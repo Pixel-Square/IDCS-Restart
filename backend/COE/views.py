@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.utils import get_user_permissions
-from academics.models import StudentProfile
+from academics.models import StudentProfile, Department
 from .models import CoeArrearStudent
 
 
@@ -21,40 +21,72 @@ FEATURE_PERMISSION_MAP = {
     'academic_calendar': 'coe.manage.calendar',
 }
 
-DEPARTMENT_LABELS = ('ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH')
-
 
 def _normalize_department_label(raw_values: list[str]) -> str | None:
-    """Map DB department variants to the canonical frontend labels.
+    """Map DB department variants (codes, IDs, names) to canonical labels."""
 
-    Examples handled:
-    - ME / MECH / MECHANICAL -> MECH
-    - AI&DS / AIDS -> AIDS
-    - AI&ML / AIML -> AIML
-    - CIVIL ENGINEERING -> CIVIL
-    """
+    def _match_aliases(parts: list[str]) -> str | None:
+        joined = ' '.join(parts)
+
+        if any(p in ('AIDS', 'AI&DS', 'AI AND DS', 'ARTIFICIAL INTELLIGENCE AND DATA SCIENCE') for p in parts) or 'DATA SCIENCE' in joined:
+            return 'AIDS'
+        if any(p in ('AIML', 'AI&ML', 'AI AND ML', 'ARTIFICIAL INTELLIGENCE AND MACHINE LEARNING') for p in parts) or 'MACHINE LEARNING' in joined:
+            return 'AIML'
+        if any(p in ('CSE', 'COMPUTER SCIENCE') for p in parts):
+            return 'CSE'
+        if any(p in ('CIVIL',) for p in parts) or 'CIVIL' in joined:
+            return 'CIVIL'
+        if any(p in ('ECE',) for p in parts) or ('ELECTRONICS' in joined and 'COMMUNICATION' in joined):
+            return 'ECE'
+        if any(p in ('EEE',) for p in parts) or ('ELECTRICAL' in joined and 'ELECTRONICS' in joined):
+            return 'EEE'
+        if any(p in ('IT', 'INFORMATION TECHNOLOGY') for p in parts) or 'INFORMATION TECHNOLOGY' in joined:
+            return 'IT'
+        if any(p in ('MECH', 'ME') for p in parts) or 'MECHANICAL' in joined:
+            return 'MECH'
+        return None
+
     parts = [str(v or '').strip().upper() for v in raw_values if str(v or '').strip()]
     if not parts:
         return None
 
-    joined = ' '.join(parts)
+    direct = _match_aliases(parts)
+    if direct:
+        return direct
 
-    if any(p in ('AIDS', 'AI&DS', 'AI AND DS', 'ARTIFICIAL INTELLIGENCE AND DATA SCIENCE') for p in parts) or 'DATA SCIENCE' in joined:
-        return 'AIDS'
-    if any(p in ('AIML', 'AI&ML', 'AI AND ML', 'ARTIFICIAL INTELLIGENCE AND MACHINE LEARNING') for p in parts) or 'MACHINE LEARNING' in joined:
-        return 'AIML'
-    if any(p in ('CSE', 'COMPUTER SCIENCE') for p in parts):
-        return 'CSE'
-    if any(p in ('CIVIL',) for p in parts) or 'CIVIL' in joined:
-        return 'CIVIL'
-    if any(p in ('ECE',) for p in parts) or 'ELECTRONICS' in joined and 'COMMUNICATION' in joined:
-        return 'ECE'
-    if any(p in ('EEE',) for p in parts) or 'ELECTRICAL' in joined and 'ELECTRONICS' in joined:
-        return 'EEE'
-    if any(p in ('IT', 'INFORMATION TECHNOLOGY') for p in parts) or 'INFORMATION TECHNOLOGY' in joined:
-        return 'IT'
-    if any(p in ('MECH', 'ME') for p in parts) or 'MECHANICAL' in joined:
-        return 'MECH'
+    # Try resolving against Department table (code, short name, name, id).
+    dept_obj = None
+    numeric_parts = [p for p in parts if p.isdigit()]
+    if numeric_parts:
+        try:
+            dept_obj = Department.objects.filter(id__in=[int(p) for p in numeric_parts]).first()
+        except Exception:
+            dept_obj = None
+
+    if not dept_obj:
+        for part in parts:
+            dept_obj = (
+                Department.objects.filter(
+                    Q(code__iexact=part)
+                    | Q(short_name__iexact=part)
+                    | Q(name__iexact=part)
+                ).first()
+            )
+            if dept_obj:
+                break
+
+    if dept_obj:
+        canonical_parts = [
+            str(getattr(dept_obj, 'short_name', '') or '').strip().upper(),
+            str(getattr(dept_obj, 'code', '') or '').strip().upper(),
+            str(getattr(dept_obj, 'name', '') or '').strip().upper(),
+        ]
+        canonical = _match_aliases([p for p in canonical_parts if p])
+        if canonical:
+            return canonical
+        for value in canonical_parts:
+            if value:
+                return value
 
     return None
 
@@ -358,9 +390,14 @@ class CoeStudentsCourseMapView(APIView):
         if not _has_portal_access(user, permission_codes):
             return Response({'detail': 'You do not have access to the COE portal.'}, status=status.HTTP_403_FORBIDDEN)
 
-        department_filter = str(request.query_params.get('department', 'ALL') or 'ALL').strip().upper()
-        if department_filter not in DEPARTMENT_LABELS:
-            return Response({'detail': 'Invalid department filter.'}, status=status.HTTP_400_BAD_REQUEST)
+        department_raw = str(request.query_params.get('department', 'ALL') or 'ALL').strip()
+        if not department_raw or department_raw.upper() == 'ALL':
+            department_filter = 'ALL'
+        else:
+            normalized = _normalize_department_label([department_raw])
+            if not normalized:
+                return Response({'detail': 'Invalid department filter.'}, status=status.HTTP_400_BAD_REQUEST)
+            department_filter = normalized
         semester_raw = str(request.query_params.get('semester', '') or '').strip().upper()
 
         sem_number = None

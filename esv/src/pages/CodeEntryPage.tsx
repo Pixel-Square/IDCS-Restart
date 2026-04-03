@@ -60,16 +60,10 @@ export default function CodeEntryPage() {
 
     // Small delay to show loading state
     setTimeout(() => {
-      const allocations = findAllocationsForFaculty(code);
-      if (allocations.length === 0) {
-        setError('No script allocations found for this faculty code. Please contact the COE.');
-        setChecking(false);
-        return;
-      }
-
-      // Store faculty code in session and navigate
+      // Store faculty code in session and navigate immediately
+      // The user is logged in regardless of whether bundles are assigned yet
       sessionStorage.setItem('esv-faculty-code', code);
-      navigate('/mark-entry');
+      navigate('/profile');
     }, 300);
   }, [digits, navigate]);
 

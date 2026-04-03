@@ -1,4 +1,11 @@
+import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+
 const TT_SCHEDULE_KEY = 'coe-tt-schedule-v1';
+
+/** Call on mount to pull TT schedule from DB into localStorage. */
+export async function hydrateTtScheduleStore(): Promise<void> {
+  await kvHydrate(TT_SCHEDULE_KEY);
+}
 
 type TTScheduleMap = Record<string, Record<string, string>>;
 
@@ -18,10 +25,10 @@ function safeWrite(value: TTScheduleMap) {
   if (typeof window === 'undefined') return;
   const keys = Object.keys(value || {});
   if (keys.length === 0) {
-    window.localStorage.removeItem(TT_SCHEDULE_KEY);
+    kvSave(TT_SCHEDULE_KEY, null);
     return;
   }
-  window.localStorage.setItem(TT_SCHEDULE_KEY, JSON.stringify(value));
+  kvSave(TT_SCHEDULE_KEY, value);
 }
 
 export function readTTScheduleMap(filterKey: string): Record<string, string> {

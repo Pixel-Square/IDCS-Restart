@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import {
   confirmMarkManagerLock,
@@ -93,8 +92,8 @@ function round1(n: number) {
 function pct(mark: number | null, max: number) {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function readFiniteNumber(value: any): number | null {
@@ -166,21 +165,9 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    // Put students with a name first
-    return an ? -1 : 1;
-  }
-
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  const byReg = ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
-  if (byReg) return byReg;
-  return 0;
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 function shortenRegisterNo(registerNo: string): string {
@@ -779,30 +766,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
         console.warn('[SSA1] My TAs fetch failed:', err);
       }
 
-      // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
-      if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-        console.log('[SSA1] Detected elective, fetching elective-choices for elective_subject_id:', matchedTa.elective_subject_id);
-        try {
-          const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
-          if (esRes.ok) {
-            const esData = await esRes.json();
-            const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-            console.log('[SSA1] Elective choices returned:', items?.length, 'students');
-            roster = (items || []).map((s: any) => ({ 
-              id: Number(s.student_id ?? s.id), 
-              reg_no: String(s.reg_no ?? s.regno ?? ''),
-              name: String(s.name ?? s.full_name ?? s.username ?? ''),
-              section: s.section_name ?? s.section ?? null 
-            }));
-          } else {
-            console.warn('[SSA1] Elective-choices API returned error:', esRes.status);
-          }
-        } catch (err) {
-          console.warn('[SSA1] Elective-choices fetch failed:', err);
-        }
-      }
-
-      // If not elective or elective fetch failed, use regular TA roster
+      // Always use TA roster (backend handles batch filtering for electives)
       if (!roster.length && matchedTa && matchedTa.id) {
         console.log('[SSA1] Fetching regular TA roster for TA ID:', matchedTa.id);
         try {

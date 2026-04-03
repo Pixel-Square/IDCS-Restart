@@ -89,13 +89,10 @@ const ArrearList: React.FC = () => {
   };
 
   useEffect(() => {
-    // TODO: Replace with real fetch to backend API
-    setLoading(true);
+    // Initialize with empty row for user data entry
+    setLoading(false);
     setError(null);
-    setTimeout(() => {
-      setRows([defaultRow]);
-      setLoading(false);
-    }, 300);
+    setRows([defaultRow]);
   }, []);
 
   useEffect(() => {

@@ -165,6 +165,7 @@ class UserAdmin(DjangoUserAdmin):
         urls = super().get_urls()
         custom = [
             path('import-users/', self.admin_site.admin_view(self.import_users_view), name='accounts_user_import'),
+            path('delete-by-email/', self.admin_site.admin_view(self.delete_by_email_view), name='accounts_user_delete_by_email'),
         ]
         return custom + urls
 
@@ -636,6 +637,151 @@ class UserAdmin(DjangoUserAdmin):
         # fallback
         ctx['stage'] = 'upload'
         return render(request, 'admin/accounts/user/import_users.html', ctx)
+
+    def delete_by_email_view(self, request):
+        """Delete users by uploading an Excel/CSV file with emails."""
+        import openpyxl
+        from django.http import HttpResponse
+
+        # Permission check
+        if not self.has_delete_permission(request):
+            messages.error(request, 'You do not have permission to delete users.')
+            ctx = {**self.admin_site.each_context(request), 'title': 'Delete Users by Email'}
+            return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+        stage = request.POST.get('stage') if request.method == 'POST' else 'upload'
+
+        ctx = {
+            **self.admin_site.each_context(request),
+            'title': 'Delete Users by Email',
+            'stage': stage,
+        }
+
+        # Download template
+        if request.GET.get('download_template'):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = 'Delete Emails'
+            ws['A1'] = 'email'
+            ws['A1'].font = openpyxl.styles.Font(bold=True)
+            ws.column_dimensions['A'].width = 40
+            # Add example
+            ws['A2'] = 'example@domain.com'
+
+            response = HttpResponse(
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="delete_users_template.xlsx"'
+            wb.save(response)
+            return response
+
+        if request.method == 'GET':
+            ctx['stage'] = 'upload'
+            return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+        # POST: Preview stage
+        if stage == 'preview':
+            f = request.FILES.get('file')
+            if not f:
+                messages.error(request, 'Please upload a file.')
+                ctx['stage'] = 'upload'
+                return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+            emails = []
+            filename = f.name.lower()
+
+            try:
+                if filename.endswith('.xlsx') or filename.endswith('.xls'):
+                    wb = openpyxl.load_workbook(f, data_only=True)
+                    ws = wb.active
+                    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                        if row and row[0]:
+                            email = str(row[0]).strip().lower()
+                            if email and '@' in email:
+                                emails.append(email)
+                elif filename.endswith('.csv'):
+                    content = f.read().decode('utf-8')
+                    reader = csv.reader(io.StringIO(content))
+                    next(reader, None)  # skip header
+                    for row in reader:
+                        if row and row[0]:
+                            email = row[0].strip().lower()
+                            if email and '@' in email:
+                                emails.append(email)
+                else:
+                    messages.error(request, 'Please upload an .xlsx, .xls, or .csv file.')
+                    ctx['stage'] = 'upload'
+                    return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+            except Exception as e:
+                messages.error(request, f'Error reading file: {e}')
+                ctx['stage'] = 'upload'
+                return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+            if not emails:
+                messages.error(request, 'No valid emails found in the file.')
+                ctx['stage'] = 'upload'
+                return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+            # Find matching users
+            users_to_delete = User.objects.filter(email__in=emails)
+            found_emails = set(u.email.lower() for u in users_to_delete)
+            not_found = [e for e in emails if e not in found_emails]
+
+            # Store in session for confirmation
+            token = str(uuid.uuid4())
+            request.session[f'delete_by_email_{token}'] = list(found_emails)
+
+            ctx['stage'] = 'preview'
+            ctx['users'] = users_to_delete
+            ctx['total_emails'] = len(emails)
+            ctx['found_count'] = users_to_delete.count()
+            ctx['not_found'] = not_found
+            ctx['token'] = token
+            return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+        # POST: Confirm deletion
+        if stage == 'confirm':
+            token = request.POST.get('token')
+            if not token:
+                messages.error(request, 'Invalid request. Please start over.')
+                ctx['stage'] = 'upload'
+                return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+            emails = request.session.get(f'delete_by_email_{token}', [])
+            if not emails:
+                messages.error(request, 'Session expired. Please upload the file again.')
+                ctx['stage'] = 'upload'
+                return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+            # Delete users
+            deleted_count = 0
+            errors = []
+            with transaction.atomic():
+                for email in emails:
+                    try:
+                        user = User.objects.get(email__iexact=email)
+                        user.delete()
+                        deleted_count += 1
+                    except User.DoesNotExist:
+                        errors.append(f'{email}: User not found')
+                    except Exception as e:
+                        errors.append(f'{email}: {str(e)}')
+
+            # Cleanup session
+            try:
+                del request.session[f'delete_by_email_{token}']
+                request.session.modified = True
+            except Exception:
+                pass
+
+            ctx['stage'] = 'result'
+            ctx['deleted_count'] = deleted_count
+            ctx['errors'] = errors
+            return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
+
+        # Fallback
+        ctx['stage'] = 'upload'
+        return render(request, 'admin/accounts/user/delete_by_email.html', ctx)
 
     def deactivate_users(self, request, queryset):
         from .services import deactivate_user

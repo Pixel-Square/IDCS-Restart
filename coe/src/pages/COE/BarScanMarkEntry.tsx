@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
+import { hydrateMarksStore, getMarksForDummy, getMarksQpType, saveMarksForDummy } from './marksStore';
 
-type QpType = 'QP1' | 'QP2' | 'TCPR' | 'OE';
+type QpType = 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 
 type StudentDetails = {
   id: number;
@@ -21,7 +22,7 @@ type StudentDetails = {
 type Question = { key: string; label: string; max: number };
 
 function getQuestions(qpType: QpType): Question[] {
-  if (qpType === 'TCPR') {
+  if (qpType === 'TCPR' || qpType === 'TCPL') {
     const questions = Array.from({ length: 12 }, (_, i) => {
       const idx = i + 1;
       return { key: `q${idx}`, label: `Q${idx}`, max: idx <= 8 ? 2 : 16 };
@@ -96,6 +97,14 @@ interface BarScanMarkEntryProps {
   onNextScan?: (code: string) => void;
 }
 
+function readStoredMarkQpType(dummyNumber: string): QpType | null {
+  if (typeof window === 'undefined') return null;
+  const qpType = getMarksQpType(dummyNumber);
+  if (!qpType) return null;
+  const upper = String(qpType).toUpperCase();
+  return upper === 'QP1' || upper === 'QP2' || upper === 'TCPR' || upper === 'TCPL' || upper === 'OE' ? (upper as QpType) : null;
+}
+
 export default function BarScanMarkEntry({ 
   embeddedCode, 
   embeddedRegNo,
@@ -111,10 +120,11 @@ export default function BarScanMarkEntry({
   const code = embeddedCode || String(searchParams.get('code') || '').trim();
   const queryRegNo = embeddedRegNo || searchParams.get('reg_no');
   const queryName = embeddedName || searchParams.get('name');
-  const queryQpType = embeddedQpType || searchParams.get('qp_type');
   const queryDummy = embeddedDummy || searchParams.get('dummy_number');
   const queryDept = embeddedDept || searchParams.get('dept');
   const querySem = embeddedSem || searchParams.get('sem');
+  const storedQpType = queryDummy ? readStoredMarkQpType(queryDummy) : null;
+  const queryQpType = storedQpType || embeddedQpType || searchParams.get('qp_type');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +145,11 @@ export default function BarScanMarkEntry({
   // This input captures the barcode scanner output while inside the Mark Entry screen
   const entryScannerRef = React.useRef<HTMLInputElement>(null);
   const [backgroundScanCode, setBackgroundScanCode] = useState<string>('');
+
+  // Hydrate marks store from DB on mount
+  useEffect(() => {
+    hydrateMarksStore().catch(() => {});
+  }, []);
 
   // Keep focus on the hidden scanner input to allow consecutive scanning
   useEffect(() => {
@@ -162,12 +177,12 @@ export default function BarScanMarkEntry({
   };
 
   const loadSavedMarks = (dummy: string, fallbackQp: QpType = 'QP1'): QpType => {
-    const stored = localStorage.getItem(`marks_${dummy}`);
-    const storedQp = localStorage.getItem(`marks_type_${dummy}`);
-    const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'OE' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
+    const entry = getMarksForDummy(dummy);
+    const storedQp = entry?.qp_type;
+    const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'TCPL' || storedQp === 'OE' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
 
-    if (stored) {
-      setMarks(JSON.parse(stored));
+    if (entry?.marks) {
+      setMarks(entry.marks);
       setIsLocked(true);
       setSaved(true);
     }
@@ -185,7 +200,7 @@ export default function BarScanMarkEntry({
     // This avoids "Unable to load student details" for unsaved dummies.
     if (queryRegNo && queryName && queryQpType) {
        const qpTypeRaw = String(queryQpType).toUpperCase();
-       const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
+      const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'TCPL' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
        setStudent({
           id: 0, // Mock ID
           reg_no: queryRegNo,
@@ -212,10 +227,10 @@ export default function BarScanMarkEntry({
         const lookupCode = queryRegNo || code;
         const res = await fetchWithAuth(`/api/academics/student/lookup/${encodeURIComponent(lookupCode)}/`);
         if (!active) return;
-        if (!res.ok) {
-          if (!queryRegNo) {
+          if (!res.ok) {
+           if (!queryRegNo) {
              // Form fallback for unknown/unsaved scanned dummy numbers
-             const fallbackQp = loadSavedMarks(lookupCode, 'QP1');
+             const fallbackQp = loadSavedMarks(lookupCode, (queryQpType as QpType) || 'QP1');
              setStudent({
                 id: 0,
                 reg_no: '-',
@@ -238,13 +253,13 @@ export default function BarScanMarkEntry({
         const urlQpType = queryQpType ? String(queryQpType).toUpperCase() : null;
 
         let qpTypeRaw = 'QP1';
-        if (urlQpType === 'QP1' || urlQpType === 'QP2' || urlQpType === 'TCPR' || urlQpType === 'OE') {
+        if (urlQpType === 'QP1' || urlQpType === 'QP2' || urlQpType === 'TCPR' || urlQpType === 'TCPL' || urlQpType === 'OE') {
           qpTypeRaw = urlQpType;
         } else {
           qpTypeRaw = dbQpType;
         }
 
-        const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
+        const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'TCPL' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
 
         const finalDummy = queryDummy || data.dummy_number || code;
         setStudent({
@@ -264,7 +279,7 @@ export default function BarScanMarkEntry({
         if (!active) return;
         if (!queryRegNo) {
            // Provide fallback on network error so table is still usable
-           const fallbackQp = loadSavedMarks(code, 'QP1');
+            const fallbackQp = loadSavedMarks(code, (queryQpType as QpType) || 'QP1');
            setStudent({
               id: 0,
               reg_no: '-',
@@ -279,6 +294,7 @@ export default function BarScanMarkEntry({
            });
         }
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
@@ -302,10 +318,8 @@ export default function BarScanMarkEntry({
       // Simulating network delay for save
       await new Promise(resolve => setTimeout(resolve, 800));
       
-      localStorage.setItem(`marks_${student.dummy_number || student.reg_no}`, JSON.stringify(marks));
-      localStorage.setItem(`marks_type_${student.dummy_number || student.reg_no}`, student.qp_type);
+      saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
       
-      console.log('Saved marks for', student.dummy_number || student.reg_no, ':', marks);
       setSaved(true);
       setIsLocked(true);
       
@@ -505,7 +519,7 @@ export default function BarScanMarkEntry({
                     <td key={`max-${q.key}`} className="px-1 py-2 text-center font-semibold text-gray-700">{q.max}</td>
                   ))}
                   <td className="px-2 py-2 text-center font-bold text-gray-700">
-                    {student.qp_type === 'TCPR' ? 100 : questions.reduce((sum, q) => sum + q.max, 0)}
+                    {(student.qp_type === 'TCPR' || student.qp_type === 'TCPL') ? 100 : questions.reduce((sum, q) => sum + q.max, 0)}
                   </td>
                 </tr>
                 <tr>
@@ -530,7 +544,7 @@ export default function BarScanMarkEntry({
                           }
                         }}
                         onChange={(e) => {
-                          let val = e.target.value;
+                          const val = e.target.value;
                           
                           if (val !== '') {
                             const num = Number(val);
@@ -554,7 +568,7 @@ export default function BarScanMarkEntry({
                   ))}
                   <td className="px-2 py-2 text-center font-bold text-base">
                     {(() => {
-                      if (student.qp_type === 'TCPR') {
+                      if (student.qp_type === 'TCPR' || student.qp_type === 'TCPL') {
                         const writtenMarks = questions.filter(q => q.key !== 'review').reduce((sum, q) => sum + (Number(marks[q.key]) || 0), 0);
                         const reviewMarks = Number(marks['review']) || 0;
                         return Math.round((writtenMarks / 80) * 70) + reviewMarks;

@@ -23,6 +23,10 @@ export function getCourseKey(params: {
   ].join('::');
 }
 
+/**
+ * @deprecated Use fetchCourseSelectionMapFromApi instead.
+ * Kept only as an offline fallback.
+ */
 export function readCourseSelectionMap(): Record<string, CourseSelection> {
   if (typeof window === 'undefined') return {};
 
@@ -40,6 +44,25 @@ export function readCourseSelectionMap(): Record<string, CourseSelection> {
 export function writeCourseSelectionMap(map: Record<string, CourseSelection>): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+}
+
+/**
+ * Fetch course selections from the backend API for a given department + semester.
+ * Falls back to localStorage if the API call fails.
+ */
+export async function fetchCourseSelectionMapFromApi(
+  department: string,
+  semester: string,
+): Promise<Record<string, CourseSelection>> {
+  try {
+    // Dynamic import to avoid circular dependency
+    const { fetchCoeCourseSel } = await import('../../services/coe');
+    const res = await fetchCoeCourseSel(`${department}::${semester}`);
+    return (res.selections || {}) as Record<string, CourseSelection>;
+  } catch {
+    // Fallback to localStorage if API fails
+    return readCourseSelectionMap();
+  }
 }
 
 export function getOrCreateCourseSelection(

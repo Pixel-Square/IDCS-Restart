@@ -28,9 +28,9 @@ import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '
 import fetchWithAuth from '../services/fetchAuth';
 import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
-import { normalizeClassType } from '../constants/classTypes';
+import { normalizeClassType, normalizeObeClassType } from '../constants/classTypes';
 
-type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null };
+type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null; questionPaperType?: string | null };
 
 type Student = {
   id: number;
@@ -170,18 +170,50 @@ function extractProjectReviewMarks(snapshot: any): Record<string, number | null>
   return out;
 }
 
-function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    return an ? -1 : 1;
+function extractTcprReviewCoSplits(snapshot: any, coKeys: string[]): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  const sheet = snapshot?.data && typeof snapshot.data === 'object'
+    ? snapshot.data
+    : snapshot?.sheet && typeof snapshot.sheet === 'object'
+      ? snapshot.sheet
+      : snapshot && typeof snapshot === 'object'
+        ? snapshot
+        : null;
+  const rows = Array.isArray(sheet?.rows) ? sheet.rows : Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const sid = String((row as any)?.studentId ?? '').trim();
+    if (!sid) continue;
+    const entry: Record<string, number> = {};
+
+    for (const coKey of coKeys) {
+      const rawReviewCoMarks = (row as any)?.reviewCoMarks?.[coKey];
+      if (Array.isArray(rawReviewCoMarks)) {
+        const total = rawReviewCoMarks.reduce<number>((sum, val) => {
+          const n = toNumOrNull(val);
+          return sum + (n == null ? 0 : n);
+        }, 0);
+        if (total > 0) {
+          entry[coKey] = total;
+          continue;
+        }
+      }
+
+      const directVal = toNumOrNull((row as any)?.[coKey]);
+      if (directVal != null) entry[coKey] = directVal;
+    }
+
+    if (Object.keys(entry).length) out[sid] = entry;
   }
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  return ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+
+  return out;
+}
+
+function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 function effectiveCoWeights12(co: 1 | 2 | '1&2') {
@@ -256,14 +288,34 @@ function parseCo34(raw: unknown): 3 | 4 | '3&4' {
   return 3;
 }
 
+function parseQuestionCoNumbers(raw: unknown): number[] {
+  if (raw == null) return [1];
+  if (typeof raw === 'number' && Number.isFinite(raw)) return [raw];
+  if (typeof raw === 'string') {
+    const s = raw.trim().toUpperCase().replace(/\s+/g, '');
+    const parts = s.split(/[&,\/]+/);
+    const nums: number[] = [];
+    for (const p of parts) {
+      const m = p.match(/\d+/);
+      if (m) nums.push(Number(m[0]));
+    }
+    if (nums.length > 0) return [...new Set(nums)];
+  }
+  if (Array.isArray(raw)) {
+    const nums: number[] = [];
+    for (const v of raw) {
+      const m = String(v ?? '').match(/\d+/);
+      if (m) nums.push(Number(m[0]));
+    }
+    if (nums.length > 0) return [...new Set(nums)];
+  }
+  return [1];
+}
+
 function effectiveCoWeights12ForQuestion(questions: QuestionDef[], idx: number) {
   const q = questions[idx];
   if (!q) return { co1: 0, co2: 0 };
   if (q.co === '1&2') return { co1: 0.5, co2: 0.5 };
-  const hasAnySplit = questions.some((x) => x.co === '1&2');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').trim().toLowerCase() === 'q9';
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co1: 0.5, co2: 0.5 };
   return effectiveCoWeights12(q.co);
 }
 
@@ -271,10 +323,6 @@ function effectiveCoWeights34ForQuestion(questions: QuestionDef34[], idx: number
   const q = questions[idx];
   if (!q) return { co3: 0, co4: 0 };
   if (q.co === '3&4') return { co3: 0.5, co4: 0.5 };
-  const hasAnySplit = questions.some((x) => x.co === '3&4');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').trim().toLowerCase() === 'q9';
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co3: 0.5, co4: 0.5 };
   return effectiveCoWeights34(q.co);
 }
 
@@ -328,8 +376,8 @@ type InternalSchema = {
   labels: string[];
 };
 
-function buildInternalSchema(classType: string | null, enabledSet: Set<string>): InternalSchema {
-  const ct = normalizeClassType(classType);
+function buildInternalSchema(classType: string | null, enabledSet: Set<string>, isPrbl?: boolean, isQp1Final?: boolean): InternalSchema {
+  const ct = normalizeObeClassType(classType);
   const allHeader = DEFAULT_INTERNAL_MAPPING.header;
   const allCycles = DEFAULT_INTERNAL_MAPPING.cycles;
   const allLabels = [
@@ -393,6 +441,21 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
     return { visible: tcplVisible, header: tcplHeader, cycles: tcplCycles, labels: tcplLabels };
   }
 
+  // QP1 FINAL YEAR: 3 COs only. CO2 gets contributions from BOTH cycle 1 and cycle 2.
+  // 15-slot layout: [CO1-SSA, CO1-CIA, CO1-FA, CO2-SSA(C1), CO2-CIA(C1), CO2-FA(C1),
+  //                  CO2-SSA(C2), CO2-CIA(C2), CO2-FA(C2), CO3-SSA, CO3-CIA, CO3-FA,
+  //                  ME-CO1, ME-CO2, ME-CO3]
+  if (isQp1Final) {
+    return {
+      visible: Array.from({ length: 15 }, (_, i) => i),
+      header:  ['CO1','CO1','CO1','CO2','CO2','CO2','CO2','CO2','CO2','CO3','CO3','CO3','CO1','CO2','CO3'],
+      cycles:  ['ssa','cia','fa','ssa','cia','fa','ssa','cia','fa','ssa','cia','fa','ME','ME','ME'],
+      labels:  ['CO1-SSA','CO1-CIA','CO1-FA','CO2-SSA(C1)','CO2-CIA(C1)','CO2-FA(C1)',
+                'CO2-SSA(C2)','CO2-CIA(C2)','CO2-FA(C2)','CO3-SSA','CO3-CIA','CO3-FA',
+                'ME-CO1','ME-CO2','ME-CO3'],
+    };
+  }
+
   if (ct === 'LAB') {
     const modelEnabled = enabledSet.has('model');
     // LAB uses CIA 1 LAB, CIA 2 LAB and optional MODEL LAB (no SSA/FA).
@@ -413,6 +476,14 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>):
   }
 
   if (ct === 'PROJECT') {
+    if (isPrbl) {
+      // PRBL: Cycle1(SSA1+Review1)=15, Cycle2(SSA2+Review2)=15, Cycle3(Model)=30 → 60
+      visible = [0, 2, 3, 8, 16];  // indices into 17-slot partsFull (co1Ssa, co1Fa, co2Ssa, co3Fa, meCo1)
+      const header = ['SSA 1', 'Review 1', 'SSA 2', 'Review 2', 'Model'];
+      const cyc = ['Cycle 1', 'Cycle 1', 'Cycle 2', 'Cycle 2', 'Cycle 3'];
+      const lab = ['SSA1', 'REVIEW1', 'SSA2', 'REVIEW2', 'MODEL'];
+      return { visible, header, cycles: cyc, labels: lab };
+    }
     // PROJECT uses only Review 1 and Review 2, each scaled to 30 marks.
     visible = [2, 8];
     const header = ['Review 1', 'Review 2'];
@@ -491,7 +562,7 @@ function splitLegacyTcplCombinedWeight(total: unknown): [number, number] {
   return [lab, ciaExam];
 }
 
-export default function InternalMarkCoursePage({ courseId, enabledAssessments, classType: classTypeProp }: Props): JSX.Element {
+export default function InternalMarkCoursePage({ courseId, enabledAssessments, classType: classTypeProp, questionPaperType: qpTypeProp }: Props): JSX.Element {
   const [assignmentEnabledAssessments, setAssignmentEnabledAssessments] = useState<string[] | null | undefined>(undefined);
   const effectiveEnabledAssessments = useMemo(
     () => (assignmentEnabledAssessments === undefined ? enabledAssessments : assignmentEnabledAssessments),
@@ -508,10 +579,24 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const [classType, setClassType] = useState<string | null>(null);
   const effectiveClassType = useMemo(() => {
+    const fromProp = normalizeObeClassType(classTypeProp);
+    if (fromProp) return fromProp;
+    return normalizeObeClassType(classType);
+  }, [classTypeProp, classType]);
+
+  const rawClassType = useMemo(() => {
     const fromProp = normalizeClassType(classTypeProp);
     if (fromProp) return fromProp;
     return normalizeClassType(classType);
   }, [classTypeProp, classType]);
+
+  const isPrbl = useMemo(() => rawClassType === 'PRBL', [rawClassType]);
+
+  const qpTypeNorm = useMemo(() => String(qpTypeProp ?? '').trim().toUpperCase(), [qpTypeProp]);
+  const isQp1Final = useMemo(
+    () => effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm),
+    [effectiveClassType, qpTypeNorm],
+  );
 
   useEffect(() => {
     if (effectiveClassType !== 'LAB' || selectedTaId == null) {
@@ -565,6 +650,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   });
   const [publishedTcplLab, setPublishedTcplLab] = useState<{ lab1: any | null; lab2: any | null }>({ lab1: null, lab2: null });
   const [publishedModel, setPublishedModel] = useState<any | null>(null);
+  const [publishedPrblModel, setPublishedPrblModel] = useState<Record<string, number | null>>({});
+
+  // Per-CO split marks from SSA drafts, returned by the published endpoint.
+  // Maps studentId → { co1: x, co2: y } (SSA1) or { co3: x, co4: y } (SSA2).
+  const [ssaCoSplits, setSsaCoSplits] = useState<{ ssa1: Record<string, any>; ssa2: Record<string, any> }>({ ssa1: {}, ssa2: {} });
 
   const [iqacCiaPattern, setIqacCiaPattern] = useState<{ cia1: IqacPattern | null; cia2: IqacPattern | null }>({ cia1: null, cia2: null });
   const [iqacModelPattern, setIqacModelPattern] = useState<IqacPattern | null>(null);
@@ -576,7 +666,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const [cqiPublished, setCqiPublished] = useState<CqiPublishedSnapshot | null>(null);
   const [cqiGlobalCfg, setCqiGlobalCfg] = useState<{ divider: number; multiplier: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<'actual' | 'after-cqi'>('actual');
+  const [activeTab, setActiveTab] = useState<'actual' | 'after-cqi'>('after-cqi');
 
   useEffect(() => {
     let mounted = true;
@@ -603,7 +693,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return () => {
       mounted = false;
     };
-  }, [courseId, selectedTaId]);
+  }, [courseId, selectedTaId, reloadCounter]);
 
   // Load global IQAC CQI config (divider/multiplier).
   useEffect(() => {
@@ -851,36 +941,20 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
-        if (ta && (ta as any).elective_subject_id && !(ta as any).section_id) {
-          const electiveId = (ta as any).elective_subject_id;
-          const res = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(electiveId))}`);
-          if (!res.ok) throw new Error(`Elective-choices fetch failed: ${res.status}`);
-          const data = await res.json();
-          if (!mounted) return;
-          const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-          const mapped = (items || []).map((s: any) => ({
-            id: Number(s.student_id ?? s.id),
-            reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-            name: String(s.name ?? s.full_name ?? s.username ?? ''),
-            section: s.section_name ?? s.section ?? null,
-          }));
-          if (!mounted) return;
-          setStudents(mapped.filter((s) => Number.isFinite(s.id)).sort(compareStudentName));
-        } else {
-          const resp = await fetchTeachingAssignmentRoster(selectedTaId);
-          if (!mounted) return;
-          const roster = (resp.students || [])
-            .map((s: TeachingAssignmentRosterStudent) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? ''),
-              name: String(s.name ?? ''),
-              section: s.section ?? null,
-            }))
-            .filter((s) => Number.isFinite(s.id))
-            .sort(compareStudentName);
-          setStudents(roster);
-        }
+        // Always use the backend roster endpoint — it handles both section-based
+        // and elective TAs, and also filters by batch when applicable.
+        const resp = await fetchTeachingAssignmentRoster(selectedTaId);
+        if (!mounted) return;
+        const roster = (resp.students || [])
+          .map((s: TeachingAssignmentRosterStudent) => ({
+            id: Number(s.id),
+            reg_no: String(s.reg_no ?? ''),
+            name: String(s.name ?? ''),
+            section: s.section ?? null,
+          }))
+          .filter((s) => Number.isFinite(s.id))
+          .sort(compareStudentName);
+        setStudents(roster);
       } catch (e: any) {
         if (!mounted) return;
         setStudents([]);
@@ -910,6 +984,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
         // reset optional snapshots to avoid stale render between class type switches
         setPublishedReview({ r1: {}, r2: {} });
+        setPublishedPrblModel({});
         setPublishedLab({ cia1: null, cia2: null, model: null });
         setPublishedTcplLab({ lab1: null, lab2: null });
         setPublishedModel(null);
@@ -919,23 +994,31 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         // Preload IQAC QP patterns (CIA entry uses these to override question maxima/count).
         // Internal Marks must match the same question definitions, especially when drafts exist
         // (draft snapshots don't store `questions`).
+        const qpForPattern = ct === 'THEORY' ? (qpTypeNorm || null) : null;
         const fetchPattern = async (exam: 'CIA1' | 'CIA2'): Promise<IqacPattern | null> => {
           if (!ct) return null;
+          let best: IqacPattern | null = null;
           try {
-            const r: any = await fetchIqacQpPattern({ class_type: String(ct).toUpperCase(), question_paper_type: null, exam });
+            const r: any = await fetchIqacQpPattern({ class_type: String(ct).toUpperCase(), question_paper_type: qpForPattern, exam });
             const p = r && (r as any).pattern;
-            if (p && Array.isArray(p.marks) && p.marks.length) return p as IqacPattern;
+            if (p && ((Array.isArray(p.marks) && p.marks.length) || (Array.isArray(p.cos) && p.cos.length))) {
+              best = p as IqacPattern;
+            }
           } catch {
             // ignore and fallback
           }
-          try {
-            const r: any = await fetchIqacQpPattern({ class_type: String(ct).toUpperCase(), question_paper_type: null, exam: 'CIA' as any });
-            const p = r && (r as any).pattern;
-            if (p && Array.isArray(p.marks) && p.marks.length) return p as IqacPattern;
-          } catch {
-            // ignore
+          if (!best) {
+            try {
+              const r: any = await fetchIqacQpPattern({ class_type: String(ct).toUpperCase(), question_paper_type: qpForPattern, exam: 'CIA' as any });
+              const p = r && (r as any).pattern;
+              if (p && ((Array.isArray(p.marks) && p.marks.length) || (Array.isArray(p.cos) && p.cos.length))) {
+                best = p as IqacPattern;
+              }
+            } catch {
+              // ignore
+            }
           }
-          return null;
+          return best;
         };
 
         try {
@@ -1029,15 +1112,33 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
           // No SSA/Formative/CIA sheet snapshots needed for lab-like.
           setPublished({ ssa1: {}, ssa2: {}, f1: {}, f2: {}, cia1: null, cia2: null });
+          setSsaCoSplits({ ssa1: {}, ssa2: {} });
           return;
         }
 
         // Prefer entered/draft marks (staff view), fallback to published.
+        // Also extract per-CO splits from draft rows when available.
+        const ssa1CoSplitsLocal: Record<string, any> = {};
+        const ssa2CoSplitsLocal: Record<string, any> = {};
         if (allow('ssa1')) {
           if (!preferPublished('ssa1')) {
             try {
               const d = await fetchDraft('ssa1', courseId, taId);
-              if (d?.draft && (d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
+              if (d?.draft) {
+                if ((d.draft as any).marks) ssa1Res = { marks: (d.draft as any).marks };
+                // Extract per-CO splits from draft rows
+                const draftSheet = (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft;
+                const rows = draftSheet?.rows || [];
+                if (Array.isArray(rows)) {
+                  for (const r of rows) {
+                    const sid = String(r?.studentId ?? '');
+                    if (!sid) continue;
+                    const co1 = toNumOrNull(r?.co1);
+                    const co2 = toNumOrNull(r?.co2);
+                    if (co1 != null && co2 != null) ssa1CoSplitsLocal[sid] = { co1, co2 };
+                  }
+                }
+              }
             } catch {}
           }
         }
@@ -1045,7 +1146,20 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           if (!preferPublished('ssa2')) {
             try {
               const d = await fetchDraft('ssa2', courseId, taId);
-              if (d?.draft && (d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
+              if (d?.draft) {
+                if ((d.draft as any).marks) ssa2Res = { marks: (d.draft as any).marks };
+                const draftSheet = (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft;
+                const rows = draftSheet?.rows || [];
+                if (Array.isArray(rows)) {
+                  for (const r of rows) {
+                    const sid = String(r?.studentId ?? '');
+                    if (!sid) continue;
+                    const co3 = toNumOrNull(r?.co3);
+                    const co4 = toNumOrNull(r?.co4);
+                    if (co3 != null && co4 != null) ssa2CoSplitsLocal[sid] = { co3, co4 };
+                  }
+                }
+              }
             } catch {}
           }
         }
@@ -1079,12 +1193,45 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             }
             if (!mounted) return;
             setPublishedReview({ r1: extractProjectReviewMarks(review1Res), r2: extractProjectReviewMarks(review2Res) });
+
+            // PRBL: Also load model assessment (stored via LabEntry format)
+            if (isPrbl) {
+              let prblModelRes: any = null;
+              if (!preferPublished('model')) {
+                try {
+                  const d = await fetchDraft('model', courseId, taId);
+                  if (d?.draft) prblModelRes = d.draft;
+                } catch {}
+              }
+              if (!prblModelRes) {
+                try { prblModelRes = (await fetchPublishedLabSheet('model', courseId, taId))?.data ?? null; } catch { prblModelRes = null; }
+              }
+              if (mounted) setPublishedPrblModel(extractProjectReviewMarks(prblModelRes));
+            }
           } else {
             if (!preferPublished('review1')) {
-              try { const d = await fetchDraft('review1', courseId, taId); if (d?.draft && (d.draft as any).marks) review1Res = { marks: (d.draft as any).marks }; } catch {}
+              try {
+                const d = await fetchDraft('review1', courseId, taId);
+                if (d?.draft) {
+                  const coSplits = extractTcprReviewCoSplits(d.draft, ['co1', 'co2']);
+                  const marks = (d.draft as any).marks;
+                  if ((marks && typeof marks === 'object') || Object.keys(coSplits).length) {
+                    review1Res = { marks: marks || {}, co_splits: coSplits };
+                  }
+                }
+              } catch {}
             }
             if (!preferPublished('review2')) {
-              try { const d = await fetchDraft('review2', courseId, taId); if (d?.draft && (d.draft as any).marks) review2Res = { marks: (d.draft as any).marks }; } catch {}
+              try {
+                const d = await fetchDraft('review2', courseId, taId);
+                if (d?.draft) {
+                  const coSplits = extractTcprReviewCoSplits(d.draft, ['co3', 'co4']);
+                  const marks = (d.draft as any).marks;
+                  if ((marks && typeof marks === 'object') || Object.keys(coSplits).length) {
+                    review2Res = { marks: marks || {}, co_splits: coSplits };
+                  }
+                }
+              } catch {}
             }
             if (!review1Res?.marks) {
               try { review1Res = await fetchPublishedReview1(courseId, taId); } catch { review1Res = null; }
@@ -1093,7 +1240,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               try { review2Res = await fetchPublishedReview2(courseId, taId); } catch { review2Res = null; }
             }
             if (!mounted) return;
-            setPublishedReview({ r1: review1Res?.marks || {}, r2: review2Res?.marks || {} });
+            setPublishedReview({ 
+              r1: { ...review1Res?.marks, co_splits: review1Res?.co_splits || {} }, 
+              r2: { ...review2Res?.marks, co_splits: review2Res?.co_splits || {} } 
+            });
           }
         }
 
@@ -1155,7 +1305,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         try {
           const modelPayload = (modelRes as any)?.data;
           const modelQpTypeRaw = String((modelPayload as any)?.qpType || '').trim().toUpperCase();
-          const modelQpType = modelQpTypeRaw === 'QP2' ? 'QP2' : modelQpTypeRaw === 'QP1' ? 'QP1' : null;
+          // Prefer the component-level qpTypeNorm (from CourseOBEPage) which preserves full QP type e.g. QP1FINAL.
+          // Fall back to the model payload's qpType if available.
+          const modelQpType = qpTypeNorm || modelQpTypeRaw || null;
           const modelClass = String((ct || '')).toUpperCase();
           const modelPatternRes: any = await fetchIqacQpPattern({
             class_type: modelClass,
@@ -1179,6 +1331,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           cia1: cia1Res?.data || null,
           cia2: cia2Res?.data || null,
         });
+        // Per-CO splits: prefer draft-extracted splits, then backend co_splits from published endpoint.
+        const backendSsa1Splits = (ssa1Res as any)?.co_splits && typeof (ssa1Res as any).co_splits === 'object' ? (ssa1Res as any).co_splits : {};
+        const backendSsa2Splits = (ssa2Res as any)?.co_splits && typeof (ssa2Res as any).co_splits === 'object' ? (ssa2Res as any).co_splits : {};
+        setSsaCoSplits({
+          ssa1: { ...backendSsa1Splits, ...ssa1CoSplitsLocal },
+          ssa2: { ...backendSsa2Splits, ...ssa2CoSplitsLocal },
+        });
         setPublishedModel(modelRes?.data || null);
       } catch (e: any) {
         if (!mounted) return;
@@ -1190,9 +1349,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     load();
     return () => { mounted = false; };
-  }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter]);
+  }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter, qpTypeNorm]);
 
-  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet), [effectiveClassType, enabledSet]);
+  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet, isPrbl, isQp1Final), [effectiveClassType, enabledSet, isPrbl, isQp1Final]);
+
+  // QP1 FINAL YEAR fixed weights: CO1(2+4+3)=9, CO2(1+2+2+1+2+2)=10, CO3(2+4+3)=9, ME(4+4+4)=12.  Total=40.
+  const QP1FINAL_WEIGHTS = [2, 4, 3, 1, 2, 2, 1, 2, 2, 2, 4, 3, 4, 4, 4];
 
   const effMapping = useMemo(() => {
     // TCPL uses 21 weight slots; all other class types use 17.
@@ -1201,11 +1363,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
     const weightsAll = weightsArr.slice(0, maxSlot);
     while (weightsAll.length < maxSlot) weightsAll.push(0);
-    const weights = effectiveClassType === 'PROJECT'
-      ? [30, 30]
-      : schema.visible.map((i) => weightsAll[i] ?? 0);
+    const weights = isQp1Final
+      ? QP1FINAL_WEIGHTS
+      : effectiveClassType === 'PROJECT'
+        ? (isPrbl ? [3, 12, 3, 12, 30] : [30, 30])
+        : schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema, effectiveClassType]);
+  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -1219,21 +1383,17 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return new Set<number>(nums.filter((n) => n >= 1 && n <= 20));
   }, [cqiPublished]);
 
-  const THRESHOLD_PERCENT = effectiveClassType === 'PROJECT' ? 60 : 58;
-  const effectiveDivider = useMemo(() => {
-    const d = Number(cqiGlobalCfg?.divider);
-    return Number.isFinite(d) && d > 0 ? d : 2;
-  }, [cqiGlobalCfg]);
-  const effectiveMultiplier = useMemo(() => {
-    const m = Number(cqiGlobalCfg?.multiplier);
-    return Number.isFinite(m) && m >= 0 ? m : 0.15;
-  }, [cqiGlobalCfg]);
+  const THRESHOLD_PERCENT = 58;
+  // CQI rates: below threshold → 60%, at/above threshold → 15%
+  const CQI_BELOW_RATE = 0.6;
+  const CQI_ABOVE_RATE = 0.15;
 
   const displayCols = useMemo(() => {
     const labels = Array.isArray((effMapping as any)?.labels) ? ((effMapping as any).labels as string[]) : [];
     const header = Array.isArray((effMapping as any)?.header) ? ((effMapping as any).header as any[]) : [];
     const cycles = Array.isArray((effMapping as any)?.cycles) ? ((effMapping as any).cycles as any[]) : [];
     const weightsRow = Array.isArray((effMapping as any)?.weights) ? ((effMapping as any).weights as any[]) : [];
+    const shouldMergeForCqi = activeTab === 'after-cqi';
 
     const out: Array<{
       key: string;
@@ -1245,21 +1405,28 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       co?: number;
     }> = [];
 
-    const mergedDone = new Set<number>();
+    // Extract CO number from any label format:
+    //   "CO1-SSA" → 1, "CO2-CIA(C1)" → 2, "ME-CO3" → 3, etc.
+    const getCoFromLabel = (lab: string): number | null => {
+      const m1 = /^CO(\d+)/i.exec(lab);
+      if (m1) return Number(m1[1]);
+      const m2 = /ME-CO(\d+)/i.exec(lab);
+      if (m2) return Number(m2[1]);
+      return null;
+    };
 
-    const isInternalCoPart = (lab: string) => /^CO(\d+)-/i.exec(lab);
-
-    for (let i = 0; i < labels.length; i++) {
-      const lab = String(labels[i] || '').trim();
-      const m = isInternalCoPart(lab);
-      if (m) {
-        const co = Number(m[1]);
-        if (publishedCoSet.has(co)) {
+    if (shouldMergeForCqi) {
+      // Final (With CQI) tab: merge ALL sub-columns (SSA+CIA+FA+ME) by CO number.
+      // QP1FINAL → 3 columns (CO1, CO2, CO3), regular theory → 5 columns (CO1–CO5).
+      const mergedDone = new Set<number>();
+      for (let i = 0; i < labels.length; i++) {
+        const lab = String(labels[i] || '').trim();
+        const co = getCoFromLabel(lab);
+        if (co != null) {
           if (mergedDone.has(co)) continue;
           const idxs: number[] = [];
           for (let j = 0; j < labels.length; j++) {
-            const mj = isInternalCoPart(String(labels[j] || '').trim());
-            if (mj && Number(mj[1]) === co) idxs.push(j);
+            if (getCoFromLabel(String(labels[j] || '').trim()) === co) idxs.push(j);
           }
           idxs.sort((a, b) => a - b);
           const wSum = round2(idxs.reduce((s, idx) => s + (Number(weightsRow[idx]) || 0), 0));
@@ -1273,22 +1440,34 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             co,
           });
           mergedDone.add(co);
-          continue;
+        } else {
+          // Non-CO column (e.g. project reviews): keep as individual column
+          out.push({
+            key: `col-${i}`,
+            indices: [i],
+            header: String(header[i] ?? ''),
+            cycle: String(cycles[i] ?? ''),
+            weight: Number(weightsRow[i] ?? 0) || 0,
+            isMerged: false,
+          });
         }
       }
-
-      out.push({
-        key: `col-${i}`,
-        indices: [i],
-        header: String(header[i] ?? ''),
-        cycle: String(cycles[i] ?? ''),
-        weight: Number(weightsRow[i] ?? 0) || 0,
-        isMerged: false,
-      });
+    } else {
+      // Before CQI tab: show all individual columns (SSA, CIA, FA, ME separately)
+      for (let i = 0; i < labels.length; i++) {
+        out.push({
+          key: `col-${i}`,
+          indices: [i],
+          header: String(header[i] ?? ''),
+          cycle: String(cycles[i] ?? ''),
+          weight: Number(weightsRow[i] ?? 0) || 0,
+          isMerged: false,
+        });
+      }
     }
 
     return out;
-  }, [effMapping, publishedCoSet]);
+  }, [effMapping, publishedCoSet, activeTab]);
 
   const getDisplayValue = (rowCells: any[], col: { indices: number[]; isMerged: boolean }): number | null => {
     const cells = Array.isArray(rowCells) ? rowCells : [];
@@ -1305,16 +1484,26 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return round2(sum);
   };
 
-  const computeCqiAdd = (args: { coValue: number; coMax: number; totalPct: number; input: number | null | undefined }): number => {
-    const { coValue, coMax, totalPct, input } = args;
+  const computeCqiAdd = (args: { coValue: number; coMax: number; input: number | null | undefined }): number => {
+    const { coValue, coMax, input } = args;
     if (input == null) return 0;
     const inp = Number(input);
-    if (!Number.isFinite(inp)) return 0;
-    const pct = coMax ? (Number(coValue) / Number(coMax)) * 100 : 0;
-    if (!(Number.isFinite(pct) && pct < THRESHOLD_PERCENT)) return 0;
-    const base = (inp / 10) * Number(coMax);
-    const add = totalPct < THRESHOLD_PERCENT ? base / effectiveDivider : base * effectiveMultiplier;
-    return Number.isFinite(add) && add > 0 ? add : 0;
+    if (!Number.isFinite(inp) || inp <= 0) return 0;
+    if (!coMax || !Number.isFinite(coMax) || coMax <= 0) return 0;
+    const pct = (Number(coValue) / Number(coMax)) * 100;
+
+    if (Number.isFinite(pct) && pct < THRESHOLD_PERCENT) {
+      // Below threshold: CQI mark (out of 10) × 0.6, cap the CO at threshold%
+      const rawAdd = inp * CQI_BELOW_RATE;
+      const cap = (coMax * THRESHOLD_PERCENT) / 100;
+      const maxAllowed = Math.max(0, cap - Number(coValue));
+      const add = Math.min(rawAdd, maxAllowed);
+      return Number.isFinite(add) && add > 0 ? add : 0;
+    } else {
+      // At or above threshold: CQI mark (out of 10) × 0.15, no cap
+      const add = inp * CQI_ABOVE_RATE;
+      return Number.isFinite(add) && add > 0 ? add : 0;
+    }
   };
 
   const computedRows = useMemo(() => {
@@ -1365,7 +1554,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       : [];
     const masterCia2Questions: QuestionDef34[] = Array.isArray(masterCfg?.assessments?.cia2?.questions)
       ? (masterCfg.assessments.cia2.questions as any[])
-          .map((q: any) => ({ key: String(q?.key || ''), max: Number(q?.max ?? q?.maxMarks ?? 0), co: parseCo34(q?.co) as any }))
+          .map((q: any) => ({
+            key: String(q?.key || ''),
+            max: Number(q?.max ?? q?.maxMarks ?? 0),
+            co: (isQp1Final ? q?.co : parseCo34(q?.co)) as any,
+          }))
           .filter((q: any) => q.key)
       : [];
 
@@ -1391,35 +1584,97 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             return {
               key: `q${idx + 1}`,
               max: Number(mx) || 0,
-              co: (coRaw != null ? parseCo34(coRaw) : (fallback?.co ?? 3)) as any,
+              co: (isQp1Final
+                ? (coRaw != null ? coRaw : (fallback?.co ?? 2))
+                : (coRaw != null ? parseCo34(coRaw) : (fallback?.co ?? 3))) as any,
             };
           })
           .filter((q) => Boolean(q.key))
       : [];
 
-    const cia1Questions: QuestionDef[] = Array.isArray(cia1Snap?.questions)
-      ? cia1Snap.questions.map((q: any) => ({ key: String(q?.key || ''), max: Number(q?.max ?? q?.maxMarks ?? 0), co: parseCo12(q?.co) as any })).filter((q: any) => q.key)
+    // When building questions from snapshot, overlay IQAC COs AND marks if available (snapshot may have stale COs/marks).
+    const iqacCia1Cos = Array.isArray(iqacCia1?.cos) ? iqacCia1.cos : null;
+    const iqacCia2Cos = Array.isArray(iqacCia2?.cos) ? iqacCia2.cos : null;
+    const iqacCia1Marks = Array.isArray(iqacCia1?.marks) ? iqacCia1.marks : null;
+    const iqacCia2Marks = Array.isArray(iqacCia2?.marks) ? iqacCia2.marks : null;
+
+    // If IQAC pattern exists, prefer IQAC-based questions.
+    const cia1SnapQuestions = Array.isArray(cia1Snap?.questions) ? cia1Snap.questions : null;
+    const cia2SnapQuestions = Array.isArray(cia2Snap?.questions) ? cia2Snap.questions : null;
+    const cia1QuestionsSource = cia1SnapQuestions
+      ? (iqacCia1Marks && iqacCia1Marks.length > 0
+          ? iqacCia1Marks.map((mx: any, idx: number) => ({ key: `q${idx + 1}`, max: Number(mx) || 0, co: cia1SnapQuestions[idx]?.co }))
+          : cia1SnapQuestions)
+      : null;
+    const cia2QuestionsSource = cia2SnapQuestions
+      ? (iqacCia2Marks && iqacCia2Marks.length > 0
+          ? iqacCia2Marks.map((mx: any, idx: number) => ({ key: `q${idx + 1}`, max: Number(mx) || 0, co: cia2SnapQuestions[idx]?.co }))
+          : cia2SnapQuestions)
+      : null;
+
+    const cia1Questions: QuestionDef[] = cia1QuestionsSource
+      ? cia1QuestionsSource.map((q: any, idx: number) => ({
+          key: String(q?.key || `q${idx + 1}`),
+          max: (iqacCia1Marks && iqacCia1Marks[idx] != null && Number(iqacCia1Marks[idx]) > 0)
+            ? Number(iqacCia1Marks[idx])
+            : Number(q?.max ?? q?.maxMarks ?? 0),
+          co: (iqacCia1Cos && iqacCia1Cos[idx] != null ? parseCo12(iqacCia1Cos[idx]) : parseCo12(q?.co)) as any,
+        })).filter((q: any) => q.key)
       : (fromIqacCia1.length ? fromIqacCia1 : (masterCia1Questions.length ? masterCia1Questions : DEFAULT_CIA1_QUESTIONS));
-    const cia2Questions: QuestionDef34[] = Array.isArray(cia2Snap?.questions)
-      ? cia2Snap.questions.map((q: any) => ({ key: String(q?.key || ''), max: Number(q?.max ?? q?.maxMarks ?? 0), co: parseCo34(q?.co) as any })).filter((q: any) => q.key)
+    const cia2Questions: QuestionDef34[] = cia2QuestionsSource
+      ? cia2QuestionsSource.map((q: any, idx: number) => ({
+          key: String(q?.key || `q${idx + 1}`),
+          max: (iqacCia2Marks && iqacCia2Marks[idx] != null && Number(iqacCia2Marks[idx]) > 0)
+            ? Number(iqacCia2Marks[idx])
+            : Number(q?.max ?? q?.maxMarks ?? 0),
+          co: (isQp1Final
+            ? (iqacCia2Cos && iqacCia2Cos[idx] != null ? iqacCia2Cos[idx] : q?.co)
+            : (iqacCia2Cos && iqacCia2Cos[idx] != null ? parseCo34(iqacCia2Cos[idx]) : parseCo34(q?.co))) as any,
+        })).filter((q: any) => q.key)
       : (fromIqacCia2.length ? fromIqacCia2 : (masterCia2Questions.length ? masterCia2Questions : DEFAULT_CIA2_QUESTIONS));
+
+    const qp1FinalCia2Offset = isQp1Final
+      ? (() => {
+          const maxCoSeen = Math.max(0, ...cia2Questions.map((q: any) => Math.max(0, ...parseQuestionCoNumbers(q?.co))));
+          return maxCoSeen > 0 && maxCoSeen <= 2 ? 1 : 0;
+        })()
+      : 0;
+
+    const qp1FinalQuestionWeight = (q: any, targetCoNum: number, offset = 0) => {
+      const coNums = parseQuestionCoNumbers(q?.co).map((n: number) => n + offset);
+      if (coNums.length === 1 && coNums[0] === targetCoNum) return 1;
+      if (coNums.length > 1 && coNums.includes(targetCoNum)) return 1 / coNums.length;
+      return 0;
+    };
 
     const cia1ById: Record<string, any> = cia1Snap?.rowsByStudentId && typeof cia1Snap.rowsByStudentId === 'object' ? cia1Snap.rowsByStudentId : {};
     const cia2ById: Record<string, any> = cia2Snap?.rowsByStudentId && typeof cia2Snap.rowsByStudentId === 'object' ? cia2Snap.rowsByStudentId : {};
 
     const cia1MaxCo = cia1Questions.reduce((s, q, idx) => {
+      if (isQp1Final) {
+        const rawCoVal = (q as any)?.co;
+        const rawCoNum = typeof rawCoVal === 'number' ? rawCoVal : Number(String(rawCoVal ?? '').replace(/[^0-9]/g, '') || '0');
+        return rawCoNum === 1 ? s + q.max : s;
+      }
       const w = effectiveCoWeights12ForQuestion(cia1Questions, idx);
       return s + q.max * w.co1;
     }, 0);
     const cia1MaxCo2 = cia1Questions.reduce((s, q, idx) => {
+      if (isQp1Final) {
+        const rawCoVal = (q as any)?.co;
+        const rawCoNum = typeof rawCoVal === 'number' ? rawCoVal : Number(String(rawCoVal ?? '').replace(/[^0-9]/g, '') || '0');
+        return rawCoNum === 2 ? s + q.max : s;
+      }
       const w = effectiveCoWeights12ForQuestion(cia1Questions, idx);
       return s + q.max * w.co2;
     }, 0);
     const cia2MaxCo3 = cia2Questions.reduce((s, q, idx) => {
+      if (isQp1Final) return s + q.max * qp1FinalQuestionWeight(q, 2, qp1FinalCia2Offset);
       const w = effectiveCoWeights34ForQuestion(cia2Questions, idx);
       return s + q.max * w.co3;
     }, 0);
     const cia2MaxCo4 = cia2Questions.reduce((s, q, idx) => {
+      if (isQp1Final) return s + q.max * qp1FinalQuestionWeight(q, 3, qp1FinalCia2Offset);
       const w = effectiveCoWeights34ForQuestion(cia2Questions, idx);
       return s + q.max * w.co4;
     }, 0);
@@ -1806,15 +2061,201 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       });
     }
 
+    // ── QP1 FINAL YEAR: 3 COs, CO2 from both cycles ───────────────────
+    if (isQp1Final) {
+      // Fixed QP1FINAL target weights (15 slots matching the schema).
+      const qfW = QP1FINAL_WEIGHTS; // [2,4,3,1,2,2,1,2,2,2,4,3,4,4,4]
+
+      return students.map((s, idx) => {
+        const ssa1Total = toNumOrNull(published.ssa1[String(s.id)]);
+        const ssa2Total = toNumOrNull(published.ssa2[String(s.id)]);
+
+        // SSA1 → CO1 + CO2 (same as normal).
+        const ssa1Split = ssaCoSplits.ssa1[String(s.id)];
+        let ssa1Co1Mark: number | null = null;
+        let ssa1Co2Mark: number | null = null;
+        if (ssa1Split) {
+          const c1 = toNumOrNull(ssa1Split.co1);
+          const c2 = toNumOrNull(ssa1Split.co2);
+          if (c1 != null) ssa1Co1Mark = clamp(c1, 0, maxes.ssa1.co1);
+          if (c2 != null) ssa1Co2Mark = clamp(c2, 0, maxes.ssa1.co2);
+        }
+        if (ssa1Co1Mark == null && ssa1Total != null) ssa1Co1Mark = clamp(Number(ssa1Total) / 2, 0, maxes.ssa1.co1);
+        if (ssa1Co2Mark == null && ssa1Total != null) ssa1Co2Mark = clamp(Number(ssa1Total) / 2, 0, maxes.ssa1.co2);
+
+        // SSA2 → "first CO" (CO2 in QP1FINAL) + "second CO" (CO3 in QP1FINAL).
+        // Backend co_splits may use co3/co4 keys (legacy naming).
+        const ssa2Split = ssaCoSplits.ssa2[String(s.id)];
+        let ssa2FirstMark: number | null = null;  // CO2's contribution from SSA2
+        let ssa2SecondMark: number | null = null;  // CO3's contribution from SSA2
+        if (ssa2Split) {
+          // Try QP1FINAL keys first (co2/co3), then legacy keys (co3/co4).
+          const firstV = toNumOrNull(ssa2Split.co2) ?? toNumOrNull(ssa2Split.co3);
+          const secondV = toNumOrNull(ssa2Split.co3 != null && ssa2Split.co2 != null ? ssa2Split.co3 : ssa2Split.co4);
+          if (firstV != null) ssa2FirstMark = clamp(firstV, 0, maxes.ssa2.co3);
+          if (secondV != null) ssa2SecondMark = clamp(secondV, 0, maxes.ssa2.co4);
+        }
+        if (ssa2FirstMark == null && ssa2Total != null) ssa2FirstMark = clamp(Number(ssa2Total) / 2, 0, maxes.ssa2.co3);
+        if (ssa2SecondMark == null && ssa2Total != null) ssa2SecondMark = clamp(Number(ssa2Total) / 2, 0, maxes.ssa2.co4);
+
+        // CIA1 → CO1 + CO2.
+        const cia1Row = cia1ById[String(s.id)] || {};
+        const cia1Absent = Boolean((cia1Row as any)?.absent);
+        let ciaCo1: number | null = null;
+        let ciaCo2: number | null = null;
+        if (!cia1Absent) {
+          const q = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : {};
+          let hasAny = false;
+          let c1 = 0; let c2 = 0;
+          for (let i = 0; i < cia1Questions.length; i++) {
+            const qq = cia1Questions[i];
+            const n = toNumOrNull(q?.[qq.key]);
+            if (n == null) continue;
+            hasAny = true;
+            const mark = clamp(n, 0, qq.max || n);
+            if (isQp1Final) {
+              // QP1FINAL: read raw CO number directly (bypass parseCo12 '1&2' splitting)
+              const rawCoVal = (qq as any)?.co;
+              const rawCoNum = typeof rawCoVal === 'number'
+                ? rawCoVal
+                : Number(String(rawCoVal ?? '').replace(/[^0-9]/g, '') || '0');
+              if (rawCoNum === 1) c1 += mark;
+              else if (rawCoNum === 2) c2 += mark;
+            } else {
+              const w12 = effectiveCoWeights12ForQuestion(cia1Questions, i);
+              c1 += mark * w12.co1;
+              c2 += mark * w12.co2;
+            }
+          }
+          if (hasAny) {
+            ciaCo1 = clamp(c1, 0, maxes.cia1.co1);
+            ciaCo2 = clamp(c2, 0, maxes.cia1.co2);
+          }
+        }
+
+        // CIA2 → For QP1FINAL use direct IQAC CO numbers (CO2/CO3), not parseCo34 slot mapping.
+        const cia2Row = cia2ById[String(s.id)] || {};
+        const cia2Absent = Boolean((cia2Row as any)?.absent);
+        let cia2Co2Part: number | null = null;  // CO2's contribution from CIA2
+        let cia2Co3Part: number | null = null;  // CO3's contribution from CIA2
+        if (!cia2Absent) {
+          const q = (cia2Row as any)?.q && typeof (cia2Row as any).q === 'object' ? (cia2Row as any).q : {};
+          let hasAny = false;
+          let c2 = 0; let c3 = 0;
+          for (let i = 0; i < cia2Questions.length; i++) {
+            const qq = cia2Questions[i];
+            const n = toNumOrNull(q?.[qq.key]);
+            if (n == null) continue;
+            hasAny = true;
+            const mark = clamp(n, 0, qq.max || n);
+            if (isQp1Final) {
+              c2 += mark * qp1FinalQuestionWeight(qq, 2, qp1FinalCia2Offset);
+              c3 += mark * qp1FinalQuestionWeight(qq, 3, qp1FinalCia2Offset);
+            } else {
+              const w34 = effectiveCoWeights34ForQuestion(cia2Questions, i);
+              c3 += mark * w34.co3;
+              c2 += mark * w34.co4;
+            }
+          }
+          if (hasAny) {
+            cia2Co2Part = clamp(c2, 0, isQp1Final ? cia2MaxCo3 : maxes.cia2.co4);
+            cia2Co3Part = clamp(c3, 0, isQp1Final ? cia2MaxCo4 : maxes.cia2.co3);
+          }
+        }
+
+        // FA1 → CO1 + CO2.
+        const f1Row = (published.f1 || {})[String(s.id)] || {};
+        const f1Co1 = toNumOrNull((f1Row as any)?.skill1) != null && toNumOrNull((f1Row as any)?.att1) != null
+          ? clamp(Number((f1Row as any).skill1) + Number((f1Row as any).att1), 0, maxes.f1.co1) : null;
+        const f1Co2 = toNumOrNull((f1Row as any)?.skill2) != null && toNumOrNull((f1Row as any)?.att2) != null
+          ? clamp(Number((f1Row as any).skill2) + Number((f1Row as any).att2), 0, maxes.f1.co2) : null;
+
+        // FA2 → skill1+att1 = first CO (CO2 in QP1FINAL), skill2+att2 = second CO (CO3 in QP1FINAL).
+        const f2Row = (published.f2 || {})[String(s.id)] || {};
+        const f2Co2Part = toNumOrNull((f2Row as any)?.skill1) != null && toNumOrNull((f2Row as any)?.att1) != null
+          ? clamp(Number((f2Row as any).skill1) + Number((f2Row as any).att1), 0, maxes.f2.co3) : null;
+        const f2Co3Part = toNumOrNull((f2Row as any)?.skill2) != null && toNumOrNull((f2Row as any)?.att2) != null
+          ? clamp(Number((f2Row as any).skill2) + Number((f2Row as any).att2), 0, maxes.f2.co4) : null;
+
+        // Model → CO1, CO2, CO3 only (CO4/CO5 = 0 for QP1FINAL via IQAC pattern).
+        const model = getModelCoMarks(s);
+
+        // Build QP1FINAL 15-slot partsFull:
+        // [CO1-SSA, CO1-CIA, CO1-FA,  CO2-SSA(C1), CO2-CIA(C1), CO2-FA(C1),
+        //  CO2-SSA(C2), CO2-CIA(C2), CO2-FA(C2),  CO3-SSA, CO3-CIA, CO3-FA,
+        //  ME-CO1, ME-CO2, ME-CO3]
+        const partsFull = [
+          scale(ssa1Co1Mark, maxes.ssa1.co1, qfW[0]),       // CO1-SSA → 2
+          scale(ciaCo1, maxes.cia1.co1, qfW[1]),            // CO1-CIA → 4
+          scale(f1Co1, maxes.f1.co1, qfW[2]),               // CO1-FA  → 3
+          scale(ssa1Co2Mark, maxes.ssa1.co2, qfW[3]),       // CO2-SSA(C1) → 1
+          scale(ciaCo2, maxes.cia1.co2, qfW[4]),            // CO2-CIA(C1) → 2
+          scale(f1Co2, maxes.f1.co2, qfW[5]),               // CO2-FA(C1)  → 2
+          scale(ssa2FirstMark, maxes.ssa2.co3, qfW[6]),     // CO2-SSA(C2) → 1
+          scale(cia2Co2Part, isQp1Final ? cia2MaxCo3 : maxes.cia2.co4, qfW[7]),       // CO2-CIA(C2) → 2
+          scale(f2Co2Part, maxes.f2.co3, qfW[8]),           // CO2-FA(C2)  → 2
+          scale(ssa2SecondMark, maxes.ssa2.co4, qfW[9]),    // CO3-SSA → 2
+          scale(cia2Co3Part, isQp1Final ? cia2MaxCo4 : maxes.cia2.co3, qfW[10]),      // CO3-CIA → 4
+          scale(f2Co3Part, maxes.f2.co4, qfW[11]),          // CO3-FA  → 3
+          scale(model.co1, model.max.co1, qfW[12]),         // ME-CO1 → 4
+          scale(model.co2, model.max.co2, qfW[13]),         // ME-CO2 → 4
+          scale(model.co3, model.max.co3, qfW[14]),         // ME-CO3 → 4
+        ];
+
+        const parts = effMapping.visible.map((i: number) => partsFull[i]);
+        const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
+        const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+        const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+
+        return {
+          sno: idx + 1,
+          ...s,
+          cells: parts,
+          total,
+          pct,
+        };
+      });
+    }
+
     return students.map((s, idx) => {
       const ssa1Total = toNumOrNull(published.ssa1[String(s.id)]);
       const ssa2Total = toNumOrNull(published.ssa2[String(s.id)]);
-      const ssa1Half = ssa1Total == null ? null : Number(ssa1Total) / 2;
-      const ssa2Half = ssa2Total == null ? null : Number(ssa2Total) / 2;
-      const ssa1Co1Mark = ssa1Half == null ? null : clamp(ssa1Half, 0, maxes.ssa1.co1);
-      const ssa1Co2Mark = ssa1Half == null ? null : clamp(ssa1Half, 0, maxes.ssa1.co2);
-      const ssa2Co3Mark = ssa2Half == null ? null : clamp(ssa2Half, 0, maxes.ssa2.co3);
-      const ssa2Co4Mark = ssa2Half == null ? null : clamp(ssa2Half, 0, maxes.ssa2.co4);
+
+      // Prefer per-CO split from backend co_splits (from SSA draft data),
+      // matching how the CQI Entry page computes CO totals.
+      // Only fall back to total/2 when per-CO data is unavailable.
+      const ssa1Split = ssaCoSplits.ssa1[String(s.id)];
+      const ssa2Split = ssaCoSplits.ssa2[String(s.id)];
+
+      let ssa1Co1Mark: number | null = null;
+      let ssa1Co2Mark: number | null = null;
+      if (ssa1Split) {
+        const co1v = toNumOrNull(ssa1Split.co1);
+        const co2v = toNumOrNull(ssa1Split.co2);
+        if (co1v != null) ssa1Co1Mark = clamp(co1v, 0, maxes.ssa1.co1);
+        if (co2v != null) ssa1Co2Mark = clamp(co2v, 0, maxes.ssa1.co2);
+      }
+      if (ssa1Co1Mark == null && ssa1Total != null) {
+        ssa1Co1Mark = clamp(Number(ssa1Total) / 2, 0, maxes.ssa1.co1);
+      }
+      if (ssa1Co2Mark == null && ssa1Total != null) {
+        ssa1Co2Mark = clamp(Number(ssa1Total) / 2, 0, maxes.ssa1.co2);
+      }
+
+      let ssa2Co3Mark: number | null = null;
+      let ssa2Co4Mark: number | null = null;
+      if (ssa2Split) {
+        const co3v = toNumOrNull(ssa2Split.co3);
+        const co4v = toNumOrNull(ssa2Split.co4);
+        if (co3v != null) ssa2Co3Mark = clamp(co3v, 0, maxes.ssa2.co3);
+        if (co4v != null) ssa2Co4Mark = clamp(co4v, 0, maxes.ssa2.co4);
+      }
+      if (ssa2Co3Mark == null && ssa2Total != null) {
+        ssa2Co3Mark = clamp(Number(ssa2Total) / 2, 0, maxes.ssa2.co3);
+      }
+      if (ssa2Co4Mark == null && ssa2Total != null) {
+        ssa2Co4Mark = clamp(Number(ssa2Total) / 2, 0, maxes.ssa2.co4);
+      }
 
       // FA columns depend on class type:
       // - TCPR: Review1/Review2
@@ -1833,18 +2274,43 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const review2Total = toNumOrNull(publishedReview.r2[String(s.id)]);
       const review1Half = review1Total == null ? null : Number(review1Total) / 2;
       const review2Half = review2Total == null ? null : Number(review2Total) / 2;
+
+      // Use backend co_splits if they exist
+      const r1Splits = (publishedReview.r1 as any)?.co_splits?.[String(s.id)];
+      const r2Splits = (publishedReview.r2 as any)?.co_splits?.[String(s.id)];
+
+      const getR1Co1 = () => {
+        if (r1Splits?.co1 != null) return clamp(r1Splits.co1, 0, maxes.review1.co1);
+        return review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co1);
+      };
+      
+      const getR1Co2 = () => {
+        if (r1Splits?.co2 != null) return clamp(r1Splits.co2, 0, maxes.review1.co2);
+        return review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co2);
+      };
+
+      const getR2Co3 = () => {
+        if (r2Splits?.co3 != null) return clamp(r2Splits.co3, 0, maxes.review2.co3);
+        return review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co3);
+      };
+
+      const getR2Co4 = () => {
+        if (r2Splits?.co4 != null) return clamp(r2Splits.co4, 0, maxes.review2.co4);
+        return review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co4);
+      };
+
       const review1Co1 = ct === 'PROJECT'
         ? scale(review1Total, 50, 30)
-        : review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co1);
+        : getR1Co1();
       const review1Co2 = ct === 'PROJECT'
         ? null
-        : review1Half == null ? null : clamp(review1Half, 0, maxes.review1.co2);
+        : getR1Co2();
       const review2Co3 = ct === 'PROJECT'
         ? scale(review2Total, 50, 30)
-        : review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co3);
+        : getR2Co3();
       const review2Co4 = ct === 'PROJECT'
         ? null
-        : review2Half == null ? null : clamp(review2Half, 0, maxes.review2.co4);
+        : getR2Co4();
 
       const readTcplLabPair = (snapshot: any | null, coA: number, coB: number | null) => {
         const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
@@ -1986,16 +2452,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
 
       // CO1/CO2 split into SSA/CIA/FA columns.
-      const co1Ssa = ct === 'PROJECT' ? null : scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
+      const co1Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa1Total, 20, 3) : null) : scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
       const co1Cia = ct === 'PROJECT' ? null : scale(ciaCo1, maxes.cia1.co1, wCo1Cia);
       const co1Fa = (ct === 'TCPR' || ct === 'PROJECT')
-        ? scale(review1Co1, maxes.review1.co1, wCo1Fa)
+        ? (isPrbl ? scale(review1Total, 50, 12) : scale(review1Co1, maxes.review1.co1, wCo1Fa))
         : ct === 'TCPL'
           ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? 2, wCo1Fa)
           : scale(f1Co1, maxes.f1.co1, wCo1Fa);
       // TCPL CIA Exam: raw mark out of 30, one per lab sheet (CO1&CO2 share lab1, CO3&CO4 share lab2).
       const co1CiaExam = ct === 'TCPL' ? scale(tcplCiaExam1, 30, wCo1CiaExam) : null;
-      const co2Ssa = ct === 'PROJECT' ? null : scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
+      const co2Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa2Total, 20, 3) : null) : scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
       const co2Cia = ct === 'PROJECT' ? null : scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
       const co2Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
@@ -2007,7 +2473,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const co3Ssa = ct === 'PROJECT' ? null : scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
       const co3Cia = ct === 'PROJECT' ? null : scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
       const co3Fa = (ct === 'TCPR' || ct === 'PROJECT')
-        ? scale(review2Co3, maxes.review2.co3, wCo3Fa)
+        ? (isPrbl ? scale(review2Total, 50, 12) : scale(review2Co3, maxes.review2.co3, wCo3Fa))
         : ct === 'TCPL'
           ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? 2, wCo3Fa)
           : scale(f2Co3, maxes.f2.co3, wCo3Fa);
@@ -2022,11 +2488,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const co4CiaExam = ct === 'TCPL' ? scale(tcplCiaExam2, 30, wCo4CiaExam) : null;
 
       const model = getModelCoMarks(s);
+      const prblModelTotal = isPrbl ? toNumOrNull(publishedPrblModel[String(s.id)]) : null;
       const meCo1 = ct === 'PROJECT' ? null : scale(model.co1, model.max.co1, wMeCo1);
       const meCo2 = ct === 'PROJECT' ? null : scale(model.co2, model.max.co2, wMeCo2);
       const meCo3 = ct === 'PROJECT' ? null : scale(model.co3, model.max.co3, wMeCo3);
       const meCo4 = ct === 'PROJECT' ? null : scale(model.co4, model.max.co4, wMeCo4);
-      const meCo5 = ct === 'PROJECT' ? null : scale(model.co5, model.max.co5, wMeCo5);
+      const meCo5 = ct === 'PROJECT' ? (isPrbl ? scale(prblModelTotal, 50, 30) : null) : scale(model.co5, model.max.co5, wMeCo5);
 
       // TCPL uses 21-slot partsFull (SSA/CIA/LAB/CIAExam per CO + ME×5).
       // All other class types use the standard 17-slot layout.
@@ -2068,7 +2535,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         pct,
       };
     });
-  }, [effMapping, published, publishedReview, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, effectiveClassType, iqacCiaPattern, iqacModelPattern]);
+  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits]);
 
   const header = displayCols.map((c) => c.header);
   const cycles = displayCols.map((c) => c.cycle);
@@ -2134,36 +2601,55 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const entries = (cqiPublished?.entries && typeof cqiPublished.entries === 'object') ? cqiPublished.entries : {};
     const projectPages = Array.isArray(cqiPublished?.pages) ? cqiPublished.pages : [];
 
-    if (effectiveClassType === 'PROJECT') {
-      const getProjectPageInput = (studentId: number, assessment: 'review1' | 'review2') => {
-        const page = projectPages.find((pg) => String(pg?.assessmentType || '').toLowerCase() === assessment);
-        if (!page || !page.entries || typeof page.entries !== 'object') return null;
-        const row = (page.entries as any)?.[studentId] ?? (page.entries as any)?.[String(studentId)] ?? null;
-        if (!row || typeof row !== 'object') return null;
-        const raw = (row as any)?.co1;
-        return raw == null ? null : Number(raw);
+    if (effectiveClassType === 'PROJECT' && !isPrbl) {
+      // Single combined CQI for project: look for 'project_combined' page
+      const getCombinedCqiMark = (studentId: number): number | null => {
+        // Check project_combined page first (new single-CQI approach)
+        const combinedPage = projectPages.find((pg) => String(pg?.assessmentType || '').toLowerCase() === 'project_combined');
+        if (combinedPage?.entries && typeof combinedPage.entries === 'object') {
+          const row = (combinedPage.entries as any)?.[studentId] ?? (combinedPage.entries as any)?.[String(studentId)] ?? null;
+          if (row && typeof row === 'object') {
+            const raw = (row as any)?.cqiMark ?? (row as any)?.co1;
+            return raw == null ? null : Number(raw);
+          }
+          // Direct numeric entry
+          const direct = (combinedPage.entries as any)?.[studentId] ?? (combinedPage.entries as any)?.[String(studentId)];
+          if (direct != null && typeof direct === 'number') return direct;
+        }
+        return null;
       };
+
+      const PROJECT_CQI_RATE = 0.6;    // take 60% of CQI mark
+      const RAW_TOTAL_MAX = 100;        // review1(50) + review2(50) in raw space
+      const RAW_THRESHOLD = 58;         // threshold in raw marks (58 out of 100)
+      const SCALE_FACTOR = maxTotal / RAW_TOTAL_MAX; // 60/100 = 0.6 (dashboard shows /60)
 
       return computedRows.map((r: any) => {
         const review1Base = typeof r.cells?.[0] === 'number' && Number.isFinite(r.cells[0]) ? Number(r.cells[0]) : null;
         const review2Base = typeof r.cells?.[1] === 'number' && Number.isFinite(r.cells[1]) ? Number(r.cells[1]) : null;
 
-        const addFromProjectCqi = (base: number | null, input: number | null) => {
-          if (base == null || input == null || !Number.isFinite(input)) return 0;
-          const pagePct = (base / 30) * 100;
-          return computeCqiAdd({ coValue: base, coMax: 30, totalPct: pagePct, input });
-        };
+        // Combined in dashboard scaled space (out of 60)
+        const combinedScaled = (review1Base ?? 0) + (review2Base ?? 0);
+        const hasAnyMark = review1Base != null || review2Base != null;
 
-        const add1 = activeTab === 'after-cqi' ? addFromProjectCqi(review1Base, getProjectPageInput(Number(r.id), 'review1')) : 0;
-        const add2 = activeTab === 'after-cqi' ? addFromProjectCqi(review2Base, getProjectPageInput(Number(r.id), 'review2')) : 0;
+        // CQI operates in raw space (/100): convert scaled → raw
+        let cqiAddScaled = 0;
+        if (activeTab === 'after-cqi' && hasAnyMark) {
+          const rawTotal = combinedScaled / SCALE_FACTOR; // convert to /100
+          const cqiMark = getCombinedCqiMark(Number(r.id));
+          if (cqiMark != null && Number.isFinite(cqiMark) && cqiMark > 0 && rawTotal < RAW_THRESHOLD) {
+            const rawAdd = cqiMark * PROJECT_CQI_RATE;
+            const maxAllowedRaw = Math.max(0, RAW_THRESHOLD - rawTotal);
+            const actualAddRaw = Math.min(rawAdd, maxAllowedRaw);
+            cqiAddScaled = round2(actualAddRaw * SCALE_FACTOR); // convert back to /60
+          }
+        }
 
-        const colVals = [
-          review1Base == null ? null : clamp(round2(review1Base + add1), 0, 30),
-          review2Base == null ? null : clamp(round2(review2Base + add2), 0, 30),
-        ];
-        const effTotal = colVals.some((v) => typeof v === 'number' && Number.isFinite(v))
-          ? round2(colVals.reduce((sum, v) => sum + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0))
-          : r.total;
+        // Column values stay unchanged (CQI applies to total, not per-review)
+        const colVals = [review1Base, review2Base];
+
+        let effTotal = hasAnyMark ? round2(combinedScaled + cqiAddScaled) : r.total;
+        if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
         const effPct = effTotal != null && maxTotal ? round2((effTotal / maxTotal) * 100) : r.pct;
         return { ...r, colVals, effTotal, effPct };
       });
@@ -2171,15 +2657,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     return computedRows.map((r: any) => {
       const studentEntry: any = (entries as any)?.[r.id] || {};
-      const mergedColsForRule = displayCols.filter((c) => c.isMerged && c.co != null && publishedCoSet.has(Number(c.co)));
-      let tv = 0, tm = 0;
-      for (const c of mergedColsForRule) {
-        const base = getDisplayValue(r.cells, c as any);
-        const mx = Number((c as any).weight) || 0;
-        if (base != null && Number.isFinite(base)) tv += Number(base);
-        if (Number.isFinite(mx) && mx > 0) tm += mx;
-      }
-      const totalPct = tm ? (tv / tm) * 100 : 0;
       let cqiAdded = 0;
       if (activeTab === 'after-cqi') {
         for (const col of displayCols) {
@@ -2188,7 +2665,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             const coMax = Number(col.weight) || 0;
             const input = studentEntry?.[`co${col.co}`];
             if (base != null && Number.isFinite(base) && coMax > 0) {
-              const add = computeCqiAdd({ coValue: Number(base), coMax, totalPct, input: input == null ? null : Number(input) });
+              const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
               if (add > 0) cqiAdded = round2(cqiAdded + add);
             }
           }
@@ -2201,13 +2678,20 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const coMax = Number(col.weight) || 0;
           const input = studentEntry?.[`co${col.co}`];
           if (base != null && Number.isFinite(base) && coMax > 0) {
-            const add = computeCqiAdd({ coValue: Number(base), coMax, totalPct, input: input == null ? null : Number(input) });
+            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
             if (add > 0) val = clamp(round2(Number(base) + add), 0, coMax);
           }
         }
         return val;
       });
-      const effTotal = r.total != null && cqiAdded > 0 ? clamp(round2(r.total + cqiAdded), 0, maxTotal) : r.total;
+      let effTotal = r.total != null && cqiAdded > 0 ? round2(r.total + cqiAdded) : r.total;
+      // Cap total at 58% if original total was below 58%.
+      const originalTotalPct = (r.total != null && maxTotal > 0) ? (r.total / maxTotal) * 100 : 0;
+      if (effTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
+        const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
+        effTotal = Math.min(effTotal, totalCap);
+      }
+      if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
       const effPct = effTotal != null && maxTotal ? round2((effTotal / maxTotal) * 100) : r.pct;
       return { ...r, colVals, effTotal, effPct };
     });
@@ -2314,7 +2798,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         body: [
           ['Course:', courseId],
           ['Section:', sectionLabel],
-          ['View:', activeTab === 'after-cqi' ? 'After CQI' : 'Actual'],
+          ['View:', activeTab === 'after-cqi' ? 'Final (With CQI)' : 'Before CQI'],
           ['Date:', new Date().toLocaleDateString('en-GB')],
         ],
       });
@@ -2447,7 +2931,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             borderRadius: 8, fontSize: 14, transition: 'color 0.2s', whiteSpace: 'nowrap',
           }}
         >
-          Actual
+          Before CQI
         </button>
         <button
           onClick={() => setActiveTab('after-cqi')}
@@ -2459,7 +2943,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             borderRadius: 8, fontSize: 14, transition: 'color 0.2s', whiteSpace: 'nowrap',
           }}
         >
-          After CQI
+          Final (With CQI)
         </button>
       </div>
 
@@ -2471,6 +2955,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       {activeTab === 'after-cqi' && !cqiPublished && (
         <div style={{ padding: '12px 16px', background: '#f0f9ff', borderRadius: 8, border: '1px solid #bae6fd', color: '#0c4a6e', marginBottom: 12, fontSize: 13 }}>
           CQI has not been published yet for this section. Once CQI is published, the combined marks will appear here.
+        </div>
+      )}
+      {activeTab === 'actual' && cqiPublished && (
+        <div style={{ padding: '12px 16px', background: '#fffbeb', borderRadius: 8, border: '1px solid #fcd34d', color: '#92400e', marginBottom: 12, fontSize: 13 }}>
+          <strong>Note:</strong> You are viewing marks <em>before</em> CQI. CQI has been published for this section.
+          Switch to <strong>Final (With CQI)</strong> tab to see the CQI-adjusted marks that are the official final values.
         </div>
       )}
       {activeTab === 'after-cqi' && cqiPublished && (
@@ -2570,18 +3060,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                   const entries = (cqiPublished?.entries && typeof cqiPublished.entries === 'object') ? cqiPublished.entries : {};
                   const studentEntry: any = (entries as any)?.[r.id] || {};
 
-                  // Row-level TOTAL% for CQI rule: based on published COs only.
-                  const mergedColsForRule = displayCols.filter((c) => c.isMerged && c.co != null && publishedCoSet.has(Number(c.co)));
-                  let totalValue = 0;
-                  let totalMax = 0;
-                  for (const c of mergedColsForRule) {
-                    const base = getDisplayValue(r.cells, c as any);
-                    const mx = Number((c as any).weight) || 0;
-                    if (base != null && Number.isFinite(base)) totalValue += Number(base);
-                    if (Number.isFinite(mx) && mx > 0) totalMax += mx;
-                  }
-                  const totalPct = totalMax ? (totalValue / totalMax) * 100 : 0;
-
                   // Pre-compute total CQI addition for this row (so total/pct cols can reflect it).
                   let cqiTotalAdded = 0;
                   if (activeTab === 'after-cqi') {
@@ -2591,16 +3069,23 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                         const coMax = Number(col.weight) || 0;
                         const input = studentEntry?.[`co${col.co}`];
                         if (base != null && Number.isFinite(base) && coMax > 0) {
-                          const add = computeCqiAdd({ coValue: Number(base), coMax, totalPct, input: input == null ? null : Number(input) });
+                          const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
                           if (add > 0) cqiTotalAdded = round2(cqiTotalAdded + add);
                         }
                       }
                     }
                   }
 
-                  const effectiveTotal = (r.total != null && cqiTotalAdded > 0)
-                    ? clamp(round2(r.total + cqiTotalAdded), 0, maxTotal)
+                  let effectiveTotal = (r.total != null && cqiTotalAdded > 0)
+                    ? round2(r.total + cqiTotalAdded)
                     : r.total;
+                  // Cap total at 58% if original total was below 58%.
+                  const originalTotalPct = (r.total != null && maxTotal > 0) ? (r.total / maxTotal) * 100 : 0;
+                  if (effectiveTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
+                    const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
+                    effectiveTotal = Math.min(effectiveTotal, totalCap);
+                  }
+                  if (effectiveTotal != null) effectiveTotal = clamp(effectiveTotal, 0, maxTotal);
                   const effectivePct = (effectiveTotal != null && maxTotal)
                     ? round2((effectiveTotal / maxTotal) * 100)
                     : r.pct;
@@ -2617,7 +3102,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                           const coMax = Number(col.weight) || 0;
                           const input = studentEntry?.[`co${col.co}`];
                           if (base != null && Number.isFinite(base) && coMax > 0) {
-                            const add = computeCqiAdd({ coValue: Number(base), coMax, totalPct, input: input == null ? null : Number(input) });
+                            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
                             if (add > 0) {
                               changed = true;
                               val = clamp(round2(Number(base) + add), 0, coMax);

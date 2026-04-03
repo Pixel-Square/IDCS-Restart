@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { jsPDF } from 'jspdf';
 
 import { fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
-import { getAttendanceFilterKey, getAttendanceSessionKey, readAttendanceStatusMap, writeAttendanceStatus, readAttendanceLock, writeAttendanceLock } from './attendanceStore';
-import { readTTScheduleMap } from './ttScheduleStore';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
+import { getAttendanceFilterKey, getAttendanceSessionKey, readAttendanceStatusMap, writeAttendanceStatus, readAttendanceLock, writeAttendanceLock, hydrateAttendanceStore } from './attendanceStore';
+import { readTTScheduleMap, hydrateTtScheduleStore } from './ttScheduleStore';
 import { getCachedMe } from '../../services/auth';
 import fetchWithAuth from '../../services/fetchAuth';
-
-const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
-const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
+import krLogoSrc from '../../assets/krlogo.png';
+import newBannerSrc from '../../assets/newban.jpeg';
 
 type AttendanceRow = {
   reg_no: string;
@@ -21,6 +21,8 @@ type CourseMeta = {
   courseCode: string;
   courseName: string;
   department: string;
+  examDate: string;
+  examSession: 'FN' | 'AN' | '-';
 };
 
 type CourseBlock = {
@@ -29,9 +31,46 @@ type CourseBlock = {
   sessionKey: string;
 };
 
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Failed to read image as data URL.'));
+    };
+    reader.onerror = () => reject(new Error('Failed to load image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function parseTtSlot(raw: string): Array<{ date: string; session: 'FN' | 'AN' | '-' }> {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+
+  return text
+    .split('|')
+    .map((part, idx) => {
+      const [datePartRaw, sessionPartRaw] = part.split('#');
+      const datePart = String(datePartRaw || '').trim();
+      if (!datePart) return null;
+
+      const sessionPart = String(sessionPartRaw || '').trim().toUpperCase();
+      const inferred = idx === 0 ? 'FN' : 'AN';
+      const session = sessionPart === 'FN' || sessionPart === 'AN' ? sessionPart : inferred;
+
+      return { date: datePart, session } as { date: string; session: 'FN' | 'AN' | '-' };
+    })
+    .filter((slot): slot is { date: string; session: 'FN' | 'AN' | '-' } => Boolean(slot));
+}
+
 export default function AttendancePage() {
-  const [department, setDepartment] = useState<(typeof DEPARTMENTS)[number]>('ALL');
-  const [semester, setSemester] = useState<(typeof SEMESTERS)[number]>('SEM1');
+  const [departments, setDepartments] = useState<string[]>(['ALL']);
+  const [semesters, setSemesters] = useState<string[]>(['SEM1']);
+  const [loadingDeps, setLoadingDeps] = useState(false);
+  const [department, setDepartment] = useState('ALL');
+  const [semester, setSemester] = useState('SEM1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [courseBlocks, setCourseBlocks] = useState<CourseBlock[]>([]);
@@ -45,6 +84,79 @@ export default function AttendancePage() {
   const [validatingPassword, setValidatingPassword] = useState(false);
   const [selectedCourseKey, setSelectedCourseKey] = useState<string>('');
   const [searchRegNo, setSearchRegNo] = useState<string>('');
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [pdfPreviewFileName, setPdfPreviewFileName] = useState('');
+  const [pdfPreviewTitle, setPdfPreviewTitle] = useState('');
+
+  // Fetch departments on mount
+  useEffect(() => {
+    // Hydrate attendance + TT schedule stores from DB
+    Promise.all([
+      hydrateAttendanceStore(),
+      hydrateTtScheduleStore(),
+    ]).catch(() => {});
+
+    let active = true;
+    setLoadingDeps(true);
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/departments/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const depts = data.results || data || [];
+          const deptNames = depts
+            .map((d: any) => {
+              const label = d?.short_name || d?.code || d?.name || d;
+              return label ? String(label).trim().toUpperCase() : null;
+            })
+            .filter(Boolean);
+          setDepartments(['ALL', ...(deptNames as string[])]);
+          setDepartment('ALL');
+        } else {
+          console.warn('Failed to fetch departments, using defaults');
+          setDepartments(['ALL']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching departments:', err);
+      } finally {
+        if (active) setLoadingDeps(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fetch semesters on mount
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/semesters/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const sems = data.results || data || [];
+          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
+          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
+          setSemester(semNames[0] || 'SEM1');
+        } else {
+          console.warn('Failed to fetch semesters, using defaults');
+          setSemesters(['SEM1']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching semesters:', err);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filterKey = useMemo(() => getAttendanceFilterKey(department, semester), [department, semester]);
 
@@ -88,7 +200,7 @@ export default function AttendancePage() {
         const response = await fetchCoeStudentsMap({ department, semester });
         if (!active) return;
 
-        const selectionMap = readCourseSelectionMap();
+        const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
         const ttMap = readTTScheduleMap(filterKey);
         const blocks: CourseBlock[] = [];
 
@@ -103,8 +215,8 @@ export default function AttendancePage() {
               });
               const selection = selectionMap[courseKey];
               if (selection && selection.eseType !== 'ESE') return false;
-              const ttDate = ttMap[courseKey];
-              return ttDate === attendanceDate;
+              const slots = parseTtSlot(ttMap[courseKey] || '');
+              return slots.some((slot) => slot.date === attendanceDate);
             })
             .forEach((course) => {
               const courseKey = getCourseKey({
@@ -113,6 +225,8 @@ export default function AttendancePage() {
                 courseCode: course.course_code || '',
                 courseName: course.course_name || '',
               });
+              const slots = parseTtSlot(ttMap[courseKey] || '');
+              const matchedSlot = slots.find((slot) => slot.date === attendanceDate);
 
               const list = (course.students || [])
                 .map((student) => ({
@@ -129,6 +243,8 @@ export default function AttendancePage() {
                   courseCode: course.course_code || '',
                   courseName: course.course_name || 'Unnamed Course',
                   department: deptBlock.department,
+                  examDate: matchedSlot?.date || attendanceDate,
+                  examSession: matchedSlot?.session || '-',
                 },
                 rows: list,
                 sessionKey: getAttendanceSessionKey(filterKey, courseKey, attendanceDate),
@@ -144,6 +260,7 @@ export default function AttendancePage() {
         const message = err instanceof Error ? err.message : 'Failed to load attendance students.';
         setError(message);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
@@ -226,6 +343,200 @@ export default function AttendancePage() {
     }
   };
 
+  const closePdfPreview = () => {
+    setPdfPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPdfPreviewFileName('');
+    setPdfPreviewTitle('');
+  };
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewUrl) {
+        URL.revokeObjectURL(pdfPreviewUrl);
+      }
+    };
+  }, [pdfPreviewUrl]);
+
+  const sanitizeFileName = (value: string) =>
+    String(value || '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .replace(/\s+/g, '_')
+      .slice(0, 120);
+
+  const downloadFromPreview = () => {
+    if (!pdfPreviewUrl || !pdfPreviewFileName) return;
+    const anchor = document.createElement('a');
+    anchor.href = pdfPreviewUrl;
+    anchor.download = pdfPreviewFileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  };
+
+  const previewAttendancePdf = async (block: CourseBlock) => {
+    const sm = statusMaps[block.sessionKey] || {};
+    const presentRows = block.rows.filter((row) => (sm[row.reg_no] || 'present') === 'present');
+
+    if (presentRows.length === 0) {
+      alert('No present students to include in PDF for this course.');
+      return;
+    }
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 10;
+    const headerTop = 0; // Moved up by decreasing from 15
+    const detailsTop = 48;
+    const tableTop = 56;
+    const footerY = pageHeight - 34; // Reduced to leave approx 1.5cm-2cm empty space at bottom
+    const rowsPerColumn = 15;
+    const columnsPerPage = 4;
+    const rowsPerPage = rowsPerColumn * columnsPerPage;
+    const totalPages = Math.max(1, Math.ceil(presentRows.length / rowsPerPage));
+
+    let bannerDataUrl = '';
+    let logoDataUrl = '';
+    try {
+      bannerDataUrl = await imageUrlToDataUrl(newBannerSrc);
+    } catch {
+      bannerDataUrl = '';
+    }
+    try {
+      logoDataUrl = await imageUrlToDataUrl(krLogoSrc);
+    } catch {
+      logoDataUrl = '';
+    }
+
+    for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
+      if (pageIndex > 0) doc.addPage();
+
+      if (bannerDataUrl) {
+        const props = doc.getImageProperties(bannerDataUrl);
+        const bannerHeight = 28; // Reduced height to prevent overlapping
+        const bannerWidth = (props.width * bannerHeight) / props.height;
+        doc.addImage(bannerDataUrl, 'PNG', margin, headerTop, bannerWidth, bannerHeight);
+      }
+
+      if (logoDataUrl) {
+        const props = doc.getImageProperties(logoDataUrl);
+        const logoHeight = 16; // Slightly increased for alignment
+        const logoWidth = (props.width * logoHeight) / props.height;
+        // Aligning logo top with banner top by using the same headerTop
+        doc.addImage(logoDataUrl, 'PNG', pageWidth - margin - logoWidth, headerTop + 4, logoWidth, logoHeight);
+      }
+
+      doc.setFont('timesnewroman', 'italic', "bold");
+      doc.setFontSize(18);
+      doc.text('Office of the Controller of Examinations', pageWidth / 2, headerTop + 15, { align: 'center' });
+
+      doc.setFontSize(10);
+      const metaYStart = headerTop + 36; // Moving meta text below the COE header
+      doc.text(`Course / Branch`, margin, metaYStart);
+      doc.text(`Course Code & Name`, margin, metaYStart + 5);
+      doc.text(`Date & Session`, margin, metaYStart + 10);
+
+      doc.setFont('helvetica', 'normal');
+      doc.text(`: ${block.meta.department}`, margin + 40, metaYStart);
+      doc.text(`: ${block.meta.courseCode} - ${block.meta.courseName}`, margin + 40, metaYStart + 5);
+      doc.text(`: ${block.meta.examDate} & ${block.meta.examSession}`, margin + 40, metaYStart + 10);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Semester - ${semester.toUpperCase()}`, pageWidth - margin, metaYStart + 10, { align: 'right' });
+      doc.text(`Station:  TRICHY`, pageWidth - margin, metaYStart + 15, { align: 'right' });
+      const usableWidth = pageWidth - margin * 2;
+      const groupGap = 3;
+      const groupWidth = (usableWidth - groupGap * 3) / 4;
+      const snoWidth = 10;
+      const attendanceWidth = 18;
+      const regWidth = groupWidth - snoWidth - attendanceWidth;
+
+      const tableBottom = footerY - 10;
+      const headerHeight = 7;
+      const rowHeight = (tableBottom - tableTop - headerHeight) / rowsPerColumn;
+
+      for (let group = 0; group < columnsPerPage; group += 1) {
+        const groupX = margin + group * (groupWidth + groupGap);
+        const groupStartIndex = pageIndex * rowsPerPage + group * rowsPerColumn;
+        const remainingForGroup = presentRows.length - groupStartIndex;
+        const rowsInGroup = Math.min(rowsPerColumn, Math.max(remainingForGroup, 0));
+
+        if (rowsInGroup <= 0) {
+          continue;
+        }
+
+        doc.setFillColor(245, 245, 245);
+        doc.rect(groupX, tableTop, groupWidth, headerHeight, 'F');
+        doc.rect(groupX, tableTop, groupWidth, headerHeight);
+        doc.line(groupX + snoWidth, tableTop, groupX + snoWidth, tableTop + headerHeight);
+        doc.line(groupX + snoWidth + regWidth, tableTop, groupX + snoWidth + regWidth, tableTop + headerHeight);
+
+        doc.setFontSize(8.5);
+        doc.text('S.No', groupX + 1.5, tableTop + 4.7);
+        doc.text('REG No', groupX + snoWidth + 1.5, tableTop + 4.7);
+        doc.text('Attendance', groupX + snoWidth + regWidth + 0.5, tableTop + 3.2);
+        
+        for (let r = 0; r < rowsInGroup; r += 1) {
+          const y = tableTop + headerHeight + r * rowHeight;
+          doc.rect(groupX, y, groupWidth, rowHeight);
+          doc.line(groupX + snoWidth, y, groupX + snoWidth, y + rowHeight);
+          doc.line(groupX + snoWidth + regWidth, y, groupX + snoWidth + regWidth, y + rowHeight);
+
+          const absoluteIndex = pageIndex * rowsPerPage + group * rowsPerColumn + r;
+          if (absoluteIndex < presentRows.length) {
+            const serialNo = absoluteIndex + 1;
+            const regNo = presentRows[absoluteIndex].reg_no;
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(8.5);
+            doc.text(String(serialNo), groupX + 2.5, y + rowHeight * 0.67);
+            doc.text(regNo, groupX + snoWidth + 2, y + rowHeight * 0.67);
+          }
+        }
+      }
+
+      
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      const blockPresent = presentRows.length;
+      const blockAbsent = block.rows.length - presentRows.length;
+      doc.text(`Total no. of registered students: ${block.rows.length} (Present: ${blockPresent}, Absent: ${blockAbsent})`, margin, tableTop - 2);
+      
+
+      // Bottom info boxes
+      const boxWidth = (pageWidth - margin * 2) / 4;
+      const boxHeight = 20;
+      doc.rect(margin, footerY, pageWidth - margin * 2, boxHeight);
+      doc.line(margin + boxWidth, footerY, margin + boxWidth, footerY + boxHeight);
+      doc.line(margin + boxWidth * 2, footerY, margin + boxWidth * 2, footerY + boxHeight);
+      doc.line(margin + boxWidth * 3, footerY, margin + boxWidth * 3, footerY + boxHeight);
+
+      doc.setFontSize(8);
+      doc.text(`Absent: ${blockAbsent}`, margin + boxWidth * 1 + 2, footerY + 5);
+      doc.text('Scripts:', margin + boxWidth * 1 + 2, footerY + 15);
+
+      doc.text('Name & Signature Checked By', margin + 2, footerY + 5);
+      doc.text('Name & Signature Verified By AUR', margin + boxWidth * 2 + 2, footerY + 5);
+      doc.text('Signature of Chief Superintendent:', margin + boxWidth * 3 + 2, footerY + 5);
+    }
+
+    const fileName = sanitizeFileName(
+      `attendance_${block.meta.courseCode || 'NO_CODE'}_${block.meta.examDate || attendanceDate}_${block.meta.examSession}.pdf`
+    );
+
+    const blob = doc.output('blob');
+    const previewUrl = URL.createObjectURL(blob);
+    setPdfPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return previewUrl;
+    });
+    setPdfPreviewFileName(fileName);
+    setPdfPreviewTitle(`${block.meta.courseCode} - ${block.meta.courseName}`);
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {showPasswordModal ? (
@@ -272,6 +583,33 @@ export default function AttendancePage() {
         </div>
       ) : null}
 
+      {pdfPreviewUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-6xl rounded-xl bg-white shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">Attendance PDF Preview{pdfPreviewTitle ? ` - ${pdfPreviewTitle}` : ''}</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={downloadFromPreview}
+                  className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
+                >
+                  Download
+                </button>
+                <button
+                  onClick={closePdfPreview}
+                  className="px-3 py-1.5 rounded-md bg-gray-200 text-gray-800 text-sm font-medium hover:bg-gray-300"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="h-[80vh] bg-gray-100">
+              <iframe title="Attendance PDF Preview" src={pdfPreviewUrl} className="w-full h-full" />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-[#deb9ac] bg-white p-6 shadow-sm flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[#5b1a30]">COE Attendance</h1>
@@ -289,11 +627,12 @@ export default function AttendancePage() {
             </label>
             <select
               id="coe-attendance-department"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 disabled:opacity-50"
               value={department}
-              onChange={(e) => setDepartment(e.target.value as (typeof DEPARTMENTS)[number])}
+              onChange={(e) => setDepartment(e.target.value)}
+              disabled={loadingDeps}
             >
-              {DEPARTMENTS.map((dept) => (
+              {departments.map((dept) => (
                 <option key={dept} value={dept}>
                   {dept}
                 </option>
@@ -309,9 +648,9 @@ export default function AttendancePage() {
               id="coe-attendance-semester"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
               value={semester}
-              onChange={(e) => setSemester(e.target.value as (typeof SEMESTERS)[number])}
+              onChange={(e) => setSemester(e.target.value)}
             >
-              {SEMESTERS.map((sem) => (
+              {semesters.map((sem) => (
                 <option key={sem} value={sem}>
                   {sem}
                 </option>
@@ -413,11 +752,17 @@ export default function AttendancePage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-bold text-gray-900">{block.meta.courseName}</h3>
-                    <p className="text-xs font-medium text-gray-500">{block.meta.courseCode || 'NO_CODE'} | {block.meta.department}</p>
+                    <p className="text-xs font-medium text-gray-500">{block.meta.courseCode || 'NO_CODE'} | {block.meta.department} | {block.meta.examDate} | {block.meta.examSession}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-1 rounded">{blockPresent} P</span>
                     <span className="text-xs text-red-700 bg-red-50 px-2 py-1 rounded">{blockAbsent} A</span>
+                    <button
+                      onClick={() => void previewAttendancePdf(block)}
+                      className="rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm bg-indigo-600 hover:bg-indigo-700"
+                    >
+                      PDF Preview
+                    </button>
                     {locked ? (
                       <button
                         onClick={() => openUnlockConfirm(block.sessionKey)}

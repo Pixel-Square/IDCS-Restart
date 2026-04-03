@@ -44,3 +44,58 @@ class CoeArrearStudent(models.Model):
     def __str__(self):
         return f"{self.department} {self.semester} {self.course_code} {self.student_register_number}"
 
+
+class CoeAssignmentStore(models.Model):
+    """Stores COE assignment data keyed by department/semester/date."""
+
+    store_key = models.CharField(max_length=64, unique=True, db_index=True)
+    assignments = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return self.store_key
+
+
+class CoeCourseSelectionStore(models.Model):
+    """
+    Persists COE Course List selections (QP type, ESE type) and lock state
+    per department+semester so they are available across all devices.
+    """
+
+    store_key = models.CharField(
+        max_length=64, unique=True, db_index=True,
+        help_text='department::semester, e.g. "BCA::SEM1"',
+    )
+    selections = models.JSONField(
+        default=dict, blank=True,
+        help_text='Map of courseKey -> {selected, qpType, eseType}',
+    )
+    is_locked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.store_key} (locked={self.is_locked})"
+
+
+class CoeKeyValueStore(models.Model):
+    """Generic key-value store for COE page data that needs DB persistence across devices."""
+
+    store_name = models.CharField(max_length=255, unique=True, db_index=True)
+    data = models.JSONField(default=dict, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return self.store_name
+

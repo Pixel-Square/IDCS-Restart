@@ -4,7 +4,7 @@ from django.utils import timezone
 
 from .models import TeachingAssignment
 from .models import SpecialCourseAssessmentEditRequest
-from academics.models import Subject, Section
+from academics.models import Subject, Section, Semester
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
@@ -14,6 +14,17 @@ from academics.models import StudentProfile
 from academics.models import PeriodAttendanceSession, PeriodAttendanceRecord
 from timetable.models import TimetableSlot
 from academics.models import AttendanceUnlockRequest
+
+
+class SemesterSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = Semester
+        fields = ('id', 'number', 'name')
+    
+    def get_name(self, obj):
+        return f"SEM{obj.number}"
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
@@ -26,6 +37,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
     class_type = serializers.SerializerMethodField(read_only=True)
+    question_paper_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.SerializerMethodField(read_only=True)
     section_id = serializers.IntegerField(source='section.id', read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
@@ -43,6 +55,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             'subject_code',
             'subject_name',
             'class_type',
+            'question_paper_type',
             'section_name',
             'section_id',
             'elective_subject_id',
@@ -240,6 +253,34 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
                 ct = getattr(row, 'class_type', None) or getattr(getattr(row, 'master', None), 'class_type', None)
                 if ct:
                     return ct
+        except Exception:
+            return None
+
+        return None
+
+    def get_question_paper_type(self, obj):
+        """Return question_paper_type from the curriculum row.
+
+        Cross-department staff may not have access to CurriculumDepartment rows
+        via the curriculum API, so we expose this here from the linked row.
+        """
+        try:
+            # Elective assignments store question_paper_type on ElectiveSubject
+            if getattr(obj, 'elective_subject', None):
+                qpt = getattr(obj.elective_subject, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+
+            row = getattr(obj, 'curriculum_row', None) or self._curriculum_row_for_obj(obj)
+            if row:
+                # Prefer CurriculumDepartment.question_paper_type (current),
+                # fall back to CurriculumMaster.qp_type (legacy)
+                qpt = getattr(row, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+                master = getattr(row, 'master', None)
+                if master:
+                    return getattr(master, 'qp_type', None)
         except Exception:
             return None
 
@@ -847,10 +888,11 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
     curriculum_row_id = serializers.IntegerField(write_only=True, required=False)
     curriculum_row = serializers.SerializerMethodField(read_only=True)
+    subject_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = None  # set at import time to avoid circular import
-        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'subject_info', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at', 'created_by')
 
     def __init__(self, *args, **kwargs):
@@ -915,6 +957,38 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             return {'id': row.id, 'course_code': getattr(row, 'course_code', None), 'course_name': getattr(row, 'course_name', None)}
         except Exception:
             return None
+
+    def get_subject_info(self, obj):
+        """Return subject code/name — using curriculum_row if available, else creator's elective TA."""
+        try:
+            row = getattr(obj, 'curriculum_row', None)
+            if row:
+                return {
+                    'course_code': getattr(row, 'course_code', None),
+                    'course_name': getattr(row, 'course_name', None),
+                }
+        except Exception:
+            pass
+        # Fallback: look up creator's elective teaching assignment
+        try:
+            creator_id = getattr(obj, 'created_by_id', None)
+            if not creator_id:
+                return None
+            from .models import TeachingAssignment
+            eta = TeachingAssignment.objects.filter(
+                staff_id=creator_id,
+                elective_subject__isnull=False,
+                is_active=True,
+            ).select_related('elective_subject').first()
+            if eta and getattr(eta, 'elective_subject', None):
+                es = eta.elective_subject
+                return {
+                    'course_code': getattr(es, 'course_code', None),
+                    'course_name': getattr(es, 'course_name', None),
+                }
+        except Exception:
+            pass
+        return None
 
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []
@@ -1398,8 +1472,26 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
             'username',
             'email',
             'full_name',
+            'salutation',
             'designation',
             'organisation',
+            'teaching',
+            'faculty_id',
+            'department',
+            'mobile',
+            'gender',
+            'ug_specialization',
+            'pg_specialization',
+            'phd_status',
+            'total_experience',
+            'engg_college_experience',
+            'date_of_birth',
+            'account_holder_name',
+            'account_number',
+            'bank_name',
+            'bank_branch_name',
+            'ifsc_code',
+            'passbook_proof',
             'notes',
             'is_active',
             'created_at',

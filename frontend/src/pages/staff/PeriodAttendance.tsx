@@ -3158,7 +3158,7 @@ export default function PeriodAttendance(){
                                 </select>
                                 {lockReason && (lockReason === 'ABSENT' || lockReason === 'OD' || lockReason === 'LEAVE' || lockReason === 'LATE') && (
                                   <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                                    <Lock className="w-4 h-4 text-slate-400" title={`Locked by daily status: ${lockReason}`}/>
+                                    <Lock className="w-4 h-4 text-slate-400" aria-label={`Locked by daily status: ${lockReason}`}/>
                                   </div>
                                 )}
                               </div>

@@ -74,7 +74,7 @@ import ManageGatePage from './pages/hr/ManageGatePage';
 import GatePassLogsPage from './pages/hr/GatePassLogsPage';
 import StaffValidationPage from './pages/hr/StaffValidationPage';
 import StaffSalaryPage from './pages/hr/StaffSalaryPage';
-import ExtStaffProfilesPage from './pages/hr/ExtStaffProfilesPage';
+import ExtStaffProfilesPage from './pages/EXTStaff/ExtStaffProfilesPage';
 import SalaryPage from './pages/staff/SalaryPage';
 import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
@@ -627,8 +627,8 @@ export default function App() {
                 />
                 
                 <Route
-                  path="/hr/ext-staff-profiles"
-                  element={<ProtectedRoute user={user} requiredPermissions={['academics.view_staffs_page']} element={<ExtStaffProfilesPage />} />}
+                  path="/iqac/external-management"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ExtStaffProfilesPage />} />}
                 />
 
                 {/* Staff Requests Routes */}

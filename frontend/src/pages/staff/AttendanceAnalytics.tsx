@@ -139,7 +139,7 @@ const AttendanceAnalytics: React.FC = () => {
                   const dailyPresent = s.daily_present_days ?? 0
                   const dailyAbsent = s.daily_absent_days ?? 0
                   const dailyLeave = s.daily_leave_days ?? 0
-                  const dailyTotal = dailyPresent + dailyAbsent + dailyLeave
+                  const dailyTotal = dailyPresent + dailyAbsent
                   const dailyPct = isRange
                     ? (dailyTotal > 0 ? Math.round((dailyPresent / dailyTotal) * 100) : null)
                     : (s.daily_status ? (['P','OD','LATE'].includes(s.daily_status) ? 100 : 0) : null)
@@ -1915,7 +1915,11 @@ const AttendanceAnalytics: React.FC = () => {
                                 {present}
                               </span>
                             </td>
-                            <td className="px-2 py-2 whitespace-nowrap text-center text-gray-300">—</td>
+                            <td className="px-2 py-2 whitespace-nowrap text-center">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                {absent}
+                              </span>
+                            </td>
                             <td className="px-2 py-2 whitespace-nowrap text-center">
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                                 {odCount}

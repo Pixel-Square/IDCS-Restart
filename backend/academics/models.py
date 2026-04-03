@@ -8,6 +8,7 @@ from django.utils import timezone
 from datetime import date
 from django.utils.translation import gettext_lazy as _
 from accounts.models import Role
+import secrets
 
 
 class AcademicYear(models.Model):
@@ -1536,20 +1537,17 @@ class AttendanceAssignmentRequest(models.Model):
 # ---------------------------------------------------------------------------
 # External Staff Profile
 # ---------------------------------------------------------------------------
-import secrets
-import string as _string
 
 def _generate_ext_uid():
-    """Generate a unique 16-character alphanumeric ID (uppercase A-Z + digits)."""
-    alphabet = _string.ascii_uppercase + _string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(16))
+    """Generate a unique 6-digit numeric ID."""
+    return ''.join(secrets.choice('0123456789') for _ in range(6))
 
 
 class ExtStaffProfile(models.Model):
     """
     Tracks external / visiting staff who do not have a full StaffProfile.
     Each record links to an existing User account and holds a randomly generated
-    16-character alphanumeric unique identifier (ext_uid).
+    6-digit numeric unique identifier (ext_uid).
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -1558,14 +1556,33 @@ class ExtStaffProfile(models.Model):
         help_text='The user account this external staff profile belongs to.',
     )
     ext_uid = models.CharField(
-        max_length=16,
+        max_length=6,
         unique=True,
         db_index=True,
         editable=False,
-        help_text='Auto-generated 16-character alphanumeric unique ID.',
+        help_text='Auto-generated 6-digit numeric unique ID.',
     )
+    salutation = models.CharField(max_length=20, blank=True, default='', help_text='Salutation, e.g., Dr., Mr., Ms.')
     designation = models.CharField(max_length=128, blank=True, default='')
-    organisation = models.CharField(max_length=255, blank=True, default='')
+    college_name = models.CharField(max_length=255, blank=True, default='', help_text='College name where staff is working')
+    teaching = models.CharField(max_length=128, blank=True, default='', help_text='Teaching role, e.g., Teaching Faculty')
+    faculty_id = models.CharField(max_length=64, blank=True, default='', help_text='Faculty ID')
+    department = models.CharField(max_length=255, blank=True, default='', help_text='Department working in')
+    mobile = models.CharField(max_length=20, blank=True, default='', help_text='Mobile number')
+    gender = models.CharField(max_length=20, blank=True, default='', help_text='Gender')
+    ug_specialization = models.CharField(max_length=255, blank=True, default='', help_text='UG with Specialization, e.g., B.E/B.Tech - Mechanical Engineering')
+    pg_specialization = models.CharField(max_length=255, blank=True, default='', help_text='PG with Specialization, e.g., M.E/M.Tech - Structural Engineering')
+    phd_status = models.CharField(max_length=64, blank=True, default='', help_text='PhD Status')
+    total_experience = models.CharField(max_length=64, blank=True, default='', help_text='Total experience')
+    engg_college_experience = models.CharField(max_length=64, blank=True, default='', help_text='Experience at Engineering College only, in years')
+    date_of_birth = models.DateField(null=True, blank=True, help_text='Date of birth')
+    # Bank details
+    account_holder_name = models.CharField(max_length=255, blank=True, default='', help_text='Account holder name')
+    account_number = models.CharField(max_length=64, blank=True, default='', help_text='Bank account number')
+    bank_name = models.CharField(max_length=255, blank=True, default='', help_text='Name of the bank')
+    bank_branch_name = models.CharField(max_length=255, blank=True, default='', help_text='Bank branch name (full form)')
+    ifsc_code = models.CharField(max_length=20, blank=True, default='', help_text='IFSC code')
+    passbook_proof = models.FileField(upload_to='ext_staff_passbook/', blank=True, null=True, help_text='Scanned copy of passbook front page')
     notes = models.TextField(blank=True, default='')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1596,3 +1613,122 @@ class ExtStaffProfile(models.Model):
 # Historically the code deleted users when profiles were removed.
 # That behavior is unsafe for audit/history. Do NOT delete users when
 # profiles are removed; prefer deactivation via accounts.services.deactivate_user.
+
+
+class ExtStaffFormSettings(models.Model):
+    """
+    Singleton model to store external staff registration form settings.
+    Manages which fields are enabled, form acceptance status, and generates
+    a unique form code for sharing.
+    """
+    # Form identification
+    form_code = models.CharField(
+        max_length=32,
+        unique=True,
+        db_index=True,
+        help_text='Unique code for the registration form URL.',
+    )
+    form_title = models.CharField(max_length=255, default='External Staff Registration', help_text='Form title displayed to users')
+    form_description = models.TextField(blank=True, default='', help_text='Form description/instructions')
+    
+    # Form status
+    is_accepting_responses = models.BooleanField(default=False, help_text='Whether the form is currently accepting responses')
+    
+    # Field configuration - JSON storing which fields are enabled and their order
+    # Format: [{"field": "salutation", "enabled": true, "required": true, "label": "Salutation", "order": 1}, ...]
+    field_config = models.JSONField(default=list, help_text='Configuration for form fields')
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ext_staff_form_created',
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='ext_staff_form_updated',
+    )
+
+    class Meta:
+        verbose_name = 'External Staff Form Settings'
+        verbose_name_plural = 'External Staff Form Settings'
+
+    def save(self, *args, **kwargs):
+        if not self.form_code:
+            # Generate unique form code
+            code = ''.join(secrets.choice(_string.ascii_lowercase + _string.digits) for _ in range(12))
+            while ExtStaffFormSettings.objects.filter(form_code=code).exists():
+                code = ''.join(secrets.choice(_string.ascii_lowercase + _string.digits) for _ in range(12))
+            self.form_code = code
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"ExtStaffForm [{self.form_code}] - {'Active' if self.is_accepting_responses else 'Inactive'}"
+
+    @classmethod
+    def get_or_create_settings(cls):
+        """Get the singleton form settings, creating with defaults if not exists."""
+        settings_obj = cls.objects.first()
+        if not settings_obj:
+            # Default field configuration based on ExtStaffProfile fields
+            default_fields = [
+                {"field": "salutation", "enabled": True, "required": False, "label": "Salutation (Dr./Mr./Ms.)", "type": "select", "options": ["Dr.", "Mr.", "Ms.", "Mrs.", "Prof."], "order": 1},
+                {"field": "full_name", "enabled": True, "required": True, "label": "Full Name", "type": "text", "order": 2},
+                {"field": "email", "enabled": True, "required": True, "label": "Email Address", "type": "email", "order": 3},
+                {"field": "mobile", "enabled": True, "required": True, "label": "Mobile Number", "type": "tel", "order": 4},
+                {"field": "gender", "enabled": True, "required": False, "label": "Gender", "type": "select", "options": ["Male", "Female", "Other"], "order": 5},
+                {"field": "date_of_birth", "enabled": True, "required": False, "label": "Date of Birth", "type": "date", "order": 6},
+                {"field": "designation", "enabled": True, "required": False, "label": "Designation", "type": "text", "order": 7},
+                {"field": "college_name", "enabled": True, "required": False, "label": "College Name", "type": "text", "order": 8},
+                {"field": "department", "enabled": True, "required": False, "label": "Department", "type": "text", "order": 9},
+                {"field": "teaching", "enabled": True, "required": False, "label": "Type of Faculty", "type": "select", "options": ["Teaching Faculty", "Visiting Faculty", "Guest Lecturer", "Industry Expert", "Other"], "order": 10},
+                {"field": "faculty_id", "enabled": False, "required": False, "label": "Faculty ID", "type": "text", "order": 11},
+                {"field": "ug_specialization", "enabled": True, "required": False, "label": "UG Specialization", "type": "text", "order": 12},
+                {"field": "pg_specialization", "enabled": True, "required": False, "label": "PG Specialization", "type": "text", "order": 13},
+                {"field": "phd_status", "enabled": True, "required": False, "label": "PhD Status", "type": "select", "options": ["Not Applicable", "Pursuing", "Completed"], "order": 14},
+                {"field": "total_experience", "enabled": True, "required": False, "label": "Total Experience (Years)", "type": "text", "order": 15},
+                {"field": "engg_college_experience", "enabled": True, "required": False, "label": "Engineering College Experience (Years)", "type": "text", "order": 16},
+                {"field": "account_holder_name", "enabled": False, "required": False, "label": "Account Holder Name", "type": "text", "order": 17},
+                {"field": "account_number", "enabled": False, "required": False, "label": "Bank Account Number", "type": "text", "order": 18},
+                {"field": "bank_name", "enabled": False, "required": False, "label": "Bank Name", "type": "text", "order": 19},
+                {"field": "bank_branch_name", "enabled": False, "required": False, "label": "Bank Branch Name", "type": "text", "order": 20},
+                {"field": "ifsc_code", "enabled": False, "required": False, "label": "IFSC Code", "type": "text", "order": 21},
+                {"field": "passbook_proof", "enabled": False, "required": False, "label": "Passbook Proof (Scanned Copy)", "type": "file", "order": 22},
+            ]
+            settings_obj = cls.objects.create(field_config=default_fields)
+        return settings_obj
+
+    @staticmethod
+    def get_available_fields():
+        """Return list of all available fields from ExtStaffProfile model."""
+        return [
+            {"field": "salutation", "label": "Salutation", "type": "select", "options": ["Dr.", "Mr.", "Ms.", "Mrs.", "Prof."]},
+            {"field": "full_name", "label": "Full Name", "type": "text"},
+            {"field": "email", "label": "Email Address", "type": "email"},
+            {"field": "mobile", "label": "Mobile Number", "type": "tel"},
+            {"field": "gender", "label": "Gender", "type": "select", "options": ["Male", "Female", "Other"]},
+            {"field": "date_of_birth", "label": "Date of Birth", "type": "date"},
+            {"field": "designation", "label": "Designation", "type": "text"},
+            {"field": "college_name", "label": "College Name", "type": "text"},
+            {"field": "department", "label": "Department", "type": "text"},
+            {"field": "teaching", "label": "Type of Faculty", "type": "select", "options": ["Teaching Faculty", "Visiting Faculty", "Guest Lecturer", "Industry Expert", "Other"]},
+            {"field": "faculty_id", "label": "Faculty ID", "type": "text"},
+            {"field": "ug_specialization", "label": "UG Specialization", "type": "text"},
+            {"field": "pg_specialization", "label": "PG Specialization", "type": "text"},
+            {"field": "phd_status", "label": "PhD Status", "type": "select", "options": ["Not Applicable", "Pursuing", "Completed"]},
+            {"field": "total_experience", "label": "Total Experience (Years)", "type": "text"},
+            {"field": "engg_college_experience", "label": "Engineering College Experience (Years)", "type": "text"},
+            {"field": "account_holder_name", "label": "Account Holder Name", "type": "text"},
+            {"field": "account_number", "label": "Bank Account Number", "type": "text"},
+            {"field": "bank_name", "label": "Bank Name", "type": "text"},
+            {"field": "bank_branch_name", "label": "Bank Branch Name", "type": "text"},
+            {"field": "ifsc_code", "label": "IFSC Code", "type": "text"},
+            {"field": "passbook_proof", "label": "Passbook Proof (Scanned Copy)", "type": "file"},
+        ]

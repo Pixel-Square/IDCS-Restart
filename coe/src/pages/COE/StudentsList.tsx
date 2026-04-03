@@ -17,7 +17,7 @@ import {
 import {
   CourseSelection,
   getCourseKey,
-  readCourseSelectionMap,
+  fetchCourseSelectionMapFromApi,
 } from './courseSelectionStorage';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
@@ -27,9 +27,10 @@ import {
   readRetrivalApplyPayload,
 } from '../../utils/retrivalStore';
 import { readTTScheduleMap } from './ttScheduleStore';
-
-const DEPARTMENTS = ['ALL', 'AIDS', 'AIML', 'CSE', 'CIVIL', 'ECE', 'EEE', 'IT', 'MECH'] as const;
-const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
+import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+import { hydrateShuffledListStore, readShuffleLocks, writeShuffleLocks, markFilterAsShuffled, unmarkFilterAsShuffled, isFilterShuffled, readShuffledLists, writeShuffledLists, getPersistedShuffledForFilter, setPersistedShuffledForFilter, clearPersistedShuffledForFilter, PersistedShuffledByDummy } from './shuffledListStore';
+import { hydrateMarksStore, getMarksQpType } from './marksStore';
+import fetchWithAuth from '../../services/fetchAuth';
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
@@ -61,45 +62,62 @@ function getSemesterDigit(value: string): string {
 type AugStudent = CoeCourseStudent & {
   enrollmentId: string;
   dummy: string;
-  saved_qp_type?: 'QP1' | 'QP2' | 'TCPR';
+  saved_qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 type AugCourse = CoeCourseGroup & { students: AugStudent[]; shuffled?: boolean };
 type AugDept = CoeDepartmentCourseMap & { courses: AugCourse[] };
 type EnrichedData = { department_filter: string; semester_filter: string | null; departments: AugDept[] };
 const SHUFFLE_LOCK_KEY = 'coe-students-shuffle-lock-v1';
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
+const ASSIGNING_STORE_KEY = 'coe-assigning-v1';
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
 type ArrearShuffleMode = 'include' | 'separate';
 type PersistedShuffledStudent = { reg_no: string; name: string };
-type PersistedShuffledByDummy = Record<string, PersistedShuffledStudent>;
+type PersistedBundleInfo = { name: string; scripts: number };
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
+type PersistedAssigningStore = Record<string, Array<{ courseKey: string; valuators?: Array<{ bundles?: PersistedBundleInfo[] }> }>>;
 
-const normalizeDeptFilter = (value: unknown): (typeof DEPARTMENTS)[number] | '' => {
-  const dept = String(value ?? '').trim().toUpperCase();
-  if ((DEPARTMENTS as readonly string[]).includes(dept) && dept !== 'ALL') {
-    return dept as (typeof DEPARTMENTS)[number];
+function readAssigningStoreForBundleDummies(): PersistedAssigningStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(ASSIGNING_STORE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedAssigningStore;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
-  return '';
-};
+}
 
-const normalizeSemesterFilter = (value: unknown): (typeof SEMESTERS)[number] | '' => {
-  const text = String(value ?? '').trim().toUpperCase();
-  if (!text) return '';
-
-  if ((SEMESTERS as readonly string[]).includes(text)) {
-    return text as (typeof SEMESTERS)[number];
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as CourseBundleDummyStore;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
+}
 
-  const match = text.match(/[1-8]/);
-  if (!match) return '';
-  const sem = `SEM${match[0]}`;
-  if ((SEMESTERS as readonly string[]).includes(sem)) {
-    return sem as (typeof SEMESTERS)[number];
+function writeCourseBundleDummyStore(store: CourseBundleDummyStore) {
+  if (typeof window === 'undefined') return;
+  const keys = Object.keys(store || {});
+  if (keys.length === 0) {
+    kvSave(COURSE_BUNDLE_DUMMY_STORE_KEY, null);
+    return;
   }
-  return '';
-};
+  kvSave(COURSE_BUNDLE_DUMMY_STORE_KEY, store);
+}
 
 export default function StudentsList() {
-  const [department, setDepartment] = useState<(typeof DEPARTMENTS)[number]>('ALL');
-  const [semester, setSemester] = useState<(typeof SEMESTERS)[number]>('SEM1');
+  const [departments, setDepartments] = useState<string[]>(['ALL']);
+  const [semesters, setSemesters] = useState<string[]>(['SEM1']);
+  const [loadingDeps, setLoadingDeps] = useState(false);
+  const [department, setDepartment] = useState('ALL');
+  const [semester, setSemester] = useState('SEM1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<CoeStudentsMapResponse | null>(null);
@@ -116,6 +134,81 @@ export default function StudentsList() {
   const [activeEntryParams, setActiveEntryParams] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const processedRetrivalApplyKeyRef = useRef<string>('');
+
+  // Fetch departments on mount
+  useEffect(() => {
+    let active = true;
+    setLoadingDeps(true);
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/departments/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const depts = data.results || data || [];
+          const deptNames = depts
+            .map((d: any) => {
+              const label = d?.short_name || d?.code || d?.name || d;
+              return label ? String(label).trim().toUpperCase() : null;
+            })
+            .filter(Boolean);
+          setDepartments(['ALL', ...(deptNames as string[])]);
+          setDepartment('ALL');
+        } else {
+          console.warn('Failed to fetch departments, using defaults');
+          setDepartments(['ALL']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching departments:', err);
+      } finally {
+        if (active) setLoadingDeps(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Fetch semesters on mount
+  useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/academics/semesters/');
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          const sems = data.results || data || [];
+          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
+          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
+          setSemester(semNames[0] || 'SEM1');
+        } else {
+          console.warn('Failed to fetch semesters, using defaults');
+          setSemesters(['SEM1']);
+        }
+      } catch (err) {
+        if (active) console.warn('Error fetching semesters:', err);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Hydrate all KV stores from DB on mount
+  useEffect(() => {
+    Promise.all([
+      hydrateShuffledListStore(),
+      hydrateMarksStore(),
+      kvHydrate(ASSIGNING_STORE_KEY),
+      kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
+    ]).catch(() => {});
+  }, []);
+
   const absentCourseMap = useMemo(
     () => readCourseAbsenteesMap(getAttendanceFilterKey(department, semester)),
     [department, semester]
@@ -147,101 +240,7 @@ export default function StudentsList() {
     return keys;
   }, [selectedDate, ttScheduleMap]);
 
-  const semesterOptions = useMemo<(typeof SEMESTERS)[number][]>(() => {
-    const rawSemesters = (data as any)?.available_semesters;
-    const normalized = (Array.isArray(rawSemesters) ? rawSemesters : [])
-      .map((value: unknown) => normalizeSemesterFilter(value))
-      .filter((value): value is (typeof SEMESTERS)[number] => Boolean(value));
-
-    const unique = Array.from(new Set(normalized));
-    unique.sort((a, b) => getSemesterNumber(a) - getSemesterNumber(b));
-
-    return unique.length > 0 ? unique : [...SEMESTERS];
-  }, [data]);
-
   const getCurrentFilterKey = () => `${department}::${semester}`;
-
-  const readShuffleLocks = (): Record<string, boolean> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(SHUFFLE_LOCK_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeShuffleLocks = (locks: Record<string, boolean>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(locks || {}).filter((k) => Boolean(locks[k]));
-    if (keys.length > 0) {
-      window.localStorage.setItem(SHUFFLE_LOCK_KEY, JSON.stringify(locks));
-      return;
-    }
-    window.localStorage.removeItem(SHUFFLE_LOCK_KEY);
-  };
-
-  const markFilterAsShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    locks[filterKey] = true;
-    writeShuffleLocks(locks);
-  };
-
-  const unmarkFilterAsShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    if (locks[filterKey]) {
-      delete locks[filterKey];
-      writeShuffleLocks(locks);
-    }
-  };
-
-  const isFilterShuffled = (filterKey: string) => {
-    const locks = readShuffleLocks();
-    return Boolean(locks[filterKey]);
-  };
-
-  const readShuffledLists = (): Record<string, PersistedShuffledByDummy> => {
-    if (typeof window === 'undefined') return {};
-    try {
-      const raw = window.localStorage.getItem(SHUFFLED_LIST_KEY);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, PersistedShuffledByDummy>;
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const writeShuffledLists = (lists: Record<string, PersistedShuffledByDummy>) => {
-    if (typeof window === 'undefined') return;
-    const keys = Object.keys(lists || {});
-    if (keys.length > 0) {
-      window.localStorage.setItem(SHUFFLED_LIST_KEY, JSON.stringify(lists));
-      return;
-    }
-    window.localStorage.removeItem(SHUFFLED_LIST_KEY);
-  };
-
-  const getPersistedShuffledForFilter = (filterKey: string): PersistedShuffledByDummy => {
-    const lists = readShuffledLists();
-    return lists[filterKey] || {};
-  };
-
-  const setPersistedShuffledForFilter = (filterKey: string, shuffledByDummy: PersistedShuffledByDummy) => {
-    const lists = readShuffledLists();
-    lists[filterKey] = shuffledByDummy;
-    writeShuffledLists(lists);
-  };
-
-  const clearPersistedShuffledForFilter = (filterKey: string) => {
-    const lists = readShuffledLists();
-    if (lists[filterKey]) {
-      delete lists[filterKey];
-      writeShuffledLists(lists);
-    }
-  };
 
   const closePdfPreview = () => {
     setPdfPreviewUrl((prev) => {
@@ -405,7 +404,7 @@ export default function StudentsList() {
   };
 
   useEffect(() => {
-    setSelectionMap(readCourseSelectionMap());
+    fetchCourseSelectionMapFromApi(department, semester).then(setSelectionMap);
   }, [department, semester]);
 
   // Build enriched data with stable per-row dummy and enrollmentId whenever API `data` or `semester` changes
@@ -495,6 +494,70 @@ export default function StudentsList() {
   }, [data, semester, selectionMap, absentCourseMap]);
 
   useEffect(() => {
+    if (!enriched) return;
+    if (department === 'ALL') return;
+
+    const filterKey = `${department}::${semester}`;
+    const assigningStore = readAssigningStoreForBundleDummies();
+    const bundleDefsByCourse: Record<string, PersistedBundleInfo[]> = {};
+
+    Object.entries(assigningStore).forEach(([storeKey, assignments]) => {
+      if (!storeKey.startsWith(`${department}::${semester}::`)) return;
+      (assignments || []).forEach((assignment) => {
+        const allBundles: PersistedBundleInfo[] = [];
+        (assignment.valuators || []).forEach((valuator) => {
+          (valuator.bundles || []).forEach((bundle) => {
+            const scripts = Number(bundle.scripts) || 0;
+            const name = String(bundle.name || '').trim();
+            if (!name || scripts <= 0) return;
+            allBundles.push({ name, scripts });
+          });
+        });
+        if (allBundles.length > 0) {
+          bundleDefsByCourse[assignment.courseKey] = allBundles;
+        }
+      });
+    });
+
+    const byCourse: CourseBundleDummyMap = {};
+
+    enriched.departments.forEach((dept) => {
+      if (dept.department !== department) return;
+
+      dept.courses.forEach((course) => {
+        const courseKey = getCourseKey({
+          department: dept.department,
+          semester,
+          courseCode: course.course_code || '',
+          courseName: course.course_name || '',
+        });
+
+        const courseDummies = ((course.students as AugStudent[]) || [])
+          .map((student) => String(student.dummy || '').trim())
+          .filter(Boolean);
+
+        const bundles: Record<string, string[]> = {};
+        const defs = bundleDefsByCourse[courseKey] || [];
+        let pointer = 0;
+        defs.forEach((bundle) => {
+          const slice = courseDummies.slice(pointer, pointer + bundle.scripts);
+          bundles[bundle.name] = slice;
+          pointer += bundle.scripts;
+        });
+
+        byCourse[courseKey] = {
+          courseDummies,
+          bundles,
+        };
+      });
+    });
+
+    const store = readCourseBundleDummyStore();
+    store[filterKey] = byCourse;
+    writeCourseBundleDummyStore(store);
+  }, [department, semester, enriched]);
+
+  useEffect(() => {
     let active = true;
 
     (async () => {
@@ -510,6 +573,7 @@ export default function StudentsList() {
         const message = err instanceof Error ? err.message : 'Failed to load students mapping.';
         setError(message);
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
@@ -526,11 +590,11 @@ export default function StudentsList() {
   }, [department, semester]);
 
   useEffect(() => {
-    if (semesterOptions.length === 0) return;
-    if (!semesterOptions.includes(semester)) {
-      setSemester(semesterOptions[0]);
+    if (semesters.length === 0) return;
+    if (!semesters.includes(semester)) {
+      setSemester(semesters[0]);
     }
-  }, [semester, semesterOptions]);
+  }, [semester, semesters]);
 
   useEffect(() => {
     if (!enriched) return;
@@ -552,15 +616,30 @@ export default function StudentsList() {
       return;
     }
 
+    // Simple normalization helpers for payload records
+    const normalizeDeptFromRecord = (value: unknown): string => {
+      return String(value || '').trim().toUpperCase() || '';
+    };
+    const normalizeSemFromRecord = (value: unknown): string => {
+      const text = String(value || '').trim().toUpperCase();
+      if (semesters.includes(text)) return text;
+      const match = text.match(/[1-8]/);
+      if (match) {
+        const sem = `SEM${match[0]}`;
+        if (semesters.includes(sem)) return sem;
+      }
+      return '';
+    };
+
     const payloadDepartments = Array.from(new Set(
       payloadRecords
-        .map((record) => normalizeDeptFilter(record.department))
-        .filter((value): value is (typeof DEPARTMENTS)[number] => Boolean(value))
+        .map((record) => normalizeDeptFromRecord(record.department))
+        .filter(Boolean)
     ));
     const payloadSemesters = Array.from(new Set(
       payloadRecords
-        .map((record) => normalizeSemesterFilter(record.semester))
-        .filter((value): value is (typeof SEMESTERS)[number] => Boolean(value))
+        .map((record) => normalizeSemFromRecord(record.semester))
+        .filter(Boolean)
     ));
 
     // Align UI filter to payload context first so apply always targets the correct realtime list.
@@ -575,8 +654,8 @@ export default function StudentsList() {
 
     type RestoredMapping = {
       id: number;
-      department: (typeof DEPARTMENTS)[number] | '';
-      semester: (typeof SEMESTERS)[number] | '';
+      department: string;
+      semester: string;
       course_code: string;
       dummy: string;
       reg_no: string;
@@ -591,8 +670,8 @@ export default function StudentsList() {
 
     payloadRecords.forEach((record, index) => {
       const parsedIndex = Number(record.course_student_index ?? record.row_index ?? record.courseIndex);
-      const recDepartment = normalizeDeptFilter(record.department);
-      const recSemester = normalizeSemesterFilter(record.semester);
+      const recDepartment = normalizeDeptFromRecord(record.department);
+      const recSemester = normalizeSemFromRecord(record.semester);
       const mapping: RestoredMapping = {
         id: index,
         department: recDepartment,
@@ -829,7 +908,7 @@ export default function StudentsList() {
 
     setSaving(true);
     try {
-      const records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' }[] = [];
+      const records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' }[] = [];
       enriched.departments.forEach((dept) => {
         dept.courses.forEach((course) => {
           const courseKey = getCourseKey({
@@ -839,7 +918,7 @@ export default function StudentsList() {
             courseName: course.course_name || '',
           });
           const conf = selectionMap[courseKey];
-          const qpType = conf?.qpType === 'QP2' || conf?.qpType === 'TCPR' ? conf.qpType : 'QP1';
+          const qpType = conf?.qpType || 'QP1';
 
           (course.students as AugStudent[]).forEach((student) => {
              records.push({
@@ -1045,11 +1124,12 @@ export default function StudentsList() {
             </label>
             <select
               id="coe-department"
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none disabled:opacity-50"
               value={department}
-              onChange={(e) => setDepartment(e.target.value as (typeof DEPARTMENTS)[number])}
+              onChange={(e) => setDepartment(e.target.value)}
+              disabled={loadingDeps}
             >
-              {DEPARTMENTS.map((dept) => (
+              {departments.map((dept) => (
                 <option key={dept} value={dept}>
                   {dept}
                 </option>
@@ -1065,9 +1145,9 @@ export default function StudentsList() {
               id="coe-semester"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
               value={semester}
-              onChange={(e) => setSemester(e.target.value as (typeof SEMESTERS)[number])}
+              onChange={(e) => setSemester(e.target.value)}
             >
-              {semesterOptions.map((sem) => (
+              {semesters.map((sem) => (
                 <option key={sem} value={sem}>
                   {sem}
                 </option>

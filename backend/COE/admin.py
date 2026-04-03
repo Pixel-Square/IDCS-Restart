@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CoeArrearStudent, CoeExamDummy
+from .models import CoeArrearStudent, CoeAssignmentStore, CoeCourseSelectionStore, CoeExamDummy, CoeKeyValueStore
 
 
 @admin.register(CoeExamDummy)
@@ -23,3 +23,23 @@ class CoeArrearStudentAdmin(admin.ModelAdmin):
 	)
 	search_fields = ('course_code', 'course_name', 'student_register_number', 'student_name', 'batch')
 	list_filter = ('department', 'semester', 'batch')
+
+
+@admin.register(CoeAssignmentStore)
+class CoeAssignmentStoreAdmin(admin.ModelAdmin):
+	list_display = ('store_key', 'updated_at', 'created_at')
+
+
+@admin.register(CoeCourseSelectionStore)
+class CoeCourseSelectionStoreAdmin(admin.ModelAdmin):
+	list_display = ('store_key', 'is_locked', 'updated_at', 'created_at')
+	list_filter = ('is_locked',)
+	search_fields = ('store_key',)
+
+
+@admin.register(CoeKeyValueStore)
+class CoeKeyValueStoreAdmin(admin.ModelAdmin):
+	list_display = ('store_name', 'updated_at', 'created_at')
+	search_fields = ('store_name',)
+	search_fields = ('store_key',)
+	readonly_fields = ('created_at', 'updated_at')

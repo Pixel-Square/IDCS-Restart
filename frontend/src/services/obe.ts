@@ -4,6 +4,7 @@ export type TeachingAssignmentItem = {
   subject_code: string;
   subject_name: string;
   class_type?: string | null;
+  question_paper_type?: string | null;
   curriculum_row_id?: number | null;
   elective_subject_id?: number | null;
   elective_subject_name?: string | null;
@@ -646,6 +647,10 @@ export async function fetchIqacQpPattern(params: { class_type: string; question_
       if (e === 'MODEL') return 'MODEL';
       if (e === 'CIA1') return 'CIA1';
       if (e === 'CIA2') return 'CIA2';
+      if (e === 'SSA1') return 'SSA1';
+      if (e === 'SSA2') return 'SSA2';
+      if (e === 'FORMATIVE1') return 'FORMATIVE1';
+      if (e === 'FORMATIVE2') return 'FORMATIVE2';
       return 'CIA';
     })(),
     pattern,
@@ -677,6 +682,10 @@ export async function upsertIqacQpPattern(payload: { class_type: string; questio
       if (e === 'MODEL') return 'MODEL';
       if (e === 'CIA1') return 'CIA1';
       if (e === 'CIA2') return 'CIA2';
+      if (e === 'SSA1') return 'SSA1';
+      if (e === 'SSA2') return 'SSA2';
+      if (e === 'FORMATIVE1') return 'FORMATIVE1';
+      if (e === 'FORMATIVE2') return 'FORMATIVE2';
       return 'CIA';
     })(),
     pattern,
@@ -1202,6 +1211,7 @@ export async function saveDraft<T>(assessment: DraftAssessmentKey, subjectId: st
 export type PublishedSsa1Response = {
   subject: { code: string; name: string };
   marks: Record<string, string | null>;
+  co_splits?: Record<string, Record<string, number | null>>;
 };
 
 export async function fetchPublishedSsa1(subjectId: string, teachingAssignmentId?: number): Promise<PublishedSsa1Response> {
@@ -1249,6 +1259,7 @@ export async function publishReview1(subjectId: string, data: any, teachingAssig
 export type PublishedSsa2Response = {
   subject: { code: string; name: string };
   marks: Record<string, string | null>;
+  co_splits?: Record<string, Record<string, number | null>>;
 };
 
 export async function fetchPublishedSsa2(subjectId: string, teachingAssignmentId?: number): Promise<PublishedSsa2Response> {

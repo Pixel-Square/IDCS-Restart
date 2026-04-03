@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ScanLine, User, CreditCard, School } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
 import BarScanMarkEntry from './BarScanMarkEntry';
+import { getMarksQpType } from './marksStore';
 
 interface StudentDetails {
   id: number;
@@ -15,7 +16,15 @@ interface StudentDetails {
   email: string;
   profile_image: string | null;
   dummy_number?: string | null;
-  qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'OE';
+  qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
+}
+
+function readStoredMarkQpType(dummyNumber: string): StudentDetails['qp_type'] {
+  if (typeof window === 'undefined') return undefined;
+  const qpType = getMarksQpType(dummyNumber);
+  if (!qpType) return undefined;
+  const upper = String(qpType).toUpperCase();
+  return upper === 'QP1' || upper === 'QP2' || upper === 'TCPR' || upper === 'TCPL' || upper === 'OE' ? upper : undefined;
 }
 
 export default function BarScan() {
@@ -25,6 +34,7 @@ export default function BarScan() {
   const [error, setError] = useState<string | null>(null);
   const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [activeEntryCode, setActiveEntryCode] = useState<string | null>(null);
+  const [activeEntryStudent, setActiveEntryStudent] = useState<StudentDetails | null>(null);
   
   // This input captures the barcode scanner output
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,6 +55,7 @@ export default function BarScan() {
     setLoading(true);
     setError(null);
     setStudent(null);
+    setActiveEntryStudent(null);
     const code = codeToProcess.trim();
 
     
@@ -57,7 +68,13 @@ export default function BarScan() {
       const res = await fetchWithAuth(`/api/academics/student/lookup/${encodeURIComponent(code)}/`);
       if (res.ok) {
         const data = await res.json();
-        setStudent(data);
+        const storedQpType = readStoredMarkQpType(code);
+        const nextStudent = {
+          ...data,
+          qp_type: storedQpType || data.qp_type,
+        };
+        setStudent(nextStudent);
+        setActiveEntryStudent(nextStudent);
         setLastScanned(code);
       } else {
         if (res.status === 404) {
@@ -210,6 +227,11 @@ export default function BarScan() {
         <BarScanMarkEntry
           key={activeEntryCode}
           embeddedCode={activeEntryCode}
+          embeddedRegNo={activeEntryStudent?.reg_no || ''}
+          embeddedName={activeEntryStudent?.name || ''}
+          embeddedQpType={readStoredMarkQpType(activeEntryCode) || activeEntryStudent?.qp_type || ''}
+          embeddedDept={activeEntryStudent?.department || ''}
+          embeddedDummy={activeEntryStudent?.dummy_number || activeEntryCode}
           onClose={() => setActiveEntryCode(null)}
           onNextScan={(newCode) => {
              processScanCode(newCode);

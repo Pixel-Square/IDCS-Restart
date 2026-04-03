@@ -3,7 +3,6 @@ import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeObeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import * as OBE from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
 import { formatRemaining, usePublishWindow } from '../hooks/usePublishWindow';
@@ -229,7 +228,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   }, [markLock?.is_published, markLock?.updated_at, publishedAt]);
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
   const approvalOpen = Boolean(markEntryEditWindow?.allowed_by_approval);
-  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || approvalOpen;
+  const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || approvalOpen;
   const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
   const editRequestsBlocked = Boolean(isPublished && publishedEditLocked && !editRequestsEnabled);
 
@@ -380,31 +379,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (!silent) setLoading(true);
     if (!silent) setError(null);
     try {
-      // Try to detect elective TAs and use elective-choices mapping when appropriate
-      try {
-        const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-        if (taRes.ok) {
-          const taObj = await taRes.json();
-          if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-            if (!esRes.ok) throw new Error(`Elective-choices fetch failed: ${esRes.status}`);
-            const data = await esRes.json();
-            const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-            const mapped = (items || []).map((s: any) => ({
-              id: Number(s.student_id ?? s.id),
-              reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-              name: String(s.name ?? s.full_name ?? s.username ?? ''),
-              section: s.section_name ?? s.section ?? null,
-            })) as TeachingAssignmentRosterStudent[];
-            const sorted = mapped.filter((s) => Number.isFinite(s.id)).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-            setStudents(sorted);
-            return;
-          }
-        }
-      } catch (err) {
-        // ignore and fall back to roster endpoint
-      }
-
+      // Always use TA roster (backend handles batch filtering for electives)
       const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
       const roster = (res?.students || []) as TeachingAssignmentRosterStudent[];
       const sorted = [...roster].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
@@ -677,34 +652,30 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const publish = async () => {
     if (!subjectId) return;
 
-    // After publish, primary action becomes edit request.
-    if (isPublished) {
-      if (publishedEditLocked) {
-        if (markEntryReqPending) {
-          setActionError('Edit request is pending. Please wait for approval.');
-          return;
-        }
-
-        const mobileOk = await ensureMobileVerified();
-        if (!mobileOk) {
-          alert('Please verify your mobile number in Profile before requesting edits.');
-          window.location.href = '/profile';
-          return;
-        }
-
-        setPublishedEditModalOpen(true);
-        return;
-      }
-      setActionError('Editing is already open for this published sheet.');
-      return;
-    }
-
     if (globalLocked) {
       setActionError('Publishing is locked by IQAC.');
       return;
     }
     if (!publishAllowed) {
       setActionError('Publish window is closed. Please request IQAC approval.');
+      return;
+    }
+
+    // If already published and locked, use Publish action as the entry-point to request edits.
+    if (isPublished && publishedEditLocked) {
+      if (markEntryReqPending) {
+        setActionError('Edit request is pending. Please wait for approval.');
+        return;
+      }
+
+      const mobileOk = await ensureMobileVerified();
+      if (!mobileOk) {
+        alert('Please verify your mobile number in Profile before requesting edits.');
+        window.location.href = '/profile';
+        return;
+      }
+
+      setPublishedEditModalOpen(true);
       return;
     }
 
@@ -717,11 +688,30 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       refreshPublishWindow({ silent: true });
       refreshMarkLock({ silent: true });
       try {
+        console.debug('obe:published dispatch', { assessment: 'model', subjectId });
         window.dispatchEvent(new CustomEvent('obe:published', { detail: { subjectId, assessment: 'model' } }));
       } catch {
         // ignore
       }
     } catch (e: any) {
+      const status = (e as any)?.status;
+      const detail = String((e as any)?.body?.detail || e?.message || '');
+
+      // If the sheet is already published, backend returns 423 (Locked) and instructs to request IQAC approval.
+      // UX expectation: do not show this as a publish failure; switch UI into the Published—Locked state.
+      if (status === 423) {
+        setPublishedAt((prev) => prev || new Date().toLocaleString());
+        refreshPublishWindow({ silent: true });
+        refreshMarkLock({ silent: true });
+        setActionError(null);
+
+        const mobileOk = await ensureMobileVerified();
+        if (mobileOk) {
+          setPublishedEditModalOpen(true);
+        }
+        return;
+      }
+
       setActionError(e?.message || 'Publish failed');
     } finally {
       setPublishing(false);
@@ -1195,7 +1185,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (raw.trim() === '') return '';
     const n = Number(raw);
     if (!Number.isFinite(n)) return '';
-    return Math.max(0, Math.min(max, n));
+    return Math.max(0, n);
   };
 
   const fmt1 = (n: number) => {
@@ -2381,9 +2371,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                                       inputMode="decimal"
                                       disabled={absent && !canEditAbsent}
                                       value={v === '' ? '' : String(v)}
-                                      placeholder={`/${q.max}`}
                                       title={`Max mark: ${q.max}`}
-                                      onChange={(e) => setQ(q.key, e.target.value, q.max)}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        if (raw === '') {
+                                          e.currentTarget.setCustomValidity('');
+                                          setQ(q.key, '', q.max);
+                                          return;
+                                        }
+                                        const next = Number(raw);
+                                        if (!Number.isFinite(next)) return;
+                                        if (next > q.max) {
+                                          e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                          e.currentTarget.reportValidity();
+                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                          return;
+                                        }
+                                        e.currentTarget.setCustomValidity('');
+                                        setQ(q.key, raw, q.max);
+                                      }}
                                       onFocus={(e) => e.currentTarget.select()}
                                       onKeyDown={onCellKeyDown(q.key)}
                                       style={{ ...excelInputStyle, color: atMax ? '#92400e' : undefined }}
@@ -2650,9 +2656,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                                   inputMode="decimal"
                                   disabled={absent && !canEditAbsent}
                                   value={v === '' ? '' : String(v)}
-                                  placeholder={`/${q.max}`}
                                   title={`Max mark: ${q.max}`}
-                                  onChange={(e) => setQ(q.key, e.target.value, q.max)}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') {
+                                      e.currentTarget.setCustomValidity('');
+                                      setQ(q.key, '', q.max);
+                                      return;
+                                    }
+                                    const next = Number(raw);
+                                    if (!Number.isFinite(next)) return;
+                                    if (next > q.max) {
+                                      e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                      e.currentTarget.reportValidity();
+                                      window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                      return;
+                                    }
+                                    e.currentTarget.setCustomValidity('');
+                                    setQ(q.key, raw, q.max);
+                                  }}
                                   onFocus={(e) => e.currentTarget.select()}
                                   onKeyDown={onCellKeyDown(q.key)}
                                   style={{ ...excelInputStyle, color: atMax ? '#92400e' : undefined }}
@@ -3085,9 +3107,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                             inputMode="decimal"
                             disabled={absent && !canEditAbsent}
                             value={v === '' ? '' : String(v)}
-                            placeholder={`/${q.max}`}
                             title={`Max mark: ${q.max}`}
-                            onChange={(e) => setQ(q.key, e.target.value, q.max)}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') {
+                                e.currentTarget.setCustomValidity('');
+                                setQ(q.key, '', q.max);
+                                return;
+                              }
+                              const next = Number(raw);
+                              if (!Number.isFinite(next)) return;
+                              if (next > q.max) {
+                                e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                return;
+                              }
+                              e.currentTarget.setCustomValidity('');
+                              setQ(q.key, raw, q.max);
+                            }}
                             onFocus={(e) => e.currentTarget.select()}
                             onKeyDown={onCellKeyDown(q.key)}
                             style={{ ...excelInputStyle, color: atMax ? '#92400e' : undefined }}
@@ -3105,9 +3143,25 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                         inputMode="decimal"
                         disabled={absent && !canEditAbsent}
                         value={lab === '' ? '' : String(lab)}
-                        placeholder={`/${tcplLabMax}`}
                         title={`Max mark: ${tcplLabMax}`}
-                        onChange={(e) => setLab(e.target.value)}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            e.currentTarget.setCustomValidity('');
+                            setLab('');
+                            return;
+                          }
+                          const next = Number(raw);
+                          if (!Number.isFinite(next)) return;
+                          if (next > tcplLabMax) {
+                            e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${tcplLabMax}`);
+                            e.currentTarget.reportValidity();
+                            window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                            return;
+                          }
+                          e.currentTarget.setCustomValidity('');
+                          setLab(raw);
+                        }}
                         onFocus={(e) => e.currentTarget.select()}
                         onKeyDown={onCellKeyDown('lab')}
                         style={excelInputStyle}

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchMasters } from '../services/curriculum';
@@ -12,6 +11,7 @@ import {
   createPublishRequest,
   fetchDraft,
   fetchEditWindow,
+  fetchIqacQpPattern,
   fetchMarkTableLockStatus,
   fetchMyLatestEditRequest,
   fetchPublishedFormative,
@@ -33,6 +33,7 @@ import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+import { normalizeObeClassType } from '../constants/classTypes';
 import { getApiBase } from '../services/apiBase';
 
 const API_BASE = getApiBase();
@@ -81,6 +82,8 @@ interface Formative1ListProps {
   teachingAssignmentId?: number;
   assessmentKey?: 'formative1' | 'formative2';
   skipMarkManager?: boolean;
+  classType?: string | null;
+  questionPaperType?: string | null;
 }
 
 const DEFAULT_MAX_PART = 5;
@@ -134,8 +137,8 @@ function readFiniteNumber(value: any): number | null {
 
 function pct(mark: number, max: number) {
   if (!max) return '-';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function compareRegNo(aRaw: unknown, bRaw: unknown): number {
@@ -168,20 +171,9 @@ function compareRegNo(aRaw: unknown, bRaw: unknown): number {
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    return an ? -1 : 1;
-  }
-
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  const byReg = ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
-  if (byReg) return byReg;
-  return 0;
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 type FormativeKey = 'formative1' | 'formative2';
@@ -220,11 +212,76 @@ function shortenRegisterNo(registerNo: string): string {
   return registerNo.slice(-8);
 }
 
-export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, skipMarkManager = false }: Formative1ListProps) {
+export default function Formative1List({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, skipMarkManager = false, classType, questionPaperType }: Formative1ListProps) {
   const assessmentKey: FormativeKey = (assessmentKeyProp as FormativeKey) || 'formative1';
   const assessmentLabel = assessmentKey === 'formative2' ? 'Formative 2' : 'Formative 1';
-  const CO_A = assessmentKey === 'formative2' ? 3 : 1;
-  const CO_B = assessmentKey === 'formative2' ? 4 : 2;
+  const DEFAULT_CO_A = assessmentKey === 'formative2' ? 3 : 1;
+  const DEFAULT_CO_B = assessmentKey === 'formative2' ? 4 : 2;
+
+  // ── IQAC QP Pattern: derive actual CO numbers for display ──
+  const [iqacPattern, setIqacPattern] = useState<{ marks?: number[]; cos?: Array<number | string> } | null>(null);
+
+  const classTypeKey = useMemo(() => {
+    const v = String(normalizeObeClassType(classType) || '').trim().toUpperCase();
+    return v || '';
+  }, [classType]);
+
+  const qpTypeKey = useMemo(() => {
+    return String(questionPaperType ?? '').trim().toUpperCase();
+  }, [questionPaperType]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!classTypeKey) { setIqacPattern(null); return; }
+      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey || null) : null;
+      const examForApi = assessmentKey === 'formative2' ? 'FORMATIVE2' : 'FORMATIVE1';
+      try {
+        const res: any = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: qpForApi, exam: examForApi as any });
+        if (!alive) return;
+        const p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+        setIqacPattern(p.length ? (res.pattern as any) : null);
+      } catch {
+        if (alive) setIqacPattern(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [classTypeKey, qpTypeKey, assessmentKey]);
+
+  const CO_A = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 1) return unique[0];
+    }
+    return DEFAULT_CO_A;
+  }, [iqacPattern, DEFAULT_CO_A]);
+
+  const CO_B = useMemo(() => {
+    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
+    if (cos && cos.length) {
+      const nums = cos
+        .flatMap((c) => {
+          const s = String(c ?? '');
+          if (s.includes('&')) return s.split('&').map(Number);
+          const m = s.match(/\d+/);
+          return m ? [Number(m[0])] : [];
+        })
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+      const unique = [...new Set(nums)].sort((a, b) => a - b);
+      if (unique.length >= 2) return unique[1];
+      if (unique.length === 1) return unique[0];
+    }
+    return DEFAULT_CO_B;
+  }, [iqacPattern, DEFAULT_CO_B]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -969,31 +1026,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
           console.warn('[Formative] My TAs fetch failed:', err);
         }
 
-        // If we found a TA and it's an elective (has elective_subject_id, no section_id), fetch from elective-choices
-        if (matchedTa && matchedTa.elective_subject_id && !matchedTa.section_id) {
-          // detected elective - fetching elective choices
-          try {
-            const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(matchedTa.elective_subject_id))}`);
-            if (esRes.ok) {
-              const esData = await esRes.json();
-              const items = Array.isArray(esData.results) ? esData.results : Array.isArray(esData) ? esData : (esData.items || []);
-              // elective choices returned
-              roster = (items || []).map((s: any) => ({ 
-                id: Number(s.student_id ?? s.id), 
-                reg_no: String(s.reg_no ?? s.regno ?? ''),
-                name: String(s.name ?? s.full_name ?? s.username ?? ''),
-                section: s.section_name ?? s.section ?? null 
-              })).filter((s) => Number.isFinite(s.id));
-              if (mounted) setSubjectData({ subject_name: matchedTa.subject_name, section: matchedTa.section_name || 'Elective' });
-            } else {
-              console.warn('[Formative] Elective-choices API returned error:', esRes.status);
-            }
-          } catch (err) {
-            console.warn('[Formative] Elective-choices fetch failed:', err);
-          }
-        }
-
-        // If not elective or elective fetch failed, use regular TA roster.
+        // Always use TA roster (backend handles batch filtering for electives)
         // Also covers IQAC viewer path where matchedTa is null but teachingAssignmentId is provided.
         const rosterTaId: number | undefined = (matchedTa && matchedTa.id) || (teachingAssignmentId ?? undefined);
         if (!roster.length && rosterTaId) {

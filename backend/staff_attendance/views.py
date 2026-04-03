@@ -2890,9 +2890,125 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
             return 0
 
         from staff_requests.models import StaffRequest, StaffLeaveBalance
+        from datetime import datetime
 
         users = User.objects.filter(id__in=list(user_ids))
         recalculated = 0
+
+        def _get_primary_role(user_obj):
+            """Role resolution consistent with staff_requests (SPL roles take priority)."""
+            try:
+                role_names = []
+                if hasattr(user_obj, 'roles'):
+                    role_names = list(user_obj.roles.values_list('name', flat=True))
+                elif hasattr(user_obj, 'user_roles'):
+                    role_names = list(user_obj.user_roles.values_list('role__name', flat=True))
+                if not role_names:
+                    return 'STAFF'
+
+                role_priority = ['HOD', 'IQAC', 'HR', 'PS', 'CFSW', 'EDC', 'COE', 'HAA',
+                                 'AHOD', 'FACULTY', 'STAFF']
+                for r in role_priority:
+                    if r in role_names:
+                        return r
+                return role_names[0]
+            except Exception:
+                return 'STAFF'
+
+        def _compute_overuse_lop_units(user_obj, as_of_date=None):
+            if as_of_date is None:
+                as_of_date = timezone.localdate()
+
+            approved = (
+                StaffRequest.objects.filter(
+                    applicant=user_obj,
+                    status='approved',
+                    template__leave_policy__action__in=['deduct', 'neutral'],
+                )
+                .select_related('template')
+                .order_by('id')
+            )
+
+            by_template = {}
+            for req in approved:
+                by_template.setdefault(req.template_id, []).append(req)
+
+            user_role = _get_primary_role(user_obj)
+            role_key = str(user_role or '').strip().upper()
+
+            total = 0.0
+            for _, reqs in by_template.items():
+                template = reqs[0].template
+                leave_policy = getattr(template, 'leave_policy', None) or {}
+                action = str(leave_policy.get('action') or '').strip().lower()
+                if action not in ['deduct', 'neutral']:
+                    continue
+
+                allotment = leave_policy.get('allotment_per_role')
+                if not isinstance(allotment, dict) or len(allotment) == 0:
+                    continue
+
+                normalized_allotment = {}
+                for k, v in allotment.items():
+                    key = str(k or '').strip().upper()
+                    if not key:
+                        continue
+                    try:
+                        normalized_allotment[key] = float(v)
+                    except (TypeError, ValueError):
+                        normalized_allotment[key] = 0.0
+
+                full_allotment = float(normalized_allotment.get(role_key, 0.0))
+                if full_allotment < 0:
+                    full_allotment = 0.0
+
+                effective_allotment = full_allotment
+                split_date_str = leave_policy.get('split_date')
+                if split_date_str:
+                    try:
+                        split_date = datetime.strptime(str(split_date_str).strip(), '%Y-%m-%d').date()
+                        if as_of_date < split_date:
+                            effective_allotment = full_allotment / 2
+                    except Exception:
+                        pass
+
+                window_from = None
+                window_to = None
+                from_str = leave_policy.get('from_date')
+                to_str = leave_policy.get('to_date')
+                if from_str and to_str:
+                    try:
+                        window_from = datetime.strptime(str(from_str).strip(), '%Y-%m-%d').date()
+                        window_to = datetime.strptime(str(to_str).strip(), '%Y-%m-%d').date()
+                    except Exception:
+                        window_from = None
+                        window_to = None
+
+                used_units = 0.0
+                for req in reqs:
+                    if action == 'deduct':
+                        try:
+                            if bool((req.form_data or {}).get('claim_col')):
+                                continue
+                        except Exception:
+                            pass
+
+                    units_by_date = self._extract_requested_units_by_date(req.form_data or {}, user_obj)
+                    for d, units in units_by_date.items():
+                        if window_from and d < window_from:
+                            continue
+                        if window_to and d > window_to:
+                            continue
+                        try:
+                            used_units += float(units or 0.0)
+                        except (TypeError, ValueError):
+                            continue
+
+                used_units = round(used_units, 2)
+                overuse = max(0.0, round(used_units - float(effective_allotment or 0.0), 2))
+                total += overuse
+
+            return round(total, 2)
 
         for user in users:
             attendance_records = list(
@@ -2927,7 +3043,9 @@ class SpecialDepartmentDateAttendanceLimitViewSet(viewsets.ModelViewSet):
                         covered_units += covered_now
                         remaining_absent_units[req_date] = round(absent_left - covered_now, 2)
 
-            lop_count = round(max(0.0, absent_units_total - covered_units), 2)
+            absence_based_lop = round(max(0.0, absent_units_total - covered_units), 2)
+            overuse_lop = _compute_overuse_lop_units(user)
+            lop_count = round(absence_based_lop + overuse_lop, 2)
             lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
                 staff=user,
                 leave_type=lop_name,

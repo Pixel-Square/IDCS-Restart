@@ -5,10 +5,12 @@ type Props = {
   subjectId: string;
   teachingAssignmentId?: number;
   label?: string;
+  classType?: string | null;
+  questionPaperType?: string | null;
 };
 
-export default function Ssa2Entry({ subjectId, teachingAssignmentId, label }: Props) {
+export default function Ssa2Entry({ subjectId, teachingAssignmentId, label, classType, questionPaperType }: Props) {
   return (
-    <Ssa2SheetEntry subjectId={subjectId} teachingAssignmentId={teachingAssignmentId} assessmentKey="ssa2" label={label || 'SSA2'} />
+    <Ssa2SheetEntry subjectId={subjectId} teachingAssignmentId={teachingAssignmentId} assessmentKey="ssa2" label={label || 'SSA2'} classType={classType} questionPaperType={questionPaperType} />
   );
 }

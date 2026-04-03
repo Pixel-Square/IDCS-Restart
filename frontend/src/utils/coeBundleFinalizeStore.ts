@@ -1,3 +1,5 @@
+import { kvHydrate, kvSave } from './coeKvStore';
+
 export type BundleFinalizeConfig = {
   finalized: boolean;
   bundleSize: number;
@@ -9,6 +11,11 @@ export type BundleFinalizeMap = Record<string, BundleFinalizeConfig>;
 const BUNDLE_FINALIZE_STORAGE_KEY = 'coe-bundle-finalize-v1';
 
 export const getBundleFinalizeKey = (department: string, semester: string) => `${department}::${semester}`;
+
+/** Call on mount to pull bundle finalize config from DB. */
+export async function hydrateBundleFinalizeStore(): Promise<void> {
+  await kvHydrate(BUNDLE_FINALIZE_STORAGE_KEY);
+}
 
 export const readBundleFinalizeMap = (): BundleFinalizeMap => {
   if (typeof window === 'undefined') return {};
@@ -26,10 +33,10 @@ const writeBundleFinalizeMap = (data: BundleFinalizeMap) => {
   if (typeof window === 'undefined') return;
   const keys = Object.keys(data || {});
   if (keys.length === 0) {
-    window.localStorage.removeItem(BUNDLE_FINALIZE_STORAGE_KEY);
+    kvSave(BUNDLE_FINALIZE_STORAGE_KEY, null);
     return;
   }
-  window.localStorage.setItem(BUNDLE_FINALIZE_STORAGE_KEY, JSON.stringify(data));
+  kvSave(BUNDLE_FINALIZE_STORAGE_KEY, data);
 };
 
 export const getBundleFinalizeConfig = (department: string, semester: string): BundleFinalizeConfig | null => {

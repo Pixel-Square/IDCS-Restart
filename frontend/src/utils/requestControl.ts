@@ -3,24 +3,66 @@ import { useEffect, useState } from 'react';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 
 // Module-level cache so all component instances share a single fetch result.
-let _cachedEnabled: boolean | null = null;
-let _pendingPromise: Promise<boolean> | null = null;
+let _cachedConfig: any | null = null;
+let _pendingPromise: Promise<any> | null = null;
 
-async function _resolveEnabled(): Promise<boolean> {
+function _resolveFlagFromConfig(cfg: any, key: string, fallbackKey?: string): boolean {
+  const direct = cfg?.[key];
+  if (typeof direct === 'boolean') return direct;
+
+  if (fallbackKey) {
+    const fallback = cfg?.[fallbackKey];
+    if (typeof fallback === 'boolean') return fallback;
+  }
+
+  return true;
+}
+
+async function _resolveConfig(): Promise<any> {
   if (_pendingPromise) return _pendingPromise;
   _pendingPromise = fetchAssessmentMasterConfig()
     .then((cfg) => {
-      const val = (cfg as any)?.edit_requests_enabled;
-      // Default to true (enabled) when the field is absent or not explicitly false.
-      return val === false ? false : true;
+      return cfg && typeof cfg === 'object' ? cfg : {};
     })
-    .catch(() => true)
+    .catch(() => ({}))
     .then((result) => {
-      _cachedEnabled = result;
+      _cachedConfig = result;
       _pendingPromise = null;
       return result;
     });
   return _pendingPromise;
+}
+
+function useEditRequestFlag(key: string, fallbackKey?: string): boolean {
+  const [enabled, setEnabled] = useState<boolean>(_resolveFlagFromConfig(_cachedConfig, key, fallbackKey));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    _resolveConfig().then((cfg) => {
+      if (!cancelled) setEnabled(_resolveFlagFromConfig(cfg, key, fallbackKey));
+    });
+
+    // Refresh every 5 minutes so IQAC changes propagate without a hard reload.
+    const tid = window.setInterval(() => {
+      _pendingPromise = null;
+      _resolveConfig().then((cfg) => {
+        if (!cancelled) setEnabled(_resolveFlagFromConfig(cfg, key, fallbackKey));
+      });
+    }, 5 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(tid);
+    };
+  }, [fallbackKey, key]);
+
+  return enabled;
+}
+
+export function primeEditRequestControlConfig(config: any): void {
+  _cachedConfig = config && typeof config === 'object' ? config : {};
+  _pendingPromise = null;
 }
 
 /**
@@ -34,28 +76,16 @@ async function _resolveEnabled(): Promise<boolean> {
  * when not explicitly configured, preserving existing behavior.
  */
 export function useMarkEntryEditRequestsEnabled(): boolean {
-  const [enabled, setEnabled] = useState<boolean>(_cachedEnabled ?? true);
+  return useEditRequestFlag('edit_requests_enabled');
+}
 
-  useEffect(() => {
-    let cancelled = false;
-
-    _resolveEnabled().then((val) => {
-      if (!cancelled) setEnabled(val);
-    });
-
-    // Refresh every 5 minutes so IQAC changes propagate without a hard reload.
-    const tid = window.setInterval(() => {
-      _pendingPromise = null;
-      _resolveEnabled().then((val) => {
-        if (!cancelled) setEnabled(val);
-      });
-    }, 5 * 60 * 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(tid);
-    };
-  }, []);
-
-  return enabled;
+/**
+ * Returns whether the IQAC-controlled CQI edit-request flow is enabled.
+ *
+ * - When `cqi_edit_requests_enabled` is explicitly configured, that value is used.
+ * - Otherwise it safely falls back to the shared `edit_requests_enabled` value,
+ *   preserving prior behavior for existing deployments.
+ */
+export function useCqiEditRequestsEnabled(): boolean {
+  return useEditRequestFlag('cqi_edit_requests_enabled', 'edit_requests_enabled');
 }

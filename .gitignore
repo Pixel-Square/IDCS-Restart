@@ -25,7 +25,17 @@ backend/.env*
 # Local TLS artifacts generated during certbot runs
 .letsencrypt/
 
-# Test files (temporary diagnostic and test scripts)
+# One-off fix / patch / test / temp scripts (any directory)
+fix_*.py
+patch_*.py
+patch_*.js
+test_*.py
+tmp_*.py
+script.py
+reset_*.py
+*.patch
+
+# Backend-specific temp files
 backend/test_*.py
 backend/check_*.py
 backend/diagnose_*.py
@@ -34,8 +44,32 @@ backend/quick_*.py
 backend/verify_*.py
 backend/debug_*.py
 backend/final_*.py
+backend/fix_*.py
+backend/patch*.py
+backend/tmp_*.py
+backend/reset_*.py
 backend/*.csv
 backend/STUDENT_ELECTIVE_IMPLEMENTATION_SUMMARY.md
+
+# COE temp scripts
+coe/fix_*.py
+coe/fix.py
+coe/script.py
+
+# Frontend temp scripts
+frontend/patch_*.py
+frontend/patch_*.js
+frontend/errors.txt
+frontend/debug.patch
+frontend/coe/patch_*.py
+frontend/src/**/patch_*.py
+
+# Tools temp scripts
+tools/fix_*.py
+
+# Rotated logs
+check.txt.*
+*.txt.*.gz
 
 # Node
 node_modules/

@@ -3,7 +3,6 @@ import { ClipboardList } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import {
   confirmMarkManagerLock,
@@ -124,6 +123,12 @@ type Props = {
   floatPanelOnTable?: boolean;
   // When true, use the SSA published-lock UI style (same as LabEntry)
   useSsaPublishedLockUi?: boolean;
+
+  // Pure Lab mode: CIA exam → 7.5, experiment average → 17.5 (total 25 per cycle)
+  pureLab?: boolean;
+  // Pure Lab Cycle 3 (MODEL): record marks only → average → 10, no CIA exam
+  pureLabCycle3?: boolean;
+  classType?: string | null;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -132,6 +137,11 @@ const DEFAULT_CIA_EXAM_MAX = 30;
 const TCPL_INTERNAL_LAB_WEIGHT = 2;
 const TCPL_INTERNAL_CIA_EXAM_WEIGHT = 1.5;
 const TCPL_INTERNAL_CO_MAX = TCPL_INTERNAL_LAB_WEIGHT + TCPL_INTERNAL_CIA_EXAM_WEIGHT;
+// Pure Lab weights: Cycle 1/2 → 25 marks each; Cycle 3 (records) → 10 marks
+const PURE_LAB_CIA_WEIGHT = 7.5;
+const PURE_LAB_EXP_WEIGHT = 17.5;
+const PURE_LAB_CYCLE_MAX = 25;
+const PURE_LAB_RECORD_WEIGHT = 10;
 
 function clampInt(n: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
@@ -149,18 +159,9 @@ function round1(n: number) {
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    return an ? -1 : 1;
-  }
-
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  return ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 function normalizeMarksArray(raw: unknown, length: number): Array<number | ''> {
@@ -202,8 +203,8 @@ function avgMarks(arr: Array<number | ''>): number | null {
 function pct(mark: number | null, max: number): string {
   if (mark == null) return '';
   if (!Number.isFinite(max) || max <= 0) return '0';
-  const p = (mark / max) * 100;
-  return `${Number.isFinite(p) ? p.toFixed(0) : 0}`;
+  const ratio = (mark / max) * 100;
+  return `${Number.isFinite(ratio) ? ratio.toFixed(0) : 0}`;
 }
 
 function sumMarks(arr: Array<number | ''>): number {
@@ -320,6 +321,9 @@ export default function LabCourseMarksEntry({
   autoSaveDelayMs,
   viewerMode,
   floatPanelOnTable,
+  pureLab,
+  pureLabCycle3,
+  classType: classTypeProp,
 }: Props) {
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
@@ -539,7 +543,8 @@ export default function LabCourseMarksEntry({
     });
   }, [draft.sheet.coConfigs, draft.sheet.markManagerSnapshot, initialEnabledCoNums]);
 
-  const [classType, setClassType] = useState<string | null>(null);
+  const [fetchedClassType, setFetchedClassType] = useState<string | null>(null);
+  const classType = classTypeProp ?? fetchedClassType;
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isLabCourse = useMemo(() => isLabClassType(classType), [classType]);
   const isTcpr = normalizedClassType === 'TCPR';
@@ -551,6 +556,10 @@ export default function LabCourseMarksEntry({
   const isStrictLabMode = normalizedClassType === 'LAB' || normalizedClassType === 'PRACTICAL';
   const ciaExamMaxConfigurable = isTcpr || isStrictLabMode;
   const usesLegacyTcplProfile = isTcplOrReviewBased && !isStrictLabMode && !isTcpr;
+  // Pure Lab mode: prop-driven or PURE_LAB class type
+  const isPureLab = Boolean(pureLab) || normalizedClassType === 'PURE_LAB';
+  // Cycle 3 (MODEL): records only – no CIA input, weight → 10
+  const isPureLabRecord = isPureLab && Boolean(pureLabCycle3);
 
   // Load master config for term label
   useEffect(() => {
@@ -587,15 +596,15 @@ export default function LabCourseMarksEntry({
         if (!mounted) return;
         const matchDept = (rows || []).find((r: any) => String(r.course_code || '').trim().toUpperCase() === code);
         if (matchDept && (matchDept as any)?.class_type) {
-          setClassType((matchDept as any)?.class_type ?? null);
+          setFetchedClassType((matchDept as any)?.class_type ?? null);
           return;
         }
         const masters = await fetchMasters();
         if (!mounted) return;
         const matchMaster = (masters || []).find((m: any) => String(m.course_code || '').trim().toUpperCase() === code);
-        setClassType((matchMaster as any)?.class_type ?? null);
+        setFetchedClassType((matchMaster as any)?.class_type ?? null);
       } catch {
-        if (mounted) setClassType(null);
+        if (mounted) setFetchedClassType(null);
       }
     })();
     return () => {
@@ -825,35 +834,16 @@ export default function LabCourseMarksEntry({
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        // Try TA detail -> elective-choices when TA represents an elective
+        // Always use TA roster (backend handles batch filtering for electives)
         let studentsList: any[] | null = null;
-        try {
-          const taRes = await fetchWithAuth(`/api/academics/teaching-assignments/${teachingAssignmentId}/`);
-          if (taRes.ok) {
-            const taObj = await taRes.json();
-            if (taObj && taObj.elective_subject_id && !taObj.section_id) {
-              const esRes = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(taObj.elective_subject_id))}`);
-              if (esRes.ok) {
-                const data = await esRes.json();
-                const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-                studentsList = items.map((s: any) => ({ id: Number(s.student_id ?? s.id), reg_no: String(s.reg_no ?? s.regno ?? ''), name: String(s.name ?? s.full_name ?? s.username ?? ''), section: s.section_name ?? s.section ?? null }));
-              }
-            }
-          }
-        } catch (err) {
-          // ignore elective attempt
-        }
-
-        if (!studentsList) {
-          const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
-          setTaMeta({
-            courseName: String((res as any)?.teaching_assignment?.subject_name || ''),
-            courseCode: String((res as any)?.teaching_assignment?.subject_code || subjectId || ''),
-            className: String((res as any)?.teaching_assignment?.section_name || ''),
-          });
-          const roster = (res?.students || []) as any[];
-          studentsList = roster.map((s: any) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null }));
-        }
+        const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+        setTaMeta({
+          courseName: String((res as any)?.teaching_assignment?.subject_name || ''),
+          courseCode: String((res as any)?.teaching_assignment?.subject_code || subjectId || ''),
+          className: String((res as any)?.teaching_assignment?.section_name || ''),
+        });
+        const roster = (res?.students || []) as any[];
+        studentsList = roster.map((s: any) => ({ id: Number(s.id), reg_no: String(s.reg_no ?? ''), name: String(s.name ?? ''), section: s.section ?? null }));
 
         if (!mounted) return;
         const sorted = (studentsList || [])
@@ -982,8 +972,12 @@ export default function LabCourseMarksEntry({
   const coBNumRaw = (draft.sheet as any).coBNum ?? coB ?? null;
   const coBNum = coBNumRaw == null ? null : clampInt(Number(coBNumRaw), 1, 5);
 
-  // Show all CO checkboxes (1..5) in Mark Manager — do not restrict by page.
-  const allowedCoNumbers = useMemo(() => [1, 2, 3, 4, 5], []);
+  // Pure-lab cycles are single-CO sheets. Old drafts may still carry extra enabled CO configs,
+  // which shifts BTL cells under the wrong headers. Restrict those pages to the fixed page COs.
+  const allowedCoNumbers = useMemo(
+    () => (normalizedClassType === 'PURE_LAB' ? initialEnabledCoNums : [1, 2, 3, 4, 5]),
+    [normalizedClassType, initialEnabledCoNums],
+  );
   const allowedCoSet = useMemo(() => new Set(allowedCoNumbers.map((n) => String(n))), [allowedCoNumbers]);
 
   const expCountA = clampInt(Number(draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
@@ -1061,6 +1055,49 @@ export default function LabCourseMarksEntry({
       ciaExamEnabled && typeof (row as any)?.ciaExam === 'number' && Number.isFinite((row as any)?.ciaExam)
         ? Number((row as any)?.ciaExam)
         : null;
+
+    // ── Pure Lab: single combined score (Cycle 1/2 → 25, Cycle 3 → 10) ──────
+    if (isPureLab) {
+      const allExpMarks = marksForEnabledCos.flatMap((m) => m.marks);
+      const expAvg = avgMarks(allExpMarks);
+      const expMax = Math.max(1, marksForEnabledCos[0]?.expMax ?? DEFAULT_EXPERIMENT_MAX);
+      const ciaTotal = (() => {
+        if (!ciaExamEnabled) return 0;
+        if (ciaExamNumLegacy != null) return clampNumber(ciaExamNumLegacy, 0, ciaExamMaxEffective);
+        const sumByCo = Object.values(ciaByCo).reduce<number>(
+          (acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0),
+          0,
+        );
+        return clampNumber(sumByCo, 0, ciaExamMaxEffective);
+      })();
+
+      const hasAnyMarks = expAvg != null || (ciaExamEnabled && ciaTotal > 0);
+      let cycleTotal: number;
+      let cycleMax: number;
+      if (isPureLabRecord) {
+        // Cycle 3: record marks only → average → scale to 10
+        cycleTotal = expAvg != null ? round1((expAvg / expMax) * PURE_LAB_RECORD_WEIGHT) : 0;
+        cycleMax = PURE_LAB_RECORD_WEIGHT;
+      } else {
+        // Cycle 1 / 2: CIA exam → 7.5, experiments average → 17.5
+        const ciaContrib =
+          ciaExamEnabled && ciaExamMaxEffective > 0
+            ? round1((clampNumber(ciaTotal, 0, ciaExamMaxEffective) / ciaExamMaxEffective) * PURE_LAB_CIA_WEIGHT)
+            : 0;
+        const expContrib = expAvg != null ? round1((expAvg / expMax) * PURE_LAB_EXP_WEIGHT) : 0;
+        cycleTotal = round1(ciaContrib + expContrib);
+        cycleMax = PURE_LAB_CYCLE_MAX;
+      }
+
+      return {
+        caaByCo,
+        ciaByCo,
+        ciaExamNumLegacy,
+        coAttainmentValues: [{ coNumber: 1, mark: hasAnyMarks ? cycleTotal : null, coMax: cycleMax }],
+        hasAnyMarks,
+        finalTotal: hasAnyMarks ? cycleTotal : '',
+      };
+    }
 
     if (isStrictLabMode) {
       const enabledCoCount = Math.max(1, marksForEnabledCos.length);
@@ -2468,7 +2505,7 @@ export default function LabCourseMarksEntry({
     const set = new Set<number>();
     for (const m of enabledCoMetas) {
       for (let i = 0; i < m.expCount; i++) {
-        const v = m.btl[i];
+        const v = Number(m.btl[i] ?? 1);
         if (v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) set.add(v);
       }
     }
@@ -2476,27 +2513,30 @@ export default function LabCourseMarksEntry({
   }, [enabledCoMetas, totalExpCols]);
 
   const headerCols = 3 + (absentUiEnabled ? 1 : 0) + experimentsCols + 1 + examCols + coAttainmentCols + visibleBtlIndices.length * 2;
+  const isLabExamUi = normalizedClassType === 'LAB' || normalizedClassType === 'PURE_LAB';
 
   const cellTh: React.CSSProperties = {
-    border: '1px solid #111',
-    padding: '4px 4px',
-    background: '#ecfdf5',
+    border: isLabExamUi ? '1px solid #304b47' : '1px solid #111',
+    padding: isLabExamUi ? '3px 4px' : '4px 4px',
+    background: isLabExamUi ? '#dff4ee' : '#ecfdf5',
     color: '#065f46',
     textAlign: 'center',
-    fontWeight: 700,
-    fontSize: 11,
+    fontWeight: 800,
+    fontSize: isLabExamUi ? 10 : 11,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+    lineHeight: 1.15,
   };
 
   const cellTd: React.CSSProperties = {
-    border: '1px solid #111',
-    padding: '4px 4px',
-    fontSize: 11,
+    border: isLabExamUi ? '1px solid #304b47' : '1px solid #111',
+    padding: isLabExamUi ? '2px 4px' : '4px 4px',
+    fontSize: isLabExamUi ? 10 : 11,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+    lineHeight: 1.15,
   };
 
   const inputStyle: React.CSSProperties = {
@@ -2504,25 +2544,27 @@ export default function LabCourseMarksEntry({
     border: 'none',
     outline: 'none',
     background: 'transparent',
-    fontSize: 11,
+    fontSize: isLabExamUi ? 10 : 11,
     textAlign: 'center',
+    padding: 0,
+    lineHeight: 1.1,
   };
 
   const cardStyle: React.CSSProperties = {
     border: '1px solid #e5e7eb',
-    borderRadius: 12,
+    borderRadius: isLabExamUi ? 10 : 12,
     background: '#fff',
-    padding: 12,
+    padding: isLabExamUi ? 8 : 12,
   };
 
-  const COL_SNO_W = 40;
-  const COL_RNO_W = 90;
-  const COL_NAME_W = 180;
+  const COL_SNO_W = isLabExamUi ? 36 : 40;
+  const COL_RNO_W = isLabExamUi ? 80 : 90;
+  const COL_NAME_W = isLabExamUi ? 160 : 180;
   const COL_AB_W = 56;
-  const COL_AVG_W = 52;
-  const COL_CIA_W = 72;
+  const COL_AVG_W = isLabExamUi ? 46 : 52;
+  const COL_CIA_W = isLabExamUi ? 70 : 72;
 
-  const DEFAULT_DATA_COL_W = 80;
+  const DEFAULT_DATA_COL_W = isLabExamUi ? 72 : 80;
 
   const restColWidths = useMemo<number[]>(
     () => [
@@ -2534,17 +2576,19 @@ export default function LabCourseMarksEntry({
     [experimentsCols, examCols, coAttainmentCols, visibleBtlIndices.length],
   );
 
+  const trailingHeaderColSpan = coAttainmentCols + visibleBtlIndices.length * 2 + (ciaExamEnabled && usesLegacyTcplProfile ? examCols : 0);
+
   const minTableWidth = useMemo(() => {
     const stickyW = COL_SNO_W + COL_RNO_W + COL_NAME_W + (absentUiEnabled ? COL_AB_W : 0);
     const restW = restColWidths.reduce((a, b) => a + b, 0);
-    return Math.max(900, stickyW + restW);
-  }, [absentUiEnabled, restColWidths]);
+    return Math.max(isLabExamUi ? 980 : 900, stickyW + restW);
+  }, [absentUiEnabled, restColWidths, isLabExamUi]);
 
   const minViewTableWidth = useMemo(() => {
     const stickyW = COL_SNO_W + COL_RNO_W + COL_NAME_W;
     const restW = restColWidths.reduce((a, b) => a + b, 0);
-    return Math.max(900, stickyW + restW);
-  }, [restColWidths]);
+    return Math.max(isLabExamUi ? 980 : 900, stickyW + restW);
+  }, [restColWidths, isLabExamUi]);
 
   useEffect(() => {
     const el = marksTableScrollRef.current;
@@ -2619,9 +2663,9 @@ export default function LabCourseMarksEntry({
   const coEnableStyle: React.CSSProperties = {
     display: 'flex',
     width: '100%',
-    maxWidth: 1200,
+    maxWidth: isLabExamUi ? '100%' : 1200,
     margin: '0 auto',
-    gap: 10,
+    gap: isLabExamUi ? 8 : 10,
     flexWrap: 'wrap',
     alignItems: 'center',
     marginBottom: 8,
@@ -2638,11 +2682,11 @@ export default function LabCourseMarksEntry({
   const dustAnimation = markManagerAnimating ? 'markManagerDust 2s ease-out forwards' : undefined;
 
   const btlSelectStyle: React.CSSProperties = {
-    width: 66,
-    borderRadius: 8,
+    width: isLabExamUi ? 58 : 66,
+    borderRadius: 6,
     border: '1px solid #e5e7eb',
-    padding: '4px 6px',
-    fontSize: 12,
+    padding: isLabExamUi ? '2px 4px' : '4px 6px',
+    fontSize: isLabExamUi ? 10 : 12,
     background: '#fff',
   };
 
@@ -2988,19 +3032,20 @@ export default function LabCourseMarksEntry({
         }
       `}</style>
       <div style={{ margin: '0 0 10px 0', maxWidth: '100%', width: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
-        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>COs enabled</div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>{isLabExamUi ? 'Lab exam setup' : 'COs enabled'}</div>
 
         <div
           style={{
             ...coEnableStyle,
-            border: '1px solid #fcd34d',
-            background: markManagerLocked ? '#f3f4f6' : '#fff7ed',
-            padding: 12,
-            borderRadius: 12,
+            border: isLabExamUi ? '1px solid #bfded4' : '1px solid #fcd34d',
+            background: markManagerLocked ? '#f8fafc' : isLabExamUi ? '#f5fbf8' : '#fff7ed',
+            padding: isLabExamUi ? 10 : 12,
+            borderRadius: isLabExamUi ? 10 : 12,
             alignItems: 'stretch',
             animation: glitchingAnimation,
             position: 'relative',
             overflow: 'hidden',
+            boxShadow: isLabExamUi ? '0 1px 2px rgba(15,23,42,0.04)' : undefined,
           }}
         >
           {markManagerAnimating && (
@@ -3022,6 +3067,21 @@ export default function LabCourseMarksEntry({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               <ClipboardList size={18} color={markManagerLocked ? '#6b7280' : '#9a3412'} />
               <div style={{ fontWeight: 950, color: '#111827' }}>Mark Manager</div>
+              {isLabExamUi ? (
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 800,
+                    color: '#065f46',
+                    background: '#dcfce7',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: 999,
+                    padding: '3px 8px',
+                  }}
+                >
+                  Compact Lab Layout
+                </span>
+              ) : null}
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -3062,19 +3122,19 @@ export default function LabCourseMarksEntry({
             </div>
           </div>
 
-          <div style={{ width: '100%', display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+          <div style={{ width: '100%', display: 'flex', gap: isLabExamUi ? 8 : 10, flexWrap: 'wrap', marginTop: 8 }}>
             {allowedCoNumbers.map((n) => {
               const cfg = coConfigs[String(n)];
               const checked = Boolean(cfg?.enabled);
               return (
-                <label key={n} style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
+                <label key={n} style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827', background: isLabExamUi ? '#ffffff' : 'transparent', border: isLabExamUi ? '1px solid #dbe7e2' : 'none', borderRadius: isLabExamUi ? 8 : 0, padding: isLabExamUi ? '5px 8px' : 0 }}>
                   <input type="checkbox" checked={checked} disabled={markManagerLocked} onChange={(e) => toggleCoSelection(n, e.target.checked)} style={bigCheckboxStyle} />
                   CO-{n}
                 </label>
               );
             })}
 
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827' }}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827', background: isLabExamUi ? '#ffffff' : 'transparent', border: isLabExamUi ? '1px solid #dbe7e2' : 'none', borderRadius: isLabExamUi ? 8 : 0, padding: isLabExamUi ? '5px 8px' : 0 }}>
               {ciaAvailable ? (
                 <>
                   <input
@@ -3097,8 +3157,8 @@ export default function LabCourseMarksEntry({
             style={{
               width: '100%',
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-              gap: 10,
+              gridTemplateColumns: isLabExamUi ? 'repeat(auto-fit, minmax(180px, 1fr))' : 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: isLabExamUi ? 8 : 10,
               marginTop: 8,
             }}
           >
@@ -3111,9 +3171,9 @@ export default function LabCourseMarksEntry({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 6,
-                  padding: '10px 10px',
+                  padding: isLabExamUi ? '8px 8px' : '10px 10px',
                   border: '1px solid #e5e7eb',
-                  borderRadius: 12,
+                  borderRadius: isLabExamUi ? 8 : 12,
                   background: '#fff',
                 }}
               >
@@ -3145,9 +3205,9 @@ export default function LabCourseMarksEntry({
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 6,
-                    padding: '10px 10px',
+                    padding: isLabExamUi ? '8px 8px' : '10px 10px',
                     border: '1px solid #e5e7eb',
-                    borderRadius: 12,
+                    borderRadius: isLabExamUi ? 8 : 12,
                     background: '#fff',
                   }}
                 >
@@ -3342,7 +3402,7 @@ export default function LabCourseMarksEntry({
         </div>
       ) : null}
 
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: isLabExamUi ? 8 : 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Term</div>
           <div style={{ fontWeight: 700 }}>{draft.sheet.termLabel || '—'}</div>
@@ -3364,7 +3424,7 @@ export default function LabCourseMarksEntry({
 
       <div style={cardStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-          <div style={{ fontSize: 12, color: '#6b7280' }}>Use the side scroll buttons to move across the marks table while entering marks.</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>{isLabExamUi ? 'Spreadsheet-style lab entry view with compact columns and sticky student details.' : 'Use the side scroll buttons to move across the marks table while entering marks.'}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="obe-btn obe-btn-secondary" disabled={!marksTableScrollState.canLeft} onClick={() => scrollMarksTable('left')}>
               Scroll Left
@@ -3381,6 +3441,9 @@ export default function LabCourseMarksEntry({
             style={{
               overflowX: 'auto',
               position: 'relative',
+              borderRadius: isLabExamUi ? 8 : undefined,
+              border: isLabExamUi ? '1px solid #c9ddd5' : undefined,
+              background: isLabExamUi ? '#f8fcfa' : undefined,
               filter: tableBlocked ? 'grayscale(5%)' : undefined,
               opacity: tableBlocked ? 0.78 : 1,
             }}
@@ -3388,11 +3451,11 @@ export default function LabCourseMarksEntry({
             {/* When the mark manager is not confirmed (editable), block the table view and show only a preview */}
             {/** tableBlocked: true when mark manager is editable and needs confirmation to unlock full table **/}
             {/* compute below */}
-            <table className="obe-table" style={{ width: '100%', minWidth: minTableWidth, tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+            <table className="obe-table" style={{ width: '100%', minWidth: minTableWidth, tableLayout: 'fixed', borderCollapse: 'collapse', background: '#ffffff' }}>
               {renderColGroup(headerCols, absentUiEnabled, restColWidths)}
               <thead>
                 <tr>
-                  <th style={cellTh} colSpan={headerCols}>
+                  <th style={{ ...cellTh, fontSize: isLabExamUi ? 11 : cellTh.fontSize, letterSpacing: 0.2 }} colSpan={headerCols}>
                     {label}
                   </th>
                 </tr>
@@ -3528,7 +3591,9 @@ export default function LabCourseMarksEntry({
 
                   {hasEnabledCos ? (
                     enabledCoMetas.map((m) => {
-                      const coMax = isStrictLabMode
+                      const coMax = isPureLab
+                        ? (isPureLabRecord ? PURE_LAB_RECORD_WEIGHT : PURE_LAB_CYCLE_MAX)
+                        : isStrictLabMode
                         ? round1(
                             Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
                               (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
@@ -3559,8 +3624,8 @@ export default function LabCourseMarksEntry({
                   )}
                   {visibleBtlIndices.map((n) => (
                     <React.Fragment key={`btlmax_${n}`}>
-                      <th style={cellTh}>{maxExpMax || DEFAULT_EXPERIMENT_MAX}</th>
-                      <th style={cellTh}>%</th>
+                      <th style={{ ...cellTh, background: isLabExamUi ? '#d8efe7' : cellTh.background }}>{maxExpMax || DEFAULT_EXPERIMENT_MAX}</th>
+                      <th style={{ ...cellTh, background: isLabExamUi ? '#d8efe7' : cellTh.background }}>%</th>
                     </React.Fragment>
                   ))}
                 </tr>
@@ -3579,7 +3644,7 @@ export default function LabCourseMarksEntry({
                       )}
                     </>
                   )}
-                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
+                  <th style={cellTh} colSpan={trailingHeaderColSpan} />
                 </tr>
 
                 <tr>
@@ -3632,7 +3697,7 @@ export default function LabCourseMarksEntry({
                       )}
                     </>
                   )}
-                  <th style={cellTh} colSpan={coAttainmentCols + visibleBtlIndices.length * 2 + examCols} />
+                  <th style={cellTh} colSpan={trailingHeaderColSpan} />
                 </tr>
               </thead>
 
@@ -3654,7 +3719,7 @@ export default function LabCourseMarksEntry({
                     for (const m of enabledCoMetas) {
                       const marksRow = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
                       for (let i = 0; i < Math.min(m.expCount, marksRow.length); i++) {
-                        if (m.btl[i] === n) {
+                        if (Number(m.btl[i] ?? 1) === n) {
                           const v = marksRow[i];
                           if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
                         }
@@ -3829,8 +3894,8 @@ export default function LabCourseMarksEntry({
                         const m = btlAvgByIndex[n] ?? null;
                         return (
                           <React.Fragment key={`btlcell_${s.id}_${n}`}>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{m == null ? '' : m.toFixed(1)}</td>
-                            <td style={{ ...cellTd, textAlign: 'right' }}>{pct(m, maxExpMax || DEFAULT_EXPERIMENT_MAX)}</td>
+                            <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700, background: isLabExamUi ? '#f3fbf7' : undefined }}>{m == null ? '' : m.toFixed(1)}</td>
+                            <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700, background: isLabExamUi ? '#f3fbf7' : undefined }}>{pct(m, maxExpMax || DEFAULT_EXPERIMENT_MAX)}</td>
                           </React.Fragment>
                         );
                       })}
@@ -4579,7 +4644,9 @@ export default function LabCourseMarksEntry({
 
                     {hasEnabledCos ? (
                       enabledCoMetas.map((m) => {
-                        const coMax = isStrictLabMode
+                        const coMax = isPureLab
+                          ? (isPureLabRecord ? PURE_LAB_RECORD_WEIGHT : PURE_LAB_CYCLE_MAX)
+                          : isStrictLabMode
                           ? round1(
                               Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
                                 (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
@@ -4664,7 +4731,7 @@ export default function LabCourseMarksEntry({
                       for (const m of enabledCoMetas) {
                         const marksRow = marksForEnabledCos.find((x) => x.coNumber === m.coNumber)?.marks ?? [];
                         for (let i = 0; i < Math.min(m.expCount, marksRow.length); i++) {
-                          if (m.btl[i] === n) {
+                          if (Number(m.btl[i] ?? 1) === n) {
                             const v = marksRow[i];
                             if (typeof v === 'number' && Number.isFinite(v)) marks.push(v);
                           }

@@ -1,5 +1,5 @@
 import { fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, readCourseSelectionMap } from './courseSelectionStorage';
+import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 
 const EVEN_SEMESTERS = ['SEM8', 'SEM6', 'SEM4', 'SEM2'];
@@ -19,10 +19,10 @@ export async function getSemesterStartSequence(department: string, targetSemeste
   const semsToFetch = semestersToCheck.slice(0, targetIndex);
   
   let startSequence = 0;
-  const selectionMap = readCourseSelectionMap();
   
   const results = await Promise.allSettled(
     semsToFetch.map(async (sem) => {
+      const selectionMap = await fetchCourseSelectionMapFromApi(department, sem);
       const res = await fetchCoeStudentsMap({ department, semester: sem });
       const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, sem));
       
@@ -65,14 +65,17 @@ export function generateDummyNumber(department: string, globalSequence: number):
   const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
     AIDS: '01',
     AIML: '02',
+    CE: '03',
     CIVIL: '03',
     CSE: '04',
     ECE: '05',
     EEE: '06',
     IT: '07',
+    ME: '08',
     MECH: '08',
   };
   
-  const deptCode = DEPARTMENT_DUMMY_DIGITS[department] || '09';
+  const normalizedDepartment = String(department || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const deptCode = DEPARTMENT_DUMMY_DIGITS[normalizedDepartment] || '00';
   return `E256${deptCode}${String(globalSequence).padStart(5, '0')}`;
 }

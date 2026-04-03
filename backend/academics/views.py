@@ -17,6 +17,15 @@ import decimal
 
 from .permissions import IsHODOfDepartment
 
+
+COE_DEPARTMENT_ACCESS_PERMS = {
+    'coe.portal.access',
+    'coe.manage.exams',
+    'coe.manage.results',
+    'coe.manage.circulars',
+    'coe.manage.calendar',
+}
+
 from .models import (
     TeachingAssignment,
     SectionAdvisor,
@@ -27,6 +36,7 @@ from .models import (
     StudentProfile,
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
+    Semester,
 )
 from OBE.models import (
     Cia1Mark,
@@ -80,6 +90,7 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
     except Exception:
         return 0
 
+    # ── Part 1: Curriculum-row based batches (non-elective) ──
     batches_qs = StudentSubjectBatch.objects.filter(
         staff=staff_profile,
         is_active=True,
@@ -87,70 +98,161 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
         curriculum_row__isnull=False,
     ).select_related('academic_year')
 
-    if not batches_qs.exists():
-        return 0
-
     created_or_updated = 0
-
-    # Group by (academic_year, curriculum_row) and create one TeachingAssignment per pair.
-    pairs = list(
-        batches_qs.values_list('academic_year_id', 'curriculum_row_id').distinct()
-    )
 
     from academics.models import StudentProfile
 
-    for academic_year_id, curriculum_row_id in pairs:
-        if not academic_year_id or not curriculum_row_id:
-            continue
-
-        # If any active TA already exists for this staff+course+year (any section), don't create another.
-        existing = TeachingAssignment.objects.filter(
-            staff=staff_profile,
-            academic_year_id=academic_year_id,
-            curriculum_row_id=curriculum_row_id,
+    if batches_qs.exists():
+        # Group by (academic_year, curriculum_row) and create one TeachingAssignment per pair.
+        pairs = list(
+            batches_qs.values_list('academic_year_id', 'curriculum_row_id').distinct()
         )
-        if existing.filter(is_active=True).exists():
-            continue
 
-        # Infer a representative section if all students in the batches belong to exactly one section.
-        section_ids = list(
-            StudentProfile.objects.filter(
-                subject_batches__staff=staff_profile,
-                subject_batches__is_active=True,
-                subject_batches__academic_year_id=academic_year_id,
-                subject_batches__curriculum_row_id=curriculum_row_id,
-            ).exclude(section_id__isnull=True).values_list('section_id', flat=True).distinct()
-        )
-        section_id = section_ids[0] if len(section_ids) == 1 else None
-
-        # If an inactive TA exists, reactivate it (prefer one matching inferred section if possible).
-        try:
-            ta_to_reactivate = None
-            if section_id is not None:
-                ta_to_reactivate = existing.filter(section_id=section_id).first()
-            if ta_to_reactivate is None:
-                ta_to_reactivate = existing.first()
-
-            if ta_to_reactivate is not None:
-                if not ta_to_reactivate.is_active:
-                    ta_to_reactivate.is_active = True
-                    ta_to_reactivate.save(update_fields=['is_active'])
-                    created_or_updated += 1
+        for academic_year_id, curriculum_row_id in pairs:
+            if not academic_year_id or not curriculum_row_id:
                 continue
-        except Exception:
-            pass
 
-        try:
-            TeachingAssignment.objects.create(
+            # If any active TA already exists for this staff+course+year (any section), don't create another.
+            existing = TeachingAssignment.objects.filter(
                 staff=staff_profile,
                 academic_year_id=academic_year_id,
                 curriculum_row_id=curriculum_row_id,
-                section_id=section_id,
-                is_active=True,
             )
-            created_or_updated += 1
+            if existing.filter(is_active=True).exists():
+                continue
+
+            # Infer a representative section if all students in the batches belong to exactly one section.
+            section_ids = list(
+                StudentProfile.objects.filter(
+                    subject_batches__staff=staff_profile,
+                    subject_batches__is_active=True,
+                    subject_batches__academic_year_id=academic_year_id,
+                    subject_batches__curriculum_row_id=curriculum_row_id,
+                ).exclude(section_id__isnull=True).values_list('section_id', flat=True).distinct()
+            )
+            section_id = section_ids[0] if len(section_ids) == 1 else None
+
+            # If an inactive TA exists, reactivate it (prefer one matching inferred section if possible).
+            try:
+                ta_to_reactivate = None
+                if section_id is not None:
+                    ta_to_reactivate = existing.filter(section_id=section_id).first()
+                if ta_to_reactivate is None:
+                    ta_to_reactivate = existing.first()
+
+                if ta_to_reactivate is not None:
+                    if not ta_to_reactivate.is_active:
+                        ta_to_reactivate.is_active = True
+                        ta_to_reactivate.save(update_fields=['is_active'])
+                        created_or_updated += 1
+                    continue
+            except Exception:
+                pass
+
+            try:
+                TeachingAssignment.objects.create(
+                    staff=staff_profile,
+                    academic_year_id=academic_year_id,
+                    curriculum_row_id=curriculum_row_id,
+                    section_id=section_id,
+                    is_active=True,
+                )
+                created_or_updated += 1
+            except Exception:
+                # Ignore races / integrity errors; this is best-effort.
+                continue
+
+    # ── Part 2: Elective batches (no curriculum_row) ──
+    # For batches where curriculum_row is NULL, resolve elective_subject
+    # from the batch creator's teaching assignments using student overlap.
+    elective_batches_qs = StudentSubjectBatch.objects.filter(
+        staff=staff_profile,
+        is_active=True,
+        academic_year__is_active=True,
+        curriculum_row__isnull=True,
+    ).select_related('academic_year', 'created_by')
+
+    for sb in elective_batches_qs:
+        try:
+            creator_id = getattr(sb, 'created_by_id', None)
+            if not creator_id:
+                continue
+
+            academic_year_id = sb.academic_year_id
+            if not academic_year_id:
+                continue
+
+            # Find elective TAs of the creator
+            creator_etas = TeachingAssignment.objects.filter(
+                staff_id=creator_id,
+                elective_subject__isnull=False,
+                is_active=True,
+                academic_year_id=academic_year_id,
+            ).select_related('elective_subject')
+
+            if not creator_etas.exists():
+                continue
+
+            # Determine which elective subject by student overlap
+            batch_student_ids = set(sb.students.values_list('id', flat=True))
+            if not batch_student_ids:
+                continue
+
+            matched_es_id = None
+            from curriculum.models import ElectiveChoice
+            for eta in creator_etas:
+                es_id = eta.elective_subject_id
+                if not es_id:
+                    continue
+                choice_student_ids = set(
+                    ElectiveChoice.objects.filter(
+                        elective_subject_id=es_id, is_active=True
+                    ).values_list('student_id', flat=True)
+                )
+                overlap = batch_student_ids & choice_student_ids
+                if len(overlap) > 0:
+                    matched_es_id = es_id
+                    break
+
+            # Fallback: if only one creator elective TA exists, use it
+            if not matched_es_id and creator_etas.count() == 1:
+                matched_es_id = creator_etas.first().elective_subject_id
+
+            if not matched_es_id:
+                continue
+
+            # Check if an active TA already exists for this staff + elective_subject + year
+            existing = TeachingAssignment.objects.filter(
+                staff=staff_profile,
+                academic_year_id=academic_year_id,
+                elective_subject_id=matched_es_id,
+            )
+            if existing.filter(is_active=True).exists():
+                continue
+
+            # Try reactivating an inactive one
+            try:
+                inactive = existing.filter(is_active=False).first()
+                if inactive:
+                    inactive.is_active = True
+                    inactive.save(update_fields=['is_active'])
+                    created_or_updated += 1
+                    continue
+            except Exception:
+                pass
+
+            try:
+                TeachingAssignment.objects.create(
+                    staff=staff_profile,
+                    academic_year_id=academic_year_id,
+                    elective_subject_id=matched_es_id,
+                    section_id=None,
+                    is_active=True,
+                )
+                created_or_updated += 1
+            except Exception:
+                continue
         except Exception:
-            # Ignore races / integrity errors; this is best-effort.
             continue
 
     return created_or_updated
@@ -231,12 +333,13 @@ class MyTeachingAssignmentsView(APIView):
         if not qs_staff.exists():
             qs_staff = base_qs.filter(staff__user=user, academic_year__is_active=True)
 
-        # Backfill from StudentSubjectBatch when the staff has no teaching assignments at all.
+        # Backfill from StudentSubjectBatch — always run to pick up newly
+        # assigned batches (e.g. elective batches assigned by another staff).
+        try:
+            _ensure_teaching_assignments_from_subject_batches(staff_profile)
+        except Exception:
+            pass
         if not qs_staff.exists():
-            try:
-                _ensure_teaching_assignments_from_subject_batches(staff_profile)
-            except Exception:
-                pass
             qs_staff = qs.filter(staff__user=user)
             if not qs_staff.exists():
                 qs_staff = qs.filter(staff=staff_profile)
@@ -406,6 +509,41 @@ class TeachingAssignmentStudentsView(APIView):
                     'name': _student_display_name(u),
                     'section': section_name,
                 })
+
+        # ── Batch-based student filtering ──
+        # If the TA owner has StudentSubjectBatch entries for this subject/year,
+        # restrict the student list to only those in the staff's batches.
+        # This ensures batch-assigned staff see only their batch students.
+        # Uses ta.staff_id (the TA owner) so HOD/IQAC views also see the correct filtered roster.
+        try:
+            from academics.models import StudentSubjectBatch as _SSB
+            batch_filter_qs = _SSB.objects.filter(
+                staff_id=ta.staff_id,
+                is_active=True,
+            )
+            if getattr(ta, 'academic_year_id', None):
+                batch_filter_qs = batch_filter_qs.filter(academic_year_id=ta.academic_year_id)
+            # For elective TAs (no curriculum_row), match by creator's elective TA overlap
+            # For regular TAs, match by curriculum_row
+            if getattr(ta, 'curriculum_row_id', None):
+                batch_filter_qs = batch_filter_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            else:
+                # Elective: match batches without curriculum_row
+                batch_filter_qs = batch_filter_qs.filter(curriculum_row__isnull=True)
+            user_batches = list(batch_filter_qs)
+            if user_batches:
+                batch_student_ids = set()
+                for ub in user_batches:
+                    try:
+                        batch_student_ids.update(
+                            ub.students.values_list('id', flat=True)
+                        )
+                    except Exception:
+                        pass
+                if batch_student_ids:
+                    students = [s for s in students if s.get('id') in batch_student_ids]
+        except Exception:
+            pass
 
         def _resolve_dept(ta_obj):
             dept = None
@@ -2061,28 +2199,67 @@ class HODStaffListView(APIView):
         return Response({'results': results})
 
 
+class SemesterViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only ViewSet for Semester objects."""
+    queryset = Semester.objects.all().order_by('number')
+    permission_classes = (IsAuthenticated,)
+
+    def get_serializer_class(self):
+        from .serializers import SemesterSerializer
+        return SemesterSerializer
+
+
 class DepartmentsListView(APIView):
-    """Return a list of departments. Users with `academics.view_all_departments`
-    permission, PS role, or staff users see all departments; others see only their effective
-    departments."""
+
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         user = request.user
-        perms = get_user_permissions(user)
+        perms = set(get_user_permissions(user))
         from .models import Department
 
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
 
+        has_coe_role = False
+        try:
+            has_coe_role = bool(user.roles.filter(name__iexact='COE').exists())
+        except Exception:
+            has_coe_role = False
+
+        has_global_access = (
+            bool({'academics.view_all_departments', 'academics.view_all_staff'} & perms)
+            or bool(COE_DEPARTMENT_ACCESS_PERMS & perms)
+            or has_coe_role
+            or has_ps_role
+            or user.is_superuser
+        )
+
         # accept either view_all_departments or view_all_staff permission as global access
-        if ({'academics.view_all_departments', 'academics.view_all_staff'} & perms) or user.is_superuser or has_ps_role:
-            qs = Department.objects.all()
+        if has_global_access:
+            # Filter for teaching departments only (parent is NULL)
+            qs = Department.objects.filter(parent__isnull=True)
         else:
             # Use effective departments (own dept + DepartmentRole HOD/AHOD mappings)
             dept_ids = get_user_effective_departments(user) or []
             if not dept_ids:
                 return Response({'results': []})
-            qs = Department.objects.filter(id__in=dept_ids)
+
+            # Determine which of the effective departments are themselves teaching departments (parent NULL)
+            teaching_ids = set(
+                Department.objects.filter(id__in=dept_ids, parent__isnull=True).values_list('id', flat=True)
+            )
+
+            # For non-teaching departments, include their parent (the actual teaching department)
+            parent_ids = set(
+                Department.objects.filter(id__in=dept_ids, parent__isnull=False).values_list('parent_id', flat=True)
+            )
+
+            allowed_ids = list(teaching_ids | parent_ids)
+            if not allowed_ids:
+                return Response({'results': []})
+
+            # Filter for teaching departments only (parent is NULL)
+            qs = Department.objects.filter(id__in=allowed_ids, parent__isnull=True)
 
         include_non_teaching = str(request.query_params.get('include_non_teaching', 'false')).strip().lower() in {'1', 'true', 'yes'}
         can_include_non_teaching = bool(
@@ -3016,13 +3193,13 @@ class StaffAssignedSubjectsView(APIView):
             bqs = StudentSubjectBatch.objects.filter(
                 staff=target,
                 is_active=True,
-                curriculum_row__isnull=False,
             ).select_related(
                 'curriculum_row',
                 'curriculum_row__department',
                 'curriculum_row__semester',
                 'section',
                 'academic_year',
+                'created_by',
             )
             if active_ay:
                 bqs = bqs.filter(academic_year=active_ay)
@@ -3078,70 +3255,165 @@ class StaffAssignedSubjectsView(APIView):
 
                 return None, None
 
+            # Build a cache of creator -> elective TAs so we can resolve subject info
+            # for elective batches (curriculum_row is NULL).
+            _creator_elective_ta_cache: dict = {}
+
+            def _resolve_elective_subject_for_batch(sb_obj):
+                """Look up elective subject info for a batch by checking creator's TAs."""
+                creator_id = getattr(sb_obj, 'created_by_id', None)
+                if not creator_id:
+                    return None, None, None, None, None  # code, name, elective_subject_id, dept_obj, sem_num
+                if creator_id not in _creator_elective_ta_cache:
+                    etas = TeachingAssignment.objects.filter(
+                        staff_id=creator_id,
+                        elective_subject__isnull=False,
+                        is_active=True,
+                    ).select_related(
+                        'elective_subject',
+                        'elective_subject__department',
+                        'elective_subject__semester',
+                    )
+                    try:
+                        if active_ay and etas.filter(academic_year=active_ay).exists():
+                            etas = etas.filter(academic_year=active_ay)
+                    except Exception:
+                        pass
+                    _creator_elective_ta_cache[creator_id] = list(etas)
+
+                etas = _creator_elective_ta_cache.get(creator_id, [])
+                if not etas:
+                    return None, None, None, None, None
+
+                # If there's only one elective TA, use it; otherwise pick first match
+                eta = etas[0]
+                es = getattr(eta, 'elective_subject', None)
+                if not es:
+                    return None, None, None, None, None
+
+                dept_obj = None
+                try:
+                    dept = getattr(es, 'department', None)
+                    if dept:
+                        dept_obj = {
+                            'id': getattr(dept, 'id', None),
+                            'code': getattr(dept, 'code', None),
+                            'name': getattr(dept, 'name', None),
+                            'short_name': getattr(dept, 'short_name', None),
+                        }
+                except Exception:
+                    dept_obj = None
+
+                sem_num = None
+                try:
+                    sem_num = getattr(getattr(es, 'semester', None), 'number', None)
+                except Exception:
+                    sem_num = None
+
+                return (
+                    getattr(es, 'course_code', None),
+                    getattr(es, 'course_name', None),
+                    getattr(es, 'pk', None),
+                    dept_obj,
+                    sem_num,
+                )
+
             for sb in bqs:
                 try:
                     cr = getattr(sb, 'curriculum_row', None)
-                    if not cr:
-                        continue
-
                     batch_info = {'id': sb.pk, 'name': getattr(sb, 'name', None)}
-
                     section_id, section_name = _infer_batch_section(sb)
 
-                    # If the subject already exists (as a TeachingAssignment), attach the batch
-                    # only to the matching section row.
-                    key = (int(cr.pk), int(section_id) if section_id is not None else None)
-                    existing_rows = by_key.get(key)
-                    if not existing_rows and section_id is None:
-                        existing_rows = by_key.get((int(cr.pk), None))
-                    if existing_rows:
-                        for existing in existing_rows:
-                            lst = existing.get('subject_batches')
-                            if not isinstance(lst, list):
-                                lst = []
-                            if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
-                                lst.append(batch_info)
-                            existing['subject_batches'] = lst
-                        continue
+                    if cr:
+                        # ── Curriculum-row based batch (non-elective) ──
+                        key = (int(cr.pk), int(section_id) if section_id is not None else None)
+                        existing_rows = by_key.get(key)
+                        if not existing_rows and section_id is None:
+                            existing_rows = by_key.get((int(cr.pk), None))
+                        if existing_rows:
+                            for existing in existing_rows:
+                                lst = existing.get('subject_batches')
+                                if not isinstance(lst, list):
+                                    lst = []
+                                if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
+                                    lst.append(batch_info)
+                                existing['subject_batches'] = lst
+                            continue
 
-                    # Otherwise create a minimal row so the batch-staff can still see the subject.
-
-                    dept_obj = None
-                    try:
-                        dept = getattr(cr, 'department', None)
-                        if dept:
-                            dept_obj = {
-                                'id': getattr(dept, 'id', None),
-                                'code': getattr(dept, 'code', None),
-                                'name': getattr(dept, 'name', None),
-                                'short_name': getattr(dept, 'short_name', None),
-                            }
-                    except Exception:
                         dept_obj = None
+                        try:
+                            dept = getattr(cr, 'department', None)
+                            if dept:
+                                dept_obj = {
+                                    'id': getattr(dept, 'id', None),
+                                    'code': getattr(dept, 'code', None),
+                                    'name': getattr(dept, 'name', None),
+                                    'short_name': getattr(dept, 'short_name', None),
+                                }
+                        except Exception:
+                            dept_obj = None
 
-                    sem_num = None
-                    try:
-                        sem_num = getattr(getattr(cr, 'semester', None), 'number', None)
-                    except Exception:
                         sem_num = None
+                        try:
+                            sem_num = getattr(getattr(cr, 'semester', None), 'number', None)
+                        except Exception:
+                            sem_num = None
 
-                    results.append({
-                        'id': -int(sb.pk),
-                        'subject_code': getattr(cr, 'course_code', None),
-                        'subject_name': getattr(cr, 'course_name', None),
-                        'class_type': 'BATCH',
-                        'section_name': section_name,
-                        'section_id': section_id,
-                        'elective_subject_id': None,
-                        'elective_subject_name': None,
-                        'curriculum_row_id': getattr(cr, 'pk', None),
-                        'batch': None,
-                        'semester': sem_num,
-                        'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
-                        'department': dept_obj,
-                        'subject_batches': [batch_info],
-                    })
-                    by_key.setdefault(key, []).append(results[-1])
+                        results.append({
+                            'id': -int(sb.pk),
+                            'subject_code': getattr(cr, 'course_code', None),
+                            'subject_name': getattr(cr, 'course_name', None),
+                            'class_type': 'BATCH',
+                            'section_name': section_name,
+                            'section_id': section_id,
+                            'elective_subject_id': None,
+                            'elective_subject_name': None,
+                            'curriculum_row_id': getattr(cr, 'pk', None),
+                            'batch': None,
+                            'semester': sem_num,
+                            'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
+                            'department': dept_obj,
+                            'subject_batches': [batch_info],
+                        })
+                        by_key.setdefault(key, []).append(results[-1])
+                    else:
+                        # ── Elective batch (no curriculum_row) ──
+                        # Derive subject info from the batch creator's elective teaching assignment.
+                        e_code, e_name, e_sub_id, e_dept, e_sem = _resolve_elective_subject_for_batch(sb)
+                        if not e_code and not e_name:
+                            continue  # can't determine subject at all
+
+                        # Check if an existing result already covers this elective subject
+                        matched = False
+                        for r in results:
+                            if r.get('elective_subject_id') and e_sub_id and int(r.get('elective_subject_id')) == int(e_sub_id):
+                                lst = r.get('subject_batches')
+                                if not isinstance(lst, list):
+                                    lst = []
+                                if not any(int(x.get('id')) == int(sb.pk) for x in lst if isinstance(x, dict) and x.get('id') is not None):
+                                    lst.append(batch_info)
+                                r['subject_batches'] = lst
+                                matched = True
+                                break
+                        if matched:
+                            continue
+
+                        results.append({
+                            'id': -int(sb.pk),
+                            'subject_code': e_code,
+                            'subject_name': e_name,
+                            'class_type': 'BATCH',
+                            'section_name': section_name,
+                            'section_id': section_id,
+                            'elective_subject_id': e_sub_id,
+                            'elective_subject_name': e_name,
+                            'curriculum_row_id': None,
+                            'batch': None,
+                            'semester': e_sem,
+                            'academic_year': getattr(getattr(sb, 'academic_year', None), 'name', None),
+                            'department': e_dept,
+                            'subject_batches': [batch_info],
+                        })
                 except Exception:
                     continue
         except Exception:
@@ -7706,8 +7978,15 @@ class ExtStaffProfileListCreateView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def _check_permission(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied('You do not have permission to manage ext staff profiles.')
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff profiles.')
 
     def get(self, request):
         self._check_permission(request)
@@ -7733,8 +8012,15 @@ class ExtStaffProfileDetailView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def _check_permission(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied('You do not have permission to manage ext staff profiles.')
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff profiles.')
 
     def _get_obj(self, pk):
         from .models import ExtStaffProfile
@@ -7752,8 +8038,68 @@ class ExtStaffProfileDetailView(APIView):
     def delete(self, request, pk):
         self._check_permission(request)
         obj = self._get_obj(pk)
+        # Also delete the associated user
+        user = obj.user
         obj.delete()
+        if user:
+            user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ExtStaffProfileBulkDeleteView(APIView):
+    """
+    POST /api/academics/ext-staff-profiles/bulk-delete/
+    Body: { "ids": [1, 2, 3] }
+    Deletes multiple ExtStaffProfile records at once.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        current_user = request.user
+        if not current_user.is_superuser and not current_user.has_perm('academics.view_staffs_page'):
+            # Also allow IQAC and COE roles
+            try:
+                if not (current_user.roles.filter(name__iexact='IQAC').exists() or current_user.roles.filter(name__iexact='COE').exists()):
+                    return Response(
+                        {'detail': 'You do not have permission to delete ext staff profiles.'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except Exception:
+                return Response(
+                    {'detail': 'You do not have permission to delete ext staff profiles.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        from .models import ExtStaffProfile
+
+        ids = request.data.get('ids', [])
+        if not ids or not isinstance(ids, list):
+            return Response(
+                {'detail': 'No IDs provided. Expected {"ids": [1, 2, 3]}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted_count = 0
+        errors = []
+        for profile_id in ids:
+            try:
+                profile = ExtStaffProfile.objects.get(pk=profile_id)
+                # Also delete the associated user
+                profile_user = profile.user
+                profile.delete()
+                if profile_user:
+                    profile_user.delete()
+                deleted_count += 1
+            except ExtStaffProfile.DoesNotExist:
+                errors.append(f'Profile with ID {profile_id} not found.')
+            except Exception as exc:
+                errors.append(f'Error deleting ID {profile_id}: {exc}')
+
+        return Response({
+            'deleted': deleted_count,
+            'total': len(ids),
+            'errors': errors,
+        })
 
 
 class ExtStaffProfileUsersView(APIView):
@@ -7764,8 +8110,15 @@ class ExtStaffProfileUsersView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        if not request.user.is_superuser and not request.user.has_perm('academics.view_staffs_page'):
-            raise PermissionDenied()
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            pass  # allowed
+        else:
+            try:
+                if not (user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists()):
+                    raise PermissionDenied()
+            except Exception:
+                raise PermissionDenied()
         from django.contrib.auth import get_user_model
         from .models import ExtStaffProfile
         User = get_user_model()
@@ -7781,3 +8134,655 @@ class ExtStaffProfileUsersView(APIView):
             for u in qs
         ]
         return Response(data)
+
+
+class ExtStaffProfileBulkImportView(APIView):
+    """Bulk import external staff profiles from an uploaded Excel (.xlsx) or CSV file.
+
+    POST /api/academics/ext-staff-profiles/import/
+
+    Expected columns (case-insensitive, spaces/underscores ignored):
+        Username, Email, Password, First Name, Last Name, Designation, College Name,
+        Department, Mobile, Gender, PhD Status, Total Experience,
+        Date of Birth, Notes
+
+    Required: Username, Email, First Name
+
+    Returns:
+        { imported: int, total: int, errors: [{ row: int, errors: [str] }] }
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _is_allowed(self, user) -> bool:
+        if user.is_superuser:
+            return True
+        if user.has_perm('academics.view_staffs_page'):
+            return True
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _col(row: dict, *names: str) -> str:
+        """Extract a value from a row dict using any of the given normalised key names."""
+        for name in names:
+            needle = name.lower().replace(' ', '').replace('_', '').replace('-', '')
+            for k, v in row.items():
+                if k.lower().replace(' ', '').replace('_', '').replace('-', '') == needle:
+                    return str(v).strip() if v is not None else ''
+        return ''
+
+    def post(self, request):
+        import csv
+        import io
+        import openpyxl
+
+        user = request.user
+        if not self._is_allowed(user):
+            return Response(
+                {'detail': 'You do not have permission to import external staff profiles.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            return Response({'detail': 'No file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        filename = file_obj.name.lower()
+        if not (filename.endswith('.xlsx') or filename.endswith('.csv')):
+            return Response(
+                {'detail': 'Only .xlsx and .csv files are supported.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Parse file ────────────────────────────────────────────────────────
+        rows: list[dict] = []
+        if filename.endswith('.xlsx'):
+            try:
+                wb = openpyxl.load_workbook(file_obj, read_only=True, data_only=True)
+                ws = wb.active
+                headers: list[str] | None = None
+                for excel_row in ws.iter_rows(values_only=True):
+                    if headers is None:
+                        headers = [str(c).strip() if c is not None else '' for c in excel_row]
+                        continue
+                    row_data = {
+                        h: (str(v).strip() if v is not None else '')
+                        for h, v in zip(headers, excel_row)
+                    }
+                    rows.append(row_data)
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse Excel file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            try:
+                content = file_obj.read().decode('utf-8-sig')
+                reader = csv.DictReader(io.StringIO(content))
+                for row in reader:
+                    rows.append({k.strip(): (v.strip() if v else '') for k, v in row.items()})
+            except Exception as exc:
+                return Response(
+                    {'detail': f'Failed to parse CSV file: {exc}'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if not rows:
+            return Response(
+                {'detail': 'File is empty or has no data rows.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Process rows ──────────────────────────────────────────────────────
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group
+        from .models import ExtStaffProfile
+
+        User = get_user_model()
+        errors: list[dict] = []
+        imported = 0
+        seen_usernames: set[str] = set()
+        seen_emails: set[str] = set()
+
+        # Get or create Ext_staff group
+        ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
+
+        for idx, row in enumerate(rows, start=2):  # row 1 is header
+            salutation   = self._col(row, 'salutation', 'title', 'prefix')
+            full_name    = self._col(row, 'fullname', 'full name', 'full_name', 'name', 'faculty name', 'name of the faculty')
+            username     = self._col(row, 'username', 'user name', 'user_name')
+            email        = self._col(row, 'email', 'emailaddress', 'email address', 'email_address')
+            password     = self._col(row, 'password', 'pwd')
+            first_name   = self._col(row, 'firstname', 'first name', 'first_name')
+            last_name    = self._col(row, 'lastname', 'last name', 'last_name')
+            designation  = self._col(row, 'designation', 'desig')
+            college_name = self._col(row, 'collegename', 'college name', 'college', 'nameofcollege', 'name of college', 'institute')
+            department   = self._col(row, 'department', 'dept', 'department working in')
+            mobile       = self._col(row, 'mobile', 'mobilenumber', 'mobile number', 'phone', 'contact')
+            gender       = self._col(row, 'gender', 'genderspecification', 'gender specification')
+            ug_spec      = self._col(row, 'ugspecialization', 'ug specialization', 'ug with specialization', 'ug')
+            pg_spec      = self._col(row, 'pgspecialization', 'pg specialization', 'pg with specialization', 'pg')
+            phd_status   = self._col(row, 'phdstatus', 'phd status', 'phd')
+            experience   = self._col(row, 'totalexperience', 'total experience', 'experience')
+            engg_exp     = self._col(row, 'engineeringcollegeexperience', 'engineering college experience', 'engg college experience', 'engg exp')
+            dob          = self._col(row, 'dateofbirth', 'date of birth', 'dob')
+            notes_text   = self._col(row, 'notes', 'remarks')
+            teaching     = self._col(row, 'teaching', 'facultytype', 'type of faculty')
+            faculty_id   = self._col(row, 'facultyid', 'faculty id', 'staffid', 'staff id')
+            # Bank details
+            acc_holder   = self._col(row, 'accountholdername', 'account holder name', 'holder name')
+            acc_number   = self._col(row, 'accountnumber', 'account number', 'account no').lstrip("'")  # Remove leading apostrophe if present
+            bank_name    = self._col(row, 'bankname', 'bank name', 'name of bank')
+            branch_name  = self._col(row, 'bankbranchname', 'bank branch name', 'branch name', 'branch')
+            ifsc         = self._col(row, 'ifsccode', 'ifsc code', 'ifsc')
+
+            # If no first_name but full_name provided, use full_name as first_name
+            if not first_name and full_name:
+                first_name = full_name
+
+            # Auto-generate username if not provided: salutation + space + full_name
+            if not username:
+                name_part = full_name or first_name or ''
+                if salutation and name_part:
+                    username = f"{salutation} {name_part}"
+                elif name_part:
+                    username = name_part.replace(' ', '_').lower()
+
+            # Only keep non-structured notes in the notes field
+            full_notes = notes_text or ''
+
+            # Parse date_of_birth
+            parsed_dob = None
+            if dob:
+                from datetime import datetime
+                for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d', '%m/%d/%Y'):
+                    try:
+                        parsed_dob = datetime.strptime(dob, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+
+            # ── Validate required fields ──
+            row_errors: list[str] = []
+            if not username:
+                row_errors.append('Username could not be generated. Provide Salutation and Full Name, or a Username.')
+            if not email:
+                row_errors.append('Email is required.')
+            if not first_name:
+                row_errors.append('Full Name (or First Name) is required.')
+
+            if username and username.lower() in seen_usernames:
+                row_errors.append(f'Duplicate username "{username}" in uploaded file.')
+            if email and email.lower() in seen_emails:
+                row_errors.append(f'Duplicate email "{email}" in uploaded file.')
+
+            if row_errors:
+                errors.append({'row': idx, 'errors': row_errors})
+                continue
+
+            seen_usernames.add(username.lower())
+            seen_emails.add(email.lower())
+
+            # ── Check for existing user by email - UPDATE instead of error ──
+            existing_user = User.objects.filter(email__iexact=email).first()
+            
+            if existing_user:
+                # Update existing user and their ExtStaffProfile
+                try:
+                    existing_user.first_name = first_name
+                    existing_user.last_name = last_name or ''
+                    if password:
+                        existing_user.set_password(password)
+                    existing_user.save()
+                    
+                    # Add to Ext_staff group if not already
+                    existing_user.groups.add(ext_staff_group)
+                    
+                    # Update or create ExtStaffProfile
+                    profile, created = ExtStaffProfile.objects.update_or_create(
+                        user=existing_user,
+                        defaults={
+                            'salutation': salutation,
+                            'designation': designation,
+                            'college_name': college_name,
+                            'teaching': teaching,
+                            'faculty_id': faculty_id,
+                            'department': department,
+                            'mobile': mobile,
+                            'gender': gender,
+                            'ug_specialization': ug_spec,
+                            'pg_specialization': pg_spec,
+                            'phd_status': phd_status,
+                            'total_experience': experience,
+                            'engg_college_experience': engg_exp,
+                            'date_of_birth': parsed_dob,
+                            'account_holder_name': acc_holder,
+                            'account_number': acc_number,
+                            'bank_name': bank_name,
+                            'bank_branch_name': branch_name,
+                            'ifsc_code': ifsc,
+                            'notes': full_notes,
+                            'is_active': True,
+                        }
+                    )
+                    imported += 1
+                except Exception as exc:
+                    errors.append({'row': idx, 'errors': [f'Failed to update: {exc}']})
+                continue
+
+            # ── Check if username is taken by another user ──
+            if User.objects.filter(username__iexact=username).exists():
+                errors.append({'row': idx, 'errors': [f'Username "{username}" already exists in the system.']})
+                continue
+
+            # ── Create User and ExtStaffProfile ──
+            try:
+                new_user = User.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=password or 'changeme123',
+                    first_name=first_name,
+                    last_name=last_name or '',
+                )
+                # Add user to Ext_staff group
+                new_user.groups.add(ext_staff_group)
+
+                ExtStaffProfile.objects.create(
+                    user=new_user,
+                    salutation=salutation,
+                    designation=designation,
+                    college_name=college_name,
+                    teaching=teaching,
+                    faculty_id=faculty_id,
+                    department=department,
+                    mobile=mobile,
+                    gender=gender,
+                    ug_specialization=ug_spec,
+                    pg_specialization=pg_spec,
+                    phd_status=phd_status,
+                    total_experience=experience,
+                    engg_college_experience=engg_exp,
+                    date_of_birth=parsed_dob,
+                    account_holder_name=acc_holder,
+                    account_number=acc_number,
+                    bank_name=bank_name,
+                    bank_branch_name=branch_name,
+                    ifsc_code=ifsc,
+                    notes=full_notes,
+                    is_active=True,
+                )
+                imported += 1
+            except Exception as exc:
+                errors.append({'row': idx, 'errors': [str(exc)]})
+
+        return Response({
+            'imported': imported,
+            'total': len(rows),
+            'errors': errors,
+        })
+
+
+# ---------------------------------------------------------------------------
+# ExtStaffFormSettings views - Registration form management
+# ---------------------------------------------------------------------------
+
+class ExtStaffFormSettingsView(APIView):
+    """
+    GET  /api/academics/ext-staff-form/settings/  - Get form settings
+    PUT  /api/academics/ext-staff-form/settings/  - Update form settings
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def _check_permission(self, request):
+        user = request.user
+        if user.is_superuser or user.has_perm('academics.view_staffs_page'):
+            return
+        try:
+            if user.roles.filter(name__iexact='IQAC').exists() or user.roles.filter(name__iexact='COE').exists():
+                return
+        except Exception:
+            pass
+        raise PermissionDenied('You do not have permission to manage ext staff form settings.')
+
+    def get(self, request):
+        self._check_permission(request)
+        from .models import ExtStaffFormSettings
+        settings_obj = ExtStaffFormSettings.get_or_create_settings()
+        
+        # Build the share URL
+        share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
+        
+        return Response({
+            'form_code': settings_obj.form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': settings_obj.is_accepting_responses,
+            'field_config': settings_obj.field_config,
+            'share_url': share_url,
+            'available_fields': ExtStaffFormSettings.get_available_fields(),
+            'updated_at': settings_obj.updated_at,
+        })
+
+    def put(self, request):
+        self._check_permission(request)
+        from .models import ExtStaffFormSettings
+        settings_obj = ExtStaffFormSettings.get_or_create_settings()
+        
+        data = request.data
+        if 'form_title' in data:
+            settings_obj.form_title = data['form_title']
+        if 'form_description' in data:
+            settings_obj.form_description = data['form_description']
+        if 'is_accepting_responses' in data:
+            settings_obj.is_accepting_responses = data['is_accepting_responses']
+        if 'field_config' in data:
+            settings_obj.field_config = data['field_config']
+        
+        settings_obj.updated_by = request.user
+        settings_obj.save()
+        
+        share_url = request.build_absolute_uri(f'/ext-register/{settings_obj.form_code}/')
+        
+        return Response({
+            'form_code': settings_obj.form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': settings_obj.is_accepting_responses,
+            'field_config': settings_obj.field_config,
+            'share_url': share_url,
+            'updated_at': settings_obj.updated_at,
+        })
+
+
+class ExtStaffPublicFormView(APIView):
+    """
+    GET  /api/academics/ext-staff-form/public/<form_code>/  - Get public form config
+    POST /api/academics/ext-staff-form/public/<form_code>/  - Submit registration
+    """
+    permission_classes = []  # Public endpoint
+    authentication_classes = []  # No auth required
+
+    def get(self, request, form_code):
+        from .models import ExtStaffFormSettings
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response({
+                'form_code': form_code,
+                'form_title': settings_obj.form_title,
+                'is_accepting_responses': False,
+                'message': 'This form is currently not accepting responses.',
+            })
+        
+        # Return only enabled fields
+        enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
+        enabled_fields.sort(key=lambda x: x.get('order', 999))
+        
+        return Response({
+            'form_code': form_code,
+            'form_title': settings_obj.form_title,
+            'form_description': settings_obj.form_description,
+            'is_accepting_responses': True,
+            'fields': enabled_fields,
+        })
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings, ExtStaffProfile
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        data = request.data
+        errors = {}
+        
+        # Get user_id from signup step
+        user_id = data.get('user_id')
+        if not user_id:
+            return Response(
+                {'detail': 'User ID is required. Please complete signup first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid user. Please signup again.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get enabled fields for validation
+        enabled_fields = [f for f in settings_obj.field_config if f.get('enabled', False)]
+        
+        # Validate required fields (exclude email since already captured in signup)
+        for field in enabled_fields:
+            field_name = field['field']
+            if field_name == 'email':  # Email already captured
+                continue
+            if field.get('required', False):
+                value = data.get(field_name, '')
+                if not value or (isinstance(value, str) and not value.strip()):
+                    errors[field_name] = f"{field.get('label', field_name)} is required."
+        
+        # Validate full_name
+        full_name = data.get('full_name', '').strip()
+        if not full_name:
+            errors['full_name'] = 'Full Name is required.'
+        
+        if errors:
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update user's name
+        salutation = data.get('salutation', '').strip()
+        if salutation and full_name:
+            username = f"{salutation} {full_name}"
+        else:
+            username = full_name
+        
+        # Parse date_of_birth
+        dob = data.get('date_of_birth', '')
+        parsed_dob = None
+        if dob:
+            from datetime import datetime
+            for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y'):
+                try:
+                    parsed_dob = datetime.strptime(dob, fmt).date()
+                    break
+                except ValueError:
+                    continue
+        
+        try:
+            # Update user info
+            user.username = username
+            user.first_name = full_name
+            user.save()
+            
+            # Handle file upload for passbook_proof
+            passbook_file = request.FILES.get('passbook_proof')
+            
+            # Get or create ExtStaffProfile
+            profile, _ = ExtStaffProfile.objects.get_or_create(user=user)
+            
+            # Update profile fields
+            profile.salutation = salutation
+            profile.designation = data.get('designation', '')
+            profile.college_name = data.get('college_name', '')
+            profile.teaching = data.get('teaching', '')
+            profile.faculty_id = data.get('faculty_id', '')
+            profile.department = data.get('department', '')
+            profile.mobile = data.get('mobile', '')
+            profile.gender = data.get('gender', '')
+            profile.ug_specialization = data.get('ug_specialization', '')
+            profile.pg_specialization = data.get('pg_specialization', '')
+            profile.phd_status = data.get('phd_status', '')
+            profile.total_experience = data.get('total_experience', '')
+            profile.engg_college_experience = data.get('engg_college_experience', '')
+            profile.date_of_birth = parsed_dob
+            profile.account_holder_name = data.get('account_holder_name', '')
+            profile.account_number = data.get('account_number', '')
+            profile.bank_name = data.get('bank_name', '')
+            profile.bank_branch_name = data.get('bank_branch_name', '')
+            profile.ifsc_code = data.get('ifsc_code', '')
+            profile.is_active = True
+            
+            if passbook_file:
+                profile.passbook_proof = passbook_file
+            
+            profile.save()
+            
+            return Response({
+                'success': True,
+                'message': 'Registration successful! Your profile has been saved.',
+                'ext_uid': profile.ext_uid,
+                'username': username,
+                'email': user.email,
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as exc:
+            return Response(
+                {'detail': f'Registration failed: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ExtStaffCheckEmailView(APIView):
+    """
+    POST /api/academics/ext-staff-form/public/<form_code>/check-email/
+    Check if email already exists in the system.
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        
+        # Verify form exists and is accepting responses
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        email = request.data.get('email', '').strip().lower()
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if email exists
+        exists = User.objects.filter(email__iexact=email).exists()
+        
+        return Response({
+            'email': email,
+            'exists': exists,
+            'message': 'Email already registered. Please login to update your profile.' if exists else 'Email available for registration.',
+        })
+
+
+class ExtStaffSignupView(APIView):
+    """
+    POST /api/academics/ext-staff-form/public/<form_code>/signup/
+    Create a new user with email and password.
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request, form_code):
+        from .models import ExtStaffFormSettings, ExtStaffProfile
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.models import Group
+        
+        User = get_user_model()
+        
+        # Verify form exists and is accepting responses
+        try:
+            settings_obj = ExtStaffFormSettings.objects.get(form_code=form_code)
+        except ExtStaffFormSettings.DoesNotExist:
+            return Response({'detail': 'Form not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if not settings_obj.is_accepting_responses:
+            return Response(
+                {'detail': 'This form is not accepting responses.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        email = request.data.get('email', '').strip().lower()
+        password = request.data.get('password', '')
+        confirm_password = request.data.get('confirm_password', '')
+        
+        errors = {}
+        
+        # Validate email
+        if not email:
+            errors['email'] = 'Email is required.'
+        elif User.objects.filter(email__iexact=email).exists():
+            errors['email'] = 'Email already registered.'
+        
+        # Validate password
+        if not password:
+            errors['password'] = 'Password is required.'
+        elif len(password) < 6:
+            errors['password'] = 'Password must be at least 6 characters.'
+        
+        # Validate confirm password
+        if password != confirm_password:
+            errors['confirm_password'] = 'Passwords do not match.'
+        
+        if errors:
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Create user with email as username initially
+            new_user = User.objects.create_user(
+                username=email,
+                email=email,
+                password=password,
+            )
+            
+            # Add to Ext_staff group
+            ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
+            new_user.groups.add(ext_staff_group)
+            
+            # Create empty ExtStaffProfile
+            profile = ExtStaffProfile.objects.create(
+                user=new_user,
+                is_active=True,
+            )
+            
+            return Response({
+                'success': True,
+                'message': 'Account created successfully. Please complete your profile.',
+                'user_id': new_user.id,
+                'email': email,
+                'ext_uid': profile.ext_uid,
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as exc:
+            return Response(
+                {'detail': f'Signup failed: {str(exc)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

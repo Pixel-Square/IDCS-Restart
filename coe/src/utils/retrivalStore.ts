@@ -1,3 +1,5 @@
+import { kvHydrate, kvSave } from './coeKvStore';
+
 export type RetrivalAction = 'deleted' | 'reset';
 
 export type RetrivalEntry = {
@@ -21,6 +23,14 @@ const RETRIVAL_STORAGE_KEY = 'global-retrival-v1';
 const RETRIVAL_UPDATED_EVENT = 'retrival:updated';
 const RETRIVAL_APPLY_STORAGE_KEY = 'global-retrival-apply-v1';
 
+/** Call on mount to pull retrival data from DB. */
+export async function hydrateRetrivalStore(): Promise<void> {
+  await Promise.all([
+    kvHydrate(RETRIVAL_STORAGE_KEY),
+    kvHydrate(RETRIVAL_APPLY_STORAGE_KEY),
+  ]);
+}
+
 const safeParse = (value: string | null): RetrivalEntry[] => {
   if (!value) return [];
   try {
@@ -40,9 +50,9 @@ export const readRetrivalEntries = (): RetrivalEntry[] => {
 const writeRetrivalEntries = (entries: RetrivalEntry[]) => {
   if (typeof window === 'undefined') return;
   if (!entries.length) {
-    window.localStorage.removeItem(RETRIVAL_STORAGE_KEY);
+    kvSave(RETRIVAL_STORAGE_KEY, null);
   } else {
-    window.localStorage.setItem(RETRIVAL_STORAGE_KEY, JSON.stringify(entries));
+    kvSave(RETRIVAL_STORAGE_KEY, entries);
   }
   window.dispatchEvent(new CustomEvent(RETRIVAL_UPDATED_EVENT));
 };
@@ -73,7 +83,7 @@ export const stageRetrivalApplyPayload = (payload: Omit<RetrivalApplyPayload, 's
     ...payload,
     stagedAt: new Date().toISOString(),
   };
-  window.localStorage.setItem(RETRIVAL_APPLY_STORAGE_KEY, JSON.stringify(data));
+  kvSave(RETRIVAL_APPLY_STORAGE_KEY, data);
 };
 
 export const readRetrivalApplyPayload = (): RetrivalApplyPayload | null => {
@@ -91,5 +101,5 @@ export const readRetrivalApplyPayload = (): RetrivalApplyPayload | null => {
 
 export const clearRetrivalApplyPayload = () => {
   if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(RETRIVAL_APPLY_STORAGE_KEY);
+  kvSave(RETRIVAL_APPLY_STORAGE_KEY, null);
 };

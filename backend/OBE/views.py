@@ -170,13 +170,10 @@ def _get_students_for_teaching_assignment(ta):
                 students.append(sp)
         except Exception:
             students = []
-        return students
+    elif getattr(ta, 'section', None) is not None:
+        try:
+            from academics.models import StudentSectionAssignment, StudentProfile
 
-    # Prefer active StudentSectionAssignment entries for the section.
-    try:
-        from academics.models import StudentSectionAssignment, StudentProfile
-
-        if getattr(ta, 'section', None) is not None:
             s_qs = (
                 StudentSectionAssignment.objects.filter(section=ta.section, end_date__isnull=True)
                 .exclude(student__status__in=['INACTIVE', 'DEBAR'])
@@ -186,10 +183,9 @@ def _get_students_for_teaching_assignment(ta):
             for a in s_qs:
                 students.append(a.student)
 
-        # Also include legacy StudentProfile.section entries even when we already
-        # have students from StudentSectionAssignment, to avoid silently dropping
-        # students whose section assignment rows were never backfilled.
-        if getattr(ta, 'section', None) is not None:
+            # Also include legacy StudentProfile.section entries even when we already
+            # have students from StudentSectionAssignment, to avoid silently dropping
+            # students whose section assignment rows were never backfilled.
             try:
                 existing_ids = {int(getattr(s, 'id', None)) for s in students if getattr(s, 'id', None) is not None}
             except Exception:
@@ -209,8 +205,40 @@ def _get_students_for_teaching_assignment(ta):
                 if sid in existing_ids:
                     continue
                 students.append(sp)
-    except Exception:
-        students = []
+        except Exception:
+            students = []
+
+    # ── Batch-based student filtering ──
+    # If the TA's staff has StudentSubjectBatch entries for this subject/year,
+    # restrict the student list to only those in the staff's batches.
+    # This ensures batch-assigned staff see only their batch students in marks pages.
+    if students and getattr(ta, 'staff_id', None):
+        try:
+            from academics.models import StudentSubjectBatch as _SSB
+            batch_qs = _SSB.objects.filter(
+                staff_id=ta.staff_id,
+                is_active=True,
+            )
+            if getattr(ta, 'academic_year_id', None):
+                batch_qs = batch_qs.filter(academic_year_id=ta.academic_year_id)
+            if getattr(ta, 'curriculum_row_id', None):
+                batch_qs = batch_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            else:
+                batch_qs = batch_qs.filter(curriculum_row__isnull=True)
+            user_batches = list(batch_qs)
+            if user_batches:
+                batch_student_ids = set()
+                for ub in user_batches:
+                    try:
+                        batch_student_ids.update(
+                            ub.students.values_list('id', flat=True)
+                        )
+                    except Exception:
+                        pass
+                if batch_student_ids:
+                    students = [s for s in students if getattr(s, 'id', None) in batch_student_ids]
+        except Exception:
+            pass
 
     return students
 
@@ -905,6 +933,17 @@ def cia_export_template_xlsx(request, assessment: str, subject_id: str):
         )
         if not students.exists():
             students = StudentProfile.objects.select_related('user', 'section').all().order_by('reg_no')
+
+    # Sort roster alphabetically by student name (matches UI display order).
+    def _sort_name(sp):
+        u = getattr(sp, 'user', None)
+        if not u:
+            return ''
+        return ' '.join([
+            str(getattr(u, 'first_name', '') or '').strip(),
+            str(getattr(u, 'last_name', '') or '').strip(),
+        ]).strip().upper() or str(getattr(u, 'username', '') or '').strip().upper()
+    students = sorted(students, key=_sort_name)
 
     # Build workbook
     import openpyxl
@@ -1925,6 +1964,9 @@ def cqi_published(request, subject_id: str):
 
     page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request)
 
+    qp = _get_query_params(request)
+    want_page_entries = str(qp.get('include_page_entries', '')).strip().lower() in ('1', 'true', 'yes')
+
     from .models import ObeCqiPublished
 
     obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
@@ -1933,19 +1975,23 @@ def cqi_published(request, subject_id: str):
 
     snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers, legacy_co_numbers=obj.co_numbers)
 
-    def _build_pages_info(raw_entries):
+    def _build_pages_info(raw_entries, *, include_entries=False):
         """Return list of published page summaries from paged entries."""
         _, pgs = _split_cqi_entries_payload(raw_entries or {})
-        return [
-            {
+        out = []
+        for pk, snap in pgs.items():
+            if not isinstance(snap, dict) or not snap.get('publishedAt'):
+                continue
+            item = {
                 'key': str(pk),
                 'assessmentType': snap.get('assessmentType'),
                 'coNumbers': _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers'))),
                 'publishedAt': snap.get('publishedAt'),
             }
-            for pk, snap in pgs.items()
-            if isinstance(snap, dict) and snap.get('publishedAt')
-        ]
+            if include_entries:
+                item['entries'] = snap.get('entries') if isinstance(snap.get('entries'), dict) else {}
+            out.append(item)
+        return out
 
     if snapshot is None:
         # When no specific page params requested and the record uses the new paged format,
@@ -1960,7 +2006,7 @@ def cqi_published(request, subject_id: str):
                     'publishedAt': latest_pub,
                     'coNumbers': merged_co_nums,
                     'entries': all_merged,
-                    'pages': _build_pages_info(obj.entries),
+                    'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
                 }})
         return Response({'published': None})
 
@@ -1970,7 +2016,7 @@ def cqi_published(request, subject_id: str):
                 'publishedAt': snapshot.get('published_at') or (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None),
                 'coNumbers': snapshot.get('co_numbers') or obj.co_numbers or [],
                 'entries': snapshot.get('entries') or {},
-                'pages': _build_pages_info(obj.entries),
+                'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
             }
         }
     )
@@ -4036,6 +4082,97 @@ def assessment_draft(request, assessment: str, subject_id: str):
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'draft': draft_data, 'updated_at': updated_at, 'updated_by': updated_by})
 
 
+def _extract_review_co_splits(subject, assessment_key, co_keys, ta=None):
+    co_splits = {}
+    try:
+        from .models import AssessmentDraft
+        drafts = AssessmentDraft.objects.filter(
+            subject=subject,
+            assessment=assessment_key,
+        ).order_by('-updated_at')
+        if ta is not None:
+            draft = drafts.filter(teaching_assignment=ta).first() or drafts.first()
+        else:
+            draft = drafts.first()
+        if draft and isinstance(draft.data, dict):
+            sheet = draft.data.get('sheet', draft.data)
+            rows = sheet.get('rows', []) if isinstance(sheet, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get('studentId', '')).strip()
+                if not sid:
+                    continue
+                entry = {}
+                for ck in co_keys:
+                    val = None
+                    reviewCoMarks = row.get('reviewCoMarks')
+                    if isinstance(reviewCoMarks, dict):
+                        raw_arr = reviewCoMarks.get(ck)
+                        if isinstance(raw_arr, list):
+                            try:
+                                val = sum([float(x) for x in raw_arr if x not in ('', None)])
+                            except (ValueError, TypeError):
+                                pass
+                    if val is None:
+                        dir_val = row.get(ck)
+                        if dir_val not in ('', None):
+                            try:
+                                val = float(dir_val)
+                            except (ValueError, TypeError):
+                                pass
+                    if val is not None:
+                        entry[ck] = val
+                if entry:
+                    co_splits[sid] = entry
+    except Exception:
+        pass
+    return co_splits
+
+def _extract_ssa_co_splits(subject, assessment_key, co_keys, ta=None):
+    """Extract per-CO split marks from SSA draft data.
+
+    Returns dict: { studentId_str: { co_key: value, ... } }
+    """
+    co_splits = {}
+    try:
+        from .models import AssessmentDraft
+        drafts = AssessmentDraft.objects.filter(
+            subject=subject,
+            assessment=assessment_key,
+        ).order_by('-updated_at')
+        if ta is not None:
+            draft = drafts.filter(teaching_assignment=ta).first() or drafts.first()
+        else:
+            draft = drafts.first()
+        if draft and isinstance(draft.data, dict):
+            sheet = draft.data.get('sheet', draft.data)
+            rows = sheet.get('rows', []) if isinstance(sheet, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get('studentId', '')).strip()
+                if not sid:
+                    continue
+                entry = {}
+                all_present = True
+                for ck in co_keys:
+                    val = row.get(ck)
+                    if val == '' or val is None:
+                        all_present = False
+                        break
+                    try:
+                        entry[ck] = float(val)
+                    except (TypeError, ValueError):
+                        all_present = False
+                        break
+                if all_present and entry:
+                    co_splits[sid] = entry
+    except Exception:
+        pass
+    return co_splits
+
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -4057,7 +4194,9 @@ def ssa1_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Ssa1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_ssa_co_splits(subject, 'ssa1', ['co1', 'co2'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4165,7 +4304,9 @@ def review1_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Review1Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_review_co_splits(subject, 'review1', ['co1', 'co2'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4273,7 +4414,9 @@ def ssa2_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Ssa2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_ssa_co_splits(subject, 'ssa2', ['co3', 'co4'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -4381,7 +4524,9 @@ def review2_published(request, subject_id: str):
         marks = _safe_marks_map_for_subject(Review2Mark, subject=subject, ta=ta, strict_scope=strict_scope)
     except (OperationalError, ProgrammingError):
         marks = {}
-    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks})
+        ta = None
+    co_splits = _extract_review_co_splits(subject, 'review2', ['co3', 'co4'], ta=ta)
+    return Response({'subject': {'code': subject.code, 'name': subject.name}, 'marks': marks, 'co_splits': co_splits})
 
 
 @api_view(['POST'])
@@ -5150,6 +5295,7 @@ def obe_progress_overview(request):
     except Exception:
         try:
             # Fallback via Role model m2m if available
+            from accounts.models import Role
             role_qs = Role.objects.filter(userrole__user=user)
             role_names = {str(r.name or '').strip().upper() for r in role_qs}
         except Exception:

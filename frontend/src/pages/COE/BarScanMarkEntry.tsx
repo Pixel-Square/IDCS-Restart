@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
+import { hydrateMarksStore, getMarksForDummy, saveMarksForDummy } from './marksStore';
 
 type QpType = 'QP1' | 'QP2' | 'TCPR';
 
@@ -82,6 +83,11 @@ export default function BarScanMarkEntry() {
   const [error, setError] = useState<string | null>(null);
   const [student, setStudent] = useState<StudentDetails | null>(null);
   const [marks, setMarks] = useState<Record<string, string>>({});
+
+  // Hydrate marks store from DB on mount
+  useEffect(() => {
+    hydrateMarksStore().catch(() => {});
+  }, []);
   const [validationNote, setValidationNote] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -92,12 +98,12 @@ export default function BarScanMarkEntry() {
   const [validatingPassword, setValidatingPassword] = useState(false);
 
   const loadSavedMarks = (dummy: string, fallbackQp: QpType = 'QP1'): QpType => {
-    const stored = localStorage.getItem(`marks_${dummy}`);
-    const storedQp = localStorage.getItem(`marks_type_${dummy}`);
+    const entry = getMarksForDummy(dummy);
+    const storedQp = entry?.qp_type;
     const finalQp = (storedQp === 'QP2' || storedQp === 'TCPR' || storedQp === 'QP1') ? storedQp as QpType : fallbackQp;
 
-    if (stored) {
-      setMarks(JSON.parse(stored));
+    if (entry?.marks) {
+      setMarks(entry.marks);
       setIsLocked(true);
       setSaved(true);
     }
@@ -209,6 +215,7 @@ export default function BarScanMarkEntry() {
            });
         }
       } finally {
+        // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
         setLoading(false);
       }
@@ -232,8 +239,7 @@ export default function BarScanMarkEntry() {
       // Simulating network delay for save
       await new Promise(resolve => setTimeout(resolve, 800));
       
-      localStorage.setItem(`marks_${student.dummy_number || student.reg_no}`, JSON.stringify(marks));
-      localStorage.setItem(`marks_type_${student.dummy_number || student.reg_no}`, student.qp_type);
+      saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
       
       console.log('Saved marks for', student.dummy_number || student.reg_no, ':', marks);
       setSaved(true);
@@ -414,7 +420,7 @@ export default function BarScanMarkEntry() {
                         value={marks[q.key] || ''}
                         disabled={isLocked}
                         onChange={(e) => {
-                          let val = e.target.value;
+                          const val = e.target.value;
                           
                           if (val !== '') {
                             const num = Number(val);

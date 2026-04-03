@@ -11,7 +11,6 @@ import {
   fetchClassTypeWeights,
 } from '../services/obe';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
-import fetchWithAuth from '../services/fetchAuth';
 import { fetchDeptRow } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { isLabClassType, normalizeClassType } from '../constants/classTypes';
@@ -155,29 +154,13 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): R
 
   const parsed = toCoNums(q.co);
 
-  // Backward-compat: if the sheet does not declare any split-CO questions,
-  // and the last question looks like Q9, treat it as a 50/50 CO1+CO2 split.
-  const hasAnySplit = questions.some((x) => toCoNums(x.co).length > 1);
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  const effective = !hasAnySplit && isLast && looksLikeQ9 ? ([1, 2] as CoNum[]) : parsed;
-
-  return coWeightsFromCos(effective);
+  return coWeightsFromCos(parsed);
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    return an ? -1 : 1;
-  }
-
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  return ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 function weightedBlendMark(args: {
@@ -517,36 +500,19 @@ export default function C1CQIPage({ courseId }: Props): JSX.Element {
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
-        if (ta && (ta as any).elective_subject_id && !(ta as any).section_id) {
-          const electiveId = (ta as any).elective_subject_id;
-          const res = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(electiveId))}`);
-          if (!res.ok) throw new Error(`Elective-choices fetch failed: ${res.status}`);
-          const data = await res.json();
-          if (!mounted) return;
-          const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-          const mapped = (items || []).map((s: any) => ({
-            id: Number(s.student_id ?? s.id),
-            reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-            name: String(s.name ?? s.full_name ?? s.username ?? ''),
-            section: s.section_name ?? s.section ?? null,
-          }));
-          if (!mounted) return;
-          setStudents(mapped.filter((s) => Number.isFinite(s.id)).sort(compareStudentName));
-        } else {
-          const resp = await fetchTeachingAssignmentRoster(selectedTaId);
-          if (!mounted) return;
-          const roster = (resp.students || [])
-            .map((s: TeachingAssignmentRosterStudent) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? ''),
-              name: String(s.name ?? ''),
-              section: s.section ?? null,
-            }))
-            .filter((s) => Number.isFinite(s.id))
-            .sort(compareStudentName);
-          setStudents(roster);
-        }
+        // Always use TA roster (backend handles batch filtering for electives)
+        const resp = await fetchTeachingAssignmentRoster(selectedTaId);
+        if (!mounted) return;
+        const roster = (resp.students || [])
+          .map((s: TeachingAssignmentRosterStudent) => ({
+            id: Number(s.id),
+            reg_no: String(s.reg_no ?? ''),
+            name: String(s.name ?? ''),
+            section: s.section ?? null,
+          }))
+          .filter((s) => Number.isFinite(s.id))
+          .sort(compareStudentName);
+        setStudents(roster);
       } catch (e: any) {
         if (!mounted) return;
         setStudents([]);

@@ -1,5 +1,15 @@
+import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+
 const ATTENDANCE_STORE_KEY = 'coe-attendance-status-v1';
 const ATTENDANCE_LOCK_KEY = 'coe-attendance-lock-v1';
+
+/** Call on mount to pull attendance data from DB into localStorage. */
+export async function hydrateAttendanceStore(): Promise<void> {
+  await Promise.all([
+    kvHydrate(ATTENDANCE_STORE_KEY),
+    kvHydrate(ATTENDANCE_LOCK_KEY),
+  ]);
+}
 
 type AttendanceMap = Record<string, Record<string, 'present' | 'absent'>>;
 type AttendanceLockMap = Record<string, boolean>;
@@ -20,10 +30,10 @@ function safeWrite(value: AttendanceMap) {
   if (typeof window === 'undefined') return;
   const keys = Object.keys(value || {});
   if (keys.length === 0) {
-    window.localStorage.removeItem(ATTENDANCE_STORE_KEY);
+    kvSave(ATTENDANCE_STORE_KEY, null);
     return;
   }
-  window.localStorage.setItem(ATTENDANCE_STORE_KEY, JSON.stringify(value));
+  kvSave(ATTENDANCE_STORE_KEY, value);
 }
 
 export function getAttendanceFilterKey(department: string, semester: string): string {
@@ -74,9 +84,9 @@ export function writeAttendanceLock(sessionKey: string, isLocked: boolean) {
     }
     
     if (Object.keys(map).length === 0) {
-      window.localStorage.removeItem(ATTENDANCE_LOCK_KEY);
+      kvSave(ATTENDANCE_LOCK_KEY, null);
     } else {
-      window.localStorage.setItem(ATTENDANCE_LOCK_KEY, JSON.stringify(map));
+      kvSave(ATTENDANCE_LOCK_KEY, map);
     }
   } catch {
     // ignore

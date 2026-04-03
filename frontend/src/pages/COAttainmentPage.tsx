@@ -234,11 +234,6 @@ function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number): {
   if (!q) return { co1: 0, co2: 0 };
   if (q.co === '1&2') return { co1: 0.5, co2: 0.5 };
 
-  const hasAnySplit = questions.some((x) => x.co === '1&2');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co1: 0.5, co2: 0.5 };
-
   return coWeights(q.co);
 }
 
@@ -252,27 +247,13 @@ function effectiveCoWeightsForQuestion34(questions: QuestionDef34[], idx: number
   if (!q) return { co3: 0, co4: 0 };
   if (q.co === '3&4') return { co3: 0.5, co4: 0.5 };
 
-  const hasAnySplit = questions.some((x) => x.co === '3&4');
-  const isLast = idx === questions.length - 1;
-  const looksLikeQ9 = String(q.key || '').toLowerCase() === 'q9' || String(q.label || '').toLowerCase().includes('q9');
-  if (!hasAnySplit && isLast && looksLikeQ9) return { co3: 0.5, co4: 0.5 };
-
   return coWeights34(q.co);
 }
 
 function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: string; reg_no?: string }) {
-  const an = String(a?.name || '').trim().toLowerCase();
-  const bn = String(b?.name || '').trim().toLowerCase();
-  if (an && bn) {
-    const byName = an.localeCompare(bn);
-    if (byName) return byName;
-  } else if (an || bn) {
-    return an ? -1 : 1;
-  }
-
-  const ar = String(a?.reg_no || '').trim();
-  const br = String(b?.reg_no || '').trim();
-  return ar.localeCompare(br, undefined, { numeric: true, sensitivity: 'base' });
+  const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+  const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+  return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
 function weightedBlendMark(args: {
@@ -806,47 +787,19 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       setLoadingRoster(true);
       setRosterError(null);
       try {
-        // Find the TA object to decide how to fetch students (section vs elective)
-        const ta = (tas || []).find((t) => t.id === selectedTaId) || null;
-        const studsRaw: any[] = [];
-
-        if (ta && (ta as any).elective_subject_id && !(ta as any).section_id) {
-          // Elective assignment — fetch students using elective-choices endpoint
-          const electiveId = (ta as any).elective_subject_id;
-          const res = await fetchWithAuth(`/api/curriculum/elective-choices/?elective_subject_id=${encodeURIComponent(String(electiveId))}`);
-          if (!res.ok) throw new Error(`Elective-choices fetch failed: ${res.status}`);
-          const data = await res.json();
-          if (!mounted) return;
-          // API may return paginated results in `results` or a plain array
-          const items = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : (data.items || []);
-          const mapped = (items || []).map((s: any) => ({
-            id: Number(s.student_id ?? s.id),
-            reg_no: String(s.reg_no ?? s.registration_no ?? s.regno ?? ''),
-            name: String(s.name ?? s.full_name ?? s.username ?? s.student_name ?? ''),
-            section: s.section_name ?? s.section ?? null,
-            section_id: s.section_id ?? null,
-          }));
-          if (!mounted) return;
-          setStudents(
-            mapped
-              .filter((s) => Number.isFinite(s.id))
-              .sort(compareStudentName),
-          );
-        } else {
-          // Default: teaching-assignment roster endpoint
-          const resp = await fetchTeachingAssignmentRoster(selectedTaId);
-          if (!mounted) return;
-          const roster = (resp.students || [])
-            .map((s: TeachingAssignmentRosterStudent) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? ''),
-              name: String(s.name ?? ''),
-              section: s.section ?? null,
-            }))
-            .filter((s) => Number.isFinite(s.id))
-            .sort(compareStudentName);
-          setStudents(roster);
-        }
+        // Always use TA roster (backend handles batch filtering for electives)
+        const resp = await fetchTeachingAssignmentRoster(selectedTaId);
+        if (!mounted) return;
+        const roster = (resp.students || [])
+          .map((s: TeachingAssignmentRosterStudent) => ({
+            id: Number(s.id),
+            reg_no: String(s.reg_no ?? ''),
+            name: String(s.name ?? ''),
+            section: s.section ?? null,
+          }))
+          .filter((s) => Number.isFinite(s.id))
+          .sort(compareStudentName);
+        setStudents(roster);
       } catch (e: any) {
         if (!mounted) return;
         setStudents([]);

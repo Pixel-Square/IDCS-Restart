@@ -44,7 +44,7 @@ export type CoeSavedDummyMapItem = {
   reg_no: string;
   name: string;
   semester: string;
-  qp_type: 'QP1' | 'QP2' | 'TCPR';
+  qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 
 export type CoeArrearRecord = {
@@ -85,7 +85,7 @@ export async function fetchCoeStudentsMap(params: { department: string; semester
   return res.json();
 }
 
-export async function saveCoeStudentDummies(payload: { records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' }[]; password: string }) {
+export async function saveCoeStudentDummies(payload: { records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' }[]; password: string }) {
   const res = await fetchWithAuth('/api/coe/save-dummies/', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -187,5 +187,42 @@ export async function bulkUpsertCoeArrears(rows: CoeArrearPayload[]) {
     throw new Error(`Failed to upload arrear records: ${res.status} ${text}`);
   }
   return res.json() as Promise<{ created: number; updated: number; errors: string[] }>;
+}
+
+/* ── COE Course Selection persistence ─────────────────────────── */
+
+export type CourseSelectionData = {
+  selected: boolean;
+  qpType: string;
+  eseType: string;
+};
+
+export type CourseSelectionResponse = {
+  selections: Record<string, CourseSelectionData>;
+  is_locked: boolean;
+};
+
+export async function fetchCoeCourseSel(key: string): Promise<CourseSelectionResponse> {
+  const qp = new URLSearchParams();
+  qp.set('key', key);
+  const res = await fetchWithAuth(`/api/coe/course-selections/?${qp.toString()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch course selections: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+export async function saveCoeCourseSel(key: string, selections: Record<string, CourseSelectionData>, is_locked: boolean): Promise<{ saved: boolean }> {
+  const res = await fetchWithAuth('/api/coe/course-selections/', {
+    method: 'POST',
+    body: JSON.stringify({ key, selections, is_locked }),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to save course selections: ${res.status} ${text}`);
+  }
+  return res.json();
 }
 

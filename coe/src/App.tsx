@@ -4,6 +4,9 @@ import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-route
 import ArrearList from './pages/COE/ArrearList';
 import AssigningPage from './pages/COE/AssigningPage';
 import AttendancePage from './pages/COE/AttendancePage';
+import ExternalManagement from './pages/COE/ExternalManagement';
+import ExtStaffRegisterPage from './pages/COE/ExtStaffRegisterPage';
+import RegistrationSettings from './pages/COE/RegistrationSettings';
 import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import BundleAllocation from './pages/COE/BundleAllocation';
@@ -16,6 +19,7 @@ import OnePageReport from './pages/COE/OnePageReport';
 import ProfilePage from './pages/ProfilePage';
 import QueriesPage from './pages/QueriesPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import DataViewPage from './pages/DataViewPage';
 import { logout } from './services/auth';
 import StudentsList from './pages/COE/StudentsList';
 
@@ -48,6 +52,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const isAuthenticated = hasAccessToken();
   const isLoginPage = location.pathname === '/login';
+  const isPublicFormPage = location.pathname.startsWith('/ext-register');
 
   useEffect(() => {
     setIsSidebarOpen(false);
@@ -68,7 +73,8 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/assigning', label: 'Assigning' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
-    { to: '/coe/retrival', label: 'Retrival Logs' },
+    { to: '/coe/external-users', label: 'External Users' },
+    { to: '/coe/registration-settings', label: 'Registration' },
   ];
 
   const bottomLinks = [{ to: '/queries', label: 'Raise Token' }];
@@ -86,6 +92,11 @@ function Shell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
     );
+  }
+
+  // Public registration form - render without Shell layout
+  if (isPublicFormPage) {
+    return <>{children}</>;
   }
 
   return (
@@ -132,7 +143,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             isDesktopSidebarCollapsed ? 'lg:-translate-x-full' : 'lg:translate-x-0'
           } ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
         >
-          <div className="flex h-full flex-col">
+          <div className="flex h-full flex-col overflow-y-auto scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent hover:scrollbar-thumb-white/50">
             <div className="mb-4 flex items-center justify-between lg:hidden">
               <span className="text-sm font-semibold text-white/70">Menu</span>
               <button
@@ -270,6 +281,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/dashboard" element={<RequireAuth><DashboardPage /></RequireAuth>} />
         <Route path="/profile" element={<RequireAuth><ProfilePage /></RequireAuth>} />
+        <Route path="/data-view" element={<RequireAuth><DataViewPage /></RequireAuth>} />
         <Route path="/queries" element={<RequireAuth><QueriesPage /></RequireAuth>} />
         <Route path="/coe" element={<RequireAuth><CoePortalPage user={readCachedUser()} /></RequireAuth>} />
         <Route path="/coe/students" element={<RequireAuth><StudentsList /></RequireAuth>} />
@@ -283,6 +295,10 @@ export default function App() {
         <Route path="/coe/bar-scan/entry" element={<RequireAuth><BarScanMarkEntry /></RequireAuth>} />
         <Route path="/coe/retrival" element={<RequireAuth><RetrivalPage /></RequireAuth>} />
         <Route path="/coe/one-page-report" element={<RequireAuth><OnePageReport /></RequireAuth>} />
+        <Route path="/coe/external-users" element={<RequireAuth><ExternalManagement /></RequireAuth>} />
+        <Route path="/coe/external-management" element={<Navigate to="/coe/external-users" replace />} />
+        <Route path="/coe/registration-settings" element={<RequireAuth><RegistrationSettings /></RequireAuth>} />
+        <Route path="/ext-register/:formCode" element={<ExtStaffRegisterPage />} />
         <Route path="*" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />} />
       </Routes>
     </Shell>

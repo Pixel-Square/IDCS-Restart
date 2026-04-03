@@ -2,6 +2,7 @@ export const CLASS_TYPES = [
   { value: 'THEORY', label: 'Theory' },
   { value: 'THEORY_PMBL', label: 'Theory (PMBL)' },
   { value: 'LAB', label: 'Lab' },
+  { value: 'PURE_LAB', label: 'Pure Lab' },
   { value: 'TCPL', label: 'Tcpl' },
   { value: 'TCPR', label: 'Tcpr' },
   { value: 'PRACTICAL', label: 'Practical' },
@@ -33,6 +34,7 @@ export function normalizeObeClassType(raw?: string | null): string {
   if (compact.includes('TCPL')) return 'TCPL';
   if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY')) return 'THEORY';
   if (compact === 'PRBL' || compact === 'PROJECT' || compact.includes('PROJECT')) return 'PROJECT';
+  if (compact === 'PURELAB') return 'PURE_LAB';
   if (compact === 'LAB' || compact === 'L' || compact.startsWith('LAB')) return 'LAB';
   if (compact === 'PRACTICAL' || compact.startsWith('PRACT')) return 'PRACTICAL';
   if (compact === 'AUDIT') return 'AUDIT';
@@ -45,6 +47,7 @@ export function isLabClassType(raw?: string | null): boolean {
   const s = normalizeObeClassType(raw);
   if (!s) return false;
   if (s === 'LAB' || s === 'L') return true;
+  if (s === 'PURE_LAB') return true;
   if (s.startsWith('LAB') || s.includes('LAB')) return true;
   if (s.includes('PRACTICAL') || s.includes('PRACT')) return true;
   return false;

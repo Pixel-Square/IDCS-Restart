@@ -5,6 +5,8 @@ type Props = {
   subjectId?: string | null;
   subject?: any | null;
   teachingAssignmentId?: number;
+  classType?: string | null;
+  questionPaperType?: string | null;
 };
 
 export default function Formative2List(props: Props) {

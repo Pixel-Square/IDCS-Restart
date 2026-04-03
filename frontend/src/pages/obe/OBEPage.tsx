@@ -269,6 +269,7 @@ export default function OBEPage(): JSX.Element {
   type CiaQDef = { key: string; label: string; max: number; co: any; btl: number };
   type CiaSheetRow = { studentId: string; reg_no: string; name: string; absent: boolean; q: Record<string, number | ''> };
   type CiaSheetForModal = {
+    kind: 'cia';
     termLabel: string;
     batchLabel: string;
     assessmentLabel: string;
@@ -281,11 +282,36 @@ export default function OBEPage(): JSX.Element {
     btlMax: Record<number, number>;
     visibleBtls: number[];
   };
+  type LabModalCo = { coNumber: number; expCount: number; expMax: number; btl: number[] };
+  type LabSheetRowForModal = {
+    studentId: string;
+    reg_no: string;
+    name: string;
+    absent: boolean;
+    marksByCo: Record<string, Array<number | ''>>;
+    ciaExam: number | '';
+    avgMark: number | null;
+    coAttainment: Array<{ coNumber: number; mark: number | null; coMax: number }>;
+    btlAttainment: Record<number, number | null>;
+  };
+  type LabSheetForModal = {
+    kind: 'lab';
+    termLabel: string;
+    batchLabel: string;
+    assessmentLabel: string;
+    cos: LabModalCo[];
+    rows: LabSheetRowForModal[];
+    ciaExamEnabled: boolean;
+    ciaExamMax: number;
+    visibleBtls: number[];
+    maxExpMax: number;
+  };
+  type ModalSheetData = CiaSheetForModal | LabSheetForModal;
   const [progressModal, setProgressModal] = useState<ProgressModalMeta | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMarkCols, setModalMarkCols] = useState<string[]>([]);
   const [modalRows, setModalRows] = useState<ProgressModalRow[] | null>(null);
-  const [modalCiaSheet, setModalCiaSheet] = useState<CiaSheetForModal | null>(null);
+  const [modalCiaSheet, setModalCiaSheet] = useState<ModalSheetData | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
 
   function normalizeImageSrc(img: any): string | null {
@@ -470,14 +496,198 @@ export default function OBEPage(): JSX.Element {
     return { a: 0, b: 0 };
   };
 
+  const _clampInt = (n: number, min: number, max: number) => {
+    if (!Number.isFinite(n)) return min;
+    return Math.max(min, Math.min(max, Math.round(n)));
+  };
+
+  const _normalizeMarksArray = (raw: unknown, length: number): Array<number | ''> => {
+    const src = Array.isArray(raw) ? raw : [];
+    return Array.from({ length }, (_, i) => {
+      const v = src[i];
+      if (v === '' || v == null) return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n : '';
+    });
+  };
+
+  const _normalizeBtlArray = (raw: unknown, length: number): number[] => {
+    const src = Array.isArray(raw) ? raw : [];
+    return Array.from({ length }, (_, i) => {
+      const n = Number(src[i] ?? 1);
+      return n >= 1 && n <= 6 ? n : 1;
+    });
+  };
+
+  const _avgMarks = (marks: Array<number | ''>): number | null => {
+    const nums = marks.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+  };
+
+  const _pctText = (mark: number | null, max: number) => {
+    if (mark == null || !Number.isFinite(mark) || !(max > 0)) return '—';
+    return `${((mark / max) * 100).toFixed(0)}%`;
+  };
+
+  const _round1 = (n: number) => Math.round(n * 10) / 10;
+
+  const _parseLabSheetData = (
+    data: any,
+    assessmentKey: string,
+    studentMap: Map<string, {id: number; reg_no: string; name: string}>,
+    rosterStudents: Array<{id: number; reg_no: string; name: string}>,
+  ): LabSheetForModal | null => {
+    const sheet = data?.sheet && typeof data.sheet === 'object' ? data.sheet : data;
+    if (!sheet || typeof sheet !== 'object') return null;
+
+    const rowsByStudentId = typeof sheet.rowsByStudentId === 'object' && sheet.rowsByStudentId ? sheet.rowsByStudentId : {};
+    const hasLabShape =
+      (typeof sheet.coConfigs === 'object' && sheet.coConfigs) ||
+      'coANum' in sheet ||
+      'expCountA' in sheet ||
+      Object.values(rowsByStudentId).some((row: any) => row && typeof row === 'object' && (row.marksByCo || row.marksA || row.marksB));
+    if (!hasLabShape) return null;
+
+    const rawCoConfigs = typeof sheet.coConfigs === 'object' && sheet.coConfigs ? sheet.coConfigs : {};
+    const migrated: Record<string, LabModalCo & { enabled?: boolean }> = {};
+    Object.entries(rawCoConfigs).forEach(([key, cfg0]: [string, any]) => {
+      const cfg = cfg0 && typeof cfg0 === 'object' ? cfg0 : {};
+      const expCount = _clampInt(Number(cfg.expCount ?? 0), 0, 12);
+      migrated[String(key)] = {
+        coNumber: _clampInt(Number(key), 1, 5),
+        expCount,
+        expMax: _clampInt(Number(cfg.expMax ?? 25), 0, 100),
+        btl: _normalizeBtlArray(cfg.btl, expCount),
+        enabled: Boolean(cfg.enabled),
+      };
+    });
+
+    const coANum = _clampInt(Number(sheet.coANum ?? (assessmentKey === 'cia2' ? 3 : 1)), 1, 5);
+    const coBVal = sheet.coBNum;
+    const coBNum = Number.isFinite(Number(coBVal)) ? _clampInt(Number(coBVal), 1, 5) : null;
+    const expCountA = _clampInt(Number(sheet.expCountA ?? 5), 0, 12);
+    const expCountB = _clampInt(Number(sheet.expCountB ?? (coBNum != null ? 5 : 0)), 0, 12);
+
+    if (!migrated[String(coANum)]) {
+      migrated[String(coANum)] = {
+        coNumber: coANum,
+        expCount: expCountA,
+        expMax: _clampInt(Number(sheet.expMaxA ?? 25), 0, 100),
+        btl: _normalizeBtlArray(sheet.btlA, expCountA),
+        enabled: Boolean(sheet.coAEnabled ?? true),
+      };
+    }
+    if (coBNum != null && !migrated[String(coBNum)]) {
+      migrated[String(coBNum)] = {
+        coNumber: coBNum,
+        expCount: expCountB,
+        expMax: _clampInt(Number(sheet.expMaxB ?? 25), 0, 100),
+        btl: _normalizeBtlArray(sheet.btlB, expCountB),
+        enabled: Boolean(sheet.coBEnabled ?? true),
+      };
+    }
+
+    const fixedCoNumbers = [coANum, coBNum].filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
+    const fixedCoSet = new Set(fixedCoNumbers.map((n) => String(n)));
+
+    let cos = Object.values(migrated)
+      .filter((cfg) => fixedCoSet.has(String(cfg.coNumber)) && Boolean(cfg.enabled) && cfg.expCount > 0)
+      .sort((a, b) => a.coNumber - b.coNumber)
+      .map(({ enabled: _enabled, ...cfg }) => cfg);
+    if (cos.length === 0) {
+      cos = Object.values(migrated)
+        .filter((cfg) => fixedCoSet.has(String(cfg.coNumber)) && cfg.expCount > 0)
+        .sort((a, b) => a.coNumber - b.coNumber)
+        .map(({ enabled: _enabled, ...cfg }) => cfg);
+    }
+    if (cos.length === 0) return null;
+
+    const visibleBtls = [1, 2, 3, 4, 5, 6].filter((n) => cos.some((cfg) => cfg.btl.includes(n)));
+    const maxExpMax = cos.reduce((mx, cfg) => Math.max(mx, cfg.expMax), 0);
+    const ciaExamEnabled = Boolean(sheet.ciaExamEnabled);
+    const ciaExamMax = _clampInt(Number(sheet.ciaExamMax ?? 0), 0, 100);
+    const allStudentIds = Array.from(new Set([...rosterStudents.map((s) => String(s.id)), ...Object.keys(rowsByStudentId)]));
+
+    const rows = allStudentIds
+      .map((sid) => {
+        const row = rowsByStudentId[String(sid)] || {};
+        const stu = studentMap.get(String(sid));
+        const rosterStu = rosterStudents.find((s) => String(s.id) === String(sid));
+        const regNo = String(row.reg_no || row.registerNo || stu?.reg_no || rosterStu?.reg_no || `(${sid})`);
+        const name = String(row.name || stu?.name || rosterStu?.name || '—');
+        const marksByCoRaw = row?.marksByCo && typeof row.marksByCo === 'object' ? row.marksByCo : {};
+        const marksByCo: Record<string, Array<number | ''>> = {};
+
+        cos.forEach((cfg, index) => {
+          const key = String(cfg.coNumber);
+          const fallback = index === 0 ? row?.marksA : index === 1 ? row?.marksB : undefined;
+          marksByCo[key] = _normalizeMarksArray(marksByCoRaw[key] ?? fallback, cfg.expCount);
+        });
+
+        const allMarks = cos.flatMap((cfg) => marksByCo[String(cfg.coNumber)] || []);
+        const avgMark = _avgMarks(allMarks);
+        const ciaExamRaw = row?.ciaExam;
+        const ciaExam: number | '' = ciaExamRaw === '' || ciaExamRaw == null ? '' : (Number.isFinite(Number(ciaExamRaw)) ? Number(ciaExamRaw) : '');
+        const coAttainment = cos.map((cfg) => ({
+          coNumber: cfg.coNumber,
+          mark: _avgMarks(marksByCo[String(cfg.coNumber)] || []),
+          coMax: cfg.expMax,
+        }));
+        const btlAttainment: Record<number, number | null> = {};
+
+        visibleBtls.forEach((btl) => {
+          const vals: number[] = [];
+          cos.forEach((cfg) => {
+            const marks = marksByCo[String(cfg.coNumber)] || [];
+            for (let i = 0; i < Math.min(cfg.expCount, marks.length); i++) {
+              if (Number(cfg.btl[i] ?? 1) === btl) {
+                const val = marks[i];
+                if (typeof val === 'number' && Number.isFinite(val)) vals.push(val);
+              }
+            }
+          });
+          btlAttainment[btl] = vals.length ? _round1(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+        });
+
+        return {
+          studentId: String(sid),
+          reg_no: regNo,
+          name,
+          absent: Boolean(row?.absent),
+          marksByCo,
+          ciaExam,
+          avgMark: avgMark == null ? null : _round1(avgMark),
+          coAttainment: coAttainment.map((item) => ({ ...item, mark: item.mark == null ? null : _round1(item.mark) })),
+          btlAttainment,
+        };
+      })
+      .sort((a, b) => a.reg_no.localeCompare(b.reg_no));
+
+    return {
+      kind: 'lab',
+      termLabel: String(sheet.termLabel || ''),
+      batchLabel: String(sheet.batchLabel || ''),
+      assessmentLabel: assessmentKey === 'model' ? 'MODEL' : assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1',
+      cos,
+      rows,
+      ciaExamEnabled,
+      ciaExamMax,
+      visibleBtls,
+      maxExpMax,
+    };
+  };
+
   // Parse a CIA/Model published sheet data object into CiaSheetForModal
   const _parseCiaSheetData = (
     data: any,
     assessmentKey: string,
     studentMap: Map<string, {id: number; reg_no: string; name: string}>,
     rosterStudents: Array<{id: number; reg_no: string; name: string}>,
-  ): any => {
+  ): ModalSheetData | null => {
     if (!data || typeof data !== 'object') return null;
+
+    const parsedLab = _parseLabSheetData(data, assessmentKey, studentMap, rosterStudents);
+    if (parsedLab) return parsedLab;
 
     // Questions may be stored directly or under a legacy key
     const rawQuestions = Array.isArray(data.questions) ? data.questions : [];
@@ -541,6 +751,7 @@ export default function OBEPage(): JSX.Element {
     sheetRows.sort((a: any, b: any) => a.reg_no.localeCompare(b.reg_no));
 
     return {
+      kind: 'cia',
       termLabel: data.termLabel || '',
       batchLabel: data.batchLabel || '',
       assessmentLabel: isModel ? 'MODEL' : (aval === 'cia2' ? 'CIA 2' : 'CIA 1'),
@@ -625,7 +836,7 @@ export default function OBEPage(): JSX.Element {
           } catch { /* ignore */ }
         }
         const parsed = _parseCiaSheetData(sheetData, aval, studentMap, rosterStudents);
-        if (parsed && parsed.questions.length > 0) {
+        if (parsed && parsed.rows.length > 0) {
           setModalCiaSheet(parsed);
           setModalRows(null);
         } else {
@@ -653,7 +864,7 @@ export default function OBEPage(): JSX.Element {
           } catch { /* ignore */ }
         }
         const parsed = _parseCiaSheetData(sheetData, 'model', studentMap, rosterStudents);
-        if (parsed && parsed.questions.length > 0) {
+        if (parsed && parsed.rows.length > 0) {
           setModalCiaSheet(parsed);
           setModalRows(null);
         } else {
@@ -1958,6 +2169,130 @@ export default function OBEPage(): JSX.Element {
                         const cs = modalCiaSheet;
                         const thStyle: React.CSSProperties = { padding: '6px 8px', border: '1px solid #cbd5e1', background: '#1e293b', color: '#f1f5f9', fontWeight: 700, fontSize: 11, textAlign: 'center', whiteSpace: 'nowrap' };
                         const tdStyle: React.CSSProperties = { padding: '5px 8px', border: '1px solid #e2e8f0', fontSize: 12, textAlign: 'center', color: '#0f172a' };
+                        if (cs.kind === 'lab') {
+                          const totalExpCols = cs.cos.reduce((sum, cfg) => sum + cfg.expCount, 0);
+                          const experimentsCols = Math.max(totalExpCols, 1);
+                          const coAttainmentCols = Math.max(cs.cos.length * 2, 2);
+                          const trailingHeaderCols = coAttainmentCols + cs.visibleBtls.length * 2 + (cs.ciaExamEnabled ? 1 : 0);
+                          const totalCols = 4 + experimentsCols + 1 + (cs.ciaExamEnabled ? 1 : 0) + coAttainmentCols + cs.visibleBtls.length * 2;
+                          return (
+                            <div style={{ overflowX: 'auto', padding: 16 }}>
+                              <table style={{ borderCollapse: 'collapse', fontSize: 12, width: 'max-content', minWidth: '100%' }}>
+                                <thead>
+                                  <tr>
+                                    <th colSpan={totalCols} style={{ ...thStyle, background: '#0f172a', fontSize: 13, padding: '8px 12px', textAlign: 'center' }}>
+                                      {cs.termLabel} &nbsp;|&nbsp; {cs.batchLabel} &nbsp;|&nbsp; {cs.assessmentLabel}
+                                    </th>
+                                  </tr>
+                                  <tr>
+                                    <th rowSpan={5} style={thStyle}>S.No</th>
+                                    <th rowSpan={5} style={thStyle}>R.No</th>
+                                    <th rowSpan={5} style={{ ...thStyle, minWidth: 180, textAlign: 'left' }}>Name of Students</th>
+                                    <th rowSpan={5} style={thStyle}>AB</th>
+                                    <th colSpan={experimentsCols} style={{ ...thStyle, background: '#1d4ed8' }}>EXPERIMENTS</th>
+                                    <th rowSpan={5} style={thStyle}>AVG</th>
+                                    {cs.ciaExamEnabled ? <th rowSpan={5} style={thStyle}>CIA EXAM<br />{cs.ciaExamMax}</th> : null}
+                                    <th colSpan={coAttainmentCols} style={{ ...thStyle, background: '#065f46' }}>CO ATTAINMENT</th>
+                                    {cs.visibleBtls.length > 0 ? <th colSpan={cs.visibleBtls.length * 2} style={{ ...thStyle, background: '#7c2d12' }}>BTL ATTAINMENT</th> : null}
+                                  </tr>
+                                  <tr>
+                                    {totalExpCols === 0 ? (
+                                      <th style={{ ...thStyle, background: '#1e40af' }}>—</th>
+                                    ) : (
+                                      cs.cos.flatMap((cfg) => Array.from({ length: cfg.expCount }, (_, i) => (
+                                        <th key={`lab_co_${cfg.coNumber}_${i}`} style={{ ...thStyle, background: '#1e40af' }}>{cfg.coNumber}</th>
+                                      )))
+                                    )}
+                                    {cs.cos.length > 0 ? cs.cos.map((cfg) => (
+                                      <th key={`lab_co_att_${cfg.coNumber}`} colSpan={2} style={{ ...thStyle, background: '#047857' }}>CO-{cfg.coNumber}</th>
+                                    )) : <th colSpan={2} style={{ ...thStyle, background: '#047857' }}>—</th>}
+                                    {cs.visibleBtls.map((btl) => (
+                                      <th key={`lab_btl_${btl}`} colSpan={2} style={{ ...thStyle, background: '#9a3412' }}>BTL-{btl}</th>
+                                    ))}
+                                  </tr>
+                                  <tr>
+                                    {totalExpCols === 0 ? (
+                                      <th style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>—</th>
+                                    ) : (
+                                      cs.cos.flatMap((cfg) => Array.from({ length: cfg.expCount }, (_, i) => (
+                                        <th key={`lab_max_${cfg.coNumber}_${i}`} style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cfg.expMax}</th>
+                                      )))
+                                    )}
+                                    {cs.cos.length > 0 ? cs.cos.flatMap((cfg) => ([
+                                      <th key={`lab_co_mark_${cfg.coNumber}`} style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cfg.expMax}</th>,
+                                      <th key={`lab_co_pct_${cfg.coNumber}`} style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>,
+                                    ])) : [
+                                      <th key="lab_co_empty_mark" style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>—</th>,
+                                      <th key="lab_co_empty_pct" style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>,
+                                    ]}
+                                    {cs.visibleBtls.flatMap((btl) => ([
+                                      <th key={`lab_btl_mark_${btl}`} style={{ ...thStyle, background: '#334155', color: '#fbbf24' }}>{cs.maxExpMax || 0}</th>,
+                                      <th key={`lab_btl_pct_${btl}`} style={{ ...thStyle, background: '#334155', color: '#94a3b8' }}>%</th>,
+                                    ]))}
+                                  </tr>
+                                  <tr>
+                                    {totalExpCols === 0 ? (
+                                      <th style={{ ...thStyle, background: '#1e40af' }}>No experiments</th>
+                                    ) : (
+                                      cs.cos.flatMap((cfg) => Array.from({ length: cfg.expCount }, (_, i) => (
+                                        <th key={`lab_e_${cfg.coNumber}_${i}`} style={{ ...thStyle, background: '#1e40af' }}>E{i + 1}</th>
+                                      )))
+                                    )}
+                                    <th colSpan={trailingHeaderCols} style={{ ...thStyle, background: '#1e293b' }} />
+                                  </tr>
+                                  <tr>
+                                    {totalExpCols === 0 ? (
+                                      <th style={{ ...thStyle, background: '#f59e0b', color: '#111827' }}>BTL</th>
+                                    ) : (
+                                      cs.cos.flatMap((cfg) => Array.from({ length: cfg.expCount }, (_, i) => (
+                                        <th key={`lab_btl_hdr_${cfg.coNumber}_${i}`} style={{ ...thStyle, background: '#f59e0b', color: '#111827' }}>{cfg.btl[i] ?? 1}</th>
+                                      )))
+                                    )}
+                                    <th colSpan={trailingHeaderCols} style={{ ...thStyle, background: '#1e293b' }} />
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {cs.rows.map((row, idx) => {
+                                    const rowBg = idx % 2 === 0 ? '#fff' : '#f8fafc';
+                                    return (
+                                      <tr key={row.studentId} style={{ background: rowBg }}>
+                                        <td style={{ ...tdStyle, background: rowBg, color: '#94a3b8', fontWeight: 600 }}>{idx + 1}</td>
+                                        <td style={{ ...tdStyle, background: rowBg, color: '#3b82f6', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.reg_no}</td>
+                                        <td style={{ ...tdStyle, background: rowBg, textAlign: 'left', minWidth: 180 }}>{row.name}</td>
+                                        <td style={{ ...tdStyle, background: rowBg, color: '#dc2626', fontWeight: 700 }}>{row.absent ? '✗' : ''}</td>
+                                        {totalExpCols === 0 ? (
+                                          <td style={{ ...tdStyle, background: rowBg }}>—</td>
+                                        ) : (
+                                          cs.cos.flatMap((cfg) => Array.from({ length: cfg.expCount }, (_, i) => {
+                                            const mark = row.marksByCo[String(cfg.coNumber)]?.[i] ?? '';
+                                            return (
+                                              <td key={`lab_row_${row.studentId}_${cfg.coNumber}_${i}`} style={{ ...tdStyle, background: rowBg }}>
+                                                {row.absent ? '—' : (mark === '' ? '' : mark)}
+                                              </td>
+                                            );
+                                          }))
+                                        )}
+                                        <td style={{ ...tdStyle, background: rowBg, fontWeight: 700 }}>{row.absent ? '—' : (row.avgMark == null ? '' : row.avgMark.toFixed(1))}</td>
+                                        {cs.ciaExamEnabled ? <td style={{ ...tdStyle, background: rowBg, fontWeight: 700 }}>{row.absent ? '—' : (row.ciaExam === '' ? '' : row.ciaExam)}</td> : null}
+                                        {cs.cos.length > 0 ? row.coAttainment.flatMap((item) => ([
+                                          <td key={`lab_co_val_${row.studentId}_${item.coNumber}`} style={{ ...tdStyle, background: rowBg }}>{row.absent ? '—' : (item.mark == null ? '' : item.mark.toFixed(1))}</td>,
+                                          <td key={`lab_co_pct_${row.studentId}_${item.coNumber}`} style={{ ...tdStyle, background: rowBg, color: '#047857' }}>{row.absent ? '—' : _pctText(item.mark, item.coMax)}</td>,
+                                        ])) : [
+                                          <td key={`lab_co_empty_val_${row.studentId}`} style={{ ...tdStyle, background: rowBg }}>—</td>,
+                                          <td key={`lab_co_empty_pct_${row.studentId}`} style={{ ...tdStyle, background: rowBg }}>—</td>,
+                                        ]}
+                                        {cs.visibleBtls.flatMap((btl) => ([
+                                          <td key={`lab_btl_val_${row.studentId}_${btl}`} style={{ ...tdStyle, background: rowBg }}>{row.absent ? '—' : (row.btlAttainment[btl] == null ? '' : row.btlAttainment[btl]?.toFixed(1))}</td>,
+                                          <td key={`lab_btl_pct_${row.studentId}_${btl}`} style={{ ...tdStyle, background: rowBg, color: '#9a3412' }}>{row.absent ? '—' : _pctText(row.btlAttainment[btl] ?? null, cs.maxExpMax || 0)}</td>,
+                                        ]))}
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        }
                         const totalCols = 4 + cs.questions.length + 1 + 4 + cs.visibleBtls.length * 2;
                         return (
                           <div style={{ overflowX: 'auto', padding: 16 }}>
