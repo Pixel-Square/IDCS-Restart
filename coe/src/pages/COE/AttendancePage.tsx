@@ -409,7 +409,7 @@ export default function AttendancePage() {
 
       if (bannerDataUrl) {
         const props = doc.getImageProperties(bannerDataUrl);
-        const bannerHeight = 28; // Reduced height to prevent overlapping
+        const bannerHeight = 40; // Reduced height to prevent overlapping
         const bannerWidth = (props.width * bannerHeight) / props.height;
         doc.addImage(bannerDataUrl, 'PNG', margin, headerTop, bannerWidth, bannerHeight);
       }
@@ -422,24 +422,24 @@ export default function AttendancePage() {
         doc.addImage(logoDataUrl, 'PNG', pageWidth - margin - logoWidth, headerTop + 4, logoWidth, logoHeight);
       }
 
-      doc.setFont('timesnewroman', 'italic', "bold");
-      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
       doc.text('Office of the Controller of Examinations', pageWidth / 2, headerTop + 15, { align: 'center' });
 
       doc.setFontSize(10);
       const metaYStart = headerTop + 36; // Moving meta text below the COE header
       doc.text(`Course / Branch`, margin, metaYStart);
       doc.text(`Course Code & Name`, margin, metaYStart + 5);
-      doc.text(`Date & Session`, margin, metaYStart + 10);
+      doc.text(`Date Session & Time`, margin, metaYStart + 10);
 
       doc.setFont('helvetica', 'normal');
       doc.text(`: ${block.meta.department}`, margin + 40, metaYStart);
       doc.text(`: ${block.meta.courseCode} - ${block.meta.courseName}`, margin + 40, metaYStart + 5);
-      doc.text(`: ${block.meta.examDate} & ${block.meta.examSession}`, margin + 40, metaYStart + 10);
+      doc.text(`: ${block.meta.examDate} ${block.meta.examSession}`, margin + 40, metaYStart + 10);
 
       doc.setFont('helvetica', 'bold');
-      doc.text(`Semester - ${semester.toUpperCase()}`, pageWidth - margin, metaYStart + 10, { align: 'right' });
-      doc.text(`Station:  TRICHY`, pageWidth - margin, metaYStart + 15, { align: 'right' });
+      doc.text(`Semester: ${semester.toUpperCase()}`, pageWidth - margin, metaYStart + 10, { align: 'right' });
+
       const usableWidth = pageWidth - margin * 2;
       const groupGap = 3;
       const groupWidth = (usableWidth - groupGap * 3) / 4;
@@ -494,9 +494,7 @@ export default function AttendancePage() {
       
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
-      const blockPresent = presentRows.length;
-      const blockAbsent = block.rows.length - presentRows.length;
-      doc.text(`Total no. of registered students: ${block.rows.length} (Present: ${blockPresent}, Absent: ${blockAbsent})`, margin, tableTop - 2);
+      doc.text(`Total no. of registered students: ${block.rows.length}`, margin, tableTop - 2);
       
 
       // Bottom info boxes
@@ -508,11 +506,11 @@ export default function AttendancePage() {
       doc.line(margin + boxWidth * 3, footerY, margin + boxWidth * 3, footerY + boxHeight);
 
       doc.setFontSize(8);
-      doc.text(`Absent: ${blockAbsent}`, margin + boxWidth * 1 + 2, footerY + 5);
+      doc.text('Absent:', margin + boxWidth * 1 + 2, footerY + 5);
       doc.text('Scripts:', margin + boxWidth * 1 + 2, footerY + 15);
 
       doc.text('Name & Signature Checked By', margin + 2, footerY + 5);
-      doc.text('Name & Signature Verified By AUR', margin + boxWidth * 2 + 2, footerY + 5);
+      doc.text('Name & Signature Verified By', margin + boxWidth * 2 + 2, footerY + 5);
       doc.text('Signature of Chief Superintendent:', margin + boxWidth * 3 + 2, footerY + 5);
     }
 
