@@ -463,81 +463,67 @@ export default function StudentsList() {
         }
       }
 
-      // Page 2: 4 Columns List (No Barcodes) - EXACT distance as barcode page
+      // Page 2: Summary of all RegNos and Dummies for this course
       doc.addPage();
       drawHeader(target.dept, target.course);
       doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.text("Course Enrollment Summary (All Students)", marginX, topY + 12);
+
+      let summaryTableY = contentStartY + 5;
+      const rowH = 7;
+      const col1X = marginX;
+      const col2X = marginX + 40;
+      const col3X = marginX + 90;
+      const col4X = marginX + 130;
+
+      // Table Header
       doc.setFontSize(10);
-      doc.text("Student Summary List (No Barcodes)", marginX, topY + 12);
+      doc.setFillColor(240, 240, 240);
+      doc.rect(marginX, summaryTableY, pageWidth - marginX * 2, rowH, 'F');
+      doc.text("Reg No", col1X + 2, summaryTableY + 5);
+      doc.text("Dummy No", col2X + 2, summaryTableY + 5);
+      doc.text("Reg No", col3X + 2, summaryTableY + 5);
+      doc.text("Dummy No", col4X + 2, summaryTableY + 5);
+      summaryTableY += rowH;
 
-      let summaryY = contentStartY + 5;
-      // Use EXACT SAME rowHeight and rowGap as the barcode page to ensure distance is identical
-      const summaryRowHeight = rowHeight; 
-      const summaryRowGap = rowGap;
-
-      // Each row contains 4 students with column-wise filling
-      const summaryRowsPerPage = 18; // Approximate for summary page, adjust as needed or use a calculation
-      const studentsPerPage = summaryRowsPerPage * 4;
-      
-      for (let i = 0; i < students.length; i += studentsPerPage) {
-        if (i > 0) {
+      doc.setFont('helvetica', 'normal');
+      for (let i = 0; i < students.length; i += 2) {
+        if (summaryTableY + rowH > pageHeight - bottomMargin) {
           doc.addPage();
           drawHeader(target.dept, target.course);
+          summaryTableY = contentStartY;
+          
+          // Repeat Table Header on new page
+          doc.setFont('helvetica', 'bold');
+          doc.setFillColor(240, 240, 240);
+          doc.rect(marginX, summaryTableY, pageWidth - marginX * 2, rowH, 'F');
+          doc.text("Reg No", col1X + 2, summaryTableY + 5);
+          doc.text("Dummy No", col2X + 2, summaryTableY + 5);
+          doc.text("Reg No", col3X + 2, summaryTableY + 5);
+          doc.text("Dummy No", col4X + 2, summaryTableY + 5);
+          summaryTableY += rowH;
+          doc.setFont('helvetica', 'normal');
         }
 
-        for (let row = 0; row < summaryRowsPerPage; row++) {
-          const yPos = summaryY + row * (summaryRowHeight + summaryRowGap);
-          if (yPos + summaryRowHeight > pageHeight - bottomMargin) break;
+        const s1 = students[i];
+        const s2 = students[i + 1];
 
-          const barcodeW = 48;
-          const barcodeXOffset = colWidth - barcodeW;
+        // Column Set 1
+        doc.text(s1.reg_no || '-', col1X + 2, summaryTableY + 5);
+        doc.text(s1.dummy || '-', col2X + 2, summaryTableY + 5);
 
-          // Col 1
-          const idx1 = i + row;
-          if (idx1 < students.length) {
-            const s = students[idx1];
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(s.reg_no || '-', marginX, yPos + 5);
-            doc.text(s.dummy || '-', marginX, yPos + 11.5);
-          }
-
-          // Col 2
-          const idx2 = i + row + summaryRowsPerPage;
-          if (idx2 < students.length) {
-            const s = students[idx2];
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(s.reg_no || '-', marginX + barcodeXOffset, yPos + 5);
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(10);
-            doc.text(s.dummy || '-', marginX + barcodeXOffset, yPos + 11.5);
-          }
-
-          // Col 3
-          const idx3 = i + row + (summaryRowsPerPage * 2);
-          if (idx3 < students.length) {
-            const s = students[idx3];
-            const col3X = marginX + colWidth + colGap;
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(s.reg_no || '-', col3X, yPos + 5);
-            doc.text(s.dummy || '-', col3X, yPos + 11.5);
-          }
-
-          // Col 4
-          const idx4 = i + row + (summaryRowsPerPage * 3);
-          if (idx4 < students.length) {
-            const s = students[idx4];
-            const col4X = marginX + colWidth + colGap + barcodeXOffset;
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(11);
-            doc.text(s.reg_no || '-', col4X, yPos + 5);
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(10);
-            doc.text(s.dummy || '-', col4X, yPos + 11.5);
-          }
+        // Column Set 2
+        if (s2) {
+          doc.text(s2.reg_no || '-', col3X + 2, summaryTableY + 5);
+          doc.text(s2.dummy || '-', col4X + 2, summaryTableY + 5);
         }
+
+        // Horizontal line
+        doc.setDrawColor(200, 200, 200);
+        doc.line(marginX, summaryTableY + rowH, pageWidth - marginX, summaryTableY + rowH);
+        
+        summaryTableY += rowH;
       }
     });
 
@@ -1180,6 +1166,17 @@ export default function StudentsList() {
     const targets: { dept: string; course: AugCourse }[] = [];
     enriched.departments.forEach((dept: AugDept) => {
       dept.courses.forEach((course: AugCourse) => {
+        // Only include courses that match the selected date filter
+        if (dateFilteredCourseKeys) {
+          const courseKey = getCourseKey({
+            department: dept.department,
+            semester,
+            courseCode: course.course_code || '',
+            courseName: course.course_name || '',
+          });
+          if (!dateFilteredCourseKeys.has(courseKey)) return; // This skips all other courses
+        }
+
         if ((course.students || []).length > 0) {
           targets.push({ dept: dept.department, course });
         }
@@ -1187,7 +1184,7 @@ export default function StudentsList() {
     });
 
     if (targets.length === 0) {
-      alert('No course data available to download.');
+      alert('No course data available for the selected date filter.');
       return;
     }
 
@@ -1379,8 +1376,8 @@ export default function StudentsList() {
                       const ck = getCourseKey({
                         department: deptBlock.department,
                         semester: semester,
-                        courseCode: course.course_code,
-                        courseName: course.course_name,
+                        courseCode: course.course_code || '',
+                        courseName: course.course_name || '',
                       });
                       return dateFilteredCourseKeys.has(ck);
                     })
