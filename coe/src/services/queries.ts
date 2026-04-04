@@ -49,3 +49,25 @@ export async function createQuery(query_text: string): Promise<UserQuery> {
   }
   return await res.json();
 }
+
+export async function fetchAllQueries(): Promise<{ queries: UserQuery[] }> {
+  const res = await fetchWithAuth('/api/accounts/queries/all/');
+  if (!res.ok) {
+    throw new Error('Failed to fetch all queries');
+  }
+  return await res.json();
+}
+
+export async function updateQuery(id: number, data: { status: string; admin_notes?: string }): Promise<UserQuery> {
+  const res = await fetchWithAuth(`/api/accounts/queries/${id}/update/`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    throw new Error('Failed to update query');
+  }
+  return await res.json();
+}

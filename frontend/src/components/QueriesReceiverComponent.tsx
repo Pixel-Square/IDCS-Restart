@@ -14,7 +14,8 @@ import {
   User,
   Shield,
   Phone,
-  XCircle
+  XCircle,
+  RotateCcw
 } from 'lucide-react';
 import { fetchAllQueries, updateQuery, UserQuery, AllQueriesResponse } from '../services/queries';
 
@@ -361,10 +362,72 @@ export default function QueriesReceiverComponent() {
 
                   {/* Query Content */}
                   <div className="mb-3">
-                    <div className="bg-slate-50 rounded-lg p-4 text-sm text-slate-800 leading-relaxed">
+                    <div className={`rounded-lg p-4 text-sm leading-relaxed ${
+                      query.query_text.includes('[ESV_RESET_REQUEST]') 
+                        ? 'bg-rose-50 border border-rose-100 text-rose-900 ring-2 ring-rose-500/20' 
+                        : 'bg-slate-50 border border-slate-100 text-slate-800'
+                    }`}>
+                      {query.query_text.includes('[ESV_RESET_REQUEST]') && (
+                        <div className="flex items-center gap-2 mb-2 font-black uppercase text-[10px] tracking-widest text-rose-600">
+                          <RotateCcw size={14} className="animate-pulse" />
+                          Critical: ESV Data Reset Request
+                        </div>
+                      )}
                       {query.query_text}
                     </div>
                   </div>
+
+                  {/* ESV Reset Action (Special) */}
+                  {query.query_text.includes('[ESV_RESET_REQUEST]') && query.status !== 'FIXED' && (
+                    <div className="mb-4">
+                      <button
+                        onClick={async () => {
+                          const facultyCodeMatch = query.query_text.match(/\(([^)]+)\)/);
+                          const facultyCode = facultyCodeMatch ? facultyCodeMatch[1] : '';
+                          if (!facultyCode) {
+                            alert('Could not extract Faculty Code from request text.');
+                            return;
+                          }
+                          if (window.confirm(`DANGER: This will mark the request as FIXED and signal ESV to CLEAR ALL MARKS for Faculty: ${facultyCode}. Proceed?`)) {
+                            setSaving(true);
+                            try {
+                              // 1. Update status to FIXED
+                              await updateQuery(query.id, { 
+                                status: 'FIXED', 
+                                admin_notes: `[SYSTEM] Reset approved by Admin. Local data cleared for ${facultyCode}.` 
+                              });
+                              
+                              // 2. Broadcast the reset signal (Cross-tab notification)
+                              if (typeof BroadcastChannel !== 'undefined') {
+                                const channel = new BroadcastChannel('idcs-marks-sync');
+                                channel.postMessage({ type: 'RESET_FACULTY_DATA', facultyCode });
+                                channel.close();
+                              }
+
+                              // 3. Clear local storage in case admin is in same app (though unlikely for faculty data)
+                              Object.keys(localStorage).forEach(key => {
+                                if (key.startsWith(`idcs-marks-v1-${facultyCode}-`)) {
+                                  localStorage.removeItem(key);
+                                }
+                              });
+
+                              setSuccess(`Reset processed for ${facultyCode}`);
+                              await loadQueries();
+                            } catch (err) {
+                              setError('Failed to process reset.');
+                            } finally {
+                              setSaving(false);
+                            }
+                          }
+                        }}
+                        disabled={saving}
+                        className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition-all shadow-lg shadow-rose-200 disabled:opacity-50"
+                      >
+                        {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw size={14} />}
+                        Approve & Clear Faculty Marks
+                      </button>
+                    </div>
+                  )}
 
                   {/* Edit Form or Display */}
                   {isEditing ? (

@@ -304,39 +304,43 @@ export default function StudentsList() {
     const rollText = student.reg_no || '-';
     const barcodeValue = dummyText;
 
+    // Adjust font for Reg No and Dummy Text
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(rollText, x + 1, y + 5);
+    doc.setFontSize(14); // Increased from 11
+    doc.text(rollText, x, y + 5);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.text(dummyText, x + 1, y + 11);
+    doc.setFontSize(14); // Increased from 11
+    doc.text(dummyText, x, y + 11.8); 
 
     const barcodeImg = barcodeDataUrlForValue(barcodeValue);
-    const barcodeW = 34;
-    const barcodeH = 7;
-    const barcodeX = x + width - barcodeW - 1;
-    const barcodeY = y + 1;
+    // Reduced length (width) of the barcode
+    const barcodeW = 35; // Reduced from 44
+    const barcodeH = 7.5; // Slightly reduced height to fit 15mm row
+    // Align barcode to the right of the entry area, moved 2mm to the left
+    const barcodeX = x + width - barcodeW - 2;
+    const barcodeY = y + 0.5;
 
     doc.addImage(barcodeImg, 'PNG', barcodeX, barcodeY, barcodeW, barcodeH);
 
+    // Dummy number below barcode with a small gap
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
-    doc.text(barcodeValue, barcodeX, y + 11);
+    doc.setFontSize(13); // Increased from 10
+    doc.text(barcodeValue, barcodeX, y + 11.8); 
   };
 
   const buildCombinedCoursesPdf = (targets: { dept: string; course: AugCourse }[]) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 12;
+    const marginX = 14; 
     const topY = 16;
-    const contentStartY = 30;
-    const bottomMargin = 12;
-    const colGap = 8;
+    const contentStartY = 31.0; // Shifted 2.5mm up from 33.5
+    const bottomMargin = 10;
+    const colGap = 12; 
     const colWidth = (pageWidth - marginX * 2 - colGap) / 2;
-    const rowHeight = 16;
-    const rowGap = 6;
+    const rowHeight = 12; // Reduced further to accommodate more gap
+    const rowGap = 12.25; // Increased from 12.15 to shift the last rows down by 1mm (10 gaps * 0.1mm)
 
     const drawHeader = (deptName: string, course: AugCourse) => {
       doc.setFont('helvetica', 'bold');
@@ -346,7 +350,7 @@ export default function StudentsList() {
       doc.text(`Code: ${course.course_code || 'NO_CODE'}`, pageWidth - marginX, topY, { align: 'right' });
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      doc.text(`Semester: ${semester}`, marginX, topY + 6);
+      doc.text(`Semester: ${semester}`, marginX, topY + 4.5); // Reduced from +6
     };
 
     targets.forEach((target, targetIndex) => {
@@ -363,20 +367,107 @@ export default function StudentsList() {
         return ra.localeCompare(rb, undefined, { numeric: true, sensitivity: 'base' });
       });
 
-      for (let i = 0; i < students.length; i += 2) {
-        if (y + rowHeight > pageHeight - bottomMargin) {
+      // Page 1: 2 Columns with Barcodes
+      const rowsPerPage = 11;
+      for (let i = 0; i < students.length; i += rowsPerPage * 2) {
+        if (i > 0) {
           doc.addPage();
           drawHeader(target.dept, target.course);
-          y = contentStartY;
         }
 
-        drawCoursePdfEntry(doc, marginX, y, colWidth, students[i]);
+        for (let row = 0; row < rowsPerPage; row++) {
+          const yPos = contentStartY + row * (rowHeight + rowGap);
+          if (yPos + rowHeight > pageHeight - bottomMargin) break;
 
-        if (students[i + 1]) {
-          drawCoursePdfEntry(doc, marginX + colWidth + colGap, y, colWidth, students[i + 1]);
+          // Student index for Left Column
+          const leftIdx = i + row;
+          if (leftIdx < students.length) {
+            drawCoursePdfEntry(doc, marginX, yPos, colWidth, students[leftIdx]);
+          }
+
+          // Student index for Right Column (skips the 'rowsPerPage' of the first column)
+          const rightIdx = i + row + rowsPerPage;
+          if (rightIdx < students.length) {
+            drawCoursePdfEntry(doc, marginX + colWidth + colGap, yPos, colWidth, students[rightIdx]);
+          }
+        }
+      }
+
+      // Page 2: 4 Columns List (No Barcodes) - EXACT distance as barcode page
+      doc.addPage();
+      drawHeader(target.dept, target.course);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text("Student Summary List (No Barcodes)", marginX, topY + 12);
+
+      let summaryY = contentStartY + 5;
+      // Use EXACT SAME rowHeight and rowGap as the barcode page to ensure distance is identical
+      const summaryRowHeight = rowHeight; 
+      const summaryRowGap = rowGap;
+
+      // Each row contains 4 students with column-wise filling
+      const summaryRowsPerPage = 18; // Approximate for summary page, adjust as needed or use a calculation
+      const studentsPerPage = summaryRowsPerPage * 4;
+      
+      for (let i = 0; i < students.length; i += studentsPerPage) {
+        if (i > 0) {
+          doc.addPage();
+          drawHeader(target.dept, target.course);
         }
 
-        y += rowHeight + rowGap;
+        for (let row = 0; row < summaryRowsPerPage; row++) {
+          const yPos = summaryY + row * (summaryRowHeight + summaryRowGap);
+          if (yPos + summaryRowHeight > pageHeight - bottomMargin) break;
+
+          const barcodeW = 48;
+          const barcodeXOffset = colWidth - barcodeW;
+
+          // Col 1
+          const idx1 = i + row;
+          if (idx1 < students.length) {
+            const s = students[idx1];
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(s.reg_no || '-', marginX, yPos + 5);
+            doc.text(s.dummy || '-', marginX, yPos + 11.5);
+          }
+
+          // Col 2
+          const idx2 = i + row + summaryRowsPerPage;
+          if (idx2 < students.length) {
+            const s = students[idx2];
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(s.reg_no || '-', marginX + barcodeXOffset, yPos + 5);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(10);
+            doc.text(s.dummy || '-', marginX + barcodeXOffset, yPos + 11.5);
+          }
+
+          // Col 3
+          const idx3 = i + row + (summaryRowsPerPage * 2);
+          if (idx3 < students.length) {
+            const s = students[idx3];
+            const col3X = marginX + colWidth + colGap;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(s.reg_no || '-', col3X, yPos + 5);
+            doc.text(s.dummy || '-', col3X, yPos + 11.5);
+          }
+
+          // Col 4
+          const idx4 = i + row + (summaryRowsPerPage * 3);
+          if (idx4 < students.length) {
+            const s = students[idx4];
+            const col4X = marginX + colWidth + colGap + barcodeXOffset;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.text(s.reg_no || '-', col4X, yPos + 5);
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(10);
+            doc.text(s.dummy || '-', col4X, yPos + 11.5);
+          }
+        }
       }
     });
 
