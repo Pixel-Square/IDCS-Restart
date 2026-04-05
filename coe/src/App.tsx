@@ -19,6 +19,8 @@ import OnePageReport from './pages/COE/OnePageReport';
 import ProfilePage from './pages/ProfilePage';
 import QueriesPage from './pages/QueriesPage';
 import AdminRequestsPage from './pages/AdminRequestsPage';
+import ExternalManagementPage from './pages/COE/ExternalManagementPage';
+import AdditionalPage from './pages/COE/AdditionalPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import DataViewPage from './pages/DataViewPage';
 import { logout } from './services/auth';
@@ -70,8 +72,10 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/attendance', label: 'Attendance' },
     { to: '/coe/students', label: 'Students' },
     { to: '/coe/arrears', label: 'Arrears' },
+    { to: '/coe/additional', label: 'Additional' },
     { to: '/coe/bundle-allocation', label: 'Bundles' },
     { to: '/coe/assigning', label: 'Assigning' },
+    { to: '/coe/external-management', label: 'External Management' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
     { to: '/coe/external-users', label: 'External Users' },
@@ -293,8 +297,12 @@ export default function App() {
         <Route path="/coe/courses" element={<RequireAuth><CourseList /></RequireAuth>} />
         <Route path="/coe/attendance" element={<RequireAuth><AttendancePage /></RequireAuth>} />
         <Route path="/coe/arrears" element={<RequireAuth><ArrearList /></RequireAuth>} />
+        <Route path="/coe/additional" element={<RequireAuth><AdditionalPage /></RequireAuth>} />
         <Route path="/coe/bundle-allocation" element={<RequireAuth><BundleAllocation /></RequireAuth>} />
         <Route path="/coe/assigning" element={<RequireAuth><AssigningPage /></RequireAuth>} />
+        <Route path="/coe/external-management" element={<RequireAuth><ExternalManagementPage /></RequireAuth>} />
+        <Route path="/coe/external" element={<RequireAuth><Navigate to="/coe/external-management" replace /></RequireAuth>} />
+        <Route path="/coe/external-data" element={<RequireAuth><Navigate to="/coe/external-management" replace /></RequireAuth>} />
         <Route path="/coe/bundle-barcodes" element={<RequireAuth><BundleBarcodeView /></RequireAuth>} />
         <Route path="/coe/bar-scan" element={<RequireAuth><BarScan /></RequireAuth>} />
         <Route path="/coe/bar-scan/entry" element={<RequireAuth><BarScanMarkEntry /></RequireAuth>} />

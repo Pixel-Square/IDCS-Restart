@@ -79,6 +79,21 @@ function barcodeDataUrlForValue(value: string): string {
   return canvas.toDataURL('image/png');
 }
 
+function writeCourseBundleDummyStore(store: Record<string, any>) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem('coe-course-bundle-dummies-v1', JSON.stringify(store));
+}
+
+function readCourseBundleDummyStore(): Record<string, any> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem('coe-course-bundle-dummies-v1');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function BundleBarcodeView() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -109,9 +124,8 @@ export default function BundleBarcodeView() {
         ]);
         if (!active) return;
 
-        const semesterDigit = getSemesterDigit(semester);
-        const filterKey = getCurrentFilterKey(department, semester);
-        const persistedByDummy = readShuffledLists()[filterKey] || {};
+        const currentFilterKeyVal = getCurrentFilterKey(department, semester);
+        const persistedByDummy = readShuffledLists()[currentFilterKeyVal] || {};
         const savedByDummy = new Map((response.saved_dummies || []).filter((r) => r.semester === semester).map((r) => [r.dummy, r]));
         const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
         const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, semester));
@@ -164,8 +178,36 @@ export default function BundleBarcodeView() {
         const allBundles: { bundleName: string; students: BundleStudent[]; course_code?: string; course_name?: string; department?: string }[] = [];
         gathered.forEach((course) => {
           const deptShort = DEPARTMENT_SHORT[course.department] || String(course.department || '').slice(0, 2).toUpperCase();
-          const grouped = chunkStudents(course.students, bundleSize).map((students, i) => ({ bundleName: `${course.course_code || 'COURSE'}${deptShort}${String(i + 1).padStart(3, '0')}`, students }));
+          const grouped = chunkStudents(course.students, bundleSize).map((students, i) => ({ 
+            bundleName: `${course.course_code || 'COURSE'}${deptShort}${String(i + 1).padStart(3, '0')}`, 
+            students 
+          }));
           grouped.forEach((b) => allBundles.push({ ...b, course_code: course.course_code, course_name: course.course_name, department: course.department }));
+        });
+
+        // Inject Additional Bundles from localStorage
+        const additionalFilterKey = getCurrentFilterKey(department, semester);
+        const bundleStore = readCourseBundleDummyStore();
+        const additionalForFilter = bundleStore[additionalFilterKey] || {};
+        
+        Object.entries(additionalForFilter).forEach(([cCode, cData]: [string, any]) => {
+          if (cData.bundles) {
+            Object.entries(cData.bundles).forEach(([bName, dummieList]: [string, any]) => {
+              if (bName.endsWith('-ADD')) {
+                const addStudents: BundleStudent[] = (dummieList || []).map((d: string) => {
+                  const p = persistedByDummy[d] || {};
+                  return { reg_no: p.reg_no || '?', name: p.name || '?', dummy: d, isShuffled: true };
+                });
+                allBundles.push({
+                  bundleName: bName,
+                  students: addStudents,
+                  course_code: cCode,
+                  department: department, 
+                  course_name: 'Additional Student'
+                });
+              }
+            });
+          }
         });
 
         if (!active) return;

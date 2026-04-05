@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { fetchFacultyAllocations } from '../services/assignments';
 import { findAllocationsForFaculty } from '../stores/coeStore';
 
 const CODE_LENGTH = 6;
@@ -48,23 +49,49 @@ export default function CodeEntryPage() {
     setTimeout(() => inputRefs.current[focusIndex]?.focus(), 0);
   }, []);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const code = digits.join('');
     if (code.length < CODE_LENGTH) {
-      setError('Please enter the complete faculty code.');
+      setError('Please enter the complete 6-digit faculty code.');
       return;
     }
 
     setChecking(true);
     setError('');
 
-    // Small delay to show loading state
-    setTimeout(() => {
-      // Store faculty code in session and navigate immediately
-      // The user is logged in regardless of whether bundles are assigned yet
-      sessionStorage.setItem('esv-faculty-code', code);
-      navigate('/profile');
-    }, 300);
+    try {
+      // 1. Check Backend DB (Primary)
+      const dbResults = await fetchFacultyAllocations(code);
+      
+      if (dbResults && dbResults.length > 0) {
+        sessionStorage.setItem('esv-faculty-code', code);
+        navigate('/profile');
+        return;
+      }
+
+      // 2. Check Local Storage (Backup)
+      const localResults = findAllocationsForFaculty(code);
+      if (localResults && localResults.length > 0) {
+        sessionStorage.setItem('esv-faculty-code', code);
+        navigate('/profile');
+        return;
+      }
+
+      // If we reach here, the faculty code is invalid or has no assignments
+      setError('Invalid Faculty Code or no courses assigned for valuation.');
+    } catch (err) {
+      console.error('Login verification error:', err);
+      // Fallback for connectivity issues if we have local data as a safety net
+      const localResults = findAllocationsForFaculty(code);
+      if (localResults.length > 0) {
+          sessionStorage.setItem('esv-faculty-code', code);
+          navigate('/profile');
+      } else {
+          setError('Communication error. Please ensure you are connected to the network.');
+      }
+    } finally {
+      setChecking(false);
+    }
   }, [digits, navigate]);
 
   const handleKeySubmit = useCallback((e: React.KeyboardEvent) => {

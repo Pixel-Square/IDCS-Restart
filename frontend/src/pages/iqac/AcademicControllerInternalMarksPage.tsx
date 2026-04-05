@@ -410,7 +410,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           existingKey.add(key);
         }
 
-        let finalRows = await hydrateMissingAllSectionAssignments(next);
+        const finalRows = await hydrateMissingAllSectionAssignments(next);
 
         finalRows.sort((a, b) => {
           const byCode = a.course_code.localeCompare(b.course_code);

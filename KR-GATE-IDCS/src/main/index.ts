@@ -257,7 +257,8 @@ function createWindow() {
 
     // Explicitly allow serial device access.
     try {
-      ;(ses as any).setDevicePermissionHandler?.((details: any) => {
+      const sessionWithDevicePermission = ses as any
+      sessionWithDevicePermission.setDevicePermissionHandler?.((details: any) => {
         return details?.deviceType === 'serial'
       })
     } catch {}

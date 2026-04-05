@@ -320,6 +320,20 @@ export default function BarScanMarkEntry({
       
       saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
       
+      // Interconnectivity: Dispatch event for both portals
+      window.dispatchEvent(new CustomEvent('esv-marks-updated'));
+      window.dispatchEvent(new CustomEvent('coe-marks-updated'));
+      
+      // Broadcast to other tabs
+      const bc = new BroadcastChannel('idcs-marks-sync');
+      bc.postMessage({ 
+        type: 'UPDATE', 
+        dummy: student.dummy_number || student.reg_no, 
+        marks, 
+        qpType: student.qp_type 
+      });
+      bc.close();
+
       setSaved(true);
       setIsLocked(true);
       

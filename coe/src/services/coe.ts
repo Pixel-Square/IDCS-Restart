@@ -227,3 +227,27 @@ export async function saveCoeCourseSel(key: string, selections: Record<string, C
   return res.json();
 }
 
+export type ExternalStaffProfile = {
+  id: number;
+  staff_id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  department_name: string;
+  login_code: string;
+  status: string;
+};
+
+export async function fetchExternalStaff(): Promise<ExternalStaffProfile[]> {
+  const res = await fetchWithAuth('/api/coe/external-staff/db-mirror/?strict=0');
+  if (!res.ok) throw new Error('Failed to fetch external staff');
+  return res.json();
+}
+
+export async function assignExternalCodes(): Promise<{ message: string; count: number }> {
+  const res = await fetchWithAuth('/api/coe/external-staff/assign-codes/?strict=1', {
+    method: 'POST'
+  });
+  if (!res.ok) throw new Error('Failed to assign external codes');
+  return res.json();
+}

@@ -169,7 +169,7 @@ export default function GateScanPage(): JSX.Element {
         ? `${profile.reg_no || profile.staff_id || ''}${profile.reg_no || profile.staff_id ? ' • ' : ''}${profile.name || ''}`.trim()
         : `UID: ${uid}`
 
-      let flashProfile = buildFlashProfile(profile, result.profile_type ?? null)
+      const flashProfile = buildFlashProfile(profile, result.profile_type ?? null)
 
       if (flashProfile) {
         profileCacheRef.current.set(uid, flashProfile)
