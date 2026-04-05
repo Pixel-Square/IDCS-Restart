@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { DeptRow, fetchDeptRows, fetchElectives } from '../../services/curriculum';
 
@@ -27,6 +26,14 @@ type InternalMarkRow = {
   class_type: string;
   qp_type: string;
   source: 'teaching-assignment' | 'curriculum' | 'elective';
+};
+
+type CourseTeachingMapItem = {
+  teaching_assignment_id?: number | null;
+  section_id?: number | null;
+  section_name?: string | null;
+  class_type?: string | null;
+  course_code?: string | null;
 };
 
 function normalizeText(value: unknown): string {
@@ -75,7 +82,7 @@ function extractCourseName(ta: any): string {
   return '';
 }
 
-function extractDepartment(ta: any, pick: any): string {
+function extractDepartment(ta: any, pick: any, electivePick?: any): string {
   const fromTa =
     normalizeText(ta?.department?.short_name) ||
     normalizeText(ta?.department?.code) ||
@@ -93,6 +100,12 @@ function extractDepartment(ta: any, pick: any): string {
     normalizeText(pick?.department?.code) ||
     normalizeText(pick?.department?.name);
   if (fromCurriculum) return fromCurriculum;
+
+  const fromElectivePick =
+    normalizeText(electivePick?.department?.short_name) ||
+    normalizeText(electivePick?.department?.code) ||
+    normalizeText(electivePick?.department?.name);
+  if (fromElectivePick) return fromElectivePick;
 
   return 'N/A';
 }
@@ -139,11 +152,11 @@ function studyYearFromSemester(value: unknown): string {
 }
 
 export default function AcademicControllerInternalMarksPage(): JSX.Element {
-  const navigate = useNavigate();
   const [rows, setRows] = useState<InternalMarkRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingTaId, setDownloadingTaId] = useState<number | null>(null);
 
   const [regulationFilter, setRegulationFilter] = useState('all');
   const [semesterFilter, setSemesterFilter] = useState('all');
@@ -154,6 +167,55 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
 
   useEffect(() => {
     let mounted = true;
+
+    async function hydrateMissingAllSectionAssignments(items: InternalMarkRow[]): Promise<InternalMarkRow[]> {
+      const needsLookup = items.filter(
+        (r) => !r.teaching_assignment_id && canonText(r.section) === canonText('All Sections') && !!r.course_code
+      );
+      if (!needsLookup.length) return items;
+
+      const uniqueCodes = Array.from(new Set(needsLookup.map((r) => normUpper(r.course_code)).filter(Boolean)));
+      const byCode = new Map<string, CourseTeachingMapItem[]>();
+
+      await Promise.all(
+        uniqueCodes.map(async (code) => {
+          try {
+            const res = await fetchWithAuth(`/api/academics/iqac/course-teaching/${encodeURIComponent(code)}/`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const results = Array.isArray((data as any)?.results) ? (data as any).results : [];
+            byCode.set(code, results as CourseTeachingMapItem[]);
+          } catch {
+            // Keep existing row as Not Assigned if fallback lookup fails.
+          }
+        })
+      );
+
+      return items.map((row) => {
+        if (row.teaching_assignment_id || canonText(row.section) !== canonText('All Sections')) return row;
+        const options = byCode.get(normUpper(row.course_code)) || [];
+        if (!options.length) return row;
+
+        const sectionless = options.filter((o) => !o?.section_id);
+        if (!sectionless.length) return row;
+
+        const wantedClass = canonText(row.class_type);
+        const picked =
+          sectionless.find((o) => wantedClass && canonText(o?.class_type) === wantedClass) ||
+          sectionless[0];
+        const taId = Number((picked as any)?.teaching_assignment_id || 0);
+        if (!Number.isFinite(taId) || taId <= 0) return row;
+
+        return {
+          ...row,
+          teaching_assignment_id: taId,
+          section_id: Number((picked as any)?.section_id) || null,
+          section: normalizeText((picked as any)?.section_name) || row.section || 'All Sections',
+          source: 'teaching-assignment',
+        };
+      });
+    }
+
     (async () => {
       try {
         setLoading(true);
@@ -180,6 +242,15 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           const curr = byCourse.get(code) || [];
           curr.push(row);
           byCourse.set(code, curr);
+        }
+
+        const electiveByCode = new Map<string, any[]>();
+        for (const e of Array.isArray(electives) ? electives : []) {
+          const code = normalizeText((e as any)?.course_code).toUpperCase();
+          if (!code) continue;
+          const curr = electiveByCode.get(code) || [];
+          curr.push(e);
+          electiveByCode.set(code, curr);
         }
 
         const pickBestCourseRow = (ta: any, rowsForCode: DeptRow[]): DeptRow | undefined => {
@@ -211,20 +282,40 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
 
           const courseRows = byCourse.get(courseCode) || [];
           const pick = pickBestCourseRow(ta as any, courseRows);
+          const electiveOptions = electiveByCode.get(courseCode) || [];
+          const electivePick = electiveOptions[0];
 
-          const regulation = normalizeText((pick as any)?.regulation) || 'N/A';
-          const semester = normalizeText((ta as any)?.section_details?.semester) || normalizeText((pick as any)?.semester) || 'N/A';
-          const batch = normalizeText((ta as any)?.section_details?.batch) || 'N/A';
+          const sectionDetails = (ta as any)?.section_details;
+          const electiveDetails = (ta as any)?.elective_subject_details;
+          const pickBatch = normalizeText((pick as any)?.batch?.name || (pick as any)?.batch);
+          const electiveBatch = normalizeText((electivePick as any)?.batch?.name || (electivePick as any)?.batch);
+          const electiveSemester = normalizeText((electivePick as any)?.semester?.number || (electivePick as any)?.semester);
+
+          const regulation = normalizeText((pick as any)?.regulation) || normalizeText((electivePick as any)?.regulation) || 'N/A';
+          const semester = normalizeText(sectionDetails?.semester) || normalizeText((pick as any)?.semester) || electiveSemester || 'N/A';
+          const batch = normalizeText(sectionDetails?.batch) || pickBatch || electiveBatch || 'N/A';
           const yearFromSem = studyYearFromSemester(semester);
           const year = yearFromSem || extractAcademicYear(ta as any);
 
-          const deptFromSection = (ta as any)?.section_details?.department;
-          const departmentId = Number((deptFromSection as any)?.id);
-          const department = extractDepartment(ta as any, pick as any);
-          const section = normalizeText((ta as any)?.section_name) || normalizeText((ta as any)?.section_details?.name) || 'N/A';
+          const deptFromSection = sectionDetails?.department;
+          const deptFromPick = (pick as any)?.department;
+          const departmentIdRaw =
+            (deptFromSection as any)?.id ||
+            (electiveDetails as any)?.department_id ||
+            (electivePick as any)?.department?.id ||
+            (deptFromPick as any)?.id ||
+            null;
+          const departmentId = Number(departmentIdRaw);
+          const department = extractDepartment(ta as any, pick as any, electivePick as any);
+          const section = normalizeText((ta as any)?.section_name) || normalizeText(sectionDetails?.name) || 'All Sections';
           const courseName = extractCourseName(ta as any) || 'Untitled Course';
-          const classType = normalizeText((pick as any)?.class_type) || 'N/A';
-          const qpType = normalizeText((pick as any)?.question_paper_type) || normalizeText((pick as any)?.qp_type) || 'N/A';
+          const classType = normalizeText((pick as any)?.class_type) || normalizeText((electivePick as any)?.class_type) || 'N/A';
+          const qpType =
+            normalizeText((pick as any)?.question_paper_type) ||
+            normalizeText((pick as any)?.qp_type) ||
+            normalizeText((electivePick as any)?.question_paper_type) ||
+            normalizeText((electivePick as any)?.qp_type) ||
+            'N/A';
 
           next.push({
             teaching_assignment_id: Number((ta as any)?.id),
@@ -319,7 +410,9 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           existingKey.add(key);
         }
 
-        next.sort((a, b) => {
+        let finalRows = await hydrateMissingAllSectionAssignments(next);
+
+        finalRows.sort((a, b) => {
           const byCode = a.course_code.localeCompare(b.course_code);
           if (byCode !== 0) return byCode;
           const byYear = a.academic_year.localeCompare(b.academic_year);
@@ -328,7 +421,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         });
 
         if (!mounted) return;
-        setRows(next);
+        setRows(finalRows);
       } catch (e: any) {
         if (!mounted) return;
         setRows([]);
@@ -465,6 +558,17 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         const pick = exportableRows.find((r) => canonText(r.department) === canonText(departmentFilter) && r.department_id != null);
         if (pick?.department_id != null) params.set('department_id', String(pick.department_id));
       }
+      if (sectionFilter !== 'all') {
+        const pick = exportableRows.find((r) => canonText(r.section) === canonText(sectionFilter) && r.section_id != null);
+        if (pick?.section_id != null) params.set('section_id', String(pick.section_id));
+      }
+
+      const taIds = exportableRows
+        .map((r) => Number(r.teaching_assignment_id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      if (taIds.length) {
+        params.set('ta_ids', Array.from(new Set(taIds)).join(','));
+      }
 
       const url = `/api/academics/iqac/internal-marks/export/${params.toString() ? `?${params.toString()}` : ''}`;
       const res = await fetchWithAuth(url);
@@ -486,6 +590,41 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       setError(e?.message || 'Failed to download ZIP export');
     } finally {
       setDownloading(false);
+    }
+  }
+
+  function safeFilenamePart(value: string): string {
+    const cleaned = String(value || '').trim().replace(/[\\/:*?"<>|]/g, '_');
+    return cleaned || 'internal_marks';
+  }
+
+  async function handleDownloadCourseExcel(row: InternalMarkRow) {
+    const taId = Number(row.teaching_assignment_id);
+    if (!Number.isFinite(taId) || taId <= 0) return;
+
+    try {
+      setDownloadingTaId(taId);
+      setError(null);
+
+      const res = await fetchWithAuth(`/api/academics/iqac/internal-marks/course-export/?ta_id=${encodeURIComponent(String(taId))}`);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Failed to download course internal marks');
+      }
+
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = `${safeFilenamePart(row.course_code)} ${safeFilenamePart(row.course_name)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to download course internal marks');
+    } finally {
+      setDownloadingTaId(null);
     }
   }
 
@@ -636,7 +775,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             </thead>
             <tbody>
               {filteredRows.map((r) => (
-                <tr key={`${r.teaching_assignment_id}-${r.course_code}`}>
+                <tr key={`${r.teaching_assignment_id}-${r.course_code}-${r.regulation}-${r.semester}-${r.department_id || 0}-${r.section}`}>
                   <td style={{ padding: '10px 8px', borderBottom: '1px solid #f3f4f6' }}>
                     <div style={{ fontWeight: 800, color: '#111827' }}>{r.course_code}</div>
                     <div style={{ fontSize: 12, color: '#6b7280' }}>{r.course_name}</div>
@@ -653,15 +792,10 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
                     {r.teaching_assignment_id ? (
                       <button
                         className="obe-btn obe-btn-primary"
-                        onClick={() =>
-                          navigate(
-                            `/iqac/academic-controller/course/${encodeURIComponent(r.course_code)}/internal-mark/${encodeURIComponent(
-                              String(r.teaching_assignment_id)
-                            )}`
-                          )
-                        }
+                        onClick={() => handleDownloadCourseExcel(r)}
+                        disabled={downloadingTaId === r.teaching_assignment_id}
                       >
-                        Open
+                        {downloadingTaId === r.teaching_assignment_id ? 'Preparing...' : 'Download'}
                       </button>
                     ) : (
                       <button className="obe-btn" disabled title="No teaching assignment/section yet for this course">

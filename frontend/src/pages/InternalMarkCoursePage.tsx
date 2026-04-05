@@ -2657,20 +2657,42 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     return computedRows.map((r: any) => {
       const studentEntry: any = (entries as any)?.[r.id] || {};
-      let cqiAdded = 0;
+      
+      let cqiAddedRaw = 0;
+      let baseTotalRaw = 0;
+      let hasBaseData = false;
+
       if (activeTab === 'after-cqi') {
         for (const col of displayCols) {
-          if (col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
+          if (col.isMerged && col.co != null) {
             const base = getDisplayValue(r.cells, col);
-            const coMax = Number(col.weight) || 0;
-            const input = studentEntry?.[`co${col.co}`];
-            if (base != null && Number.isFinite(base) && coMax > 0) {
-              const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
-              if (add > 0) cqiAdded = round2(cqiAdded + add);
+            if (base != null && Number.isFinite(base)) {
+              hasBaseData = true;
+              baseTotalRaw += base;
+              if (publishedCoSet.has(Number(col.co))) {
+                const coMax = Number(col.weight) || 0;
+                const input = studentEntry?.[`co${col.co}`];
+                if (coMax > 0) {
+                  const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
+                  if (add > 0) cqiAddedRaw += add;
+                }
+              }
             }
           }
         }
+      } else {
+        for (const col of displayCols) {
+          const base = getDisplayValue(r.cells, col);
+          if (base != null && Number.isFinite(base)) {
+            hasBaseData = true;
+            baseTotalRaw += base;
+          }
+        }
       }
+
+      const cqiAdded = round2(cqiAddedRaw);
+      const computedBaseTotal = hasBaseData ? round2(baseTotalRaw) : r.total;
+
       const colVals = displayCols.map((col) => {
         let val = getDisplayValue(r.cells, col);
         if (activeTab === 'after-cqi' && col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
@@ -2684,9 +2706,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         }
         return val;
       });
-      let effTotal = r.total != null && cqiAdded > 0 ? round2(r.total + cqiAdded) : r.total;
+      let effTotal = computedBaseTotal != null && cqiAdded > 0 ? round2(computedBaseTotal + cqiAdded) : computedBaseTotal;
       // Cap total at 58% if original total was below 58%.
-      const originalTotalPct = (r.total != null && maxTotal > 0) ? (r.total / maxTotal) * 100 : 0;
+      const originalTotalPct = (computedBaseTotal != null && maxTotal > 0) ? (computedBaseTotal / maxTotal) * 100 : 0;
       if (effTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
         const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
         effTotal = Math.min(effTotal, totalCap);

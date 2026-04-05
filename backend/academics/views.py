@@ -660,6 +660,16 @@ class IqacInternalMarksBulkExportView(APIView):
         except Exception:
             return None
 
+    def _resolve_semester_number_for_ta(self, ta):
+        sec_sem = getattr(getattr(getattr(ta, 'section', None), 'semester', None), 'number', None)
+        if sec_sem is not None:
+            return sec_sem
+        cur_sem = getattr(getattr(getattr(ta, 'curriculum_row', None), 'semester', None), 'number', None)
+        if cur_sem is not None:
+            return cur_sem
+        ele_sem = getattr(getattr(getattr(ta, 'elective_subject', None), 'semester', None), 'number', None)
+        return ele_sem
+
     def _resolve_course(self, ta):
         code = ''
         name = ''
@@ -797,18 +807,11 @@ class IqacInternalMarksBulkExportView(APIView):
             return Response({'detail': 'Only IQAC/OBE master can download this export.'}, status=403)
 
         from openpyxl import Workbook
-        from OBE.models import (
-            Cia1Mark,
-            Cia2Mark,
-            Ssa1Mark,
-            Ssa2Mark,
-            Review1Mark,
-            Review2Mark,
-            Formative1Mark,
-            Formative2Mark,
-            ModelPublishedSheet,
+        from OBE.models import FinalInternalMark
+        from OBE.services.final_internal_marks import (
+            _compute_weighted_final_total_theory_like,
+            recompute_final_internal_marks,
         )
-        from .models import Subject
 
         regulation = self._safe_text(request.query_params.get('regulation'))
         semester = self._safe_text(request.query_params.get('semester'))
@@ -816,17 +819,40 @@ class IqacInternalMarksBulkExportView(APIView):
         section_id = self._safe_text(request.query_params.get('section_id'))
         batch = self._safe_text(request.query_params.get('batch'))
         academic_year = self._safe_text(request.query_params.get('academic_year'))
+        ta_ids_raw = self._safe_text(request.query_params.get('ta_ids'))
 
-        qs = TeachingAssignment.objects.filter(is_active=True, section__isnull=False).select_related(
+        ta_ids = []
+        if ta_ids_raw:
+            for part in ta_ids_raw.split(','):
+                part = self._safe_text(part)
+                if not part:
+                    continue
+                try:
+                    ta_ids.append(int(part))
+                except Exception:
+                    return Response({'detail': f'Invalid ta_ids value: {part}'}, status=400)
+
+        ta_ids = sorted(set(ta_ids))
+
+        qs = TeachingAssignment.objects.filter(is_active=True).select_related(
             'subject',
             'curriculum_row',
+            'curriculum_row__semester',
+            'curriculum_row__batch',
+            'curriculum_row__department',
             'elective_subject',
+            'elective_subject__semester',
+            'elective_subject__batch',
+            'elective_subject__department',
             'section',
             'section__semester',
             'section__batch',
             'section__batch__regulation',
             'section__batch__course__department',
         )
+
+        if ta_ids:
+            qs = qs.filter(id__in=ta_ids)
 
         if section_id:
             try:
@@ -835,20 +861,36 @@ class IqacInternalMarksBulkExportView(APIView):
                 return Response({'detail': 'Invalid section_id'}, status=400)
         if semester:
             try:
-                qs = qs.filter(section__semester__number=int(semester))
+                sem_no = int(semester)
+                qs = qs.filter(
+                    Q(section__semester__number=sem_no)
+                    | Q(curriculum_row__semester__number=sem_no)
+                    | Q(elective_subject__semester__number=sem_no)
+                )
             except Exception:
                 return Response({'detail': 'Invalid semester'}, status=400)
         if department_id:
             try:
-                qs = qs.filter(section__batch__course__department_id=int(department_id))
+                dept_no = int(department_id)
+                qs = qs.filter(
+                    Q(section__batch__course__department_id=dept_no)
+                    | Q(curriculum_row__department_id=dept_no)
+                    | Q(elective_subject__department_id=dept_no)
+                )
             except Exception:
                 return Response({'detail': 'Invalid department_id'}, status=400)
         if batch:
-            qs = qs.filter(section__batch__name__iexact=batch)
+            qs = qs.filter(
+                Q(section__batch__name__iexact=batch)
+                | Q(curriculum_row__batch__name__iexact=batch)
+                | Q(elective_subject__batch__name__iexact=batch)
+            )
         if regulation:
             qs = qs.filter(
                 Q(section__batch__regulation__name__iexact=regulation)
                 | Q(section__batch__regulation__code__iexact=regulation)
+                | Q(curriculum_row__regulation__iexact=regulation)
+                | Q(elective_subject__regulation__iexact=regulation)
             )
 
         tas = list(qs.order_by('section__batch__name', 'section__name', 'id'))
@@ -856,8 +898,7 @@ class IqacInternalMarksBulkExportView(APIView):
         if academic_year:
             filtered = []
             for ta in tas:
-                sem_no = getattr(getattr(ta, 'section', None), 'semester', None)
-                sem_num = getattr(sem_no, 'number', None)
+                sem_num = self._resolve_semester_number_for_ta(ta)
                 yr = self._study_year_from_semester(sem_num)
                 if yr and yr == academic_year:
                     filtered.append(ta)
@@ -892,67 +933,55 @@ class IqacInternalMarksBulkExportView(APIView):
                 code, course_name, sem_no, _dept_id, dept_name, reg_label, batch_name = key
 
                 subject = Subject.objects.filter(code__iexact=code).first()
-                if subject is None:
+                merged_students = {}
+                ta_ids_for_course = [int(t.id) for t in course_tas if getattr(t, 'id', None)]
+                if not ta_ids_for_course:
                     continue
 
-                merged_students = {}
+                fim_qs = (
+                    FinalInternalMark.objects.filter(teaching_assignment_id__in=ta_ids_for_course)
+                    .select_related('student__user', 'teaching_assignment__section', 'subject')
+                    .order_by('student_id', 'teaching_assignment_id')
+                )
 
-                for ta in course_tas:
-                    students = self._student_rows_for_ta(ta)
-                    if not students:
+                for fim in fim_qs:
+                    subj_code = self._safe_text(getattr(getattr(fim, 'subject', None), 'code', '')).upper()
+                    if subj_code and subj_code != code:
                         continue
 
-                    student_ids = [int(s['id']) for s in students]
-                    if not student_ids:
+                    sp = getattr(fim, 'student', None)
+                    if sp is None:
                         continue
 
-                    cia1 = self._assessment_map(Cia1Mark, 'mark', subject.id, student_ids, ta.id)
-                    cia2 = self._assessment_map(Cia2Mark, 'mark', subject.id, student_ids, ta.id)
-                    ssa1 = self._assessment_map(Ssa1Mark, 'mark', subject.id, student_ids, ta.id)
-                    ssa2 = self._assessment_map(Ssa2Mark, 'mark', subject.id, student_ids, ta.id)
-                    review1 = self._assessment_map(Review1Mark, 'mark', subject.id, student_ids, ta.id)
-                    review2 = self._assessment_map(Review2Mark, 'mark', subject.id, student_ids, ta.id)
-                    formative1 = self._assessment_map(Formative1Mark, 'total', subject.id, student_ids, ta.id)
-                    formative2 = self._assessment_map(Formative2Mark, 'total', subject.id, student_ids, ta.id)
+                    sid = int(getattr(sp, 'id', 0) or 0)
+                    if sid <= 0:
+                        continue
 
-                    model_map = {}
-                    model_qs = ModelPublishedSheet.objects.filter(subject_id=subject.id)
-                    model_qs = model_qs.filter(Q(teaching_assignment_id=ta.id) | Q(teaching_assignment__isnull=True)).order_by('-updated_at')
-                    model_row = model_qs.first()
-                    if model_row is not None:
-                        data = getattr(model_row, 'data', None)
-                        for sid in student_ids:
-                            model_map[sid] = self._extract_model_total_for_student(data, sid)
+                    user = getattr(sp, 'user', None)
+                    name = ' '.join([
+                        self._safe_text(getattr(user, 'first_name', '')),
+                        self._safe_text(getattr(user, 'last_name', '')),
+                    ]).strip() if user else ''
+                    if not name:
+                        name = self._safe_text(getattr(user, 'username', '')) if user else ''
 
-                    section_name = self._safe_text(getattr(getattr(ta, 'section', None), 'name', None) or 'N/A')
+                    ta_obj = getattr(fim, 'teaching_assignment', None)
+                    section_name = self._safe_text(getattr(getattr(ta_obj, 'section', None), 'name', None) or '-')
+                    total = self._safe_float(getattr(fim, 'final_mark', None))
 
-                    for s in students:
-                        sid = int(s.get('id'))
-                        parts = [
-                            formative1.get(sid),
-                            formative2.get(sid),
-                            ssa1.get(sid),
-                            ssa2.get(sid),
-                            review1.get(sid),
-                            review2.get(sid),
-                            cia1.get(sid),
-                            cia2.get(sid),
-                            model_map.get(sid),
-                        ]
-                        parts = [p for p in parts if p is not None]
-                        total = round(sum(parts), 2) if parts else None
-
-                        prev = merged_students.get(sid)
-                        if prev is None:
-                            merged_students[sid] = {
-                                'reg_no': self._safe_text(s.get('reg_no')),
-                                'name': self._safe_text(s.get('name')),
-                                'section': section_name,
-                                'total': total,
-                            }
-                        else:
-                            if prev.get('total') is None and total is not None:
-                                prev['total'] = total
+                    prev = merged_students.get(sid)
+                    if prev is None:
+                        merged_students[sid] = {
+                            'reg_no': self._safe_text(getattr(sp, 'reg_no', '')),
+                            'name': name,
+                            'section': section_name,
+                            'total': total,
+                        }
+                    else:
+                        if prev.get('total') is None and total is not None:
+                            prev['total'] = total
+                        if self._safe_text(prev.get('section')) in {'', '-'} and section_name not in {'', '-'}:
+                            prev['section'] = section_name
 
                 if not merged_students:
                     continue
@@ -970,7 +999,7 @@ class IqacInternalMarksBulkExportView(APIView):
                         self._safe_text(row.get('reg_no')),
                         self._safe_text(row.get('name')),
                         self._safe_text(row.get('section')),
-                        row.get('total'),
+                        row.get('total') if row.get('total') is not None else '-',
                     ])
 
                 ws.auto_filter.ref = f"A1:E{ws.max_row}"
@@ -1000,6 +1029,230 @@ class IqacInternalMarksBulkExportView(APIView):
         zip_buffer.seek(0)
         response = HttpResponse(zip_buffer.read(), content_type='application/zip')
         response['Content-Disposition'] = 'attachment; filename="internal_marks_export.zip"'
+        return response
+
+
+class IqacInternalMarksCourseExportView(APIView):
+    """Download one course internal marks sheet for a teaching assignment.
+
+    Query params:
+      ta_id: int (required)
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    @staticmethod
+    def _safe_text(value):
+        return str(value or '').strip()
+
+    @staticmethod
+    def _safe_float(value):
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_filename(value: str) -> str:
+        allowed = []
+        for ch in str(value or ''):
+            if ch.isalnum() or ch in ('_', '-', '.', ' '):
+                allowed.append(ch)
+            else:
+                allowed.append('_')
+        out = ''.join(allowed).strip()
+        return out or 'internal_marks'
+
+    def _resolve_course(self, ta):
+        code = ''
+        name = ''
+        subj = getattr(ta, 'subject', None)
+        if subj is not None:
+            code = self._safe_text(getattr(subj, 'code', ''))
+            name = self._safe_text(getattr(subj, 'name', ''))
+        if not code and getattr(ta, 'curriculum_row', None) is not None:
+            row = ta.curriculum_row
+            code = self._safe_text(getattr(row, 'course_code', ''))
+            name = self._safe_text(getattr(row, 'course_name', ''))
+        if not code and getattr(ta, 'elective_subject', None) is not None:
+            es = ta.elective_subject
+            code = self._safe_text(getattr(es, 'course_code', ''))
+            name = self._safe_text(getattr(es, 'course_name', ''))
+        code = code.upper()
+        return code, (name or code)
+
+    def get(self, request):
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'Only IQAC/OBE master can download this export.'}, status=403)
+
+        ta_id_raw = self._safe_text(request.query_params.get('ta_id'))
+        if not ta_id_raw:
+            return Response({'detail': 'ta_id is required.'}, status=400)
+        try:
+            ta_id = int(ta_id_raw)
+        except Exception:
+            return Response({'detail': 'Invalid ta_id.'}, status=400)
+
+        ta = (
+            TeachingAssignment.objects.filter(id=ta_id, is_active=True)
+            .select_related('subject', 'curriculum_row', 'elective_subject')
+            .first()
+        )
+        if ta is None:
+            return Response({'detail': 'Teaching assignment not found.'}, status=404)
+
+        from openpyxl import Workbook
+        from OBE.models import FinalInternalMark
+        from OBE.services.final_internal_marks import (
+            _compute_weighted_final_total_theory_like,
+            recompute_final_internal_marks,
+        )
+
+        course_code, course_name = self._resolve_course(ta)
+        if not course_code:
+            return Response({'detail': 'Unable to resolve course code for this assignment.'}, status=400)
+
+        sync_result = {}
+        try:
+            sync_result = recompute_final_internal_marks(
+                actor_user_id=getattr(request.user, 'id', None),
+                filters={'teaching_assignment_id': ta_id},
+            ) or {}
+        except Exception:
+            sync_result = {'error': 'recompute_failed'}
+
+        fim_qs = (
+            FinalInternalMark.objects.filter(teaching_assignment_id=ta_id)
+            .select_related('student__user', 'subject')
+            .order_by('student_id', 'id')
+        )
+
+        student_rows = {}
+        for fim in fim_qs:
+            subj_code = self._safe_text(getattr(getattr(fim, 'subject', None), 'code', '')).upper()
+            if subj_code and subj_code != course_code:
+                continue
+
+            sp = getattr(fim, 'student', None)
+            if sp is None:
+                continue
+            sid = int(getattr(sp, 'id', 0) or 0)
+            if sid <= 0:
+                continue
+
+            user = getattr(sp, 'user', None)
+            student_name = ' '.join([
+                self._safe_text(getattr(user, 'first_name', '')),
+                self._safe_text(getattr(user, 'last_name', '')),
+            ]).strip() if user else ''
+            if not student_name:
+                student_name = self._safe_text(getattr(user, 'username', '')) if user else ''
+
+            live = _compute_weighted_final_total_theory_like(
+                ta=ta,
+                subject=getattr(fim, 'subject', None),
+                student={'id': sid, 'reg_no': self._safe_text(getattr(sp, 'reg_no', ''))},
+                ta_id=ta_id,
+                return_details=True,
+            )
+
+            co_vals = {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None}
+            final_mark = None
+            total_100 = None
+            if isinstance(live, dict):
+                final_mark = self._safe_float(live.get('total_40'))
+                total_100 = self._safe_float(live.get('total_100'))
+                co_payload = live.get('co_values_40') if isinstance(live.get('co_values_40'), dict) else {}
+                co_vals = {
+                    'co1': self._safe_float(co_payload.get('co1')),
+                    'co2': self._safe_float(co_payload.get('co2')),
+                    'co3': self._safe_float(co_payload.get('co3')),
+                    'co4': self._safe_float(co_payload.get('co4')),
+                    'co5': self._safe_float(co_payload.get('co5')),
+                }
+
+            if final_mark is None:
+                final_mark = self._safe_float(getattr(fim, 'final_mark', None))
+            if total_100 is None and final_mark is not None:
+                total_100 = round((float(final_mark) / 40.0) * 100.0, 2)
+
+            prev = student_rows.get(sid)
+            if prev is None:
+                student_rows[sid] = {
+                    'name': student_name,
+                    'reg_no': self._safe_text(getattr(sp, 'reg_no', '')),
+                    'co1': co_vals['co1'],
+                    'co2': co_vals['co2'],
+                    'co3': co_vals['co3'],
+                    'co4': co_vals['co4'],
+                    'co5': co_vals['co5'],
+                    'fim': final_mark,
+                    'total_100': total_100,
+                }
+                continue
+
+            if prev.get('fim') is None and final_mark is not None:
+                prev['fim'] = final_mark
+            if prev.get('total_100') is None and total_100 is not None:
+                prev['total_100'] = total_100
+            for key in ('co1', 'co2', 'co3', 'co4', 'co5'):
+                if prev.get(key) is None and co_vals.get(key) is not None:
+                    prev[key] = co_vals.get(key)
+            if not self._safe_text(prev.get('name')) and student_name:
+                prev['name'] = student_name
+            if not self._safe_text(prev.get('reg_no')):
+                prev['reg_no'] = self._safe_text(getattr(sp, 'reg_no', ''))
+
+        rows = sorted(student_rows.values(), key=lambda r: (self._safe_text(r.get('reg_no')), self._safe_text(r.get('name'))))
+        if not rows:
+            return Response({'detail': 'No internal marks found for this teaching assignment.'}, status=404)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'FIM'
+        ws.append(['S.no', "Student's name", 'Register number', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5', '40', '100'])
+
+        for idx, row in enumerate(rows, start=1):
+            ws.append([
+                idx,
+                self._safe_text(row.get('name')),
+                self._safe_text(row.get('reg_no')),
+                row.get('co1') if row.get('co1') is not None else '-',
+                row.get('co2') if row.get('co2') is not None else '-',
+                row.get('co3') if row.get('co3') is not None else '-',
+                row.get('co4') if row.get('co4') is not None else '-',
+                row.get('co5') if row.get('co5') is not None else '-',
+                row.get('fim') if row.get('fim') is not None else '-',
+                row.get('total_100') if row.get('total_100') is not None else '-',
+            ])
+
+        ws.auto_filter.ref = f"A1:J{ws.max_row}"
+        ws.freeze_panes = 'A2'
+
+        meta_ws = wb.create_sheet('SYNC_STATUS')
+        meta_ws.append(['Key', 'Value'])
+        meta_ws.append(['Course code', course_code])
+        meta_ws.append(['Course name', course_name])
+        meta_ws.append(['Teaching assignment ID', ta_id])
+        meta_ws.append(['Exported at', timezone.now().strftime('%Y-%m-%d %H:%M:%S')])
+        meta_ws.append(['Sync processed teaching assignments', sync_result.get('processed_teaching_assignments')])
+        meta_ws.append(['Sync upserted rows', sync_result.get('upserted_rows')])
+        meta_ws.append(['Sync deleted rows', sync_result.get('deleted_rows')])
+        if sync_result.get('error'):
+            meta_ws.append(['Sync warning', sync_result.get('error')])
+
+        filename = f"{self._safe_filename(course_code)} {self._safe_filename(course_name)}.xlsx"
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
+
+        response = HttpResponse(
+            out.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
 
 

@@ -44,6 +44,7 @@ from .views import (
     StaffDepartmentRoleRemoveView,
     BatchListView,
     IqacInternalMarksBulkExportView,
+    IqacInternalMarksCourseExportView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -109,6 +110,7 @@ urlpatterns = [
     # IQAC / OBE Master helpers
     path('iqac/course-teaching/<str:course_code>/', IQACCourseTeachingMapView.as_view()),
     path('iqac/internal-marks/export/', IqacInternalMarksBulkExportView.as_view()),
+    path('iqac/internal-marks/course-export/', IqacInternalMarksCourseExportView.as_view()),
 
     # SPECIAL course helpers
     path('special-courses/<str:course_code>/enabled_assessments/', SpecialCourseEnabledAssessmentsView.as_view()),

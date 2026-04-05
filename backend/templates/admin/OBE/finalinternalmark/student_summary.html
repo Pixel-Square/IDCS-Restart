@@ -32,7 +32,7 @@
         <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.subject.code|default:"-" }}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.subject.name|default:"-" }}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.teaching_assignment.section.name|default:"-" }}</td>
-        <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.final_mark }}</td>
+        <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.final_mark|default_if_none:"-" }}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.max_mark }}</td>
         <td style="padding: 8px; border-bottom: 1px solid #eee;">{{ row.computed_at }}</td>
       </tr>
