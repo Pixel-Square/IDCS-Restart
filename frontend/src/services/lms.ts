@@ -7,6 +7,8 @@ const LMS_BASE = `${API_BASE}/api/lms`
 export type MaterialRow = {
   id: number
   title: string
+  co_title?: string
+  sub_topic?: string
   description?: string
   material_type: 'FILE' | 'LINK'
   file_size_bytes?: number
@@ -18,6 +20,8 @@ export type MaterialRow = {
   course: number
   course_name?: string
   department_code?: string
+  subject_code?: string
+  subject_name?: string
   teaching_assignment?: number | null
   created_at: string
   updated_at: string
@@ -37,6 +41,20 @@ export type UploadOption = {
   course_name: string
   subject_code?: string | null
   subject_name?: string | null
+}
+
+export type CoOption = {
+  value: string
+  label: string
+  unit_names?: string[]
+}
+
+export type UploadMetadata = {
+  teaching_assignment_id: number
+  subject_code?: string | null
+  subject_name?: string | null
+  co_options: CoOption[]
+  sub_topics_by_co: Record<string, string[]>
 }
 
 export type DownloadAuditRow = {
@@ -105,6 +123,22 @@ export async function getIqacMaterials(): Promise<CourseWiseMaterials[]> {
 export async function getUploadOptions(): Promise<UploadOption[]> {
   const res = await fetchWithAuth(`${LMS_BASE}/materials/my/upload-options/`)
   return parseResults<UploadOption>(res)
+}
+
+export async function getUploadMetadata(teachingAssignmentId: number): Promise<UploadMetadata> {
+  const res = await fetchWithAuth(`${LMS_BASE}/materials/my/upload-metadata/?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}`)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to load CDAP upload metadata')
+  }
+  const data = await res.json()
+  return {
+    teaching_assignment_id: Number(data?.teaching_assignment_id || teachingAssignmentId),
+    subject_code: data?.subject_code || null,
+    subject_name: data?.subject_name || null,
+    co_options: Array.isArray(data?.co_options) ? data.co_options : [],
+    sub_topics_by_co: typeof data?.sub_topics_by_co === 'object' && data?.sub_topics_by_co ? data.sub_topics_by_co : {},
+  }
 }
 
 export async function createMaterial(form: FormData): Promise<MaterialRow> {

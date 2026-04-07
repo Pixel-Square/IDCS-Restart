@@ -11,6 +11,8 @@ class StudyMaterialSerializer(serializers.ModelSerializer):
     uploaded_by_staff_id = serializers.SerializerMethodField()
     course_name = serializers.CharField(source='course.name', read_only=True)
     department_code = serializers.CharField(source='course.department.code', read_only=True)
+    subject_code = serializers.SerializerMethodField()
+    subject_name = serializers.SerializerMethodField()
     download_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -23,10 +25,14 @@ class StudyMaterialSerializer(serializers.ModelSerializer):
             'course',
             'course_name',
             'department_code',
+            'subject_code',
+            'subject_name',
             'teaching_assignment',
             'curriculum_row',
             'elective_subject',
             'title',
+            'co_title',
+            'sub_topic',
             'description',
             'material_type',
             'file',
@@ -62,6 +68,44 @@ class StudyMaterialSerializer(serializers.ModelSerializer):
         except Exception:
             return 0
 
+    def get_subject_code(self, obj):
+        try:
+            if getattr(obj, 'elective_subject', None) and getattr(obj.elective_subject, 'course_code', None):
+                return str(obj.elective_subject.course_code).strip()
+            if getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'course_code', None):
+                return str(obj.curriculum_row.course_code).strip()
+
+            ta = getattr(obj, 'teaching_assignment', None)
+            if ta is not None:
+                if getattr(ta, 'elective_subject', None) and getattr(ta.elective_subject, 'course_code', None):
+                    return str(ta.elective_subject.course_code).strip()
+                if getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'course_code', None):
+                    return str(ta.curriculum_row.course_code).strip()
+                if getattr(ta, 'subject', None) and getattr(ta.subject, 'code', None):
+                    return str(ta.subject.code).strip()
+        except Exception:
+            pass
+        return ''
+
+    def get_subject_name(self, obj):
+        try:
+            if getattr(obj, 'elective_subject', None) and getattr(obj.elective_subject, 'course_name', None):
+                return str(obj.elective_subject.course_name).strip()
+            if getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'course_name', None):
+                return str(obj.curriculum_row.course_name).strip()
+
+            ta = getattr(obj, 'teaching_assignment', None)
+            if ta is not None:
+                if getattr(ta, 'elective_subject', None) and getattr(ta.elective_subject, 'course_name', None):
+                    return str(ta.elective_subject.course_name).strip()
+                if getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'course_name', None):
+                    return str(ta.curriculum_row.course_name).strip()
+                if getattr(ta, 'subject', None) and getattr(ta.subject, 'name', None):
+                    return str(ta.subject.name).strip()
+        except Exception:
+            pass
+        return ''
+
 
 class StudyMaterialCreateSerializer(serializers.ModelSerializer):
     class Meta:
@@ -70,6 +114,8 @@ class StudyMaterialCreateSerializer(serializers.ModelSerializer):
             'course',
             'teaching_assignment',
             'title',
+            'co_title',
+            'sub_topic',
             'description',
             'material_type',
             'file',
@@ -97,6 +143,9 @@ class StudyMaterialCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'file': 'File is required for file material.'})
         if material_type == StudyMaterial.TYPE_LINK and not external_url:
             raise serializers.ValidationError({'external_url': 'URL is required for link material.'})
+
+        if attrs.get('sub_topic') in (None, ''):
+            attrs['sub_topic'] = 'ALL'
 
         course = attrs.get('course')
         if ta.section_id and getattr(ta.section.batch, 'course_id', None):
@@ -145,6 +194,9 @@ class StudyMaterialCreateSerializer(serializers.ModelSerializer):
                 validated_data['title'] = str(validated_data['file'].name)
             elif validated_data.get('material_type') == StudyMaterial.TYPE_LINK:
                 validated_data['title'] = str(validated_data.get('external_url') or '').strip()[:255]
+
+        if not validated_data.get('co_title'):
+            validated_data['co_title'] = str(validated_data.get('title') or '').strip()[:255]
 
         return super().create(validated_data)
 

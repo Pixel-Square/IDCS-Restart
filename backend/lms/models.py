@@ -88,6 +88,8 @@ class StudyMaterial(models.Model):
         related_name='study_materials',
     )
     title = models.CharField(max_length=255)
+    co_title = models.CharField(max_length=255, blank=True, default='')
+    sub_topic = models.CharField(max_length=255, blank=True, default='ALL')
     description = models.TextField(blank=True)
     material_type = models.CharField(max_length=8, choices=TYPE_CHOICES)
     file = models.FileField(upload_to=_material_upload_path, null=True, blank=True)

@@ -1,6 +1,7 @@
 from collections import OrderedDict
 import os
 import mimetypes
+import re
 from urllib.parse import quote
 
 from django.http import FileResponse
@@ -375,6 +376,174 @@ class StaffUploadOptionsView(APIView):
         return Response({'results': rows})
 
 
+class StaffUploadMetadataView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        staff_profile = get_user_staff_profile(request.user)
+        if staff_profile is None:
+            raise PermissionDenied('Staff access only.')
+
+        ta_id = request.query_params.get('teaching_assignment_id')
+        if not ta_id:
+            return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ta_id_int = int(ta_id)
+        except Exception:
+            return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from academics.models import TeachingAssignment
+
+        ta = TeachingAssignment.objects.filter(pk=ta_id_int, staff=staff_profile).select_related(
+            'subject',
+            'curriculum_row',
+            'elective_subject',
+            'academic_year',
+        ).first()
+        if ta is None:
+            return Response({'detail': 'Teaching assignment not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        subject_code = None
+        subject_name = None
+        if ta.elective_subject:
+            subject_code = str(getattr(ta.elective_subject, 'course_code', '') or '').strip()
+            subject_name = str(getattr(ta.elective_subject, 'course_name', '') or '').strip()
+        elif ta.curriculum_row:
+            subject_code = str(getattr(ta.curriculum_row, 'course_code', '') or '').strip()
+            subject_name = str(getattr(ta.curriculum_row, 'course_name', '') or '').strip()
+        elif ta.subject:
+            subject_code = str(getattr(ta.subject, 'code', '') or '').strip()
+            subject_name = str(getattr(ta.subject, 'name', '') or '').strip()
+
+        # Return empty metadata if no subject code is mapped.
+        if not subject_code:
+            return Response(
+                {
+                    'teaching_assignment_id': ta.id,
+                    'subject_code': None,
+                    'subject_name': None,
+                    'co_options': [],
+                    'sub_topics_by_co': {},
+                }
+            )
+
+        try:
+            from OBE.models import CdapRevision
+        except Exception:
+            CdapRevision = None
+
+        rev = None
+        if CdapRevision is not None:
+            rev = CdapRevision.objects.filter(subject_id=subject_code).first()
+
+        rows = []
+        if rev is not None and isinstance(rev.rows, list):
+            rows = rev.rows
+
+        # Build unit metadata so blank row-level co values inherit unit's CO.
+        unit_meta = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            unit_index = row.get('unit_index')
+            if unit_index in (None, ''):
+                continue
+            try:
+                unit_key = int(unit_index)
+            except Exception:
+                continue
+
+            unit_name = str(row.get('unit_name') or '').strip()
+            co_raw = str(row.get('co') or '').strip().upper()
+            existing = unit_meta.get(unit_key) or {'unit_name': '', 'co': ''}
+            if unit_name and not existing.get('unit_name'):
+                existing['unit_name'] = unit_name
+            if co_raw and not existing.get('co'):
+                existing['co'] = co_raw
+            unit_meta[unit_key] = existing
+
+        def _normalize_co(value):
+            txt = str(value or '').strip().upper()
+            if not txt:
+                return ''
+            m = re.search(r'CO\s*[-_]?\s*(\d+)', txt)
+            if m:
+                return f"CO{m.group(1)}"
+            # Ignore non-CO labels like "Sub Topics - (...)" in CDAP rows.
+            return ''
+
+        co_info = {}
+        sub_topics_by_co = {}
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            unit_index = row.get('unit_index')
+            try:
+                unit_key = int(unit_index) if unit_index not in (None, '') else None
+            except Exception:
+                unit_key = None
+
+            meta = unit_meta.get(unit_key, {}) if unit_key is not None else {}
+            fallback_unit_co = f"CO{unit_key}" if unit_key else ''
+            raw_row_co = row.get('co') or meta.get('co')
+            row_co = _normalize_co(raw_row_co)
+            if not row_co and fallback_unit_co:
+                row_co = fallback_unit_co
+            if not row_co:
+                continue
+
+            unit_name = str(meta.get('unit_name') or row.get('unit_name') or '').strip()
+            if row_co not in co_info:
+                co_info[row_co] = {
+                    'co': row_co,
+                    'unit_names': [],
+                }
+            if unit_name and unit_name not in co_info[row_co]['unit_names']:
+                co_info[row_co]['unit_names'].append(unit_name)
+
+            # Prefer sub_topics column; fallback to topics if sub_topics is blank.
+            topic_txt = str(row.get('sub_topics') or '').strip()
+            if not topic_txt:
+                topic_txt = str(row.get('topics') or '').strip()
+            if not topic_txt:
+                continue
+
+            topic_bucket = sub_topics_by_co.setdefault(row_co, [])
+            if topic_txt not in topic_bucket:
+                topic_bucket.append(topic_txt)
+
+        co_options = []
+        for co_key in sorted(co_info.keys(), key=lambda x: int(re.sub(r'\D', '', x) or '999')):
+            unit_names = co_info[co_key]['unit_names']
+            unit_label = ' / '.join(unit_names) if unit_names else 'Unit'
+            co_options.append(
+                {
+                    'value': co_key,
+                    'label': f"{co_key} - ({unit_label})",
+                    'unit_names': unit_names,
+                }
+            )
+
+        # If CDAP rows are unavailable, provide a best-effort single option so upload remains usable.
+        if not co_options:
+            fallback_label = subject_name or subject_code
+            co_options = [{'value': 'CO', 'label': f"CO - ({fallback_label})", 'unit_names': []}]
+            sub_topics_by_co = {'CO': []}
+
+        return Response(
+            {
+                'teaching_assignment_id': ta.id,
+                'subject_code': subject_code,
+                'subject_name': subject_name,
+                'co_options': co_options,
+                'sub_topics_by_co': sub_topics_by_co,
+            }
+        )
+
+
 class StaffMaterialDetailView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
@@ -441,6 +610,11 @@ class StudentCourseWiseMaterialsView(APIView):
             qs = StudyMaterial.objects.filter(course_id__in=enrolled_ids).select_related(
                 'uploaded_by__user',
                 'course__department',
+                'curriculum_row',
+                'elective_subject',
+                'teaching_assignment__subject',
+                'teaching_assignment__curriculum_row',
+                'teaching_assignment__elective_subject',
             )
 
         grouped = _group_materials_by_course(qs.order_by('course__name', '-created_at'), serializer_context={'request': request})
@@ -458,7 +632,16 @@ class HODCourseWiseMaterialsView(APIView):
         if not dept_ids and not getattr(request.user, 'is_superuser', False):
             raise PermissionDenied('No managed departments found.')
 
-        qs = StudyMaterial.objects.select_related('uploaded_by__department', 'uploaded_by__user', 'course__department')
+        qs = StudyMaterial.objects.select_related(
+            'uploaded_by__department',
+            'uploaded_by__user',
+            'course__department',
+            'curriculum_row',
+            'elective_subject',
+            'teaching_assignment__subject',
+            'teaching_assignment__curriculum_row',
+            'teaching_assignment__elective_subject',
+        )
         if not getattr(request.user, 'is_superuser', False):
             qs = qs.filter(uploaded_by__department_id__in=dept_ids)
 
@@ -473,7 +656,16 @@ class IQACCourseWiseMaterialsView(APIView):
         if not is_iqac_user(request.user):
             raise PermissionDenied('IQAC access only.')
 
-        qs = StudyMaterial.objects.select_related('uploaded_by__department', 'uploaded_by__user', 'course__department')
+        qs = StudyMaterial.objects.select_related(
+            'uploaded_by__department',
+            'uploaded_by__user',
+            'course__department',
+            'curriculum_row',
+            'elective_subject',
+            'teaching_assignment__subject',
+            'teaching_assignment__curriculum_row',
+            'teaching_assignment__elective_subject',
+        )
         course_id = request.query_params.get('course_id')
         if course_id:
             try:

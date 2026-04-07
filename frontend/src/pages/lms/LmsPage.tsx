@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  CoOption,
   CourseWiseMaterials,
   DownloadAuditRow,
   MaterialRow,
+  UploadMetadata,
   UploadOption,
   createMaterial,
   deleteMaterial,
@@ -15,6 +17,7 @@ import {
   getStaffMaterials,
   getStaffQuotas,
   getStudentMaterials,
+  getUploadMetadata,
   getUploadOptions,
   updateMaterial,
   updateStaffQuota,
@@ -54,7 +57,12 @@ export default function LmsPage({ user }: Props) {
   const [error, setError] = useState('')
 
   const [uploadOptions, setUploadOptions] = useState<UploadOption[]>([])
+  const [uploadMeta, setUploadMeta] = useState<UploadMetadata | null>(null)
+  const [coOptions, setCoOptions] = useState<CoOption[]>([])
+  const [subTopicsByCo, setSubTopicsByCo] = useState<Record<string, string[]>>({})
   const [selectedTa, setSelectedTa] = useState<number | ''>('')
+  const [selectedCo, setSelectedCo] = useState('')
+  const [selectedSubTopic, setSelectedSubTopic] = useState('ALL')
   const [materialType, setMaterialType] = useState<'FILE' | 'LINK'>('FILE')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -66,6 +74,10 @@ export default function LmsPage({ user }: Props) {
   const [quotaRows, setQuotaRows] = useState<any[]>([])
   const [quotaEdit, setQuotaEdit] = useState<Record<number, string>>({})
   const [myQuota, setMyQuota] = useState<any | null>(null)
+  const [bulkQuotaMb, setBulkQuotaMb] = useState('')
+  const [bulkQuotaAction, setBulkQuotaAction] = useState<'set' | 'increase' | 'decrease'>('set')
+  const [bulkUpdating, setBulkUpdating] = useState(false)
+  const [expandedCourses, setExpandedCourses] = useState<Record<number, boolean>>({})
 
   const mode = useMemo(() => {
     if (canIqacPage) return 'IQAC'
@@ -134,7 +146,40 @@ export default function LmsPage({ user }: Props) {
     loadExtras()
   }, [mode])
 
+  useEffect(() => {
+    if (!selectedTa) {
+      setUploadMeta(null)
+      setCoOptions([])
+      setSubTopicsByCo({})
+      setSelectedCo('')
+      setSelectedSubTopic('ALL')
+      return
+    }
+
+    getUploadMetadata(Number(selectedTa))
+      .then((meta) => {
+        setUploadMeta(meta)
+        setCoOptions(meta.co_options || [])
+        setSubTopicsByCo(meta.sub_topics_by_co || {})
+        const firstCo = (meta.co_options || [])[0]?.value || ''
+        setSelectedCo(firstCo)
+        setSelectedSubTopic('ALL')
+      })
+      .catch((e: any) => {
+        setUploadMeta(null)
+        setCoOptions([])
+        setSubTopicsByCo({})
+        setSelectedCo('')
+        setSelectedSubTopic('ALL')
+        setError(e?.message || 'Failed to load CDAP metadata for selected assignment')
+      })
+  }, [selectedTa])
+
   const flatMaterials = useMemo(() => groups.flatMap((g) => g.materials || []), [groups])
+  const subTopicOptions = useMemo(() => {
+    const vals = selectedCo ? (subTopicsByCo[selectedCo] || []) : []
+    return ['ALL', ...vals]
+  }, [selectedCo, subTopicsByCo])
 
   async function onUpload(e: React.FormEvent) {
     e.preventDefault()
@@ -145,17 +190,26 @@ export default function LmsPage({ user }: Props) {
       const option = uploadOptions.find((x) => x.teaching_assignment_id === Number(selectedTa))
       if (!option) throw new Error('Please choose a valid teaching assignment')
 
+      const selectedCoOption = coOptions.find((x) => x.value === selectedCo)
+      const computedTitle = selectedCoOption?.label || title
+      if (!computedTitle || !computedTitle.trim()) {
+        throw new Error('Please select a CO title before uploading')
+      }
+
       const form = new FormData()
       form.append('teaching_assignment', String(option.teaching_assignment_id))
       form.append('course', String(option.course_id))
       form.append('material_type', materialType)
-      form.append('title', title)
+      form.append('title', computedTitle)
+      form.append('co_title', selectedCoOption?.label || computedTitle)
+      form.append('sub_topic', selectedSubTopic || 'ALL')
       form.append('description', description)
       if (materialType === 'FILE' && file) form.append('file', file)
       if (materialType === 'LINK') form.append('external_url', externalUrl)
 
       await createMaterial(form)
       setTitle('')
+      setSelectedSubTopic('ALL')
       setDescription('')
       setFile(null)
       setExternalUrl('')
@@ -227,9 +281,47 @@ export default function LmsPage({ user }: Props) {
     }
   }
 
+  async function onApplyBulkQuota() {
+    const mbVal = Number(bulkQuotaMb)
+    if (!Number.isFinite(mbVal) || mbVal < 0) {
+      setError('Bulk quota value must be a non-negative MB number')
+      return
+    }
+
+    const deltaBytes = Math.floor(mbVal) * 1024 * 1024
+    if (quotaRows.length === 0) return
+
+    setBulkUpdating(true)
+    setError('')
+    try {
+      const tasks = quotaRows.map((r) => {
+        const current = Number(r.quota_bytes || 0)
+        let next = current
+        if (bulkQuotaAction === 'set') next = deltaBytes
+        if (bulkQuotaAction === 'increase') next = current + deltaBytes
+        if (bulkQuotaAction === 'decrease') next = Math.max(0, current - deltaBytes)
+        return updateStaffQuota(Number(r.staff), Math.max(0, Math.floor(next)))
+      })
+      await Promise.all(tasks)
+      const rows = await getStaffQuotas()
+      setQuotaRows(rows)
+      const next: Record<number, string> = {}
+      rows.forEach((r) => {
+        next[r.staff] = String(r.quota_bytes)
+      })
+      setQuotaEdit(next)
+    } catch (err: any) {
+      setError(err?.message || 'Failed to apply bulk quota update')
+    } finally {
+      setBulkUpdating(false)
+    }
+  }
+
   if (mode === 'NONE') {
     return <div className="p-6">You do not have LMS page permission.</div>
   }
+
+  const isStudentExpandable = mode === 'STUDENT'
 
   return (
     <div className="p-6 space-y-6 bg-gradient-to-b from-slate-50 via-white to-cyan-50 min-h-[calc(100vh-6rem)]">
@@ -249,7 +341,7 @@ export default function LmsPage({ user }: Props) {
               <option value="">Select assignment</option>
               {uploadOptions.map((opt) => (
                 <option key={opt.teaching_assignment_id} value={opt.teaching_assignment_id}>
-                  {`Course: ${opt.course_name} | Subject: ${opt.subject_code || opt.subject_name || `TA#${opt.teaching_assignment_id}`}`}
+                  {`Course: ${opt.subject_name || opt.subject_code || opt.course_name} | Class: ${opt.course_name}`}
                 </option>
               ))}
             </select>
@@ -264,9 +356,24 @@ export default function LmsPage({ user }: Props) {
               </select>
             </div>
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Title</label>
-              <input className="w-full border border-slate-300 rounded-lg px-2 py-2" value={title} onChange={(e) => setTitle(e.target.value)} />
+              <label className="block text-sm text-gray-700 mb-1">Title (CO from CDAP)</label>
+              <select className="w-full border border-slate-300 rounded-lg px-2 py-2" value={selectedCo} onChange={(e) => { setSelectedCo(e.target.value); setSelectedSubTopic('ALL') }}>
+                <option value="">Select CO</option>
+                {coOptions.map((co) => (
+                  <option key={co.value} value={co.value}>{co.label}</option>
+                ))}
+              </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Sub Topic</label>
+            <select className="w-full border border-slate-300 rounded-lg px-2 py-2" value={selectedSubTopic} onChange={(e) => setSelectedSubTopic(e.target.value)}>
+              {subTopicOptions.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            {uploadMeta?.subject_code ? <div className="text-xs text-slate-500 mt-1">Course CDAP: {uploadMeta.subject_code} {uploadMeta.subject_name ? `- ${uploadMeta.subject_name}` : ''}</div> : null}
           </div>
 
           <div>
@@ -311,14 +418,34 @@ export default function LmsPage({ user }: Props) {
         <div className="space-y-4">
           {groups.map((g) => (
             <div key={g.course_id} className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-              <div className="font-semibold text-slate-800">{g.course_name} {g.department_code ? `(${g.department_code})` : ''}</div>
-              <div className="mt-2 space-y-2">
+              {(() => {
+                const firstMaterial = (g.materials || [])[0]
+                const subjectCode = String(firstMaterial?.subject_code || '').trim()
+                const subjectName = String(firstMaterial?.subject_name || '').trim()
+                const subjectLabel = subjectCode || subjectName
+                  ? `${subjectCode}${subjectCode && subjectName ? ' - ' : ''}${subjectName}`
+                  : `${g.course_name}${g.department_code ? ` (${g.department_code})` : ''}`
+                return isStudentExpandable ? (
+                  <button
+                    type="button"
+                    className="w-full text-left font-semibold text-slate-800 flex items-center justify-between"
+                    onClick={() => setExpandedCourses((prev) => ({ ...prev, [g.course_id]: !prev[g.course_id] }))}
+                  >
+                    <span>{subjectLabel}</span>
+                    <span className="text-xs text-slate-500">{expandedCourses[g.course_id] ? 'Hide' : 'Show'}</span>
+                  </button>
+                ) : (
+                  <div className="font-semibold text-slate-800">{subjectLabel}</div>
+                )
+              })()}
+              {(!isStudentExpandable || expandedCourses[g.course_id]) ? <div className="mt-2 space-y-2">
                 {(g.materials || []).map((m) => (
                   <div key={m.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-lg p-2 bg-white">
                     <div>
                       <div className="font-medium text-sm text-slate-800">{m.title}</div>
                       <div className="text-xs text-gray-600">
                         {m.material_type} {m.material_type === 'FILE' ? `- ${fmtBytes(Number(m.file_size_bytes || 0))}` : ''}
+                        {m.sub_topic ? ` | Sub Topic: ${m.sub_topic}` : ''}
                         {' | '}Downloads: {Number(m.download_count || 0)}
                         {' | '}By: {m.uploaded_by_name || '-'}
                       </div>
@@ -326,7 +453,7 @@ export default function LmsPage({ user }: Props) {
                     <div className="flex items-center gap-2">
                       <button className="px-3 py-1 rounded-md border border-cyan-300 text-cyan-700 hover:bg-cyan-50" onClick={() => onView(m)}>View</button>
                       <button className="px-3 py-1 rounded-md border border-slate-300 hover:bg-slate-50" onClick={() => onDownload(m)}>Download</button>
-                      {mode === 'STAFF' && canManageOwn ? (
+                      {(mode === 'STAFF' || mode === 'HOD') && canManageOwn ? (
                         <>
                           <button className="px-3 py-1 rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => onRename(m)}>Rename</button>
                           <button className="px-3 py-1 rounded-md border border-red-300 text-red-600 hover:bg-red-50" onClick={() => onDelete(m)}>Delete</button>
@@ -335,7 +462,7 @@ export default function LmsPage({ user }: Props) {
                     </div>
                   </div>
                 ))}
-              </div>
+              </div> : null}
             </div>
           ))}
         </div>
@@ -344,6 +471,38 @@ export default function LmsPage({ user }: Props) {
       {canManageQuota ? (
         <div className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm">
           <h2 className="font-medium mb-3">Staff Quota Management</h2>
+          <div className="mb-4 p-3 rounded-lg border border-indigo-100 bg-indigo-50/60">
+            <div className="text-sm font-medium text-indigo-900 mb-2">Bulk Update (All Listed Staff)</div>
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">Action</label>
+                <select
+                  className="border border-slate-300 rounded px-2 py-1.5"
+                  value={bulkQuotaAction}
+                  onChange={(e) => setBulkQuotaAction(e.target.value as 'set' | 'increase' | 'decrease')}
+                >
+                  <option value="set">Set To (MB)</option>
+                  <option value="increase">Increase By (MB)</option>
+                  <option value="decrease">Decrease By (MB)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-600 mb-1">Value (MB)</label>
+                <input
+                  className="border border-slate-300 rounded px-2 py-1.5 w-40"
+                  value={bulkQuotaMb}
+                  onChange={(e) => setBulkQuotaMb(e.target.value)}
+                />
+              </div>
+              <button
+                disabled={bulkUpdating || quotaRows.length === 0}
+                className="px-3 py-1.5 rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                onClick={onApplyBulkQuota}
+              >
+                {bulkUpdating ? 'Applying...' : 'Apply to All'}
+              </button>
+            </div>
+          </div>
           <div className="overflow-auto">
             <table className="min-w-full text-sm">
               <thead>
