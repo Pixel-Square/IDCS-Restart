@@ -54,6 +54,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   applications_admin: Layout,
   applications_inbox: ClipboardList,
   applications_home: Layout,
+  lms: BookOpen,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   idscan_gatescan: Shield,
@@ -366,6 +367,23 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Feedback page: require explicit feedback permission
   if (permsLower.includes('feedback.feedback_page')) {
     items.push({ key: 'feedback', label: 'Feedback', to: '/feedback' });
+  }
+
+  // LMS page visibility via lms.page.* permissions
+  if (
+    permsLower.includes('lms.page.student') ||
+    permsLower.includes('lms.page.staff') ||
+    permsLower.includes('lms.page.hod') ||
+    permsLower.includes('lms.page.ahod') ||
+    permsLower.includes('lms.page.iqac') ||
+    rolesUpper.includes('STUDENT') ||
+    rolesUpper.includes('STAFF') ||
+    rolesUpper.includes('FACULTY') ||
+    rolesUpper.includes('HOD') ||
+    rolesUpper.includes('AHOD') ||
+    rolesUpper.includes('IQAC')
+  ) {
+    items.push({ key: 'lms', label: 'LMS', to: '/lms' })
   }
 
   // Advisor pages: require ADVISOR role or explicit permission

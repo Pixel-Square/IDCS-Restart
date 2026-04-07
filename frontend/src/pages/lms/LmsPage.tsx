@@ -1,0 +1,422 @@
+import React, { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import {
+  CourseWiseMaterials,
+  DownloadAuditRow,
+  MaterialRow,
+  UploadOption,
+  createMaterial,
+  deleteMaterial,
+  downloadMaterial,
+  getMyQuota,
+  getDownloadAuditLogs,
+  getHodMaterials,
+  getIqacMaterials,
+  getStaffMaterials,
+  getStaffQuotas,
+  getStudentMaterials,
+  getUploadOptions,
+  updateMaterial,
+  updateStaffQuota,
+  viewMaterial,
+} from '../../services/lms'
+
+function fmtBytes(v: number): string {
+  const n = Number(v || 0)
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+type Props = {
+  user: any
+}
+
+export default function LmsPage({ user }: Props) {
+  const navigate = useNavigate()
+  const perms = useMemo(() => (Array.isArray(user?.permissions) ? user.permissions.map((p: string) => String(p || '').toLowerCase()) : []), [user])
+  const roles = useMemo(() => (Array.isArray(user?.roles) ? user.roles.map((r: string) => String(r || '').toUpperCase()) : []), [user])
+  const profileType = String(user?.profile_type || '').toUpperCase()
+  const isStaffProfile = profileType === 'STAFF'
+  const isStudentProfile = profileType === 'STUDENT'
+
+  const canStaffPage = isStaffProfile && (perms.includes('lms.page.staff') || roles.includes('STAFF') || roles.includes('FACULTY'))
+  const canStudentPage = isStudentProfile && (perms.includes('lms.page.student') || roles.includes('STUDENT'))
+  const canHodPage = isStaffProfile && (perms.includes('lms.page.hod') || perms.includes('lms.page.ahod') || roles.includes('HOD') || roles.includes('AHOD'))
+  const canIqacPage = isStaffProfile && (perms.includes('lms.page.iqac') || roles.includes('IQAC'))
+  const canManageOwn = isStaffProfile && (perms.includes('lms.materials.manage_own') || roles.includes('STAFF') || roles.includes('FACULTY') || roles.includes('HOD') || roles.includes('AHOD') || roles.includes('IQAC'))
+  const canViewAudit = perms.includes('lms.materials.view_all') || perms.includes('lms.materials.view_department') || roles.includes('IQAC') || roles.includes('HOD') || roles.includes('AHOD') || canManageOwn
+  const canManageQuota = perms.includes('lms.quota.manage') || roles.includes('IQAC')
+
+  const [groups, setGroups] = useState<CourseWiseMaterials[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const [uploadOptions, setUploadOptions] = useState<UploadOption[]>([])
+  const [selectedTa, setSelectedTa] = useState<number | ''>('')
+  const [materialType, setMaterialType] = useState<'FILE' | 'LINK'>('FILE')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [externalUrl, setExternalUrl] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const [auditRows, setAuditRows] = useState<DownloadAuditRow[]>([])
+  const [quotaRows, setQuotaRows] = useState<any[]>([])
+  const [quotaEdit, setQuotaEdit] = useState<Record<number, string>>({})
+  const [myQuota, setMyQuota] = useState<any | null>(null)
+
+  const mode = useMemo(() => {
+    if (canIqacPage) return 'IQAC'
+    if (canHodPage) return 'HOD'
+    if (canStaffPage) return 'STAFF'
+    if (canStudentPage) return 'STUDENT'
+    return 'NONE'
+  }, [canIqacPage, canHodPage, canStaffPage, canStudentPage])
+
+  async function loadMaterials() {
+    setLoading(true)
+    setError('')
+    try {
+      if (mode === 'IQAC') setGroups(await getIqacMaterials())
+      else if (mode === 'HOD') setGroups(await getHodMaterials())
+      else if (mode === 'STAFF') setGroups(await getStaffMaterials())
+      else if (mode === 'STUDENT') setGroups(await getStudentMaterials())
+      else setGroups([])
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load LMS materials')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadExtras() {
+    if (canManageOwn) {
+      try {
+        setUploadOptions(await getUploadOptions())
+      } catch (e: any) {
+        setUploadOptions([])
+        setError(e?.message || 'Failed to load teaching assignments for upload')
+      }
+      try {
+        setMyQuota(await getMyQuota())
+      } catch {
+        setMyQuota(null)
+      }
+    }
+
+    if (canViewAudit) {
+      try {
+        setAuditRows(await getDownloadAuditLogs())
+      } catch {
+        // Keep main page usable even if optional panels fail
+      }
+    }
+
+    if (canManageQuota) {
+      try {
+        const rows = await getStaffQuotas()
+        setQuotaRows(rows)
+        const next: Record<number, string> = {}
+        rows.forEach((r) => {
+          next[r.staff] = String(r.quota_bytes)
+        })
+        setQuotaEdit(next)
+      } catch {
+        // Keep main page usable even if optional panels fail
+      }
+    }
+  }
+
+  useEffect(() => {
+    loadMaterials()
+    loadExtras()
+  }, [mode])
+
+  const flatMaterials = useMemo(() => groups.flatMap((g) => g.materials || []), [groups])
+
+  async function onUpload(e: React.FormEvent) {
+    e.preventDefault()
+    if (!selectedTa) return
+    setSubmitting(true)
+    setError('')
+    try {
+      const option = uploadOptions.find((x) => x.teaching_assignment_id === Number(selectedTa))
+      if (!option) throw new Error('Please choose a valid teaching assignment')
+
+      const form = new FormData()
+      form.append('teaching_assignment', String(option.teaching_assignment_id))
+      form.append('course', String(option.course_id))
+      form.append('material_type', materialType)
+      form.append('title', title)
+      form.append('description', description)
+      if (materialType === 'FILE' && file) form.append('file', file)
+      if (materialType === 'LINK') form.append('external_url', externalUrl)
+
+      await createMaterial(form)
+      setTitle('')
+      setDescription('')
+      setFile(null)
+      setExternalUrl('')
+      await loadMaterials()
+    } catch (err: any) {
+      setError(err?.message || 'Upload failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function onDelete(m: MaterialRow) {
+    if (!window.confirm(`Delete material: ${m.title}?`)) return
+    try {
+      await deleteMaterial(m.id)
+      await loadMaterials()
+    } catch (err: any) {
+      setError(err?.message || 'Delete failed')
+    }
+  }
+
+  async function onRename(m: MaterialRow) {
+    const next = window.prompt('Enter new material title', m.title || '')
+    if (!next || next.trim() === '' || next.trim() === m.title) return
+    try {
+      await updateMaterial(m.id, { title: next.trim() })
+      await loadMaterials()
+    } catch (err: any) {
+      setError(err?.message || 'Rename failed')
+    }
+  }
+
+  async function onDownload(m: MaterialRow) {
+    try {
+      await downloadMaterial(m)
+      if (canViewAudit) setAuditRows(await getDownloadAuditLogs())
+      await loadMaterials()
+    } catch (err: any) {
+      setError(err?.message || 'Download failed')
+    }
+  }
+
+  async function onView(m: MaterialRow) {
+    try {
+      if (m.material_type === 'FILE') {
+        navigate(`/lms/preview/file/${m.id}`)
+        return
+      }
+      await viewMaterial(m)
+      if (canViewAudit) setAuditRows(await getDownloadAuditLogs())
+    } catch (err: any) {
+      setError(err?.message || 'View failed')
+    }
+  }
+
+  async function onUpdateQuota(staffId: number) {
+    const raw = quotaEdit[staffId]
+    const val = Number(raw)
+    if (!Number.isFinite(val) || val < 0) {
+      setError('Quota bytes must be a non-negative number')
+      return
+    }
+    try {
+      await updateStaffQuota(staffId, Math.floor(val))
+      const rows = await getStaffQuotas()
+      setQuotaRows(rows)
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update quota')
+    }
+  }
+
+  if (mode === 'NONE') {
+    return <div className="p-6">You do not have LMS page permission.</div>
+  }
+
+  return (
+    <div className="p-6 space-y-6 bg-gradient-to-b from-slate-50 via-white to-cyan-50 min-h-[calc(100vh-6rem)]">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-800">LMS - Study Materials</h1>
+        <p className="text-sm text-slate-600 mt-1">Mode: <span className="inline-flex px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-800 font-medium">{mode}</span></p>
+      </div>
+
+      {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">{error}</div> : null}
+
+      {canManageOwn ? (
+        <form className="rounded-2xl border border-cyan-200 bg-white/95 backdrop-blur p-5 space-y-3 shadow-sm" onSubmit={onUpload}>
+          <h2 className="font-semibold text-slate-800">Upload Material</h2>
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Teaching Assignment</label>
+            <select className="w-full border border-slate-300 rounded-lg px-2 py-2" value={selectedTa} onChange={(e) => setSelectedTa(e.target.value ? Number(e.target.value) : '')}>
+              <option value="">Select assignment</option>
+              {uploadOptions.map((opt) => (
+                <option key={opt.teaching_assignment_id} value={opt.teaching_assignment_id}>
+                  {`Course: ${opt.course_name} | Subject: ${opt.subject_code || opt.subject_name || `TA#${opt.teaching_assignment_id}`}`}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Type</label>
+              <select className="w-full border border-slate-300 rounded-lg px-2 py-2" value={materialType} onChange={(e) => setMaterialType(e.target.value as 'FILE' | 'LINK')}>
+                <option value="FILE">File</option>
+                <option value="LINK">Link</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Title</label>
+              <input className="w-full border border-slate-300 rounded-lg px-2 py-2" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-700 mb-1">Description</label>
+            <textarea className="w-full border border-slate-300 rounded-lg px-2 py-2" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+
+          {materialType === 'FILE' ? (
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">File</label>
+              <input type="file" onChange={(e) => setFile(e.target.files && e.target.files.length ? e.target.files[0] : null)} />
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">External URL</label>
+              <input className="w-full border border-slate-300 rounded-lg px-2 py-2" placeholder="https://..." value={externalUrl} onChange={(e) => setExternalUrl(e.target.value)} />
+            </div>
+          )}
+
+          <button disabled={submitting} className="rounded-lg bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 disabled:opacity-60 transition-colors">
+            {submitting ? 'Uploading...' : 'Upload'}
+          </button>
+        </form>
+      ) : null}
+
+      {canManageOwn && myQuota ? (
+        <div className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm">
+          <h2 className="font-medium mb-2">My LMS Space Allocation</h2>
+          <div className="text-sm text-gray-700">
+            <div>Total Quota: {fmtBytes(Number(myQuota.quota_bytes || 0))}</div>
+            <div>Used: {fmtBytes(Number(myQuota.used_bytes || 0))}</div>
+            <div>Remaining: {fmtBytes(Number(myQuota.remaining_bytes || 0))}</div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="font-medium mb-3">Course-wise Materials</h2>
+        {loading ? <div className="text-sm text-gray-500">Loading...</div> : null}
+        {!loading && groups.length === 0 ? <div className="text-sm text-gray-500">No materials found.</div> : null}
+
+        <div className="space-y-4">
+          {groups.map((g) => (
+            <div key={g.course_id} className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+              <div className="font-semibold text-slate-800">{g.course_name} {g.department_code ? `(${g.department_code})` : ''}</div>
+              <div className="mt-2 space-y-2">
+                {(g.materials || []).map((m) => (
+                  <div key={m.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-lg p-2 bg-white">
+                    <div>
+                      <div className="font-medium text-sm text-slate-800">{m.title}</div>
+                      <div className="text-xs text-gray-600">
+                        {m.material_type} {m.material_type === 'FILE' ? `- ${fmtBytes(Number(m.file_size_bytes || 0))}` : ''}
+                        {' | '}Downloads: {Number(m.download_count || 0)}
+                        {' | '}By: {m.uploaded_by_name || '-'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button className="px-3 py-1 rounded-md border border-cyan-300 text-cyan-700 hover:bg-cyan-50" onClick={() => onView(m)}>View</button>
+                      <button className="px-3 py-1 rounded-md border border-slate-300 hover:bg-slate-50" onClick={() => onDownload(m)}>Download</button>
+                      {mode === 'STAFF' && canManageOwn ? (
+                        <>
+                          <button className="px-3 py-1 rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50" onClick={() => onRename(m)}>Rename</button>
+                          <button className="px-3 py-1 rounded-md border border-red-300 text-red-600 hover:bg-red-50" onClick={() => onDelete(m)}>Delete</button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {canManageQuota ? (
+        <div className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-sm">
+          <h2 className="font-medium mb-3">Staff Quota Management</h2>
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-3">Staff</th>
+                  <th className="py-2 pr-3">Used</th>
+                  <th className="py-2 pr-3">Quota (MB)</th>
+                  <th className="py-2 pr-3">Quota (human)</th>
+                  <th className="py-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quotaRows.map((r) => (
+                  <tr key={r.id} className="border-b">
+                    <td className="py-2 pr-3">{r.staff_name} ({r.staff_id})</td>
+                    <td className="py-2 pr-3">{fmtBytes(Number(r.used_bytes || 0))}</td>
+                    <td className="py-2 pr-3">
+                      <input
+                        className="border border-slate-300 rounded px-2 py-1 w-44"
+                        value={String(Math.floor(Number(quotaEdit[r.staff] || 0) / (1024 * 1024)))}
+                        onChange={(e) => {
+                          const mb = Number(e.target.value || 0)
+                          const bytes = Number.isFinite(mb) ? Math.max(0, Math.floor(mb)) * 1024 * 1024 : 0
+                          setQuotaEdit((prev) => ({ ...prev, [r.staff]: String(bytes) }))
+                        }}
+                      />
+                    </td>
+                    <td className="py-2 pr-3">{fmtBytes(Number(quotaEdit[r.staff] || 0))}</td>
+                    <td className="py-2">
+                      <button className="px-3 py-1 rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50" onClick={() => onUpdateQuota(r.staff)}>Update</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {canViewAudit ? (
+        <div className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+          <h2 className="font-medium mb-3">Download Audit Logs</h2>
+          {auditRows.length === 0 ? <div className="text-sm text-gray-500">No download logs found.</div> : null}
+          <div className="overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-3">When</th>
+                  <th className="py-2 pr-3">Material</th>
+                  <th className="py-2 pr-3">Course</th>
+                  <th className="py-2 pr-3">User</th>
+                  <th className="py-2 pr-3">Type</th>
+                  <th className="py-2">IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditRows.map((r) => (
+                  <tr key={r.id} className="border-b">
+                    <td className="py-2 pr-3">{new Date(r.downloaded_at).toLocaleString()}</td>
+                    <td className="py-2 pr-3">{r.material_title}</td>
+                    <td className="py-2 pr-3">{r.material_course_name}</td>
+                    <td className="py-2 pr-3">{r.user_name || '-'}</td>
+                    <td className="py-2 pr-3">{r.user_profile_type || '-'}</td>
+                    <td className="py-2">{r.client_ip || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {flatMaterials.length > 0 ? null : null}
+    </div>
+  )
+}

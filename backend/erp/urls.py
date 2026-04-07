@@ -42,6 +42,7 @@ urlpatterns = [
     path('api/feedback/', include('feedback.urls')),
     path('api/announcements/', include('announcements.api_urls')),
     path('api/reporting/', include('reporting.urls')),
+    path('api/lms/', include('lms.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available
