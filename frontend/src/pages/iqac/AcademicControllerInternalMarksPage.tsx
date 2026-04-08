@@ -36,6 +36,24 @@ type CourseTeachingMapItem = {
   course_code?: string | null;
 };
 
+type InternalMarksFilters = {
+  regulation: string;
+  semester: string;
+  batch: string;
+  year: string;
+  department: string;
+  section: string;
+};
+
+const DEFAULT_FILTERS: InternalMarksFilters = {
+  regulation: 'all',
+  semester: 'all',
+  batch: 'all',
+  year: 'all',
+  department: 'all',
+  section: 'all',
+};
+
 function normalizeText(value: unknown): string {
   return String(value || '').trim();
 }
@@ -158,12 +176,13 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
   const [downloading, setDownloading] = useState(false);
   const [downloadingTaId, setDownloadingTaId] = useState<number | null>(null);
 
-  const [regulationFilter, setRegulationFilter] = useState('all');
-  const [semesterFilter, setSemesterFilter] = useState('all');
-  const [batchFilter, setBatchFilter] = useState('all');
-  const [yearFilter, setYearFilter] = useState('all');
-  const [departmentFilter, setDepartmentFilter] = useState('all');
-  const [sectionFilter, setSectionFilter] = useState('all');
+  const [regulationFilter, setRegulationFilter] = useState(DEFAULT_FILTERS.regulation);
+  const [semesterFilter, setSemesterFilter] = useState(DEFAULT_FILTERS.semester);
+  const [batchFilter, setBatchFilter] = useState(DEFAULT_FILTERS.batch);
+  const [yearFilter, setYearFilter] = useState(DEFAULT_FILTERS.year);
+  const [departmentFilter, setDepartmentFilter] = useState(DEFAULT_FILTERS.department);
+  const [sectionFilter, setSectionFilter] = useState(DEFAULT_FILTERS.section);
+  const [appliedFilters, setAppliedFilters] = useState<InternalMarksFilters>(DEFAULT_FILTERS);
 
   useEffect(() => {
     let mounted = true;
@@ -196,13 +215,14 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         const options = byCode.get(normUpper(row.course_code)) || [];
         if (!options.length) return row;
 
+        // Prefer sectionless TAs; fall back to any TA (e.g. project courses that always have sections)
         const sectionless = options.filter((o) => !o?.section_id);
-        if (!sectionless.length) return row;
+        const candidates = sectionless.length ? sectionless : options;
 
         const wantedClass = canonText(row.class_type);
         const picked =
-          sectionless.find((o) => wantedClass && canonText(o?.class_type) === wantedClass) ||
-          sectionless[0];
+          candidates.find((o) => wantedClass && canonText(o?.class_type) === wantedClass) ||
+          candidates[0];
         const taId = Number((picked as any)?.teaching_assignment_id || 0);
         if (!Number.isFinite(taId) || taId <= 0) return row;
 
@@ -315,7 +335,12 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             normalizeText((pick as any)?.qp_type) ||
             normalizeText((electivePick as any)?.question_paper_type) ||
             normalizeText((electivePick as any)?.qp_type) ||
-            'N/A';
+            // Fallback: check the teaching assignment API response itself
+            normalizeText((ta as any)?.question_paper_type) ||
+            normalizeText((ta as any)?.elective_subject_details?.question_paper_type) ||
+            normalizeText((ta as any)?.curriculum_row_details?.question_paper_type) ||
+            // Default to QP1 (matching OBE page behavior) instead of N/A
+            'QP1';
 
           next.push({
             teaching_assignment_id: Number((ta as any)?.id),
@@ -338,6 +363,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         const existingKey = new Set(
           next.map((r) => `${normUpper(r.course_code)}|${normUpper(r.regulation)}|${normNumText(r.semester)}|${normUpper(r.batch)}|${r.department_id || 0}`)
         );
+        // Batch/regulation-agnostic set: any TA already covering code+sem+dept
+        // prevents curriculum/elective fallback rows from creating duplicates
+        const existingCourseSemDept = new Set(
+          next.map((r) => `${normUpper(r.course_code)}|${normNumText(r.semester)}|${r.department_id || 0}`)
+        );
 
         for (const row of Array.isArray(deptRows) ? deptRows : []) {
           const courseCode = normalizeText((row as any)?.course_code).toUpperCase();
@@ -351,11 +381,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             normalizeText((row as any)?.department?.name) ||
             'N/A';
           const departmentId = Number((row as any)?.department?.id || 0);
-          const key = `${normUpper(courseCode)}|${normUpper(regulation)}|${normNumText(semester)}|${normUpper(batch)}|${departmentId || 0}`;
-          if (existingKey.has(key)) continue;
+          const courseKey = `${normUpper(courseCode)}|${normNumText(semester)}|${departmentId || 0}`;
+          if (existingCourseSemDept.has(courseKey)) continue;
 
           const classType = normalizeText((row as any)?.class_type) || 'N/A';
-          const qpType = normalizeText((row as any)?.question_paper_type) || normalizeText((row as any)?.qp_type) || 'N/A';
+          const qpType = normalizeText((row as any)?.question_paper_type) || normalizeText((row as any)?.qp_type) || 'QP1';
 
           next.push({
             teaching_assignment_id: null,
@@ -373,7 +403,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             qp_type: qpType,
             source: 'curriculum',
           });
-          existingKey.add(key);
+          existingCourseSemDept.add(courseKey);
         }
 
         for (const e of Array.isArray(electives) ? electives : []) {
@@ -388,8 +418,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             normalizeText((e as any)?.department?.name) ||
             'N/A';
           const departmentId = Number((e as any)?.department?.id || 0);
-          const key = `${normUpper(courseCode)}|${normUpper(regulation)}|${normNumText(semester)}|${normUpper(batch)}|${departmentId || 0}`;
-          if (existingKey.has(key)) continue;
+          const courseKey = `${normUpper(courseCode)}|${normNumText(semester)}|${departmentId || 0}`;
+          if (existingCourseSemDept.has(courseKey)) continue;
 
           next.push({
             teaching_assignment_id: null,
@@ -404,10 +434,10 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             department_id: departmentId || null,
             section: 'All Sections',
             class_type: normalizeText((e as any)?.class_type) || 'N/A',
-            qp_type: normalizeText((e as any)?.question_paper_type) || normalizeText((e as any)?.qp_type) || 'N/A',
+            qp_type: normalizeText((e as any)?.question_paper_type) || normalizeText((e as any)?.qp_type) || 'QP1',
             source: 'elective',
           });
-          existingKey.add(key);
+          existingCourseSemDept.add(courseKey);
         }
 
         const finalRows = await hydrateMissingAllSectionAssignments(next);
@@ -438,14 +468,14 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
 
   const regulations = useMemo(() => uniqueSorted(rows.map((r) => r.regulation)), [rows]);
   const semesters = useMemo(
-    () => uniqueSorted(rows.filter((r) => regulationFilter === 'all' || r.regulation === regulationFilter).map((r) => r.semester)),
+    () => uniqueSorted(rows.filter((r) => regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)).map((r) => r.semester)),
     [rows, regulationFilter]
   );
   const batches = useMemo(
     () =>
       uniqueSorted(
         rows
-          .filter((r) => (regulationFilter === 'all' || r.regulation === regulationFilter) && (semesterFilter === 'all' || r.semester === semesterFilter))
+          .filter((r) => (regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)) && (semesterFilter === 'all' || canonSemester(r.semester) === canonSemester(semesterFilter)))
           .map((r) => r.batch)
       ),
     [rows, regulationFilter, semesterFilter]
@@ -456,9 +486,9 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         rows
           .filter(
             (r) =>
-              (regulationFilter === 'all' || r.regulation === regulationFilter) &&
-              (semesterFilter === 'all' || r.semester === semesterFilter) &&
-              (batchFilter === 'all' || r.batch === batchFilter)
+              (regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)) &&
+              (semesterFilter === 'all' || canonSemester(r.semester) === canonSemester(semesterFilter)) &&
+              (batchFilter === 'all' || canonText(r.batch) === canonText(batchFilter))
           )
           .map((r) => r.academic_year)
       ),
@@ -470,10 +500,10 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         rows
           .filter(
             (r) =>
-              (regulationFilter === 'all' || r.regulation === regulationFilter) &&
-              (semesterFilter === 'all' || r.semester === semesterFilter) &&
-              (batchFilter === 'all' || r.batch === batchFilter) &&
-              (yearFilter === 'all' || r.academic_year === yearFilter)
+              (regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)) &&
+              (semesterFilter === 'all' || canonSemester(r.semester) === canonSemester(semesterFilter)) &&
+              (batchFilter === 'all' || canonText(r.batch) === canonText(batchFilter)) &&
+              (yearFilter === 'all' || canonSemester(r.academic_year) === canonSemester(yearFilter))
           )
           .map((r) => r.department)
       ),
@@ -485,11 +515,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         rows
           .filter(
             (r) =>
-              (regulationFilter === 'all' || r.regulation === regulationFilter) &&
-              (semesterFilter === 'all' || r.semester === semesterFilter) &&
-              (batchFilter === 'all' || r.batch === batchFilter) &&
-              (yearFilter === 'all' || r.academic_year === yearFilter) &&
-              (departmentFilter === 'all' || r.department === departmentFilter)
+              (regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)) &&
+              (semesterFilter === 'all' || canonSemester(r.semester) === canonSemester(semesterFilter)) &&
+              (batchFilter === 'all' || canonText(r.batch) === canonText(batchFilter)) &&
+              (yearFilter === 'all' || canonSemester(r.academic_year) === canonSemester(yearFilter)) &&
+              (departmentFilter === 'all' || canonText(r.department) === canonText(departmentFilter))
           )
           .map((r) => r.section)
       ),
@@ -497,23 +527,23 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
   );
 
   const filteredRows = useMemo(() => {
-    const fReg = canonReg(regulationFilter);
-    const fSem = canonSemester(semesterFilter);
-    const fBatch = canonText(batchFilter);
-    const fYear = canonSemester(yearFilter);
-    const fDept = canonText(departmentFilter);
-    const fSection = canonText(sectionFilter);
+    const fReg = canonReg(appliedFilters.regulation);
+    const fSem = canonSemester(appliedFilters.semester);
+    const fBatch = canonText(appliedFilters.batch);
+    const fYear = canonSemester(appliedFilters.year);
+    const fDept = canonText(appliedFilters.department);
+    const fSection = canonText(appliedFilters.section);
 
     return rows.filter((r) => {
-      if (regulationFilter !== 'all' && canonReg(r.regulation) !== fReg) return false;
-      if (semesterFilter !== 'all' && canonSemester(r.semester) !== fSem) return false;
-      if (batchFilter !== 'all' && canonText(r.batch) !== fBatch) return false;
-      if (yearFilter !== 'all' && canonSemester(r.academic_year) !== fYear) return false;
-      if (departmentFilter !== 'all' && canonText(r.department) !== fDept) return false;
-      if (sectionFilter !== 'all' && canonText(r.section) !== fSection) return false;
+      if (appliedFilters.regulation !== 'all' && canonReg(r.regulation) !== fReg) return false;
+      if (appliedFilters.semester !== 'all' && canonSemester(r.semester) !== fSem) return false;
+      if (appliedFilters.batch !== 'all' && canonText(r.batch) !== fBatch) return false;
+      if (appliedFilters.year !== 'all' && canonSemester(r.academic_year) !== fYear) return false;
+      if (appliedFilters.department !== 'all' && canonText(r.department) !== fDept) return false;
+      if (appliedFilters.section !== 'all' && canonText(r.section) !== fSection) return false;
       return true;
     });
-  }, [rows, regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter, sectionFilter]);
+  }, [rows, appliedFilters]);
 
   const exportableRows = useMemo(
     () =>
@@ -525,24 +555,57 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
   );
 
   useEffect(() => {
-    setSemesterFilter((prev) => (prev === 'all' || semesters.includes(prev) ? prev : 'all'));
+    setSemesterFilter((prev) => (prev === 'all' || semesters.some((s) => canonSemester(s) === canonSemester(prev)) ? prev : 'all'));
   }, [semesters]);
 
   useEffect(() => {
-    setBatchFilter((prev) => (prev === 'all' || batches.includes(prev) ? prev : 'all'));
+    setBatchFilter((prev) => (prev === 'all' || batches.some((b) => canonText(b) === canonText(prev)) ? prev : 'all'));
   }, [batches]);
 
   useEffect(() => {
-    setYearFilter((prev) => (prev === 'all' || years.includes(prev) ? prev : 'all'));
+    setYearFilter((prev) => (prev === 'all' || years.some((y) => canonSemester(y) === canonSemester(prev)) ? prev : 'all'));
   }, [years]);
 
   useEffect(() => {
-    setDepartmentFilter((prev) => (prev === 'all' || departments.includes(prev) ? prev : 'all'));
+    setDepartmentFilter((prev) => (prev === 'all' || departments.some((d) => canonText(d) === canonText(prev)) ? prev : 'all'));
   }, [departments]);
 
   useEffect(() => {
-    setSectionFilter((prev) => (prev === 'all' || sections.includes(prev) ? prev : 'all'));
+    setSectionFilter((prev) => (prev === 'all' || sections.some((s) => canonText(s) === canonText(prev)) ? prev : 'all'));
   }, [sections]);
+
+  const hasPendingFilterChanges = useMemo(
+    () =>
+      regulationFilter !== appliedFilters.regulation ||
+      semesterFilter !== appliedFilters.semester ||
+      batchFilter !== appliedFilters.batch ||
+      yearFilter !== appliedFilters.year ||
+      departmentFilter !== appliedFilters.department ||
+      sectionFilter !== appliedFilters.section,
+    [regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter, sectionFilter, appliedFilters]
+  );
+
+  function handleApplyFilters() {
+    setAppliedFilters({
+      regulation: regulationFilter,
+      semester: semesterFilter,
+      batch: batchFilter,
+      year: yearFilter,
+      department: departmentFilter,
+      section: sectionFilter,
+    });
+  }
+
+  function handleShowAll() {
+    setRegulationFilter(DEFAULT_FILTERS.regulation);
+    setSemesterFilter(DEFAULT_FILTERS.semester);
+    setBatchFilter(DEFAULT_FILTERS.batch);
+    setYearFilter(DEFAULT_FILTERS.year);
+    setDepartmentFilter(DEFAULT_FILTERS.department);
+    setSectionFilter(DEFAULT_FILTERS.section);
+    setAppliedFilters(DEFAULT_FILTERS);
+    setError(null);
+  }
 
   async function handleDownloadFilteredZip() {
     try {
@@ -550,16 +613,16 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       setError(null);
 
       const params = new URLSearchParams();
-      if (regulationFilter !== 'all') params.set('regulation', regulationFilter);
-      if (semesterFilter !== 'all') params.set('semester', semesterFilter);
-      if (batchFilter !== 'all') params.set('batch', batchFilter);
-      if (yearFilter !== 'all') params.set('academic_year', yearFilter);
-      if (departmentFilter !== 'all') {
-        const pick = exportableRows.find((r) => canonText(r.department) === canonText(departmentFilter) && r.department_id != null);
+      if (appliedFilters.regulation !== 'all') params.set('regulation', appliedFilters.regulation);
+      if (appliedFilters.semester !== 'all') params.set('semester', appliedFilters.semester);
+      if (appliedFilters.batch !== 'all') params.set('batch', appliedFilters.batch);
+      if (appliedFilters.year !== 'all') params.set('academic_year', appliedFilters.year);
+      if (appliedFilters.department !== 'all') {
+        const pick = exportableRows.find((r) => canonText(r.department) === canonText(appliedFilters.department) && r.department_id != null);
         if (pick?.department_id != null) params.set('department_id', String(pick.department_id));
       }
-      if (sectionFilter !== 'all') {
-        const pick = exportableRows.find((r) => canonText(r.section) === canonText(sectionFilter) && r.section_id != null);
+      if (appliedFilters.section !== 'all') {
+        const pick = exportableRows.find((r) => canonText(r.section) === canonText(appliedFilters.section) && r.section_id != null);
         if (pick?.section_id != null) params.set('section_id', String(pick.section_id));
       }
 
@@ -573,7 +636,17 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       const url = `/api/academics/iqac/internal-marks/export/${params.toString() ? `?${params.toString()}` : ''}`;
       const res = await fetchWithAuth(url);
       if (!res.ok) {
-        const text = await res.text();
+        let text = '';
+        try {
+          text = await res.text();
+          // Strip HTML tags if server returned an HTML error page
+          if (text.includes('<html') || text.includes('<!doctype') || text.includes('<!DOCTYPE')) {
+            const match = text.match(/<title>(.*?)<\/title>/i);
+            text = match ? match[1] : `Server Error (${res.status})`;
+          }
+        } catch {
+          text = `Server Error (${res.status})`;
+        }
         throw new Error(text || 'Failed to download ZIP export');
       }
 
@@ -751,6 +824,18 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <button className="obe-btn obe-btn-primary" onClick={handleApplyFilters} disabled={!hasPendingFilterChanges}>
+          Filter
+        </button>
+        <button className="obe-btn" onClick={handleShowAll}>
+          Show all
+        </button>
+        <div style={{ fontSize: 12, color: '#6b7280' }}>
+          Showing {filteredRows.length} of {rows.length} courses
         </div>
       </div>
 

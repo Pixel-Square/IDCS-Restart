@@ -28,15 +28,15 @@ import {
 } from '../../utils/retrivalStore';
 import { readTTScheduleMap } from './ttScheduleStore';
 import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+import { getBundleFinalizeConfig, hydrateBundleFinalizeStore, readBundleFinalizeMap } from '../../utils/coeBundleFinalizeStore';
 import { hydrateShuffledListStore, readShuffleLocks, writeShuffleLocks, markFilterAsShuffled, unmarkFilterAsShuffled, isFilterShuffled, readShuffledLists, writeShuffledLists, getPersistedShuffledForFilter, setPersistedShuffledForFilter, clearPersistedShuffledForFilter, PersistedShuffledByDummy } from './shuffledListStore';
 import { hydrateMarksStore, getMarksQpType } from './marksStore';
 import fetchWithAuth from '../../services/fetchAuth';
+import { isSameDept } from '../../utils/deptAliases';
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
-  RE: '9',
-  SH: '0',
   CIVIL: '3',
   CSE: '4',
   ECE: '5',
@@ -44,6 +44,19 @@ const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   IT: '7',
   MECH: '8',
 };
+
+const DEPARTMENT_SHORT: Record<string, string> = {
+  CIVIL: 'CE',
+  IT: 'IT',
+  CSE: 'CS',
+  MECH: 'ME',
+  ECE: 'EC',
+  EEE: 'EE',
+  AIDS: 'AD',
+  AIML: 'AM',
+};
+
+
 
 function getSemesterNumber(value: string): number {
   const parsed = Number.parseInt(String(value || '').replace('SEM', ''), 10);
@@ -64,6 +77,7 @@ function getSemesterDigit(value: string): string {
 type AugStudent = CoeCourseStudent & {
   enrollmentId: string;
   dummy: string;
+  bundleName?: string;
   saved_qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 type AugCourse = CoeCourseGroup & { students: AugStudent[]; shuffled?: boolean };
@@ -136,6 +150,8 @@ export default function StudentsList() {
   const [activeEntryParams, setActiveEntryParams] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const processedRetrivalApplyKeyRef = useRef<string>('');
+  // Refresh tick to force re-enrichment when navigating back to this page (e.g., after adding students via AdditionalPage)
+  const [localStorageRefreshTick, setLocalStorageRefreshTick] = useState(0);
 
   // Fetch departments on mount
   useEffect(() => {
@@ -201,14 +217,32 @@ export default function StudentsList() {
     };
   }, []);
 
-  // Hydrate all KV stores from DB on mount
+  // Hydrate all KV stores from DB on mount and trigger refresh tick to re-read localStorage
   useEffect(() => {
     Promise.all([
       hydrateShuffledListStore(),
       hydrateMarksStore(),
+      hydrateBundleFinalizeStore(),
       kvHydrate(ASSIGNING_STORE_KEY),
       kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
-    ]).catch(() => {});
+    ]).then(() => {
+      // Increment refresh tick after hydration completes to ensure enrichment uses fresh data
+      setLocalStorageRefreshTick((prev) => prev + 1);
+    }).catch(() => {});
+  }, []);
+
+  // Increment refresh tick on window focus to pick up changes made in other pages (e.g., AdditionalPage)
+  useEffect(() => {
+    const handleRefresh = () => {
+      setLocalStorageRefreshTick((prev) => prev + 1);
+    };
+    window.addEventListener('focus', handleRefresh);
+    // Also listen for the event dispatched by AdditionalPage in the same tab
+    window.addEventListener('coe:additional-updated', handleRefresh);
+    return () => {
+      window.removeEventListener('focus', handleRefresh);
+      window.removeEventListener('coe:additional-updated', handleRefresh);
+    };
   }, []);
 
   const absentCourseMap = useMemo(
@@ -306,48 +340,39 @@ export default function StudentsList() {
     const rollText = student.reg_no || '-';
     const barcodeValue = dummyText;
 
-    // Adjust font for Reg No and Dummy Text
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14); // Increased from 11
-    doc.text(rollText, x, y + 5);
+    doc.setFontSize(10);
+    doc.text(rollText, x + 1, y + 5);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14); // Increased from 11
-    doc.text(dummyText, x, y + 11.8); 
+    doc.setFontSize(10);
+    doc.text(dummyText, x + 1, y + 11);
 
     const barcodeImg = barcodeDataUrlForValue(barcodeValue);
-    // Reduced length (width) of the barcode
-    const barcodeW = 35; // Reduced from 44
-    const barcodeH = 7.5; // Slightly reduced height to fit 15mm row
-    // Align barcode to the right of the entry area, moved 2mm to the left
-    const barcodeX = x + width - barcodeW - 2;
-    const barcodeY = y + 0.5;
+    const barcodeW = 34;
+    const barcodeH = 7;
+    const barcodeX = x + width - barcodeW - 1;
+    const barcodeY = y + 1;
 
     doc.addImage(barcodeImg, 'PNG', barcodeX, barcodeY, barcodeW, barcodeH);
 
-    // Dummy number below barcode with a small gap
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13); // Increased from 10
-    doc.text(barcodeValue, barcodeX, y + 11.8); 
+    doc.setFontSize(9.5);
+    doc.text(barcodeValue, barcodeX, y + 11);
   };
 
   const buildCombinedCoursesPdf = (targets: { dept: string; course: AugCourse }[]) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
-    const marginX = 14; 
-    const topY = 14;
-    const contentStartY = 29.0;
-    const bottomMargin = 10;
-    const colGap = 12; 
+    const marginX = 12;
+    const topY = 16;
+    const contentStartY = 30;
+    const bottomMargin = 12;
+    const colGap = 8;
     const colWidth = (pageWidth - marginX * 2 - colGap) / 2;
-    const rightColumnShift = 6; // mm (0.6 cm)
-    const rowsPerPage = 11;
-    const rowHeight = 12;
-    // Keep 11 rows and maximize vertical gap so the last row sits near bottom margin.
-    const rowGap = Number(
-      (((pageHeight - bottomMargin - contentStartY - rowHeight) / (rowsPerPage - 1)) - rowHeight).toFixed(2)
-    );
+    const rowHeight = 16;
+    const rowGap = 6;
 
     const drawHeader = (deptName: string, course: AugCourse) => {
       doc.setFont('helvetica', 'bold');
@@ -357,7 +382,7 @@ export default function StudentsList() {
       doc.text(`Code: ${course.course_code || 'NO_CODE'}`, pageWidth - marginX, topY, { align: 'right' });
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      doc.text(`Semester: ${semester}`, marginX, topY + 4.5); // Reduced from +6
+      doc.text(`Semester: ${semester}`, marginX, topY + 6);
     };
 
     targets.forEach((target, targetIndex) => {
@@ -367,98 +392,27 @@ export default function StudentsList() {
 
       drawHeader(target.dept, target.course);
 
+      let y = contentStartY;
       const students = [...(target.course.students || [])].sort((a, b) => {
         const ra = String(a.reg_no || '').trim();
         const rb = String(b.reg_no || '').trim();
         return ra.localeCompare(rb, undefined, { numeric: true, sensitivity: 'base' });
       });
 
-      // Page 1: 2 Columns with Barcodes
-      for (let i = 0; i < students.length; i += rowsPerPage * 2) {
-        if (i > 0) {
-          doc.addPage();
-          drawHeader(target.dept, target.course);
-        }
-
-        for (let row = 0; row < rowsPerPage; row++) {
-          const yPos = contentStartY + row * (rowHeight + rowGap);
-          if (yPos + rowHeight > pageHeight - bottomMargin) break;
-
-          // Student index for Left Column
-          const leftIdx = i + row;
-          if (leftIdx < students.length) {
-            drawCoursePdfEntry(doc, marginX, yPos, colWidth, students[leftIdx]);
-          }
-
-          // Student index for Right Column (skips the 'rowsPerPage' of the first column)
-          const rightIdx = i + row + rowsPerPage;
-          if (rightIdx < students.length) {
-            drawCoursePdfEntry(doc, marginX + colWidth + colGap + rightColumnShift, yPos, colWidth, students[rightIdx]);
-          }
-        }
-      }
-
-      // Page 2: Summary of all RegNos and Dummies for this course
-      doc.addPage();
-      drawHeader(target.dept, target.course);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12);
-      doc.text("Course Enrollment Summary (All Students)", marginX, topY + 12);
-
-      let summaryTableY = contentStartY + 5;
-      const rowH = 7;
-      const col1X = marginX;
-      const col2X = marginX + 40;
-      const col3X = marginX + 90;
-      const col4X = marginX + 130;
-
-      // Table Header
-      doc.setFontSize(10);
-      doc.setFillColor(240, 240, 240);
-      doc.rect(marginX, summaryTableY, pageWidth - marginX * 2, rowH, 'F');
-      doc.text("Reg No", col1X + 2, summaryTableY + 5);
-      doc.text("Dummy No", col2X + 2, summaryTableY + 5);
-      doc.text("Reg No", col3X + 2, summaryTableY + 5);
-      doc.text("Dummy No", col4X + 2, summaryTableY + 5);
-      summaryTableY += rowH;
-
-      doc.setFont('helvetica', 'normal');
       for (let i = 0; i < students.length; i += 2) {
-        if (summaryTableY + rowH > pageHeight - bottomMargin) {
+        if (y + rowHeight > pageHeight - bottomMargin) {
           doc.addPage();
           drawHeader(target.dept, target.course);
-          summaryTableY = contentStartY;
-          
-          // Repeat Table Header on new page
-          doc.setFont('helvetica', 'bold');
-          doc.setFillColor(240, 240, 240);
-          doc.rect(marginX, summaryTableY, pageWidth - marginX * 2, rowH, 'F');
-          doc.text("Reg No", col1X + 2, summaryTableY + 5);
-          doc.text("Dummy No", col2X + 2, summaryTableY + 5);
-          doc.text("Reg No", col3X + 2, summaryTableY + 5);
-          doc.text("Dummy No", col4X + 2, summaryTableY + 5);
-          summaryTableY += rowH;
-          doc.setFont('helvetica', 'normal');
+          y = contentStartY;
         }
 
-        const s1 = students[i];
-        const s2 = students[i + 1];
+        drawCoursePdfEntry(doc, marginX, y, colWidth, students[i]);
 
-        // Column Set 1
-        doc.text(s1.reg_no || '-', col1X + 2, summaryTableY + 5);
-        doc.text(s1.dummy || '-', col2X + 2, summaryTableY + 5);
-
-        // Column Set 2
-        if (s2) {
-          doc.text(s2.reg_no || '-', col3X + 2, summaryTableY + 5);
-          doc.text(s2.dummy || '-', col4X + 2, summaryTableY + 5);
+        if (students[i + 1]) {
+          drawCoursePdfEntry(doc, marginX + colWidth + colGap, y, colWidth, students[i + 1]);
         }
 
-        // Horizontal line
-        doc.setDrawColor(200, 200, 200);
-        doc.line(marginX, summaryTableY + rowH, pageWidth - marginX, summaryTableY + rowH);
-        
-        summaryTableY += rowH;
+        y += rowHeight + rowGap;
       }
     });
 
@@ -499,18 +453,38 @@ export default function StudentsList() {
     const semesterDigit = getSemesterDigit(semester);
     let globalSequence = startSequence;
 
-    const persistedByDummy = getPersistedShuffledForFilter(getCurrentFilterKey());
+    const filterKey = `${department}::${semester}`;
+    // Read the full stores once; we'll index per-dept inside the loop.
+    // This fixes the case where department=="ALL" but data was saved under "ECE::SEM5" etc.
+    const fullBundleStore = readCourseBundleDummyStore();
+    const fullShuffledLists = readShuffledLists();
+    
+    const persistedByDummyGlobal = getPersistedShuffledForFilter(getCurrentFilterKey());
+    const savedByDummy = new Map(
+      (data.saved_dummies || [])
+        .filter((row) => row.semester === semester)
+        .map((row) => [row.dummy, row])
+    );
 
     const departments: AugDept[] = data.departments.map((deptBlock) => {
-      const savedByDummy = new Map(
-        (data.saved_dummies || [])
-          .filter(
-            (row) =>
-              row.semester === semester
-              && (!row.department || String(row.department).trim().toUpperCase() === String(deptBlock.department).trim().toUpperCase())
-          )
-          .map((row) => [row.dummy, row])
-      );
+      const deptCode = DEPARTMENT_DUMMY_DIGITS[deptBlock.department] || '9';
+
+      // Use the specific dept filter key so additional students added from AdditionalPage
+      // are found even when the global filter is "ALL".
+      const deptFilterKey = `${deptBlock.department}::${semester}`;
+      const courseBundleMap = fullBundleStore[deptFilterKey] || fullBundleStore[filterKey] || {};
+      const dummyOwnerCourseKey = new Map<string, string>();
+      Object.entries(courseBundleMap).forEach(([storedCourseKey, storedCourseData]) => {
+        (storedCourseData?.courseDummies || []).forEach((value) => {
+          const dummy = String(value || '').trim();
+          if (!dummy) return;
+          if (!dummyOwnerCourseKey.has(dummy)) {
+            dummyOwnerCourseKey.set(dummy, storedCourseKey);
+          }
+        });
+      });
+      const persistedByDummy: Record<string, { reg_no: string; name: string }> =
+        fullShuffledLists[deptFilterKey] || fullShuffledLists[filterKey] || persistedByDummyGlobal;
 
       const courses: AugCourse[] = deptBlock.courses
         .filter((course) => {
@@ -537,10 +511,10 @@ export default function StudentsList() {
             return regNo ? !(courseAbsentees?.has(regNo)) : true;
           });
 
-          const students: AugStudent[] = sourceStudents.map((student) => {
+          let students: AugStudent[] = sourceStudents.map((student) => {
             globalSequence += 1;
             const enrollmentId = `ROW::${globalSequence}`;
-            const dummy = generateDummyNumber(deptBlock.department, globalSequence);
+            const dummy = generateDummyNumber(department, globalSequence);
             const saved = savedByDummy.get(dummy);
             const persisted = persistedByDummy[dummy];
 
@@ -552,31 +526,143 @@ export default function StudentsList() {
               dummy,
               saved_qp_type: saved?.qp_type,
             };
+          }).filter((student) => {
+            const ownerCourseKey = dummyOwnerCourseKey.get(String(student.dummy || '').trim());
+            if (!ownerCourseKey) return true;
+            return ownerCourseKey === courseKey;
           });
 
-          // Inject Additional Students for this Course
-          const filterKeyInternal = getCurrentFilterKey();
-          const bundleStore = readCourseBundleDummyStore();
-          const additionalData = bundleStore[filterKeyInternal]?.[course.course_code];
-          if (additionalData && additionalData.courseDummies) {
-            additionalData.courseDummies.forEach((d: string) => {
-              const p = persistedByDummy[d];
-              if (p) {
-                if (!students.some(st => st.dummy === d)) {
-                  students.push({
-                    id: Math.random(),
-                    reg_no: p.reg_no,
-                    name: p.name,
-                    enrollmentId: `ADD::${course.course_code}::${d}`,
-                    dummy: d,
-                    is_arrear: false
-                  } as any);
-                }
-              }
+          // Attach any additional/manual dummies saved for this course.
+          // Use course_code matching (prefix) so we don't miss entries if course_name differs.
+          const normalizedCourseCode = String(course.course_code || '').trim();
+          const normalizedCourseName = String(course.course_name || '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ');
+
+          let matchingCourseKeys: string[] = [];
+          if (normalizedCourseCode) {
+            const prefix = `${deptBlock.department}::${semester}::${normalizedCourseCode}::`;
+            const all = Object.keys(courseBundleMap).filter((k) => k.startsWith(prefix));
+            if (all.length <= 1) {
+              matchingCourseKeys = all;
+            } else {
+              const exactByName = all.filter((k) => {
+                const parts = k.split('::');
+                const storedName = String(parts[3] || '')
+                  .trim()
+                  .toLowerCase()
+                  .replace(/\s+/g, ' ');
+                return normalizedCourseName && storedName === normalizedCourseName;
+              });
+              matchingCourseKeys = exactByName.length > 0 ? exactByName : all;
+            }
+          } else {
+            // If course_code is missing, do NOT prefix-match (it would match everything).
+            // Fall back to exact key only.
+            if (courseBundleMap[courseKey]) matchingCourseKeys = [courseKey];
+          }
+          const mergedAdditionalDummies = new Set<string>();
+          const dummyToBundleMap = new Map<string, string>();
+          matchingCourseKeys.forEach((k) => {
+            const cd = courseBundleMap[k];
+            (cd?.courseDummies || []).forEach((d) => {
+              const dummy = String(d || '').trim();
+              if (dummy) mergedAdditionalDummies.add(dummy);
+            });
+            Object.entries(cd?.bundles || {}).forEach(([bName, dummies]) => {
+              (dummies || []).forEach((d) => {
+                const dm = String(d || '').trim();
+                if (dm) dummyToBundleMap.set(dm, bName);
+              });
+            });
+          });
+
+          // If stored course dummies are available, treat them as source of truth.
+          const authoritativeCourseKey = matchingCourseKeys.length > 0 ? matchingCourseKeys[0] : null;
+          const authoritativeCourse = authoritativeCourseKey ? courseBundleMap[authoritativeCourseKey] : null;
+          const authoritativeDummies = Array.isArray(authoritativeCourse?.courseDummies)
+            ? authoritativeCourse!.courseDummies.map((d: string) => String(d || '').trim()).filter(Boolean)
+            : [];
+          if (authoritativeDummies.length > 0) {
+            const currentByDummy = new Map(students.map((s) => [String(s.dummy || '').trim(), s]));
+            students = authoritativeDummies.map((dummy) => {
+              const current = currentByDummy.get(dummy);
+              const saved = savedByDummy.get(dummy);
+              const persisted = persistedByDummy[dummy];
+              return {
+                id: current?.id ?? -1,
+                reg_no: saved?.reg_no || persisted?.reg_no || current?.reg_no || '',
+                name: saved?.name || persisted?.name || current?.name || '-',
+                is_arrear: Boolean(current?.is_arrear),
+                enrollmentId: current?.enrollmentId || `AUTH::${courseKey}::${dummy}`,
+                dummy,
+                bundleName: dummyToBundleMap.get(dummy),
+                saved_qp_type: saved?.qp_type || current?.saved_qp_type,
+              };
             });
           }
 
-          const isCourseShuffled = students.some((student, index) => {
+          // Attach bundle names to all regular students
+          // Compute bundle names the same way BundleAllocation does: from bundleSize + student index
+          const deptShort = DEPARTMENT_SHORT[deptBlock.department.toUpperCase()] || deptBlock.department.slice(0, 2).toUpperCase();
+          const courseCodeForBundle = String(course.course_code || 'COURSE').trim();
+          // Try dept-specific config first, then fallback to "ALL" (user may have finalized with ALL selected)
+          const finalizeConfig = getBundleFinalizeConfig(deptBlock.department, semester)
+            || getBundleFinalizeConfig(department, semester)
+            || getBundleFinalizeConfig('ALL', semester);
+          const bundleSize = finalizeConfig?.bundleSize || 0;
+
+          students.forEach((s, idx) => {
+            if (s.dummy) {
+              // Priority 1: Specifically preserved overrides in the store (e.g. additional students)
+              const cachedOverride = dummyToBundleMap.get(s.dummy);
+              if (cachedOverride) {
+                s.bundleName = cachedOverride;
+              } else if (bundleSize > 0) {
+                // Priority 2: Compute from bundleSize exactly like BundleAllocation does
+                const bundleIndex = Math.floor(idx / bundleSize);
+                const seq = String(bundleIndex + 1).padStart(3, '0');
+                s.bundleName = `${courseCodeForBundle}${deptShort}${seq}`;
+              }
+            }
+          });
+
+          if (mergedAdditionalDummies.size > 0) {
+            const existingDummySet = new Set(students.map((s) => String(s.dummy || '').trim()).filter(Boolean));
+            Array.from(mergedAdditionalDummies).forEach((dummy) => {
+              if (!dummy || existingDummySet.has(dummy)) return;
+              const saved = savedByDummy.get(dummy);
+              const persisted = persistedByDummy[dummy];
+              students.push({
+                id: -1,
+                reg_no: saved?.reg_no || persisted?.reg_no || '',
+                name: saved?.name || persisted?.name || '-',
+                is_arrear: false,
+                enrollmentId: `ADD::${courseKey}::${dummy}`,
+                dummy,
+                bundleName: dummyToBundleMap.get(dummy),
+                saved_qp_type: saved?.qp_type,
+              });
+            });
+          }
+
+          // Defensive cleanup: keep only first row per reg_no inside a course
+          // so accidental duplicate extra dummies do not duplicate UI rows.
+          const seenRegNo = new Set<string>();
+          const uniqueStudents: AugStudent[] = [];
+          students.forEach((student) => {
+            const regNoKey = String(student.reg_no || '').trim().toUpperCase();
+            if (!regNoKey) {
+              uniqueStudents.push(student);
+              return;
+            }
+            if (seenRegNo.has(regNoKey)) return;
+            seenRegNo.add(regNoKey);
+            uniqueStudents.push(student);
+          });
+
+          const isCourseShuffled = uniqueStudents.some((student, index) => {
             const original = sourceStudents[index];
             const saved = savedByDummy.get(student.dummy);
             if (!saved || !original) return false;
@@ -585,7 +671,7 @@ export default function StudentsList() {
 
           return {
             ...course,
-            students,
+            students: uniqueStudents,
             shuffled: isCourseShuffled,
           };
         });
@@ -598,13 +684,21 @@ export default function StudentsList() {
       semester_filter: data.semester_filter,
       departments,
     });
-  }, [data, semester, selectionMap, absentCourseMap]);
+  }, [data, semester, selectionMap, absentCourseMap, localStorageRefreshTick]);
 
   useEffect(() => {
     if (!enriched) return;
     if (department === 'ALL') return;
 
     const filterKey = `${department}::${semester}`;
+    const store = readCourseBundleDummyStore();
+    const existingByCourse = store[filterKey] || {};
+    const hasExistingCourseMap = Object.keys(existingByCourse).length > 0;
+    if (hasExistingCourseMap) {
+      // Do not auto-overwrite an existing map on page load.
+      // Existing DB/KV mapping is source of truth after manual/fix operations.
+      return;
+    }
     const assigningStore = readAssigningStoreForBundleDummies();
     const bundleDefsByCourse: Record<string, PersistedBundleInfo[]> = {};
 
@@ -629,7 +723,7 @@ export default function StudentsList() {
     const byCourse: CourseBundleDummyMap = {};
 
     enriched.departments.forEach((dept) => {
-      if (dept.department !== department) return;
+      if (!isSameDept(dept.department, department)) return;
 
       dept.courses.forEach((course) => {
         const courseKey = getCourseKey({
@@ -652,14 +746,96 @@ export default function StudentsList() {
           pointer += bundle.scripts;
         });
 
-        byCourse[courseKey] = {
-          courseDummies,
-          bundles,
-        };
+        const existing = existingByCourse[courseKey];
+        if (existing && Array.isArray(existing.courseDummies)) {
+          // Preserve already saved course dummy map as source of truth.
+          byCourse[courseKey] = {
+            courseDummies: [...(existing.courseDummies || [])],
+            bundles: { ...(existing.bundles || {}) },
+          };
+        } else {
+          byCourse[courseKey] = {
+            courseDummies,
+            bundles,
+          };
+        }
       });
     });
 
-    const store = readCourseBundleDummyStore();
+    const pickTargetCourseKey = (existingKey: string): string | null => {
+      const parts = String(existingKey || '').split('::');
+      const existingCourseCode = String(parts[2] || '').trim();
+      const existingCourseName = String(parts[3] || '').trim();
+      if (!existingCourseCode) return null;
+      const prefix = `${department}::${semester}::${existingCourseCode}::`;
+      const candidates = Object.keys(byCourse).filter((k) => k.startsWith(prefix));
+      if (candidates.length === 0) return null;
+      if (candidates.length === 1) return candidates[0];
+      const normalizedExistingName = existingCourseName.toLowerCase();
+      const exactByName = candidates.find((k) => {
+        const p = k.split('::');
+        const name = String(p[3] || '').trim().toLowerCase();
+        return normalizedExistingName && name === normalizedExistingName;
+      });
+      return exactByName || candidates[0];
+    };
+
+    Object.entries(existingByCourse).forEach(([existingKey, existingCourseData]) => {
+      const targetKey = byCourse[existingKey] ? existingKey : pickTargetCourseKey(existingKey);
+      if (!targetKey) {
+        // No matching course in enriched data — preserve this entry as-is
+        // (e.g., additional students added via AdditionalPage for courses not in current enriched set)
+        if (existingCourseData && (
+          (Array.isArray(existingCourseData.courseDummies) && existingCourseData.courseDummies.length > 0) ||
+          Object.keys(existingCourseData.bundles || {}).length > 0
+        )) {
+          byCourse[existingKey] = existingCourseData;
+        }
+        return;
+      }
+
+      const current = byCourse[targetKey];
+      if (!current) return;
+
+      // Keep the current roster order first, then append any previously-stored dummies
+      // (i.e., additional/manual entries) so they always appear at the bottom.
+      const mergedCourseDummies: string[] = Array.isArray(current.courseDummies)
+        ? [...current.courseDummies]
+        : [];
+      const existingCourseDummies: string[] = Array.isArray(existingCourseData?.courseDummies)
+        ? existingCourseData.courseDummies
+        : [];
+      const mergedDummySet = new Set(mergedCourseDummies.map((d) => String(d || '').trim()).filter(Boolean));
+      existingCourseDummies.forEach((d) => {
+        const dummy = String(d || '').trim();
+        if (!dummy || mergedDummySet.has(dummy)) return;
+        mergedCourseDummies.push(dummy);
+        mergedDummySet.add(dummy);
+      });
+
+      const mergedBundles: Record<string, string[]> = { ...(current.bundles || {}) };
+      Object.entries(existingCourseData?.bundles || {}).forEach(([bundleName, bundleDummies]) => {
+        if (Array.isArray(bundleDummies)) {
+          if (!mergedBundles[bundleName]) {
+            mergedBundles[bundleName] = [...bundleDummies];
+          } else {
+            // Include manually added dummies not caught in standard slice
+            const existingSet = new Set(mergedBundles[bundleName]);
+            bundleDummies.forEach((d) => {
+              if (d && !existingSet.has(d)) {
+                mergedBundles[bundleName].push(d);
+              }
+            });
+          }
+        }
+      });
+
+      byCourse[targetKey] = {
+        courseDummies: mergedCourseDummies,
+        bundles: mergedBundles,
+      };
+    });
+
     store[filterKey] = byCourse;
     writeCourseBundleDummyStore(store);
   }, [department, semester, enriched]);
@@ -828,7 +1004,7 @@ export default function StudentsList() {
       if (!prev) return prev;
       const next = JSON.parse(JSON.stringify(prev)) as EnrichedData;
       next.departments.forEach((dept) => {
-        if (dept.department !== department) return;
+        if (!isSameDept(dept.department, department)) return;
         dept.courses.forEach((course) => {
           const coursePool = byCourseCode[normalize(course.course_code || '')] || [];
           if (coursePool.length === 0) return;
@@ -1127,17 +1303,6 @@ export default function StudentsList() {
     const targets: { dept: string; course: AugCourse }[] = [];
     enriched.departments.forEach((dept: AugDept) => {
       dept.courses.forEach((course: AugCourse) => {
-        // Only include courses that match the selected date filter
-        if (dateFilteredCourseKeys) {
-          const courseKey = getCourseKey({
-            department: dept.department,
-            semester,
-            courseCode: course.course_code || '',
-            courseName: course.course_name || '',
-          });
-          if (!dateFilteredCourseKeys.has(courseKey)) return; // This skips all other courses
-        }
-
         if ((course.students || []).length > 0) {
           targets.push({ dept: dept.department, course });
         }
@@ -1145,7 +1310,7 @@ export default function StudentsList() {
     });
 
     if (targets.length === 0) {
-      alert('No course data available for the selected date filter.');
+      alert('No course data available to download.');
       return;
     }
 
@@ -1337,8 +1502,8 @@ export default function StudentsList() {
                       const ck = getCourseKey({
                         department: deptBlock.department,
                         semester: semester,
-                        courseCode: course.course_code || '',
-                        courseName: course.course_name || '',
+                        courseCode: course.course_code,
+                        courseName: course.course_name,
                       });
                       return dateFilteredCourseKeys.has(ck);
                     })
@@ -1368,6 +1533,7 @@ export default function StudentsList() {
                             <thead className="bg-gray-100 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
                               <tr>
                                 <th className="px-3 py-2">Dummy</th>
+                                <th className="px-3 py-2">Bundle</th>
                                 <th className="px-3 py-2">Mark Entry</th>
                                 <th className="px-3 py-2">Reg No</th>
                                 <th className="px-3 py-2">Name</th>
@@ -1378,6 +1544,7 @@ export default function StudentsList() {
                               {course.students.map((student: AugStudent) => {
                                 const dummy = student.dummy;
                                 const enrollmentKey = student.enrollmentId;
+                                const bundleName = student.bundleName || '-';
                                 const canNavigateToMarkEntry = Boolean(
                                   dummy && student.reg_no && shuffleUsed && savedDummySet.has(dummy)
                                 );
@@ -1385,6 +1552,7 @@ export default function StudentsList() {
                                 return (
                                   <tr key={enrollmentKey} className="align-middle">
                                     <td className="px-3 py-2 font-semibold text-gray-900">{dummy}</td>
+                                    <td className="px-3 py-2 font-medium text-emerald-700">{bundleName}</td>
                                     <td className="px-3 py-2">
                                       {canNavigateToMarkEntry ? (
                                         <a

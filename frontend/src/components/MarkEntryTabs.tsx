@@ -37,6 +37,8 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import IqacResetNotificationAlert from './IqacResetNotificationAlert';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
+import SpecialExamConfigurator from './SpecialExamConfigurator';
+import { SpecialQpQuestion, fetchSpecialQpPattern } from '../services/obe';
 
 type BaseTabKey = 'dashboard' | 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'formative1' | 'formative2' | 'cia1' | 'cia2' | 'model';
 type CqiTabKey = `cqi_${number}`;
@@ -608,6 +610,46 @@ export default function MarkEntryTabs({
   }, []);
 
   const isSpecial = useMemo(() => normalizedEffectiveClassType === 'SPECIAL', [normalizedEffectiveClassType]);
+
+  // --- Special QP customization state ---
+  const [specialQpOpen, setSpecialQpOpen] = useState(false);
+  const [specialQpByExam, setSpecialQpByExam] = useState<Record<string, SpecialQpQuestion[] | null>>({});
+
+  // For the current active non-dashboard tab, resolve which exam key to use
+  const activeExamKey = useMemo(() => {
+    if (active === 'dashboard' || String(active).startsWith('cqi_')) return null;
+    return active as string;
+  }, [active]);
+
+  // Fetch special QP pattern when active tab changes (only for SPECIAL courses)
+  useEffect(() => {
+    if (!isSpecial || !activeExamKey || selectedTaId == null) return;
+    // If we already fetched for this exam, skip
+    if (specialQpByExam[activeExamKey] !== undefined) return;
+    let alive = true;
+    (async () => {
+      try {
+        const resp = await fetchSpecialQpPattern(selectedTaId, activeExamKey);
+        if (!alive) return;
+        const qs = resp?.pattern?.questions;
+        setSpecialQpByExam((prev) => ({
+          ...prev,
+          [activeExamKey]: Array.isArray(qs) && qs.length ? qs : null,
+        }));
+      } catch {
+        if (!alive) return;
+        setSpecialQpByExam((prev) => ({ ...prev, [activeExamKey]: null }));
+      }
+    })();
+    return () => { alive = false; };
+  }, [isSpecial, activeExamKey, selectedTaId, specialQpByExam]);
+
+  // Clear cached special QP when TA changes
+  useEffect(() => {
+    setSpecialQpByExam({});
+  }, [selectedTaId]);
+
+  const activeSpecialQp = activeExamKey ? (specialQpByExam[activeExamKey] ?? null) : null;
 
   // If faculty has set enabled assessments for the selected TA, prefer that.
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
@@ -1239,6 +1281,36 @@ export default function MarkEntryTabs({
               This exam is disabled by IQAC. Please contact IQAC to enable it.
             </div>
           ) : (
+            <>
+            {isSpecial && activeExamKey && !String(active).startsWith('cqi_') && selectedTaId != null && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+                <button
+                  className="obe-btn obe-btn-primary"
+                  style={{ fontSize: 13, padding: '6px 14px' }}
+                  onClick={() => setSpecialQpOpen(true)}
+                >
+                  ✎ Customize Questions
+                </button>
+                {activeSpecialQp && (
+                  <span style={{ fontSize: 12, color: '#64748b' }}>
+                    {activeSpecialQp.length} questions · Total: {activeSpecialQp.reduce((s, q) => s + (Number(q.max) || 0), 0)} marks
+                  </span>
+                )}
+              </div>
+            )}
+            {isSpecial && specialQpOpen && activeExamKey && selectedTaId != null && (
+              <SpecialExamConfigurator
+                teachingAssignmentId={selectedTaId}
+                exam={activeExamKey}
+                classType={effectiveClassType ?? null}
+                questionPaperType={questionPaperType ?? null}
+                open={specialQpOpen}
+                onClose={() => setSpecialQpOpen(false)}
+                onSaved={(qs) => {
+                  setSpecialQpByExam((prev) => ({ ...prev, [activeExamKey]: qs }));
+                }}
+              />
+            )}
             <fieldset disabled={Boolean(activeForcedViewerMode)} style={{ border: 0, padding: 0, margin: 0 }}>
               {(() => {
                 const activeTabDef = visibleTabs.find((t) => t.key === active) || null;
@@ -1248,6 +1320,7 @@ export default function MarkEntryTabs({
                 if (active === 'formative1') {
                   return normalizedEffectiveClassType === 'TCPL' ? (
                     <LabEntry
+                      key={`lab-formative1-${subjectId}-${selectedTaId ?? 'none'}`}
                       subjectId={subjectId}
                       teachingAssignmentId={selectedTaId ?? undefined}
                       assessmentKey="formative1"
@@ -1263,6 +1336,7 @@ export default function MarkEntryTabs({
                 if (active === 'formative2') {
                   return normalizedEffectiveClassType === 'TCPL' ? (
                     <LabEntry
+                      key={`lab-formative2-${subjectId}-${selectedTaId ?? 'none'}`}
                       subjectId={subjectId}
                       teachingAssignmentId={selectedTaId ?? undefined}
                       assessmentKey="formative2"
@@ -1358,6 +1432,7 @@ export default function MarkEntryTabs({
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}
                       questionPaperType={questionPaperType ?? null}
+                      customQuestions={isSpecial ? activeSpecialQp : null}
                     />
                   );
                 }
@@ -1420,6 +1495,7 @@ export default function MarkEntryTabs({
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}
                       questionPaperType={questionPaperType ?? null}
+                      customQuestions={isSpecial ? activeSpecialQp : null}
                     />
                   );
                 }
@@ -1490,6 +1566,7 @@ export default function MarkEntryTabs({
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}
                       questionPaperType={questionPaperType ?? null}
+                      customQuestions={isSpecial ? activeSpecialQp : null}
                     />
                   );
                 }
@@ -1533,6 +1610,7 @@ export default function MarkEntryTabs({
                 return <MarkEntryTable subjectId={subjectId} tab={active as Exclude<BaseTabKey, 'dashboard'>} />;
               })()}
             </fieldset>
+            </>
           )}
         </div>
       )}

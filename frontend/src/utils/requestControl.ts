@@ -89,3 +89,15 @@ export function useMarkEntryEditRequestsEnabled(): boolean {
 export function useCqiEditRequestsEnabled(): boolean {
   return useEditRequestFlag('cqi_edit_requests_enabled', 'edit_requests_enabled');
 }
+
+/**
+ * Returns whether the IQAC-controlled Mark Manager edit-request flow is enabled
+ * across all exam assignments.
+ *
+ * - When `mark_manager_edit_requests_enabled` is explicitly configured, that value is used.
+ * - Otherwise it safely falls back to the shared `edit_requests_enabled` value,
+ *   preserving prior behavior for existing deployments.
+ */
+export function useMarkManagerEditRequestsEnabled(): boolean {
+  return useEditRequestFlag('mark_manager_edit_requests_enabled', 'edit_requests_enabled');
+}

@@ -120,6 +120,7 @@ urlpatterns = [
     path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),
     path('iqac/class-type-weights', views.class_type_weights_list),
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
+    path('iqac/special-courses', views.special_courses_list),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),

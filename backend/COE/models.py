@@ -99,3 +99,24 @@ class CoeKeyValueStore(models.Model):
     def __str__(self):
         return self.store_name
 
+
+class CoeStudentMarks(models.Model):
+    """
+    Row-based marks storage for COE mark entry.
+    Each row stores marks for one dummy number instead of storing all marks in a single JSON blob.
+    """
+
+    dummy_number = models.CharField(max_length=64, unique=True, db_index=True)
+    marks = models.JSONField(default=dict, blank=True, help_text='{"q1": "10", "q2": "5", ...}')
+    qp_type = models.CharField(max_length=16, default='QP1', help_text='Question paper type: QP1, OE, etc.')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'COE Student Marks'
+        verbose_name_plural = 'COE Student Marks'
+
+    def __str__(self):
+        return f"{self.dummy_number} ({self.qp_type})"
+

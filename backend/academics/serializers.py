@@ -352,13 +352,14 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     curriculum_row_details = serializers.SerializerMethodField(read_only=True)
     elective_subject_details = serializers.SerializerMethodField(read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
+    question_paper_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     custom_subject = serializers.CharField(allow_null=True, required=False)
 
     class Meta:
         model = TeachingAssignment
 
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments', 'elective_subject_details')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments', 'elective_subject_details', 'question_paper_type')
         enabled_assessments = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def get_subject(self, obj):
@@ -592,6 +593,34 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
 
         return super().create(validated_data)
 
+    def get_question_paper_type(self, obj):
+        """Return question_paper_type from the curriculum/elective row.
+
+        Mirrors the logic from TeachingAssignmentInfoSerializer so that
+        the main TA list endpoint also exposes QP type information.
+        """
+        try:
+            # Elective assignments store question_paper_type on ElectiveSubject
+            if getattr(obj, 'elective_subject', None):
+                qpt = getattr(obj.elective_subject, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+
+            row = getattr(obj, 'curriculum_row', None)
+            if row:
+                # Prefer CurriculumDepartment.question_paper_type (current),
+                # fall back to CurriculumMaster.qp_type (legacy)
+                qpt = getattr(row, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+                master = getattr(row, 'master', None)
+                if master:
+                    return getattr(master, 'qp_type', None)
+        except Exception:
+            return None
+
+        return None
+
     def get_elective_subject_details(self, obj):
         try:
             es = getattr(obj, 'elective_subject', None)
@@ -603,6 +632,8 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 'id': getattr(es, 'id', None),
                 'course_code': getattr(es, 'course_code', None),
                 'course_name': getattr(es, 'course_name', None),
+                'class_type': getattr(es, 'class_type', None),
+                'question_paper_type': getattr(es, 'question_paper_type', None),
                 'department_id': getattr(dept, 'id', None),
                 'department_display': str(dept) if dept else None,
                 'parent_id': getattr(parent, 'id', None),
@@ -1468,13 +1499,13 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'user_id',
-            'ext_uid',
+            'external_id',
             'username',
             'email',
             'full_name',
             'salutation',
             'designation',
-            'organisation',
+            'college_name',
             'teaching',
             'faculty_id',
             'department',
@@ -1497,7 +1528,7 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'ext_uid', 'username', 'email', 'full_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'external_id', 'username', 'email', 'full_name', 'created_at', 'updated_at']
 
     def get_username(self, obj):
         try:

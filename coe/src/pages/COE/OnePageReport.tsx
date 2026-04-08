@@ -3,8 +3,8 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JsBarcode from 'jsbarcode';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
-import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
-import { listFinalizedBundleConfigs } from '../../utils/coeBundleFinalizeStore';
+import { getCourseKey, fetchCourseSelectionMapFromApi, QpType } from './courseSelectionStorage';
+import { listFinalizedBundleConfigs, hydrateBundleFinalizeStore } from '../../utils/coeBundleFinalizeStore';
 import krLogoSrc from '../../assets/krlogo.png';
 import newBannerSrc from '../../assets/newban.jpeg';
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
@@ -18,8 +18,6 @@ const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
-  RE: '9',
-  SH: '0',
   CIVIL: '3',
   CSE: '4',
   ECE: '5',
@@ -39,6 +37,30 @@ const DEPARTMENT_SHORT: Record<string, string> = {
   AIML: 'AM',
 };
 
+// Read course bundle dummy store (same key used by BundleAllocation AdditionalPage)
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
+
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
+
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function normalizeBundleNameForCompare(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+    .replace(/\s*\(ADDITIONAL\)$/, '');
+}
+
 type BundleStudent = {
   dummy: string;
   reg_no: string;
@@ -54,8 +76,23 @@ type FinalizedBundle = {
   department: string;
   course_code: string;
   course_name: string;
+  qpType: QpType;
   students: BundleStudent[];
 };
+
+function getMaxMarksForQpType(qpType: QpType): number {
+  switch (qpType) {
+    case 'TCPR':
+      return 80;
+    case 'OE':
+      return 60;
+    case 'QP1':
+    case 'QP2':
+    case 'TCPL':
+    default:
+      return 100;
+  }
+}
 
 type BundleSearchResult =
   | { status: 'ready'; bundle: FinalizedBundle }
@@ -153,6 +190,7 @@ function numberToWords(value: number): string {
 export default function OnePageReport() {
   const [bundleCode, setBundleCode] = useState('');
   const [searching, setSearching] = useState(false);
+  const [hydrating, setHydrating] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [foundBundle, setFoundBundle] = useState<FinalizedBundle | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -163,9 +201,12 @@ export default function OnePageReport() {
   useEffect(() => {
     // Hydrate KV stores from DB on mount
     Promise.all([
+      hydrateBundleFinalizeStore(),
       hydrateShuffledListStore(),
       hydrateMarksStore(),
-    ]).catch(() => {});
+    ])
+      .catch(() => {})
+      .finally(() => setHydrating(false));
   }, []);
 
   useEffect(() => {
@@ -243,12 +284,81 @@ export default function OnePageReport() {
             };
           });
 
-          const isCourseShuffled = students.some((student, idx) => {
-            const original = course.students[idx];
-            if (!original) return false;
-            return student.reg_no !== original.reg_no || student.name !== original.name;
-          });
-          if (!isCourseShuffled) continue;
+          // Prepare a map by dummy for quick lookup
+          const studentsByDummy = new Map(students.map((s) => [String(s.dummy || '').trim(), s]));
+
+          // Check if this course has any "additional" bundles stored in KV (course-bundle-dummies).
+          // If a matching additional bundle is found, prefer those exact dummies for the one-page report.
+          try {
+            const bundleStore = readCourseBundleDummyStore();
+            const deptFilterKey = `${deptBlock.department}::${semester}`;
+            const globalFilterKey = `${department}::${semester}`;
+            const courseBundleMap = bundleStore[deptFilterKey] || bundleStore[globalFilterKey] || {};
+
+            const normalizedCourseCode = String(course.course_code || '').trim();
+            const normalizedCourseName = String(course.course_name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+            let matchingKeys: string[] = [];
+            if (normalizedCourseCode) {
+              const prefix = `${deptBlock.department}::${semester}::${normalizedCourseCode}::`;
+              const candidates = Object.keys(courseBundleMap).filter((k) => k.startsWith(prefix));
+              if (candidates.length <= 1) {
+                matchingKeys = candidates;
+              } else {
+                const exactByName = candidates.filter((k) => String((k.split('::')[3] || '')).trim().toLowerCase().replace(/\s+/g, ' ') === normalizedCourseName);
+                matchingKeys = exactByName.length > 0 ? exactByName : candidates;
+              }
+            }
+
+            const authKey = matchingKeys.length > 0 ? matchingKeys[0] : null;
+            const authCourse = authKey ? courseBundleMap[authKey] : null;
+            const authBundles = authCourse?.bundles || {};
+
+            for (const [bundleName, dummies] of Object.entries(authBundles)) {
+              const normalizedBundle = normalizeBundleNameForCompare(bundleName);
+              if (normalizedBundle !== normalizedCode && normalizeBundleNameForCompare(bundleName + ' (Additional)') !== normalizedCode) continue;
+
+              // Build students array for this additional bundle using the dummy list stored
+              const bundleStudents: BundleStudent[] = (dummies || []).map((dummy) => {
+                const key = String(dummy || '').trim();
+                const saved = savedByDummy.get(key);
+                const persisted = persistedByDummy[key];
+                const current = studentsByDummy.get(key);
+                const marksData = readStudentTotalMarks(key);
+                return {
+                  dummy: key,
+                  reg_no: saved?.reg_no || persisted?.reg_no || current?.reg_no || '',
+                  name: saved?.name || persisted?.name || current?.name || '-',
+                  hasSavedMarks: marksData.hasSavedMarks,
+                  totalMarks: marksData.totalMarks,
+                };
+              });
+
+              const hasAtLeastOneMarkEntry = bundleStudents.some((s) => s.hasSavedMarks);
+              if (!hasAtLeastOneMarkEntry) {
+                // Found bundle but marks missing for all — indicate not_finalized
+                return { status: 'not_finalized' } as BundleSearchResult;
+              }
+
+              return {
+                status: 'ready',
+                bundle: {
+                  bundleName: bundleName,
+                  semester,
+                  bundleSize: cfg.bundleSize,
+                  department: deptBlock.department,
+                  course_code: course.course_code || 'NO_CODE',
+                  course_name: course.course_name || 'Unnamed Course',
+                  qpType: selection?.qpType || 'QP1',
+                  students: bundleStudents,
+                },
+              } as BundleSearchResult;
+            }
+          } catch (e) {
+            // ignore KV errors and fallback to generated bundles
+          }
+
+          // Note: Bundle barcode view generates bundles for all ESE courses,
+          // so we should not filter by isCourseShuffled here to ensure consistency.
 
           const deptShort =
             DEPARTMENT_SHORT[deptBlock.department] ||
@@ -263,8 +373,8 @@ export default function OnePageReport() {
 
             if (bundleName.toUpperCase() !== normalizedCode) continue;
 
-            const isFinalized = bundleStudents.length > 0 && bundleStudents.every((student) => student.hasSavedMarks);
-            if (!isFinalized) {
+            const hasAtLeastOneMarkEntry = bundleStudents.some((student) => student.hasSavedMarks);
+            if (!hasAtLeastOneMarkEntry) {
               foundNotFinalized = true;
               continue;
             }
@@ -278,6 +388,7 @@ export default function OnePageReport() {
                 department: deptBlock.department,
                 course_code: course.course_code || 'NO_CODE',
                 course_name: course.course_name || 'Unnamed Course',
+                qpType: selection?.qpType || 'QP1',
                 students: bundleStudents,
               },
             };
@@ -311,7 +422,7 @@ export default function OnePageReport() {
         return;
       }
       if (result.status === 'not_finalized') {
-        setError('Bundle found, but marks are not fully finalized for all students in this bundle.');
+        setError('Bundle found, but at least one mark entry is required to generate one-page report.');
         return;
       }
       setError('Bundle not found. Check the scanned/entered bundle number.');
@@ -331,6 +442,7 @@ export default function OnePageReport() {
     const contentWidth = pageWidth - margin * 2;
     const headerTop = 12;
     const headerHeight = 26;
+    const tableStartY = headerTop + headerHeight + 16;
 
     let leftLogoDataUrl = '';
     let rightLogoDataUrl = '';
@@ -393,7 +505,7 @@ export default function OnePageReport() {
       drawLogoInBox(leftLogoDataUrl, leftLogoSize, leftBoxX, leftBoxY, leftBoxWidth, leftBoxHeight);
       drawLogoInBox(rightLogoDataUrl, rightLogoSize, rightBoxX, rightBoxY, rightBoxSize, rightBoxSize);
 
-      const textCenterX = pageWidth / 2;
+      const textCenterX = pageWidth / 2 + 14;
       const textCenterY = headerTop + headerHeight / 2;
       doc.setFont('times', 'bolditalic');
       doc.setFontSize(12);
@@ -421,7 +533,7 @@ export default function OnePageReport() {
     const yyyy = String(today.getFullYear());
     doc.text(`DATE: ${dd}-${mm}-${yyyy}`, pageWidth - margin - 3, headerTop + headerHeight + 12, { align: 'right' });
 
-    const maxMarkPerStudent = 100;
+    const maxMarkPerStudent = getMaxMarksForQpType(bundle.qpType);
     const studentRows = bundle.students.map((student, idx) => {
       const mark = Math.max(0, Math.floor(Number(student.totalMarks || 0)));
       return [String(idx + 1), student.dummy, String(maxMarkPerStudent), String(mark), numberToWords(mark), ''];
@@ -460,8 +572,8 @@ export default function OnePageReport() {
     const tableBody = [...studentRows, summaryRow] as any[];
 
     autoTable(doc, {
-      startY: headerTop + headerHeight + 16,
-      margin: { left: margin, right: margin, bottom: 26 },
+      startY: tableStartY,
+      margin: { top: tableStartY, left: margin, right: margin, bottom: 26 },
       head: [['S.NO', 'DUMMY NUMBER', 'MAX MARK', 'MARK', 'MARKS IN WORDS', 'REMARKS']],
       body: tableBody,
       theme: 'grid',
@@ -499,15 +611,14 @@ export default function OnePageReport() {
     const signLineY = pageHeight - margin - 10;
     const signLabelY = signLineY + 5;
     const leftX = margin + 8;
-    const rightX = pageWidth - margin - 74;
     const signWidth = 66;
+    const centerX = (pageWidth - signWidth) / 2;
+    const rightX = pageWidth - margin - 74;
 
-    doc.setLineWidth(0.3);
-    doc.line(leftX, signLineY, leftX + signWidth, signLineY);
-    doc.line(rightX, signLineY, rightX + signWidth, signLineY);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.text('Valuator Details', leftX + signWidth / 2, signLabelY, { align: 'center' });
+    doc.text('AE', centerX + signWidth / 2, signLabelY, { align: 'center' });
     doc.text('Cheif Examiner Signature', rightX + signWidth / 2, signLabelY, { align: 'center' });
 
     return doc;
@@ -595,15 +706,16 @@ export default function OnePageReport() {
           <button
             type="button"
             onClick={() => void handleSearch()}
-            disabled={searching}
+            disabled={searching || hydrating}
             className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {searching ? 'Searching...' : 'Find Bundle'}
+            {hydrating ? 'Loading...' : searching ? 'Searching...' : 'Find Bundle'}
           </button>
         </div>
       </div>
 
-      {searching ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Searching finalized bundle...</div> : null}
+      {hydrating ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Loading bundle data from server...</div> : null}
+      {!hydrating && searching ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Searching finalized bundle...</div> : null}
       {error ? <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div> : null}
 
       {!searching && !error && foundBundle ? (

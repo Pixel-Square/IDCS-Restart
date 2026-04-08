@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Loader2, Send, Mail, Lock, Eye, EyeOff, ArrowRight, UserPlus } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, Send, Mail, Lock, Eye, EyeOff, ArrowRight, UserPlus, Search, Building2 } from 'lucide-react';
 import idcsLogo from '../../assets/idcs-logo.png';
 import krctLogo from '../../assets/krlogo.png';
 
@@ -33,6 +33,15 @@ interface SubmissionResult {
   email?: string;
 }
 
+interface CollegeResult {
+  id: number;
+  code: string;
+  name: string;
+  short_name: string;
+  city: string;
+  display: string;
+}
+
 type Step = 'email' | 'signup' | 'form' | 'success' | 'already-registered';
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -61,6 +70,10 @@ export default function ExtStaffRegisterPage() {
   const [userId, setUserId] = useState<number | null>(null);
   const [extUid, setExtUid] = useState<string | null>(null);
   
+  // Skip email state
+  const [skipEmail, setSkipEmail] = useState(false);
+  const [fullName, setFullName] = useState('');
+  
   // Form filling step state
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -69,6 +82,82 @@ export default function ExtStaffRegisterPage() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<Record<string, File>>({});
   const [result, setResult] = useState<SubmissionResult | null>(null);
+  
+  // College autocomplete state
+  const [collegeQuery, setCollegeQuery] = useState('');
+  const [collegeResults, setCollegeResults] = useState<CollegeResult[]>([]);
+  const [selectedCollege, setSelectedCollege] = useState<CollegeResult | null>(null);
+  const [collegeSearching, setCollegeSearching] = useState(false);
+  const [showCollegeDropdown, setShowCollegeDropdown] = useState(false);
+  const collegeDropdownRef = useRef<HTMLDivElement>(null);
+  const collegeSearchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── College search with debounce ───────────────────────────────────────────
+
+  const searchColleges = useCallback(async (query: string) => {
+    if (query.length < 2) {
+      setCollegeResults([]);
+      return;
+    }
+    
+    setCollegeSearching(true);
+    try {
+      const res = await fetch(`/api/colleges/search/?q=${encodeURIComponent(query)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCollegeResults(data.results || []);
+      }
+    } catch (e) {
+      console.error('College search error:', e);
+    } finally {
+      setCollegeSearching(false);
+    }
+  }, []);
+
+  const handleCollegeInputChange = (value: string) => {
+    setCollegeQuery(value);
+    setSelectedCollege(null);
+    // Clear the college_name value since no college is selected
+    setValues((prev) => {
+      const n = { ...prev };
+      delete n['college_name'];
+      return n;
+    });
+    setShowCollegeDropdown(true);
+    
+    // Debounce search
+    if (collegeSearchTimeout.current) {
+      clearTimeout(collegeSearchTimeout.current);
+    }
+    collegeSearchTimeout.current = setTimeout(() => {
+      searchColleges(value);
+    }, 300);
+  };
+
+  const handleSelectCollege = (college: CollegeResult) => {
+    setSelectedCollege(college);
+    setCollegeQuery(college.name);
+    setValues((prev) => ({ ...prev, college_name: college.name }));
+    setShowCollegeDropdown(false);
+    setCollegeResults([]);
+    // Clear any field error for college_name
+    setFieldErrors((prev) => {
+      const n = { ...prev };
+      delete n['college_name'];
+      return n;
+    });
+  };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (collegeDropdownRef.current && !collegeDropdownRef.current.contains(e.target as Node)) {
+        setShowCollegeDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // ── Load form ──────────────────────────────────────────────────────────────
 
@@ -149,6 +238,13 @@ export default function ExtStaffRegisterPage() {
     
     const errors: Record<string, string> = {};
     
+    // Validate full name if skipping email
+    if (skipEmail) {
+      if (!fullName.trim()) {
+        errors.full_name = 'Full name is required';
+      }
+    }
+    
     if (!password) {
       errors.password = 'Password is required';
     } else if (password.length < 6) {
@@ -170,14 +266,22 @@ export default function ExtStaffRegisterPage() {
     setSignupErrors({});
     
     try {
+      const payload: Record<string, any> = {
+        password,
+        confirm_password: confirmPassword,
+      };
+      
+      if (skipEmail) {
+        payload.skip_email = true;
+        payload.full_name = fullName.trim();
+      } else {
+        payload.email = email.trim().toLowerCase();
+      }
+      
       const res = await fetch(`/api/academics/ext-staff-form/public/${formCode}/signup/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
-          confirm_password: confirmPassword,
-        }),
+        body: JSON.stringify(payload),
       });
       
       const data = await res.json();
@@ -235,6 +339,15 @@ export default function ExtStaffRegisterPage() {
     const errors: Record<string, string> = {};
     formData.fields.forEach((field) => {
       if (field.field === 'email') return; // Skip email validation
+      
+      // Special validation for college_name - must be selected from dropdown
+      if (field.field === 'college_name' && field.enabled) {
+        if (!selectedCollege) {
+          errors[field.field] = 'Please select a college from the list';
+        }
+        return;
+      }
+      
       if (field.required) {
         // For file fields, check the files state
         if (field.type === 'file') {
@@ -417,11 +530,25 @@ export default function ExtStaffRegisterPage() {
             <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-12 h-12 text-green-500" />
             </div>
-            <h2 className="mt-4 text-2xl font-bold text-gray-800">Registration Successful!</h2>
+            <h2 className="mt-4 text-2xl font-bold text-gray-800">Account Created Successfully!</h2>
             <p className="mt-2 text-gray-600">{result.message}</p>
             
+            {/* Prominent External ID Display */}
+            <div className="mt-6 p-4 bg-green-50 border-2 border-green-200 rounded-xl">
+              <div className="flex items-center justify-center gap-2 text-green-700">
+                <CheckCircle2 className="w-5 h-5" />
+                <span className="font-semibold">Your External ID is:</span>
+              </div>
+              <code className="mt-2 block text-2xl font-bold text-green-800 bg-white px-4 py-2 rounded-lg border border-green-300">
+                {result.ext_uid}
+              </code>
+              <p className="mt-2 text-sm text-green-600">
+                Please save this ID for future reference
+              </p>
+            </div>
+            
             <div className="mt-6 bg-gray-50 rounded-lg p-4 text-left">
-              <h3 className="font-semibold text-gray-800 mb-2">Your Details:</h3>
+              <h3 className="font-semibold text-gray-800 mb-2">Your Account Details:</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Username:</span>
@@ -431,16 +558,8 @@ export default function ExtStaffRegisterPage() {
                   <span className="text-gray-600">Email:</span>
                   <span className="font-medium text-gray-800">{result.email}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">External UID:</span>
-                  <code className="bg-[#fdf2f4] px-2 py-1 rounded text-[#6f1d34] font-bold">{result.ext_uid}</code>
-                </div>
               </div>
             </div>
-            
-            <p className="mt-6 text-sm text-gray-500">
-              Please save your External UID for future reference.
-            </p>
           </div>
         </div>
       </div>
@@ -505,6 +624,19 @@ export default function ExtStaffRegisterPage() {
                 </>
               )}
             </button>
+            
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setSkipEmail(true);
+                  setStep('signup');
+                }}
+                className="w-full text-center text-sm text-gray-500 hover:text-[#6f1d34] transition-colors"
+              >
+                Continue without email
+              </button>
+            </div>
           </form>
         </div>
       </div>
@@ -519,21 +651,53 @@ export default function ExtStaffRegisterPage() {
           <LogoHeader />
           <div className="bg-[#6f1d34] px-6 py-4 text-white">
             <h1 className="text-xl font-bold">Create Your Account</h1>
-            <p className="text-sm text-white/80 mt-1">Step 2 of 3: Set up your password</p>
+            <p className="text-sm text-white/80 mt-1">Step 2 of 3: Set up your {skipEmail ? 'name and ' : ''}password</p>
           </div>
           <form onSubmit={handleSignup} className="bg-white rounded-b-2xl shadow-xl p-6">
             <div className="text-center mb-6">
               <div className="w-16 h-16 bg-[#fdf2f4] rounded-full flex items-center justify-center mx-auto mb-3">
                 <UserPlus className="w-8 h-8 text-[#6f1d34]" />
               </div>
-              <p className="text-sm text-gray-600">
-                Creating account for: <strong className="text-[#6f1d34]">{email}</strong>
-              </p>
+              {skipEmail ? (
+                <p className="text-sm text-gray-600">Register without email</p>
+              ) : (
+                <p className="text-sm text-gray-600">
+                  Creating account for: <strong className="text-[#6f1d34]">{email}</strong>
+                </p>
+              )}
             </div>
             
             {signupErrors.form && (
               <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-lg text-sm text-red-700">
                 {signupErrors.form}
+              </div>
+            )}
+            
+            {skipEmail && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Full Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => {
+                    setFullName(e.target.value);
+                    setSignupErrors((prev) => {
+                      const n = { ...prev };
+                      delete n.full_name;
+                      return n;
+                    });
+                  }}
+                  placeholder="Enter your full name"
+                  className={`w-full px-4 py-3 border rounded-lg text-sm focus:ring-2 focus:ring-[#6f1d34] focus:border-transparent ${
+                    signupErrors.full_name ? 'border-red-300 bg-red-50' : 'border-gray-300'
+                  }`}
+                  autoFocus
+                />
+                {signupErrors.full_name && (
+                  <p className="mt-1 text-sm text-red-500">{signupErrors.full_name}</p>
+                )}
               </div>
             )}
             
@@ -608,7 +772,10 @@ export default function ExtStaffRegisterPage() {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => setStep('email')}
+                onClick={() => {
+                  setSkipEmail(false);
+                  setStep('email');
+                }}
                 className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
               >
                 Back
@@ -722,6 +889,70 @@ export default function ExtStaffRegisterPage() {
                     }`}
                     placeholder={`Enter ${field.label.toLowerCase()}`}
                   />
+                ) : field.field === 'college_name' ? (
+                  /* College Autocomplete */
+                  <div className="relative" ref={collegeDropdownRef}>
+                    <div className="relative">
+                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                      <input
+                        type="text"
+                        value={collegeQuery}
+                        onChange={(e) => handleCollegeInputChange(e.target.value)}
+                        onFocus={() => setShowCollegeDropdown(true)}
+                        className={`w-full pl-10 pr-10 py-3 border rounded-lg text-sm focus:ring-2 focus:ring-[#6f1d34] focus:border-transparent ${
+                          fieldErrors[field.field] ? 'border-red-300 bg-red-50' : selectedCollege ? 'border-green-300 bg-green-50' : 'border-gray-300'
+                        }`}
+                        placeholder="Type to search colleges..."
+                        autoComplete="off"
+                      />
+                      {collegeSearching && (
+                        <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 animate-spin" />
+                      )}
+                      {selectedCollege && !collegeSearching && (
+                        <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />
+                      )}
+                    </div>
+                    
+                    {/* Dropdown results */}
+                    {showCollegeDropdown && collegeQuery.length >= 2 && (
+                      <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-auto">
+                        {collegeResults.length > 0 ? (
+                          collegeResults.map((college) => (
+                            <button
+                              key={college.id}
+                              type="button"
+                              onClick={() => handleSelectCollege(college)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 border-b border-gray-100 last:border-b-0 focus:outline-none focus:bg-gray-50"
+                            >
+                              <div className="text-sm font-medium text-gray-900">{college.name}</div>
+                              {college.city && (
+                                <div className="text-xs text-gray-500 mt-0.5">{college.city}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : !collegeSearching ? (
+                          <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                            <AlertCircle className="w-5 h-5 mx-auto mb-1 text-gray-400" />
+                            No colleges found for "{collegeQuery}"
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                    
+                    {/* Helper text */}
+                    {!selectedCollege && collegeQuery.length < 2 && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        <Search className="inline w-3 h-3 mr-1" />
+                        Type at least 2 characters to search
+                      </p>
+                    )}
+                    {selectedCollege && (
+                      <p className="mt-1 text-xs text-green-600">
+                        <CheckCircle2 className="inline w-3 h-3 mr-1" />
+                        Selected: {selectedCollege.name}
+                      </p>
+                    )}
+                  </div>
                 ) : (
                   <input
                     type={field.type === 'tel' ? 'tel' : 'text'}

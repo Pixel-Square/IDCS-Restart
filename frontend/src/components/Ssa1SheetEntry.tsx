@@ -29,7 +29,7 @@ import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo } from '../utils/excelImport';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
@@ -350,6 +350,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
 
   // When published, the list normally locks unless IQAC explicitly opens editing.
   // If IQAC disables edit requests entirely, bypass that published lock state.
@@ -1022,7 +1023,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
-    if (!editRequestsEnabled) {
+    if (!markManagerEditRequestsEnabled) {
       alert('Edit requests are disabled by IQAC.');
       return;
     }
@@ -2471,10 +2472,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 onClick={() => {
                   // If Mark Manager has not been confirmed (no snapshot), open confirm modal
                   // to allow selecting BTLs and saving. If already confirmed, open request mode.
-                  if (markManagerConfirmed && !editRequestsEnabled) return;
+                  if (markManagerConfirmed && !markManagerEditRequestsEnabled) return;
                   setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
                 }}
-                disabled={!subjectId || markManagerBusy || (markManagerConfirmed && !editRequestsEnabled)}
+                disabled={!subjectId || markManagerBusy || (markManagerConfirmed && !markManagerEditRequestsEnabled)}
               >
                 {markManagerConfirmed ? 'Edit' : 'Save'}
               </button>

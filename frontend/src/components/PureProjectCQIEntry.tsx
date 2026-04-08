@@ -13,7 +13,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import fetchWithAuth from '../services/fetchAuth';
-import { fetchPublishedReview1, fetchPublishedReview2 } from '../services/obe';
+import { fetchPublishedLabSheet, fetchPublishedReview1, fetchPublishedReview2 } from '../services/obe';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import { useCqiEditRequestsEnabled } from '../utils/requestControl';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
@@ -64,17 +64,55 @@ function extractReviewMark(reviewRes: any, studentId: number | string): number |
       const componentMarks = (row as any)?.reviewComponentMarks && typeof (row as any).reviewComponentMarks === 'object'
         ? Object.values((row as any).reviewComponentMarks)
         : [];
+      let hasNumeric = false;
       const sum = componentMarks.reduce<number>((acc, raw) => {
         const n = toNumOrNull(raw);
+        if (n != null) hasNumeric = true;
         return acc + (n == null ? 0 : n);
       }, 0);
-      if (sum > 0) return clamp(sum, 0, REVIEW_MAX);
+      if (hasNumeric) return clamp(sum, 0, REVIEW_MAX);
     }
   }
 
   // Published marks
   const total = toNumOrNull(reviewRes?.marks?.[sid]);
   return total == null ? null : clamp(Number(total), 0, REVIEW_MAX);
+}
+
+/**
+ * Project review pages are published through lab-published-sheet endpoints.
+ * Read per-student total directly from sheet rows when marks endpoint is empty.
+ */
+function extractReviewMarkFromLabSheet(sheetRes: any, studentId: number | string): number | null {
+  const sid = String(studentId);
+  const rowsByStudentId =
+    (sheetRes?.data?.sheet?.rowsByStudentId && typeof sheetRes.data.sheet.rowsByStudentId === 'object')
+      ? sheetRes.data.sheet.rowsByStudentId
+      : (sheetRes?.data?.rowsByStudentId && typeof sheetRes.data.rowsByStudentId === 'object')
+        ? sheetRes.data.rowsByStudentId
+        : null;
+
+  if (!rowsByStudentId) return null;
+  const row = rowsByStudentId[sid];
+  if (!row || typeof row !== 'object') return null;
+
+  const ciaExamTotal = toNumOrNull((row as any)?.ciaExam);
+  if (ciaExamTotal != null) return clamp(ciaExamTotal, 0, REVIEW_MAX);
+
+  const componentMarks =
+    (row as any)?.reviewComponentMarks && typeof (row as any).reviewComponentMarks === 'object'
+      ? Object.values((row as any).reviewComponentMarks)
+      : [];
+
+  let hasNumeric = false;
+  const sum = componentMarks.reduce<number>((acc, raw) => {
+    const n = toNumOrNull(raw);
+    if (n != null) hasNumeric = true;
+    return acc + (n == null ? 0 : n);
+  }, 0);
+  if (hasNumeric) return clamp(sum, 0, REVIEW_MAX);
+
+  return null;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -128,6 +166,8 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
   const [roster, setRoster]       = useState<Student[]>([]);
   const [review1Res, setReview1Res] = useState<any>(null);
   const [review2Res, setReview2Res] = useState<any>(null);
+  const [review1SheetRes, setReview1SheetRes] = useState<any>(null);
+  const [review2SheetRes, setReview2SheetRes] = useState<any>(null);
   const [loading, setLoading]     = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -156,6 +196,8 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
     Promise.all([
       fetchPublishedReview1(subjectId, taId).catch(() => ({ marks: {} })),
       fetchPublishedReview2(subjectId, taId).catch(() => ({ marks: {} })),
+      fetchPublishedLabSheet('review1', subjectId, taId).catch(() => ({ data: null })),
+      fetchPublishedLabSheet('review2', subjectId, taId).catch(() => ({ data: null })),
       fetchTeachingAssignmentRoster(taId).catch(() => null),
       // CQI draft
       fetchWithAuth(
@@ -167,11 +209,13 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
         `/api/obe/cqi-published/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${taId}&assessment_type=project_combined&page_key=project_combined_cqi&co_numbers=1`,
         { method: 'GET' },
       ).catch(() => null),
-    ]).then(([r1Res, r2Res, rosterRes, draftHttpRes, pubHttpRes]) => {
+    ]).then(([r1Res, r2Res, r1Sheet, r2Sheet, rosterRes, draftHttpRes, pubHttpRes]) => {
       if (!mounted) return;
 
       setReview1Res(r1Res);
       setReview2Res(r2Res);
+      setReview1SheetRes(r1Sheet);
+      setReview2SheetRes(r2Sheet);
 
       const students: Student[] = Array.isArray((rosterRes as any)?.students)
         ? (rosterRes as any).students
@@ -228,8 +272,8 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
     return roster.map((s) => {
       const sid = String(s.id);
-      const review1 = extractReviewMark(review1Res, sid);
-      const review2 = extractReviewMark(review2Res, sid);
+      const review1 = extractReviewMark(review1Res, sid) ?? extractReviewMarkFromLabSheet(review1SheetRes, sid);
+      const review2 = extractReviewMark(review2Res, sid) ?? extractReviewMarkFromLabSheet(review2SheetRes, sid);
 
       const hasSome = review1 != null || review2 != null;
       const combined = hasSome ? round2((review1 ?? 0) + (review2 ?? 0)) : null;
@@ -253,7 +297,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
       return { student: s, review1, review2, combined, needsCqi, afterCqi };
     });
-  }, [roster, review1Res, review2Res, cqiEntries]);
+  }, [roster, review1Res, review2Res, review1SheetRes, review2SheetRes, cqiEntries]);
 
   // ── Save draft ────────────────────────────────────────────────────────
   async function saveDraft() {

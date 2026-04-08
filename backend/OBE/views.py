@@ -107,11 +107,11 @@ from .models import CdapRevision, CdapActiveLearningAnalysisMapping, ObeAssessme
 from .services.cdap_parser import parse_cdap_excel
 from .services.articulation_parser import parse_articulation_matrix_excel
 from .services.articulation_from_revision import build_articulation_matrix_from_revision_rows
+from .services.final_internal_marks import recompute_final_internal_marks
 from accounts.utils import get_user_permissions
 from django.core.files.storage import default_storage
 from django.conf import settings
 import os
-from .services.final_internal_marks import recompute_final_internal_marks
 
 
 def _student_display_name(user) -> str:
@@ -2294,6 +2294,102 @@ def class_type_weights_upsert(request):
             }
 
     return Response({'results': out})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def special_courses_list(request):
+    """IQAC: list all active SPECIAL class-type teaching assignments with CO weights.
+
+    Returns:
+      { results: [ { id, subject_name, subject_code, section_name, academic_year,
+                     department, staff_name, co_weights: { co1, co2, co3, co4, co5 } } ] }
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    from academics.models import TeachingAssignment
+    from .models import SpecialCourseCoWeights
+
+    qs = (
+        TeachingAssignment.objects
+        .filter(is_active=True)
+        .select_related(
+            'staff', 'staff__user',
+            'section', 'section__batch', 'section__batch__course',
+            'section__batch__course__department',
+            'academic_year',
+            'curriculum_row', 'curriculum_row__master',
+        )
+    )
+
+    results = []
+    for ta in qs:
+        # Resolve class type from curriculum_row
+        ct = ''
+        try:
+            row = getattr(ta, 'curriculum_row', None)
+            if row:
+                ct = str(getattr(row, 'class_type', '') or getattr(getattr(row, 'master', None), 'class_type', '') or '').upper()
+        except Exception:
+            ct = ''
+
+        if ct != 'SPECIAL':
+            continue
+
+        # Resolve display fields
+        subject_code = subject_name = ''
+        try:
+            row = ta.curriculum_row
+            if row:
+                subject_code = str(getattr(row, 'course_code', '') or getattr(getattr(row, 'master', None), 'course_code', '') or '')
+                subject_name = str(getattr(row, 'course_name', '') or getattr(getattr(row, 'master', None), 'course_name', '') or '')
+            elif getattr(ta, 'subject', None):
+                subject_code = str(getattr(ta.subject, 'code', '') or '')
+                subject_name = str(getattr(ta.subject, 'name', '') or '')
+        except Exception:
+            pass
+
+        section_name = str(getattr(getattr(ta, 'section', None), 'name', '') or '')
+        dept = ''
+        try:
+            dept = str(getattr(getattr(getattr(getattr(ta, 'section', None), 'batch', None), 'course', None), 'department', None) or '').strip()
+            if not dept:
+                dept = str(getattr(getattr(ta.curriculum_row, 'department', None) if getattr(ta, 'curriculum_row', None) else None, 'name', '') or '')
+        except Exception:
+            pass
+
+        academic_year = str(getattr(getattr(ta, 'academic_year', None), 'name', '') or getattr(getattr(ta, 'academic_year', None), 'year', '') or '')
+        staff_name = ''
+        try:
+            sp = getattr(ta, 'staff', None)
+            if sp:
+                u = getattr(sp, 'user', None)
+                staff_name = str(getattr(u, 'get_full_name', lambda: '')() or getattr(sp, 'name', '') or '')
+        except Exception:
+            pass
+
+        # CO weights
+        try:
+            co_obj = SpecialCourseCoWeights.objects.filter(teaching_assignment=ta).first()
+            co_weights = co_obj.weights if co_obj else {}
+        except Exception:
+            co_weights = {}
+
+        results.append({
+            'id': ta.id,
+            'subject_code': subject_code,
+            'subject_name': subject_name,
+            'section_name': section_name,
+            'academic_year': academic_year,
+            'department': dept,
+            'staff_name': staff_name,
+            'co_weights': co_weights,
+        })
+
+    return Response({'results': results})
 
 
 @api_view(['GET'])

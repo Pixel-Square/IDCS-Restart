@@ -43,7 +43,6 @@ export type CoeSavedDummyMapItem = {
   dummy: string;
   reg_no: string;
   name: string;
-  department?: string | null;
   semester: string;
   qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
@@ -227,27 +226,83 @@ export async function saveCoeCourseSel(key: string, selections: Record<string, C
   return res.json();
 }
 
+/* ── External Staff Management ─────────────────────────── */
+
 export type ExternalStaffProfile = {
   id: number;
   staff_id: string;
   first_name: string;
   last_name: string;
+  department_name: string | null;
   email: string;
-  department_name: string;
-  login_code: string;
-  status: string;
+  login_code: string | null;
 };
 
 export async function fetchExternalStaff(): Promise<ExternalStaffProfile[]> {
-  const res = await fetchWithAuth('/api/coe/external-staff/db-mirror/?strict=0');
-  if (!res.ok) throw new Error('Failed to fetch external staff');
+  const res = await fetchWithAuth('/api/coe/external-staff/');
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch external staff: ${res.status} ${text}`);
+  }
+  const data = await res.json();
+  return data.results || data;
+}
+
+export async function assignExternalCodes(): Promise<{ message: string; assigned_count: number }> {
+  const res = await fetchWithAuth('/api/coe/external-staff/assign-codes/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to assign external codes: ${res.status} ${text}`);
+  }
   return res.json();
 }
 
-export async function assignExternalCodes(): Promise<{ message: string; count: number }> {
-  const res = await fetchWithAuth('/api/coe/external-staff/assign-codes/?strict=1', {
-    method: 'POST'
+/* ── COE Student Marks (bulk) ─────────────────────────── */
+
+export type CoeStudentMarksEntry = {
+  dummy_number: string;
+  marks: Record<string, any> | null;
+  qp_type: string | null;
+};
+
+export async function fetchCoeStudentMarksBulk(
+  dummies: string[],
+): Promise<{ entries: CoeStudentMarksEntry[] }> {
+  const res = await fetchWithAuth('/api/coe/student-marks/bulk/', {
+    method: 'POST',
+    body: JSON.stringify({ dummies }),
+    headers: { 'Content-Type': 'application/json' },
   });
-  if (!res.ok) throw new Error('Failed to assign external codes');
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch bulk marks: ${res.status} ${text}`);
+  }
+  return res.json();
+}
+
+/* ── COE Final Result (server-side resolved) ──────────── */
+
+export type CoeFinalResultEntry = {
+  reg_no: string;
+  name: string;
+  course_code: string;
+  course_name: string;
+  dummy_number: string;
+  total_marks: number;
+};
+
+export async function fetchCoeFinalResult(
+  department: string,
+  semester: string,
+): Promise<{ department: string; semester: string; results: CoeFinalResultEntry[]; message?: string }> {
+  const params = new URLSearchParams({ department, semester });
+  const res = await fetchWithAuth(`/api/coe/final-result/?${params.toString()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch final result: ${res.status} ${text}`);
+  }
   return res.json();
 }

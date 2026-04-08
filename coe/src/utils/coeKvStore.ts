@@ -26,23 +26,8 @@ export async function kvHydrate(key: string): Promise<any> {
       return json.data;
     }
 
-    // DB is empty — check if localStorage has data we should sync UP
-    const existing = window.localStorage.getItem(key);
-    if (existing) {
-      try {
-        const parsed = JSON.parse(existing);
-        // fire-and-forget sync UP
-        fetchWithAuth('/api/coe/kv-store/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key, data: parsed }),
-        }).catch(() => {});
-        return parsed;
-      } catch {
-        /* corrupt localStorage — ignore */
-      }
-    }
-
+    // DB is empty — DO NOT sync localStorage up to DB!
+    // Just return null and do not POST anything.
     return null;
   } catch {
     return null;

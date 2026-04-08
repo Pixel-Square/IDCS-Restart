@@ -1083,6 +1083,333 @@ class IqacInternalMarksCourseExportView(APIView):
         code = code.upper()
         return code, (name or code)
 
+    # ──────────────────────────────────────────────────────────────────
+    # CO-wise breakdown sheets: Cycle 1 / Cycle 2 / Model
+    # ──────────────────────────────────────────────────────────────────
+    def _add_co_breakdown_sheets(self, wb, ta, subject, student_list):
+        """Append Cycle 1, Cycle 2 and Model Exam CO-breakdown sheets to *wb*.
+
+        Parameters
+        ----------
+        wb : openpyxl.Workbook
+        ta : TeachingAssignment
+        subject : Subject (resolved)
+        student_list : list[dict] – each dict has 'id', 'name', 'reg_no'; sorted
+        """
+        from django.db.models import Q
+        from OBE.models import (
+            Ssa1Mark,
+            Ssa2Mark,
+            Formative1Mark,
+            Formative2Mark,
+        )
+        from OBE.services.final_internal_marks import (
+            _resolve_class_type,
+            _resolve_qp_type,
+            _extract_ssa_co_splits_for_ta,
+            _get_cia_sheet_data,
+            _get_model_sheet_data,
+            _extract_model_co_marks_for_student,
+            _get_qp_pattern,
+            _safe_float as _sf,
+            _safe_text as _st,
+            _parse_co12,
+            _parse_co34,
+            _parse_question_co_numbers,
+            _qp1_final_question_weight,
+            _co_weights_12,
+            _co_weights_34,
+            _clamp,
+            _round2,
+            _assessment_map,
+        )
+
+        if not student_list or subject is None:
+            return
+
+        ta_id = ta.id
+        subject_id = subject.id
+        student_ids = [int(s['id']) for s in student_list]
+        reg_map = {int(s['id']): self._safe_text(s.get('reg_no', '')) for s in student_list}
+
+        class_type = _resolve_class_type(ta)
+        qp_type = _resolve_qp_type(ta)
+        batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+        is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+
+        # ── helper: display value ────────────────────────────────────
+        def _v(x):
+            """Round to 2dp or dash."""
+            return _round2(x) if x is not None else '-'
+
+        # ═════════════════════════════════════════════════════════════
+        # 1. Fetch all raw data (batch queries – one pass)
+        # ═════════════════════════════════════════════════════════════
+
+        # --- SSA ---
+        ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id)
+        ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id)
+        ssa1_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', ['co1', 'co2'])
+        ssa2_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', ['co3', 'co4'])
+
+        # --- Formative (FA) ---
+        def _fetch_formative_bulk(model_cls):
+            result = {}
+            qs = (
+                model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
+                .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+                .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+            )
+            for row in qs:
+                sid = int(row['student_id'])
+                is_ta = row.get('teaching_assignment_id') == ta_id
+                existing = result.get(sid)
+                if existing is None or (not existing.get('_is_ta') and is_ta):
+                    result[sid] = {**row, '_is_ta': is_ta}
+            return result
+
+        f1_rows_all = _fetch_formative_bulk(Formative1Mark)
+        f2_rows_all = _fetch_formative_bulk(Formative2Mark)
+
+        # --- CIA ---
+        cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1')
+        cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2')
+
+        cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+        cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+        def _build_questions(sheet, pattern, is_cia1):
+            qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+            p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+            p_cos = pattern.get('cos') if isinstance(pattern, dict) and isinstance(pattern.get('cos'), list) else []
+            out = []
+            count = max(len(qs), len(p_marks))
+            for i in range(count):
+                q = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+                key = _st(q.get('key')) or f'q{i + 1}'
+                mx = _sf(p_marks[i] if i < len(p_marks) else q.get('max'))
+                if mx is None:
+                    mx = _sf(q.get('maxMarks'))
+                if mx is None:
+                    mx = 0.0
+                co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+                if is_qp1_final:
+                    co = co_raw
+                else:
+                    co = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+                out.append({'key': key, 'max': float(mx), 'co': co})
+            return out
+
+        cia1_questions = _build_questions(cia1_sheet, cia1_pattern, True)
+        cia2_questions = _build_questions(cia2_sheet, cia2_pattern, False)
+
+        cia1_row_map = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+        cia2_row_map = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+
+        # CIA2 CO offset for QP1FINAL
+        max_seen = 0
+        for qq in cia2_questions:
+            nums = _parse_question_co_numbers(qq.get('co'))
+            if nums:
+                max_seen = max(max_seen, max(nums))
+        qp1_cia2_offset = 1 if (is_qp1_final and max_seen > 0 and max_seen <= 2) else 0
+
+        def _cia_co_raw(row, questions, is_cia1):
+            """Compute raw (unscaled) CO totals for a student from CIA question-level data."""
+            if not isinstance(row, dict) or bool(row.get('absent')):
+                return None, None, None
+            qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+            c_a = 0.0
+            c_b = 0.0
+            has_any = False
+            for q in questions:
+                mx = float(q.get('max') or 0)
+                n = _sf(qvals.get(q.get('key')))
+                if is_qp1_final and is_cia1:
+                    raw_nums = _parse_question_co_numbers(q.get('co'))
+                    raw_num = raw_nums[0] if raw_nums else None
+                    wa = 1.0 if raw_num == 1 else 0.0
+                    wb_weight = 1.0 if raw_num == 2 else 0.0
+                elif is_qp1_final and not is_cia1:
+                    wa = _qp1_final_question_weight(q.get('co'), 2, qp1_cia2_offset)
+                    wb_weight = _qp1_final_question_weight(q.get('co'), 3, qp1_cia2_offset)
+                elif is_cia1:
+                    wa, wb_weight = _co_weights_12(q.get('co'))
+                else:
+                    wa, wb_weight = _co_weights_34(q.get('co'))
+                if n is None:
+                    continue
+                has_any = True
+                mark = _clamp(n, 0, mx)
+                c_a += mark * wa
+                c_b += mark * wb_weight
+            if not has_any:
+                return None, None, None
+            return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
+
+        # --- MODEL ---
+        model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type)
+        model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+
+        # ── Determine CO labels based on QP type ─────────────────────
+        if is_qp1_final:
+            c2_label_a, c2_label_b = 'CO2', 'CO3'
+            model_co_keys = ['co1', 'co2', 'co3']
+        else:
+            c2_label_a, c2_label_b = 'CO3', 'CO4'
+            model_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+        # ═════════════════════════════════════════════════════════════
+        # 2. Cycle 1 sheet – SSA1 + CIA1 + FA1 (CO1, CO2)
+        # ═════════════════════════════════════════════════════════════
+        ws1 = wb.create_sheet('Cycle 1 (SSA1+CIA1+FA1)')
+        ws1.append([
+            'S.no', "Student's Name", 'Register Number',
+            'SSA1 CO1', 'SSA1 CO2', 'SSA1 Total',
+            'CIA1 CO1', 'CIA1 CO2', 'CIA1 Total',
+            'FA1 CO1', 'FA1 CO2', 'FA1 Total',
+        ])
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+
+            # SSA1 CO splits
+            sp1 = ssa1_splits_all.get(sid, {})
+            s1_co1 = _sf(sp1.get('co1'))
+            s1_co2 = _sf(sp1.get('co2'))
+            s1_total = _sf(ssa1_totals.get(sid))
+            if s1_co1 is None and s1_co2 is None and s1_total is not None:
+                s1_co1 = s1_total / 2.0
+                s1_co2 = s1_total / 2.0
+
+            # CIA1 CO splits
+            c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+            c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+
+            # FA1 CO splits
+            f1 = f1_rows_all.get(sid, {})
+            f1_co1 = None
+            f1_co2 = None
+            f1_total = _sf(f1.get('total'))
+            if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None:
+                f1_co1 = _round2(_sf(f1['skill1']) + _sf(f1['att1']))
+            if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None:
+                f1_co2 = _round2(_sf(f1['skill2']) + _sf(f1['att2']))
+
+            ws1.append([
+                idx,
+                self._safe_text(s.get('name')),
+                self._safe_text(s.get('reg_no')),
+                _v(s1_co1), _v(s1_co2), _v(s1_total),
+                _v(c1_a), _v(c1_b), _v(c1_total),
+                _v(f1_co1), _v(f1_co2), _v(f1_total),
+            ])
+
+        ws1.auto_filter.ref = f"A1:L{ws1.max_row}"
+        ws1.freeze_panes = 'A2'
+
+        # ═════════════════════════════════════════════════════════════
+        # 3. Cycle 2 sheet – SSA2 + CIA2 + FA2
+        # ═════════════════════════════════════════════════════════════
+        ws2 = wb.create_sheet('Cycle 2 (SSA2+CIA2+FA2)')
+        ws2.append([
+            'S.no', "Student's Name", 'Register Number',
+            f'SSA2 {c2_label_a}', f'SSA2 {c2_label_b}', 'SSA2 Total',
+            f'CIA2 {c2_label_a}', f'CIA2 {c2_label_b}', 'CIA2 Total',
+            f'FA2 {c2_label_a}', f'FA2 {c2_label_b}', 'FA2 Total',
+        ])
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+
+            # SSA2 CO splits
+            sp2 = ssa2_splits_all.get(sid, {})
+            s2_co_a = _sf(sp2.get('co3'))
+            s2_co_b = _sf(sp2.get('co4'))
+            s2_total = _sf(ssa2_totals.get(sid))
+            if s2_co_a is None and s2_co_b is None and s2_total is not None:
+                s2_co_a = s2_total / 2.0
+                s2_co_b = s2_total / 2.0
+
+            # QP1FINAL SSA2 special mapping (mirrors _compute_weighted_final_total_theory_like)
+            if is_qp1_final and sp2:
+                first_v = _sf(sp2.get('co2'))
+                if first_v is None:
+                    first_v = _sf(sp2.get('co3'))
+                if first_v is not None:
+                    s2_co_a = first_v
+                second_v = None
+                if sp2.get('co3') is not None and sp2.get('co2') is not None:
+                    second_v = _sf(sp2.get('co3'))
+                if second_v is None:
+                    second_v = _sf(sp2.get('co4'))
+                if second_v is not None:
+                    s2_co_b = second_v
+
+            # CIA2 CO splits
+            c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+            c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+
+            # FA2 CO splits
+            f2 = f2_rows_all.get(sid, {})
+            f2_co_a = None
+            f2_co_b = None
+            f2_total = _sf(f2.get('total'))
+            if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None:
+                f2_co_a = _round2(_sf(f2['skill1']) + _sf(f2['att1']))
+            if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None:
+                f2_co_b = _round2(_sf(f2['skill2']) + _sf(f2['att2']))
+
+            ws2.append([
+                idx,
+                self._safe_text(s.get('name')),
+                self._safe_text(s.get('reg_no')),
+                _v(s2_co_a), _v(s2_co_b), _v(s2_total),
+                _v(c2_a), _v(c2_b), _v(c2_total),
+                _v(f2_co_a), _v(f2_co_b), _v(f2_total),
+            ])
+
+        ws2.auto_filter.ref = f"A1:L{ws2.max_row}"
+        ws2.freeze_panes = 'A2'
+
+        # ═════════════════════════════════════════════════════════════
+        # 4. Model Exam sheet – all COs
+        # ═════════════════════════════════════════════════════════════
+        ws3 = wb.create_sheet('Model Exam')
+        model_co_headers = [f'MODEL {k.upper()}' for k in model_co_keys]
+        ws3.append(['S.no', "Student's Name", 'Register Number'] + model_co_headers + ['MODEL Total'])
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+            reg_no = reg_map.get(sid, '')
+
+            model_marks = _extract_model_co_marks_for_student(
+                model_sheet=model_sheet,
+                student_id=sid,
+                reg_no=reg_no,
+                model_pattern=model_pattern,
+            )
+
+            row_data = [idx, self._safe_text(s.get('name')), self._safe_text(s.get('reg_no'))]
+
+            if model_marks:
+                m_total = 0.0
+                for co_key in model_co_keys:
+                    val = _sf(model_marks.get(co_key))
+                    row_data.append(_v(val))
+                    if val is not None:
+                        m_total += val
+                row_data.append(_v(m_total))
+            else:
+                row_data.extend(['-'] * (len(model_co_keys) + 1))
+
+            ws3.append(row_data)
+
+        last_col = len(model_co_headers) + 4  # S.no + Name + Reg + COs + Total
+        col_letter = chr(ord('A') + last_col - 1) if last_col <= 26 else 'Z'
+        ws3.auto_filter.ref = f"A1:{col_letter}{ws3.max_row}"
+        ws3.freeze_panes = 'A2'
+
     def get(self, request):
         if not _user_is_iqac_admin(request.user):
             return Response({'detail': 'Only IQAC/OBE master can download this export.'}, status=403)
@@ -1104,15 +1431,24 @@ class IqacInternalMarksCourseExportView(APIView):
             return Response({'detail': 'Teaching assignment not found.'}, status=404)
 
         from openpyxl import Workbook
-        from OBE.models import FinalInternalMark
+        from OBE.models import FinalInternalMark, LabPublishedSheet, Review1Mark, Review2Mark
         from OBE.services.final_internal_marks import (
+            _assessment_map,
             _compute_weighted_final_total_theory_like,
+            _resolve_class_type,
+            _resolve_qp_type as _rqp,
             recompute_final_internal_marks,
         )
 
         course_code, course_name = self._resolve_course(ta)
         if not course_code:
             return Response({'detail': 'Unable to resolve course code for this assignment.'}, status=400)
+        class_type = str(_resolve_class_type(ta) or '').upper()
+        is_project_course = class_type == 'PROJECT'
+        _qp_type_raw = _rqp(ta)
+        is_qp1_final = 'QP1FINAL' in str(_qp_type_raw or '').upper().replace(' ', '')
+        # OE Theory (QP1FINAL) courses convert final mark to 60 instead of 100
+        scaled_max = 60.0 if is_qp1_final else 100.0
 
         sync_result = {}
         try:
@@ -1159,11 +1495,16 @@ class IqacInternalMarksCourseExportView(APIView):
             )
 
             co_vals = {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None}
+            base_co_vals = {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None}
             final_mark = None
             total_100 = None
+            base_mark = None
+            base_total_100 = None
             if isinstance(live, dict):
                 final_mark = self._safe_float(live.get('total_40'))
                 total_100 = self._safe_float(live.get('total_100'))
+                base_mark = self._safe_float(live.get('base_total_40'))
+                base_total_100 = self._safe_float(live.get('base_total_100'))
                 co_payload = live.get('co_values_40') if isinstance(live.get('co_values_40'), dict) else {}
                 co_vals = {
                     'co1': self._safe_float(co_payload.get('co1')),
@@ -1172,15 +1513,26 @@ class IqacInternalMarksCourseExportView(APIView):
                     'co4': self._safe_float(co_payload.get('co4')),
                     'co5': self._safe_float(co_payload.get('co5')),
                 }
+                base_co_payload = live.get('base_co_values_40') if isinstance(live.get('base_co_values_40'), dict) else {}
+                base_co_vals = {
+                    'co1': self._safe_float(base_co_payload.get('co1')),
+                    'co2': self._safe_float(base_co_payload.get('co2')),
+                    'co3': self._safe_float(base_co_payload.get('co3')),
+                    'co4': self._safe_float(base_co_payload.get('co4')),
+                    'co5': self._safe_float(base_co_payload.get('co5')),
+                }
 
             if final_mark is None:
                 final_mark = self._safe_float(getattr(fim, 'final_mark', None))
             if total_100 is None and final_mark is not None:
-                total_100 = round((float(final_mark) / 40.0) * 100.0, 2)
+                from decimal import Decimal as _D, ROUND_HALF_UP as _RHU
+                _raw = (float(final_mark) / 40.0) * scaled_max
+                total_100 = int(_D(str(_raw)).quantize(_D('1'), rounding=_RHU))
 
             prev = student_rows.get(sid)
             if prev is None:
                 student_rows[sid] = {
+                    'student_id': sid,
                     'name': student_name,
                     'reg_no': self._safe_text(getattr(sp, 'reg_no', '')),
                     'co1': co_vals['co1'],
@@ -1190,6 +1542,13 @@ class IqacInternalMarksCourseExportView(APIView):
                     'co5': co_vals['co5'],
                     'fim': final_mark,
                     'total_100': total_100,
+                    'base_co1': base_co_vals['co1'],
+                    'base_co2': base_co_vals['co2'],
+                    'base_co3': base_co_vals['co3'],
+                    'base_co4': base_co_vals['co4'],
+                    'base_co5': base_co_vals['co5'],
+                    'base_fim': base_mark,
+                    'base_total_100': base_total_100,
                 }
                 continue
 
@@ -1197,51 +1556,625 @@ class IqacInternalMarksCourseExportView(APIView):
                 prev['fim'] = final_mark
             if prev.get('total_100') is None and total_100 is not None:
                 prev['total_100'] = total_100
+            if prev.get('base_fim') is None and base_mark is not None:
+                prev['base_fim'] = base_mark
+            if prev.get('base_total_100') is None and base_total_100 is not None:
+                prev['base_total_100'] = base_total_100
             for key in ('co1', 'co2', 'co3', 'co4', 'co5'):
                 if prev.get(key) is None and co_vals.get(key) is not None:
                     prev[key] = co_vals.get(key)
+            for key in ('base_co1', 'base_co2', 'base_co3', 'base_co4', 'base_co5'):
+                if prev.get(key) is None and base_co_vals.get(key.replace('base_', '')) is not None:
+                    prev[key] = base_co_vals.get(key.replace('base_', ''))
             if not self._safe_text(prev.get('name')) and student_name:
                 prev['name'] = student_name
             if not self._safe_text(prev.get('reg_no')):
                 prev['reg_no'] = self._safe_text(getattr(sp, 'reg_no', ''))
+            if not prev.get('student_id'):
+                prev['student_id'] = sid
 
         rows = sorted(student_rows.values(), key=lambda r: (self._safe_text(r.get('reg_no')), self._safe_text(r.get('name'))))
         if not rows:
             return Response({'detail': 'No internal marks found for this teaching assignment.'}, status=404)
 
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'FIM'
-        ws.append(['S.no', "Student's name", 'Register number', 'CO1', 'CO2', 'CO3', 'CO4', 'CO5', '40', '100'])
+        def _extract_review_mark_from_lab_data(lab_data, student_id):
+            if not isinstance(lab_data, dict):
+                return None
+            sid = str(student_id)
+            sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
+            rows_by_student = None
+            if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
+                rows_by_student = sheet.get('rowsByStudentId')
+            elif isinstance(lab_data.get('rowsByStudentId'), dict):
+                rows_by_student = lab_data.get('rowsByStudentId')
+            if not isinstance(rows_by_student, dict):
+                return None
+            row = rows_by_student.get(sid) or rows_by_student.get(student_id)
+            if not isinstance(row, dict):
+                return None
 
-        for idx, row in enumerate(rows, start=1):
-            ws.append([
-                idx,
+            direct = self._safe_float(row.get('ciaExam'))
+            if direct is not None:
+                return round(max(0.0, min(50.0, float(direct))), 2)
+
+            comps = row.get('reviewComponentMarks') if isinstance(row.get('reviewComponentMarks'), dict) else {}
+            if not isinstance(comps, dict):
+                return None
+            total = 0.0
+            has_any = False
+            for raw in comps.values():
+                n = self._safe_float(raw)
+                if n is None:
+                    continue
+                has_any = True
+                total += float(n)
+            if not has_any:
+                return None
+            return round(max(0.0, min(50.0, total)), 2)
+
+        wb = Workbook()
+
+        # ════════════════════════════════════════════════════════════════
+        # SHEET 1 — Comprehensive Internal Marks (Cycle 1 + 2 + Model + FIM Before/After CQI)
+        # ════════════════════════════════════════════════════════════════
+        ws = wb.active
+        ws.title = 'Internal Marks'
+
+        if is_project_course:
+            # ── Project courses: comprehensive layout matching Theory format ──
+            # Two-header layout with Review 1/2 Before & After CQI, FIM Before/After CQI
+            from django.db.models import Q as _QP
+            from .models import Subject as _SubjectModel
+            from OBE.models import ObeCqiPublished
+            from OBE.services.final_internal_marks import (
+                _compute_cqi_add as _cqi_add,
+                _pick_scoped_row as _pick_row,
+                _safe_float as _sfp,
+                _round2 as _r2p,
+            )
+
+            _subject_obj = ta.subject
+            if _subject_obj is None:
+                _subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
+
+            review1_map = {}
+            review2_map = {}
+            review1_lab_data = {}
+            review2_lab_data = {}
+
+            def _pick_lab_data(assessment_key):
+                if _subject_obj is None:
+                    return {}
+                rows_qs = list(
+                    LabPublishedSheet.objects.filter(subject_id=_subject_obj.id, assessment=assessment_key)
+                    .filter(_QP(teaching_assignment_id=ta_id) | _QP(teaching_assignment__isnull=True))
+                    .order_by('-updated_at')
+                )
+                exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+                if exact is not None and isinstance(getattr(exact, 'data', None), dict):
+                    return exact.data
+                legacy = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+                if legacy is not None and isinstance(getattr(legacy, 'data', None), dict):
+                    return legacy.data
+                first = rows_qs[0] if rows_qs else None
+                return first.data if first is not None and isinstance(getattr(first, 'data', None), dict) else {}
+
+            export_student_ids = []
+            for r in rows:
+                try:
+                    sid = int(r.get('student_id'))
+                except Exception:
+                    sid = 0
+                if sid > 0:
+                    export_student_ids.append(sid)
+
+            if _subject_obj is not None and export_student_ids:
+                review1_map = _assessment_map(Review1Mark, 'mark', _subject_obj.id, export_student_ids, ta_id)
+                review2_map = _assessment_map(Review2Mark, 'mark', _subject_obj.id, export_student_ids, ta_id)
+                review1_lab_data = _pick_lab_data('review1')
+                review2_lab_data = _pick_lab_data('review2')
+
+            # ── Fetch CQI published snapshot for this project course ──
+            cqi_entries = {}
+            cqi_co_set = set()
+            if _subject_obj is not None:
+                cqi_rows = list(
+                    ObeCqiPublished.objects.filter(subject_id=_subject_obj.id)
+                    .filter(_QP(teaching_assignment_id=ta_id) | _QP(teaching_assignment__isnull=True))
+                    .order_by('-published_at')
+                )
+                cqi_row = _pick_row(cqi_rows, ta_id)
+                if cqi_row:
+                    cqi_entries = cqi_row.entries if isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+                    cqi_nums = cqi_row.co_numbers if isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
+                    cqi_co_set = {int(n) for n in cqi_nums if n is not None}
+
+            def _vp(x):
+                return _r2p(x) if x is not None else '-'
+
+            # Project weights: Review 1 = 50 (mapped to CO1), Review 2 = 50 (mapped to CO2)
+            PROJ_R1_MAX = 50.0
+            PROJ_R2_MAX = 50.0
+            PROJ_TOTAL_MAX = 100.0
+
+            # ── Build section + column header rows ──
+            header_sections = ['', '', '']  # S.no, Name, Reg placeholders
+            header_cols = ['S.no', "Student's Name", 'Register Number']
+
+            # Review 1 (Before CQI)
+            header_sections.append('Review 1 (Before CQI)')
+            header_cols.append('Mark')
+            # Review 2 (Before CQI)
+            header_sections.append('Review 2 (Before CQI)')
+            header_cols.append('Mark')
+            # Review 1 (After CQI)
+            header_sections.append('Review 1 (After CQI)')
+            header_cols.append('Mark')
+            # Review 2 (After CQI)
+            header_sections.append('Review 2 (After CQI)')
+            header_cols.append('Mark')
+            # FIM (Before CQI)
+            header_sections.append('FIM (Before CQI)')
+            header_cols.append('100')
+            # FIM (After CQI)
+            header_sections.append('FIM (After CQI)')
+            header_cols.append('100')
+
+            ws.append(header_sections)
+            ws.append(header_cols)
+
+            # ── Merge and style section header cells ──
+            try:
+                from openpyxl.styles import Font, Alignment
+                section_ranges = {}
+                for ci, sec in enumerate(header_sections, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(header_cols) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            # ── Write data rows ──
+            proj_totals_before = {}
+            proj_totals_after = {}
+
+            for idx, row in enumerate(rows, start=1):
+                sid = int(row.get('student_id') or 0)
+
+                # Get raw review marks (before CQI)
+                r1 = self._safe_float(review1_map.get(sid))
+                r2 = self._safe_float(review2_map.get(sid))
+                if r1 is None:
+                    r1 = _extract_review_mark_from_lab_data(review1_lab_data, sid)
+                if r2 is None:
+                    r2 = _extract_review_mark_from_lab_data(review2_lab_data, sid)
+                if r1 is not None:
+                    r1 = round(max(0.0, min(PROJ_R1_MAX, float(r1))), 2)
+                if r2 is not None:
+                    r2 = round(max(0.0, min(PROJ_R2_MAX, float(r2))), 2)
+
+                # FIM before CQI
+                fim_before = round((r1 or 0.0) + (r2 or 0.0), 2) if (r1 is not None or r2 is not None) else None
+
+                # Apply CQI to each review (mapped as CO1=Review1, CO2=Review2)
+                cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+                r1_after = r1
+                r2_after = r2
+                r1_add = 0.0
+                r2_add = 0.0
+
+                if r1 is not None and 1 in cqi_co_set:
+                    inp_co1 = _sfp((cqi_student or {}).get('co1'))
+                    r1_add = _cqi_add(co_value=r1, co_max=PROJ_R1_MAX, input_mark=inp_co1)
+                    r1_after = _r2p(min(PROJ_R1_MAX, r1 + r1_add))
+
+                if r2 is not None and 2 in cqi_co_set:
+                    inp_co2 = _sfp((cqi_student or {}).get('co2'))
+                    r2_add = _cqi_add(co_value=r2, co_max=PROJ_R2_MAX, input_mark=inp_co2)
+                    r2_after = _r2p(min(PROJ_R2_MAX, r2 + r2_add))
+
+                # FIM after CQI
+                fim_after = round((r1_after or 0.0) + (r2_after or 0.0), 2) if (r1_after is not None or r2_after is not None) else None
+
+                # Cap FIM at 100
+                if fim_before is not None:
+                    fim_before = min(PROJ_TOTAL_MAX, fim_before)
+                if fim_after is not None:
+                    fim_after = min(PROJ_TOTAL_MAX, fim_after)
+
+                proj_totals_before[sid] = fim_before
+                proj_totals_after[sid] = fim_after
+
+                row_data = [
+                    idx,
+                    self._safe_text(row.get('name')),
+                    self._safe_text(row.get('reg_no')),
+                    _vp(r1),            # Review 1 Before CQI
+                    _vp(r2),            # Review 2 Before CQI
+                    _vp(r1_after),      # Review 1 After CQI
+                    _vp(r2_after),      # Review 2 After CQI
+                    fim_before if fim_before is not None else '-',   # FIM Before CQI /100
+                    fim_after if fim_after is not None else '-',     # FIM After CQI /100
+                ]
+                ws.append(row_data)
+
+            total_cols = len(header_cols)
+            from openpyxl.utils import get_column_letter as _gcl_proj
+            last_letter = _gcl_proj(total_cols)
+            ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+        else:
+            # ── Theory / Special courses: comprehensive all-in-one sheet ──
+            from django.db.models import Q as _Q
+            from OBE.models import Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark
+            from OBE.services.final_internal_marks import (
+                _resolve_qp_type as __rqp,
+                _extract_ssa_co_splits_for_ta,
+                _get_cia_sheet_data,
+                _get_model_sheet_data,
+                _extract_model_co_marks_for_student,
+                _get_qp_pattern,
+                _safe_float as _sf,
+                _safe_text as _st,
+                _parse_co12,
+                _parse_co34,
+                _parse_question_co_numbers,
+                _qp1_final_question_weight,
+                _co_weights_12,
+                _co_weights_34,
+                _clamp,
+                _round2,
+            )
+
+            from .models import Subject as _SubjectModel
+            _subject_obj = ta.subject
+            if _subject_obj is None:
+                _subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
+
+            subject_id = _subject_obj.id if _subject_obj else 0
+            _student_id_list = [
+                {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
+                for sid, data in sorted(
+                    student_rows.items(),
+                    key=lambda x: (self._safe_text(x[1].get('reg_no')), self._safe_text(x[1].get('name'))),
+                )
+            ]
+            student_ids = [int(s['id']) for s in _student_id_list]
+            reg_map = {int(s['id']): self._safe_text(s.get('reg_no', '')) for s in _student_id_list}
+
+            qp_type = __rqp(ta)
+            batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+
+            def _v(x):
+                return _round2(x) if x is not None else '-'
+
+            # ── Fetch all raw assessment data ──
+            ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+            ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+            ssa1_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', ['co1', 'co2']) if subject_id else {}
+            ssa2_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', ['co3', 'co4']) if subject_id else {}
+
+            def _fetch_formative_bulk(model_cls):
+                result = {}
+                if not subject_id:
+                    return result
+                qs = (
+                    model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
+                    .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                    .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+                )
+                for row in qs:
+                    sid = int(row['student_id'])
+                    is_ta = row.get('teaching_assignment_id') == ta_id
+                    existing = result.get(sid)
+                    if existing is None or (not existing.get('_is_ta') and is_ta):
+                        result[sid] = {**row, '_is_ta': is_ta}
+                return result
+
+            f1_rows_all = _fetch_formative_bulk(Formative1Mark)
+            f2_rows_all = _fetch_formative_bulk(Formative2Mark)
+
+            cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
+            cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
+
+            cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+            cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+            def _build_questions(sheet, pattern, is_cia1):
+                qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+                p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+                p_cos = pattern.get('cos') if isinstance(pattern, dict) and isinstance(pattern.get('cos'), list) else []
+                out = []
+                count = max(len(qs), len(p_marks))
+                for i in range(count):
+                    q = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+                    key = _st(q.get('key')) or f'q{i + 1}'
+                    mx = _sf(p_marks[i] if i < len(p_marks) else q.get('max'))
+                    if mx is None:
+                        mx = _sf(q.get('maxMarks'))
+                    if mx is None:
+                        mx = 0.0
+                    co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+                    if is_qp1_final:
+                        co = co_raw
+                    else:
+                        co = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+                    out.append({'key': key, 'max': float(mx), 'co': co})
+                return out
+
+            cia1_questions = _build_questions(cia1_sheet, cia1_pattern, True)
+            cia2_questions = _build_questions(cia2_sheet, cia2_pattern, False)
+
+            cia1_row_map = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+            cia2_row_map = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+
+            max_seen = 0
+            for qq in cia2_questions:
+                nums = _parse_question_co_numbers(qq.get('co'))
+                if nums:
+                    max_seen = max(max_seen, max(nums))
+            qp1_cia2_offset = 1 if (is_qp1_final and max_seen > 0 and max_seen <= 2) else 0
+
+            def _cia_co_raw(row, questions, is_cia1):
+                if not isinstance(row, dict) or bool(row.get('absent')):
+                    return None, None, None
+                qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+                c_a = 0.0
+                c_b = 0.0
+                has_any = False
+                for q in questions:
+                    mx = float(q.get('max') or 0)
+                    n = _sf(qvals.get(q.get('key')))
+                    if is_qp1_final and is_cia1:
+                        raw_nums = _parse_question_co_numbers(q.get('co'))
+                        raw_num = raw_nums[0] if raw_nums else None
+                        wa = 1.0 if raw_num == 1 else 0.0
+                        wb_weight = 1.0 if raw_num == 2 else 0.0
+                    elif is_qp1_final and not is_cia1:
+                        wa = _qp1_final_question_weight(q.get('co'), 2, qp1_cia2_offset)
+                        wb_weight = _qp1_final_question_weight(q.get('co'), 3, qp1_cia2_offset)
+                    elif is_cia1:
+                        wa, wb_weight = _co_weights_12(q.get('co'))
+                    else:
+                        wa, wb_weight = _co_weights_34(q.get('co'))
+                    if n is None:
+                        continue
+                    has_any = True
+                    mark = _clamp(n, 0, mx)
+                    c_a += mark * wa
+                    c_b += mark * wb_weight
+                if not has_any:
+                    return None, None, None
+                return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
+
+            model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type) if subject_id else {}
+            model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+
+            if is_qp1_final:
+                c2_label_a, c2_label_b = 'CO2', 'CO3'
+                model_co_keys = ['co1', 'co2', 'co3']
+                fim_co_keys = ['co1', 'co2', 'co3']
+            else:
+                c2_label_a, c2_label_b = 'CO3', 'CO4'
+                model_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+                fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            scaled_label = str(int(scaled_max))
+
+            # ── Build header rows ──
+            header_sections = ['', '', '']  # S.no, Name, Reg placeholders
+            header_cols = ['S.no', "Student's Name", 'Register Number']
+
+            # Cycle 1
+            for lbl in ['SSA1 CO1', 'SSA1 CO2', 'SSA1 Total', 'CIA1 CO1', 'CIA1 CO2', 'CIA1 Total', 'FA1 CO1', 'FA1 CO2', 'FA1 Total']:
+                header_sections.append('Cycle 1')
+                header_cols.append(lbl)
+            # Cycle 2
+            for lbl in [f'SSA2 {c2_label_a}', f'SSA2 {c2_label_b}', 'SSA2 Total',
+                        f'CIA2 {c2_label_a}', f'CIA2 {c2_label_b}', 'CIA2 Total',
+                        f'FA2 {c2_label_a}', f'FA2 {c2_label_b}', 'FA2 Total']:
+                header_sections.append('Cycle 2')
+                header_cols.append(lbl)
+            # Model
+            for k in model_co_keys:
+                header_sections.append('Model Exam')
+                header_cols.append(f'MODEL {k.upper()}')
+            header_sections.append('Model Exam')
+            header_cols.append('MODEL Total')
+            # FIM Before CQI
+            for k in fim_co_keys:
+                header_sections.append('FIM (Before CQI)')
+                header_cols.append(k.upper())
+            header_sections.append('FIM (Before CQI)')
+            header_cols.append('40')
+            header_sections.append('FIM (Before CQI)')
+            header_cols.append(scaled_label)
+            # FIM After CQI
+            for k in fim_co_keys:
+                header_sections.append('FIM (After CQI)')
+                header_cols.append(k.upper())
+            header_sections.append('FIM (After CQI)')
+            header_cols.append('40')
+            header_sections.append('FIM (After CQI)')
+            header_cols.append(scaled_label)
+
+            # Write section header row
+            ws.append(header_sections)
+            # Write column header row
+            ws.append(header_cols)
+
+            # Merge section header cells
+            try:
+                from openpyxl.styles import Font, Alignment, PatternFill
+                section_ranges = {}
+                for ci, sec in enumerate(header_sections, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                # Bold the column headers
+                for ci in range(1, len(header_cols) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            # ── Write data rows ──
+            for idx, s in enumerate(_student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+
+                # Cycle 1
+                sp1 = ssa1_splits_all.get(sid, {})
+                s1_co1 = _sf(sp1.get('co1'))
+                s1_co2 = _sf(sp1.get('co2'))
+                s1_total = _sf(ssa1_totals.get(sid))
+                if s1_co1 is None and s1_co2 is None and s1_total is not None:
+                    s1_co1 = s1_total / 2.0
+                    s1_co2 = s1_total / 2.0
+                c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+                c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+                f1 = f1_rows_all.get(sid, {})
+                f1_co1 = None
+                f1_co2 = None
+                f1_total = _sf(f1.get('total'))
+                if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None:
+                    f1_co1 = _round2(_sf(f1['skill1']) + _sf(f1['att1']))
+                if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None:
+                    f1_co2 = _round2(_sf(f1['skill2']) + _sf(f1['att2']))
+
+                # Cycle 2
+                sp2 = ssa2_splits_all.get(sid, {})
+                s2_co_a = _sf(sp2.get('co3'))
+                s2_co_b = _sf(sp2.get('co4'))
+                s2_total = _sf(ssa2_totals.get(sid))
+                if s2_co_a is None and s2_co_b is None and s2_total is not None:
+                    s2_co_a = s2_total / 2.0
+                    s2_co_b = s2_total / 2.0
+                if is_qp1_final and sp2:
+                    first_v = _sf(sp2.get('co2'))
+                    if first_v is None:
+                        first_v = _sf(sp2.get('co3'))
+                    if first_v is not None:
+                        s2_co_a = first_v
+                    second_v = None
+                    if sp2.get('co3') is not None and sp2.get('co2') is not None:
+                        second_v = _sf(sp2.get('co3'))
+                    if second_v is None:
+                        second_v = _sf(sp2.get('co4'))
+                    if second_v is not None:
+                        s2_co_b = second_v
+                c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+                c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+                f2 = f2_rows_all.get(sid, {})
+                f2_co_a = None
+                f2_co_b = None
+                f2_total = _sf(f2.get('total'))
+                if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None:
+                    f2_co_a = _round2(_sf(f2['skill1']) + _sf(f2['att1']))
+                if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None:
+                    f2_co_b = _round2(_sf(f2['skill2']) + _sf(f2['att2']))
+
+                # Model
+                model_marks = _extract_model_co_marks_for_student(
+                    model_sheet=model_sheet,
+                    student_id=sid,
+                    reg_no=reg_map.get(sid, ''),
+                    model_pattern=model_pattern,
+                ) if subject_id else None
+                model_vals = []
+                m_total = 0.0
+                m_has = False
+                for k in model_co_keys:
+                    val = _sf(model_marks.get(k)) if model_marks else None
+                    model_vals.append(_v(val))
+                    if val is not None:
+                        m_total += val
+                        m_has = True
+                model_vals.append(_v(m_total) if m_has else '-')
+
+                # FIM Before CQI
+                before_co_vals = []
+                for k in fim_co_keys:
+                    before_co_vals.append(_v(fim_row.get(f'base_{k}')))
+                before_co_vals.append(_v(fim_row.get('base_fim')))
+                before_co_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+
+                # FIM After CQI
+                after_co_vals = []
+                for k in fim_co_keys:
+                    after_co_vals.append(_v(fim_row.get(k)))
+                after_co_vals.append(_v(fim_row.get('fim')))
+                after_co_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+
+                row_data = [
+                    idx,
+                    self._safe_text(s.get('name')),
+                    self._safe_text(s.get('reg_no')),
+                    # Cycle 1
+                    _v(s1_co1), _v(s1_co2), _v(s1_total),
+                    _v(c1_a), _v(c1_b), _v(c1_total),
+                    _v(f1_co1), _v(f1_co2), _v(f1_total),
+                    # Cycle 2
+                    _v(s2_co_a), _v(s2_co_b), _v(s2_total),
+                    _v(c2_a), _v(c2_b), _v(c2_total),
+                    _v(f2_co_a), _v(f2_co_b), _v(f2_total),
+                ] + model_vals + before_co_vals + after_co_vals
+
+                ws.append(row_data)
+
+            total_cols = len(header_cols)
+            last_letter = chr(ord('A') + min(total_cols - 1, 25)) if total_cols <= 26 else 'Z'
+            if total_cols > 26:
+                # Handle columns beyond Z (AA, AB, etc.)
+                from openpyxl.utils import get_column_letter
+                last_letter = get_column_letter(total_cols)
+            ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+        # ════════════════════════════════════════════════════════════════
+        # SHEET 2 — Summary (Name, Register No., Total)
+        # ════════════════════════════════════════════════════════════════
+        ws2 = wb.create_sheet('Summary')
+        ws2.append(['Name', 'Register No.', 'Total'])
+        try:
+            from openpyxl.styles import Font as _F2
+            for ci in range(1, 4):
+                ws2.cell(row=1, column=ci).font = _F2(bold=True)
+        except Exception:
+            pass
+
+        for row in rows:
+            if is_project_course:
+                # For project courses, use the FIM After CQI total (/100)
+                sid = int(row.get('student_id') or 0)
+                t100 = proj_totals_after.get(sid) if sid > 0 else None
+            else:
+                t100 = row.get('total_100')
+            ws2.append([
                 self._safe_text(row.get('name')),
                 self._safe_text(row.get('reg_no')),
-                row.get('co1') if row.get('co1') is not None else '-',
-                row.get('co2') if row.get('co2') is not None else '-',
-                row.get('co3') if row.get('co3') is not None else '-',
-                row.get('co4') if row.get('co4') is not None else '-',
-                row.get('co5') if row.get('co5') is not None else '-',
-                row.get('fim') if row.get('fim') is not None else '-',
-                row.get('total_100') if row.get('total_100') is not None else '-',
+                t100 if t100 is not None else '-',
             ])
-
-        ws.auto_filter.ref = f"A1:J{ws.max_row}"
-        ws.freeze_panes = 'A2'
-
-        meta_ws = wb.create_sheet('SYNC_STATUS')
-        meta_ws.append(['Key', 'Value'])
-        meta_ws.append(['Course code', course_code])
-        meta_ws.append(['Course name', course_name])
-        meta_ws.append(['Teaching assignment ID', ta_id])
-        meta_ws.append(['Exported at', timezone.now().strftime('%Y-%m-%d %H:%M:%S')])
-        meta_ws.append(['Sync processed teaching assignments', sync_result.get('processed_teaching_assignments')])
-        meta_ws.append(['Sync upserted rows', sync_result.get('upserted_rows')])
-        meta_ws.append(['Sync deleted rows', sync_result.get('deleted_rows')])
-        if sync_result.get('error'):
-            meta_ws.append(['Sync warning', sync_result.get('error')])
+        ws2.auto_filter.ref = f"A1:C{ws2.max_row}"
+        ws2.freeze_panes = 'A2'
 
         filename = f"{self._safe_filename(course_code)} {self._safe_filename(course_name)}.xlsx"
         out = io.BytesIO()
@@ -2355,94 +3288,118 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         ser = SpecialCourseAssessmentEditRequestSerializer(req)
         return Response(ser.data, status=201)
 
+    def special_qp_pattern(self, request, pk=None):
+        """GET/POST custom question paper pattern for SPECIAL courses.
 
-class SpecialCourseAssessmentEditRequestViewSet(viewsets.ModelViewSet):
-    queryset = SpecialCourseAssessmentEditRequest.objects.select_related('selection', 'selection__curriculum_row', 'selection__academic_year', 'requested_by', 'reviewed_by')
-    serializer_class = SpecialCourseAssessmentEditRequestSerializer
-    permission_classes = (IsAuthenticated,)
-
-    def get_queryset(self):
-        user = self.request.user
-        if _user_is_iqac_admin(user):
-            return self.queryset
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            return SpecialCourseAssessmentEditRequest.objects.none()
-        return self.queryset.filter(requested_by=staff_profile)
-
-    @action(detail=True, methods=['post'], permission_classes=(IsAuthenticated,), url_path='review', url_name='review')
-    def review(self, request, pk=None):
-        """IQAC/admin approves/rejects an edit request.
-
-        POST body:
-          { "status": "APPROVED"|"REJECTED", "can_edit_minutes": 60 }
+        GET  ?exam=cia1  -> { teaching_assignment_id, exam, pattern }
+        POST { exam, pattern: { questions: [{ key, label, max, co, btl }] } }
         """
-        if not _user_is_iqac_admin(request.user):
-            return Response({'detail': 'You do not have permission to review requests.'}, status=403)
-
-        obj = self.get_object()
-        data = request.data or {}
-        new_status = str(data.get('status') or '').upper().strip()
-        if new_status not in {SpecialCourseAssessmentEditRequest.STATUS_APPROVED, SpecialCourseAssessmentEditRequest.STATUS_REJECTED}:
-            return Response({'detail': 'Invalid status. Use APPROVED or REJECTED.'}, status=400)
-
-        minutes = data.get('can_edit_minutes')
         try:
-            minutes_i = int(minutes) if minutes is not None else 60
-        except Exception:
-            minutes_i = 60
-        minutes_i = max(5, min(minutes_i, 24 * 60))
+            ta = TeachingAssignment.objects.get(pk=int(pk), is_active=True)
+        except TeachingAssignment.DoesNotExist:
+            return Response({'detail': 'Teaching assignment not found'}, status=404)
 
-        obj.status = new_status
-        obj.reviewed_by = request.user
-        obj.reviewed_at = timezone.now()
-        obj.used_at = None
-        if new_status == SpecialCourseAssessmentEditRequest.STATUS_APPROVED:
-            obj.can_edit_until = timezone.now() + timedelta(minutes=minutes_i)
-        else:
-            obj.can_edit_until = None
-        obj.save()
+        from OBE.models import SpecialCourseQpPattern
 
-        # Mirror the review decision into the central OBE edit queue so IQAC UIs
-        # that consume `ObeEditRequest` see the updated status and approval window.
+        if request.method == 'GET':
+            exam = str(request.query_params.get('exam', '')).strip().lower()
+            if not exam:
+                return Response({'detail': 'exam query parameter required'}, status=400)
+            obj = SpecialCourseQpPattern.objects.filter(teaching_assignment=ta, exam=exam).first()
+            if obj is None:
+                return Response({'teaching_assignment_id': ta.id, 'exam': exam, 'pattern': None})
+            return Response({
+                'teaching_assignment_id': ta.id,
+                'exam': obj.exam,
+                'pattern': obj.pattern,
+            })
+
+        # POST
+        exam = str(request.data.get('exam', '')).strip().lower()
+        if not exam:
+            return Response({'detail': 'exam field required'}, status=400)
+
+        pattern = request.data.get('pattern', {})
+        questions = pattern.get('questions', []) if isinstance(pattern, dict) else []
+        if not isinstance(questions, list) or not questions:
+            return Response({'detail': 'pattern.questions must be a non-empty list'}, status=400)
+
+        # Validate each question
+        clean_qs = []
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                return Response({'detail': f'Question {i+1} must be an object'}, status=400)
+            max_marks = q.get('max', 0)
+            try:
+                max_marks = int(max_marks)
+            except (TypeError, ValueError):
+                max_marks = 0
+            if max_marks <= 0:
+                return Response({'detail': f'Question {i+1}: max marks must be > 0'}, status=400)
+            clean_qs.append({
+                'key': str(q.get('key', f'q{i+1}')).strip() or f'q{i+1}',
+                'label': str(q.get('label', f'Q{i+1}')).strip() or f'Q{i+1}',
+                'max': max_marks,
+                'co': q.get('co', 1),
+                'btl': min(6, max(1, int(q.get('btl', 1) or 1))),
+            })
+
+        obj, _ = SpecialCourseQpPattern.objects.update_or_create(
+            teaching_assignment=ta,
+            exam=exam,
+            defaults={
+                'pattern': {'questions': clean_qs},
+                'updated_by': request.user.id,
+            },
+        )
+        return Response({
+            'teaching_assignment_id': ta.id,
+            'exam': obj.exam,
+            'pattern': obj.pattern,
+        })
+
+
+    def special_co_weights(self, request, pk=None):
+        """GET/POST CO attainment weights for a SPECIAL course teaching assignment.
+
+        GET  -> { teaching_assignment_id, weights: { co1: 20.0, co2: 20.0, ... } }
+        POST { weights: { co1: 20.0, co2: 20.0, ... } }
+        """
         try:
-            from OBE.models import ObeEditRequest
+            ta = TeachingAssignment.objects.get(pk=int(pk), is_active=True)
+        except TeachingAssignment.DoesNotExist:
+            return Response({'detail': 'Teaching assignment not found'}, status=404)
 
-            # Resolve the faculty User associated with the staff profile who requested this edit
-            staff_user = None
-            try:
-                staff_user = getattr(getattr(obj, 'requested_by', None), 'user', None)
-            except Exception:
-                staff_user = None
+        from OBE.models import SpecialCourseCoWeights
 
-            # Best-effort subject code used when we created the ObeEditRequest earlier
-            subject_code = None
-            try:
-                subject_code = getattr(getattr(obj.selection, 'curriculum_row', None), 'course_code', None) or getattr(getattr(getattr(obj.selection, 'curriculum_row', None), 'master', None), 'course_code', None) or ''
-            except Exception:
-                subject_code = ''
+        if request.method == 'GET':
+            obj = SpecialCourseCoWeights.objects.filter(teaching_assignment=ta).first()
+            return Response({
+                'teaching_assignment_id': ta.id,
+                'weights': obj.weights if obj else {},
+            })
 
-            if staff_user is not None:
-                qs = ObeEditRequest.objects.filter(
-                    staff_user=staff_user,
-                    academic_year=obj.selection.academic_year,
-                    subject_code=subject_code,
-                    assessment='model',
-                    scope='MARK_MANAGER',
-                )
-                for o in qs:
-                    try:
-                        if new_status == SpecialCourseAssessmentEditRequest.STATUS_APPROVED:
-                            o.mark_approved(request.user, window_minutes=minutes_i)
-                        else:
-                            o.mark_rejected(request.user)
-                        o.save()
-                    except Exception:
-                        continue
-        except Exception:
-            # best-effort only; don't surface failures to the caller
-            pass
-        return Response(self.get_serializer(obj).data)
+        # POST
+        raw = request.data.get('weights', {})
+        if not isinstance(raw, dict):
+            return Response({'detail': 'weights must be an object'}, status=400)
+
+        clean = {}
+        for co_key in ['co1', 'co2', 'co3', 'co4', 'co5']:
+            if co_key in raw:
+                try:
+                    clean[co_key] = float(raw[co_key])
+                except (TypeError, ValueError):
+                    return Response({'detail': f'{co_key}: must be a number'}, status=400)
+
+        obj, _ = SpecialCourseCoWeights.objects.update_or_create(
+            teaching_assignment=ta,
+            defaults={'weights': clean, 'updated_by': request.user.id},
+        )
+        return Response({
+            'teaching_assignment_id': ta.id,
+            'weights': obj.weights,
+        })
 
 
 class SpecialCourseEnabledAssessmentsView(APIView):
@@ -2505,6 +3462,60 @@ class SpecialCourseEnabledAssessmentsView(APIView):
                 'enabled_assessments': enabled,
             }
         )
+
+
+class SpecialCourseAssessmentEditRequestViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only viewset for SpecialCourseAssessmentEditRequest.  IQAC can list/review."""
+
+    serializer_class = SpecialCourseAssessmentEditRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        from .models import SpecialCourseAssessmentEditRequest
+        user = self.request.user
+        try:
+            if user.staff_profile.role in ('IQAC', 'HOD', 'PRINCIPAL'):
+                return SpecialCourseAssessmentEditRequest.objects.all().order_by('-requested_at')
+        except Exception:
+            pass
+        # Faculty: own requests only
+        try:
+            return SpecialCourseAssessmentEditRequest.objects.filter(
+                requested_by=user.staff_profile
+            ).order_by('-requested_at')
+        except Exception:
+            return SpecialCourseAssessmentEditRequest.objects.none()
+
+    @action(detail=True, methods=['post'], url_path='approve')
+    def approve(self, request, pk=None):
+        from .models import SpecialCourseAssessmentEditRequest
+        from django.utils import timezone
+        import datetime
+        try:
+            obj = self.get_object()
+        except Exception as e:
+            return Response({'detail': str(e)}, status=404)
+        obj.status = SpecialCourseAssessmentEditRequest.STATUS_APPROVED
+        obj.reviewed_by = request.user.staff_profile if hasattr(request.user, 'staff_profile') else None
+        obj.reviewed_at = timezone.now()
+        hours = int(request.data.get('hours', 24))
+        obj.can_edit_until = timezone.now() + datetime.timedelta(hours=max(1, hours))
+        obj.save()
+        return Response(self.get_serializer(obj).data)
+
+    @action(detail=True, methods=['post'], url_path='reject')
+    def reject(self, request, pk=None):
+        from .models import SpecialCourseAssessmentEditRequest
+        from django.utils import timezone
+        try:
+            obj = self.get_object()
+        except Exception as e:
+            return Response({'detail': str(e)}, status=404)
+        obj.status = SpecialCourseAssessmentEditRequest.STATUS_REJECTED
+        obj.reviewed_by = request.user.staff_profile if hasattr(request.user, 'staff_profile') else None
+        obj.reviewed_at = timezone.now()
+        obj.save()
+        return Response(self.get_serializer(obj).data)
 
 
 class AcademicYearViewSet(viewsets.ModelViewSet):
@@ -9535,7 +10546,7 @@ class ExtStaffPublicFormView(APIView):
             return Response({
                 'success': True,
                 'message': 'Registration successful! Your profile has been saved.',
-                'ext_uid': profile.ext_uid,
+                'ext_uid': profile.external_id,
                 'username': username,
                 'email': user.email,
             }, status=status.HTTP_201_CREATED)
@@ -9590,7 +10601,7 @@ class ExtStaffCheckEmailView(APIView):
 class ExtStaffSignupView(APIView):
     """
     POST /api/academics/ext-staff-form/public/<form_code>/signup/
-    Create a new user with email and password.
+    Create a new user with email and password, or without email (username only).
     """
     permission_classes = []
     authentication_classes = []
@@ -9599,6 +10610,7 @@ class ExtStaffSignupView(APIView):
         from .models import ExtStaffFormSettings, ExtStaffProfile
         from django.contrib.auth import get_user_model
         from django.contrib.auth.models import Group
+        import uuid
         
         User = get_user_model()
         
@@ -9617,14 +10629,21 @@ class ExtStaffSignupView(APIView):
         email = request.data.get('email', '').strip().lower()
         password = request.data.get('password', '')
         confirm_password = request.data.get('confirm_password', '')
+        full_name = request.data.get('full_name', '').strip()
+        skip_email = request.data.get('skip_email', False)
         
         errors = {}
         
-        # Validate email
-        if not email:
-            errors['email'] = 'Email is required.'
-        elif User.objects.filter(email__iexact=email).exists():
-            errors['email'] = 'Email already registered.'
+        if skip_email:
+            # Signup without email - require full_name
+            if not full_name:
+                errors['full_name'] = 'Full name is required.'
+        else:
+            # Signup with email
+            if not email:
+                errors['email'] = 'Email is required.'
+            elif User.objects.filter(email__iexact=email).exists():
+                errors['email'] = 'Email already registered.'
         
         # Validate password
         if not password:
@@ -9640,12 +10659,32 @@ class ExtStaffSignupView(APIView):
             return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # Create user with email as username initially
-            new_user = User.objects.create_user(
-                username=email,
-                email=email,
-                password=password,
-            )
+            if skip_email:
+                # Generate a unique username from full_name
+                base_username = ''.join(c.lower() for c in full_name if c.isalnum())[:20]
+                if not base_username:
+                    base_username = 'ext'
+                username = base_username
+                suffix = 1
+                while User.objects.filter(username=username).exists():
+                    username = f"{base_username}{suffix}"
+                    suffix += 1
+                
+                # Create user without email
+                new_user = User.objects.create_user(
+                    username=username,
+                    email='',  # No email
+                    password=password,
+                    first_name=full_name.split()[0] if full_name else '',
+                    last_name=' '.join(full_name.split()[1:]) if len(full_name.split()) > 1 else '',
+                )
+            else:
+                # Create user with email as username
+                new_user = User.objects.create_user(
+                    username=email,
+                    email=email,
+                    password=password,
+                )
             
             # Add to Ext_staff group
             ext_staff_group, _ = Group.objects.get_or_create(name='EXT_STAFF')
@@ -9661,8 +10700,9 @@ class ExtStaffSignupView(APIView):
                 'success': True,
                 'message': 'Account created successfully. Please complete your profile.',
                 'user_id': new_user.id,
-                'email': email,
-                'ext_uid': profile.ext_uid,
+                'username': new_user.username,
+                'email': email or None,
+                'ext_uid': profile.external_id,
             }, status=status.HTTP_201_CREATED)
             
         except Exception as exc:

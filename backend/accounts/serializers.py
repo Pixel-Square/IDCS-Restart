@@ -235,6 +235,8 @@ class MeSerializer(serializers.Serializer):
             return 'STUDENT'
         if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
             return 'STAFF'
+        if hasattr(obj, 'ext_staff_profile') and obj.ext_staff_profile is not None:
+            return 'EXT_STAFF'
         return None
 
     def get_profile(self, obj):
@@ -289,6 +291,24 @@ class MeSerializer(serializers.Serializer):
                 },
                 'designation': st.designation,
                 'status': st.status,
+            }
+
+        if hasattr(obj, 'ext_staff_profile') and obj.ext_staff_profile is not None:
+            ext = obj.ext_staff_profile
+            mobile_value = str(getattr(ext, 'mobile', '') or getattr(obj, 'mobile_no', '') or '')
+            return {
+                'staff_id': getattr(ext, 'external_id', '') or getattr(ext, 'faculty_id', ''),
+                'profile_image': profile_image_url,
+                'profile_image_updated': self.get_profile_image_updated(obj),
+                'mobile_number': mobile_value,
+                'mobile_verified': bool(mobile_value),
+                'department': {
+                    'code': None,
+                    'name': str(getattr(ext, 'department', '') or ''),
+                    'short_name': None,
+                },
+                'designation': str(getattr(ext, 'designation', '') or ''),
+                'status': 'ACTIVE' if bool(getattr(ext, 'is_active', True)) else 'INACTIVE',
             }
         return None
 

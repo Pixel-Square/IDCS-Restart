@@ -30,7 +30,7 @@ import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo } from '../utils/excelImport';
 import { normalizeObeClassType } from '../constants/classTypes';
 
@@ -419,6 +419,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
   const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
 
@@ -1147,7 +1148,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
-    if (!editRequestsEnabled) {
+    if (!markManagerEditRequestsEnabled) {
       alert('Edit requests are disabled by IQAC.');
       return;
     }
@@ -2350,10 +2351,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
               className="obe-btn obe-btn-success"
               onClick={() => {
                 if (uiReadOnly) return;
-                if (markManagerConfirmed && !editRequestsEnabled) return;
+                if (markManagerConfirmed && !markManagerEditRequestsEnabled) return;
                 setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
               }}
-              disabled={!subjectId || markManagerBusy || uiReadOnly || (markManagerConfirmed && !editRequestsEnabled)}
+              disabled={!subjectId || markManagerBusy || uiReadOnly || (markManagerConfirmed && !markManagerEditRequestsEnabled)}
             >
               {markManagerConfirmed ? 'Edit' : 'Save'}
             </button>

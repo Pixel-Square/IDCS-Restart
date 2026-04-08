@@ -45,6 +45,8 @@ urlpatterns = [
     path('api/sections/by-dept-year/', SectionsByDeptYearView.as_view()),
     path('api/announcements/', include('announcements.api_urls')),
     path('api/reporting/', include('reporting.urls')),
+    # College search API (public for external staff registration)
+    path('api/colleges/', include('college.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

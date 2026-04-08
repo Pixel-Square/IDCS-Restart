@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 import newBannerSrc from '../assets/new_banner.png';
 import krLogoSrc from '../assets/krlogo.png';
 import idcsLogoSrc from '../assets/idcs-logo.png';
@@ -484,7 +485,7 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
       const lab = ['SSA1', 'REVIEW1', 'SSA2', 'REVIEW2', 'MODEL'];
       return { visible, header, cycles: cyc, labels: lab };
     }
-    // PROJECT uses only Review 1 and Review 2, each scaled to 30 marks.
+    // PROJECT uses only Review 1 and Review 2, each out of 50 (total /100).
     visible = [2, 8];
     const header = ['Review 1', 'Review 2'];
     const cyc = ['Project Review', 'Project Review'];
@@ -1366,7 +1367,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const weights = isQp1Final
       ? QP1FINAL_WEIGHTS
       : effectiveClassType === 'PROJECT'
-        ? (isPrbl ? [3, 12, 3, 12, 30] : [30, 30])
+        ? (isPrbl ? [3, 12, 3, 12, 30] : [50, 50])
         : schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
   }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final]);
@@ -1375,6 +1376,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
     return w.reduce((s, n) => s + n, 0);
   }, [effMapping]);
+
+  // OE Theory (QP1FINAL) courses convert final mark to 60 instead of 100
+  const scaledMax = isQp1Final ? 60 : 100;
 
   const publishedCoSet = useMemo(() => {
     const nums = (cqiPublished?.coNumbers || [])
@@ -1700,6 +1704,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const f2Co = Number(f2Cfg?.maxCo);
 
     const isTcplCourse = ct === 'TCPL';
+    const projectReviewMax = ct === 'PROJECT' && !isPrbl ? 50 : 15;
 
     const maxes = {
       ssa1: {
@@ -1734,8 +1739,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         co3: Number.isFinite(f2Co) ? Math.max(0, f2Co) : 10,
         co4: Number.isFinite(f2Co) ? Math.max(0, f2Co) : 10,
       },
-      review1: { co1: 15, co2: 15 },
-      review2: { co3: 15, co4: 15 },
+      review1: { co1: projectReviewMax, co2: projectReviewMax },
+      review2: { co3: projectReviewMax, co4: projectReviewMax },
     };
 
     const modelIsTcpl = ct === 'TCPL';
@@ -2049,7 +2054,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const parts = effMapping.visible.map((i) => partsFull[i]);
         const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
         const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
-        const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+        const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
 
         return {
           sno: idx + 1,
@@ -2205,7 +2210,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const parts = effMapping.visible.map((i: number) => partsFull[i]);
         const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
         const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
-        const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+        const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
 
         return {
           sno: idx + 1,
@@ -2300,13 +2305,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       };
 
       const review1Co1 = ct === 'PROJECT'
-        ? scale(review1Total, 50, 30)
+        ? (isPrbl ? scale(review1Total, 50, 30) : (review1Total == null ? null : clamp(review1Total, 0, 50)))
         : getR1Co1();
       const review1Co2 = ct === 'PROJECT'
         ? null
         : getR1Co2();
       const review2Co3 = ct === 'PROJECT'
-        ? scale(review2Total, 50, 30)
+        ? (isPrbl ? scale(review2Total, 50, 30) : (review2Total == null ? null : clamp(review2Total, 0, 50)))
         : getR2Co3();
       const review2Co4 = ct === 'PROJECT'
         ? null
@@ -2525,7 +2530,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const parts = effMapping.visible.map((i: number) => partsFull[i]);
       const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
       const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
-      const pct = total == null || !maxTotal ? null : round2((total / maxTotal) * 100);
+      const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
 
       return {
         sno: idx + 1,
@@ -2535,7 +2540,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         pct,
       };
     });
-  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits]);
+  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, scaledMax, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits]);
 
   const header = displayCols.map((c) => c.header);
   const cycles = displayCols.map((c) => c.cycle);
@@ -2558,8 +2563,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       enabled: true,
     })),
     { key: '__total', label: `Total (${round2(maxTotal)})`, enabled: true },
-    { key: '__pct', label: '% (100)', enabled: true },
-  ], [displayCols, maxTotal]);
+    { key: '__pct', label: `${scaledMax}`, enabled: true },
+  ], [displayCols, maxTotal, scaledMax]);
 
   const [exportCols, setExportCols] = useState<ExportCol[]>([]);
   // Sync when displayCols change
@@ -2620,37 +2625,33 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       };
 
       const PROJECT_CQI_RATE = 0.6;    // take 60% of CQI mark
-      const RAW_TOTAL_MAX = 100;        // review1(50) + review2(50) in raw space
       const RAW_THRESHOLD = 58;         // threshold in raw marks (58 out of 100)
-      const SCALE_FACTOR = maxTotal / RAW_TOTAL_MAX; // 60/100 = 0.6 (dashboard shows /60)
 
       return computedRows.map((r: any) => {
         const review1Base = typeof r.cells?.[0] === 'number' && Number.isFinite(r.cells[0]) ? Number(r.cells[0]) : null;
         const review2Base = typeof r.cells?.[1] === 'number' && Number.isFinite(r.cells[1]) ? Number(r.cells[1]) : null;
 
-        // Combined in dashboard scaled space (out of 60)
-        const combinedScaled = (review1Base ?? 0) + (review2Base ?? 0);
+        // Combined raw total out of 100.
+        const combinedRaw = (review1Base ?? 0) + (review2Base ?? 0);
         const hasAnyMark = review1Base != null || review2Base != null;
 
-        // CQI operates in raw space (/100): convert scaled → raw
-        let cqiAddScaled = 0;
+        let cqiAddRaw = 0;
         if (activeTab === 'after-cqi' && hasAnyMark) {
-          const rawTotal = combinedScaled / SCALE_FACTOR; // convert to /100
+          const rawTotal = combinedRaw;
           const cqiMark = getCombinedCqiMark(Number(r.id));
           if (cqiMark != null && Number.isFinite(cqiMark) && cqiMark > 0 && rawTotal < RAW_THRESHOLD) {
             const rawAdd = cqiMark * PROJECT_CQI_RATE;
             const maxAllowedRaw = Math.max(0, RAW_THRESHOLD - rawTotal);
-            const actualAddRaw = Math.min(rawAdd, maxAllowedRaw);
-            cqiAddScaled = round2(actualAddRaw * SCALE_FACTOR); // convert back to /60
+            cqiAddRaw = round2(Math.min(rawAdd, maxAllowedRaw));
           }
         }
 
         // Column values stay unchanged (CQI applies to total, not per-review)
         const colVals = [review1Base, review2Base];
 
-        let effTotal = hasAnyMark ? round2(combinedScaled + cqiAddScaled) : r.total;
+        let effTotal = hasAnyMark ? round2(combinedRaw + cqiAddRaw) : r.total;
         if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
-        const effPct = effTotal != null && maxTotal ? round2((effTotal / maxTotal) * 100) : r.pct;
+        const effPct = effTotal != null && maxTotal ? Math.round((effTotal / maxTotal) * scaledMax) : r.pct;
         return { ...r, colVals, effTotal, effPct };
       });
     }
@@ -2714,9 +2715,42 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         effTotal = Math.min(effTotal, totalCap);
       }
       if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
-      const effPct = effTotal != null && maxTotal ? round2((effTotal / maxTotal) * 100) : r.pct;
+      const effPct = effTotal != null && maxTotal ? Math.round((effTotal / maxTotal) * scaledMax) : r.pct;
       return { ...r, colVals, effTotal, effPct };
     });
+  };
+
+  // ── Excel export (student_result template) ──
+  const handleExportExcel = () => {
+    const rows = computeEffectiveRows();
+    // Row 1: keys
+    const headerKeys = ['StuRollNo', 'Mark', 'IsAbs', 'StuNm', 'InEligible', 'rsSts'];
+    // Row 2: labels
+    const headerLabels = ['Roll No', 'Marks', 'Is Absent', 'Student Name', 'InEligible', 'Result Status'];
+
+    const sheetData: (string | number | null)[][] = [headerKeys, headerLabels];
+
+    for (const r of rows) {
+      const mark = r.effPct != null ? Math.round(Number(r.effPct)) : null;
+      sheetData.push([
+        String(r.reg_no || ''),        // StuRollNo
+        mark != null ? mark : null,     // Mark
+        'N',                            // IsAbs — default "N" (present)
+        String(r.name || ''),           // StuNm
+        null,                           // InEligible — blank
+        null,                           // rsSts — blank
+      ]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    // Force all StuRollNo cells to text so Excel doesn't mangle leading zeros
+    for (let i = 2; i < 2 + rows.length; i++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: i, c: 0 })];
+      if (cell) { cell.t = 's'; }
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Mark Upload');
+    XLSX.writeFile(wb, `${courseId || 'student_result'}.xlsx`);
   };
 
   const handleExportPdf = async () => {
@@ -2842,7 +2876,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         headRow3.push(c.cycle);
       });
       if (showTotal) { headRow1.push(String(round2(maxTotal))); headRow2.push(''); headRow3.push(''); }
-      if (showPct) { headRow1.push('100'); headRow2.push(''); headRow3.push(''); }
+      if (showPct) { headRow1.push(String(scaledMax)); headRow2.push(''); headRow3.push(''); }
 
       const effRows = computeEffectiveRows();
       const tableBody = effRows.map((r: any) => {
@@ -2856,7 +2890,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           row.push(v == null ? '' : Number(v).toFixed(2));
         });
         if (showTotal) row.push(r.effTotal == null ? '' : Number(r.effTotal).toFixed(2));
-        if (showPct) row.push(r.effPct == null ? '' : Number(r.effPct).toFixed(2));
+        if (showPct) row.push(r.effPct == null ? '' : String(Math.round(Number(r.effPct))));
         return row;
       });
 
@@ -2895,6 +2929,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       setExportStep('closed');
     }
   };
+
+  const effectiveRows = computeEffectiveRows();
 
   return (
     <div style={{ padding: 12 }}>
@@ -3035,7 +3071,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                 </th>
               ))}
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>{round2(maxTotal)}</th>
-              <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>100</th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>{scaledMax}</th>
             </tr>
             <tr>
               <th colSpan={3} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'left', fontWeight: 800 }}>internal weightage</th>
@@ -3073,86 +3109,49 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             </tr>
           </thead>
           <tbody>
-            {computedRows.map((r: any) => (
+            {effectiveRows.map((r: any) => (
               <tr key={r.id}>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.sno}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.reg_no}</td>
                 <td style={{ border: '1px solid #e5e7eb', padding: 6 }}>{r.name}</td>
+                {displayCols.map((col, i) => {
+                  const baseVal = getDisplayValue(r.cells, col);
+                  const val = Array.isArray(r.colVals) ? r.colVals[i] : baseVal;
+                  const changed = activeTab === 'after-cqi'
+                    && baseVal != null
+                    && val != null
+                    && Math.abs(Number(val) - Number(baseVal)) > 0.0001;
+
+                  return (
+                    <td
+                      key={col.key || i}
+                      style={{
+                        border: '1px solid #e5e7eb',
+                        padding: 6,
+                        textAlign: 'center',
+                        fontWeight: changed ? 900 : undefined,
+                        color: changed ? '#16a34a' : undefined,
+                        background: changed ? '#f0fdf4' : undefined,
+                      }}
+                    >
+                      {val == null ? '' : Number(val).toFixed(2)}
+                    </td>
+                  );
+                })}
                 {(() => {
-                  const entries = (cqiPublished?.entries && typeof cqiPublished.entries === 'object') ? cqiPublished.entries : {};
-                  const studentEntry: any = (entries as any)?.[r.id] || {};
-
-                  // Pre-compute total CQI addition for this row (so total/pct cols can reflect it).
-                  let cqiTotalAdded = 0;
-                  if (activeTab === 'after-cqi') {
-                    for (const col of displayCols) {
-                      if (col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
-                        const base = getDisplayValue(r.cells, col);
-                        const coMax = Number(col.weight) || 0;
-                        const input = studentEntry?.[`co${col.co}`];
-                        if (base != null && Number.isFinite(base) && coMax > 0) {
-                          const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
-                          if (add > 0) cqiTotalAdded = round2(cqiTotalAdded + add);
-                        }
-                      }
-                    }
-                  }
-
-                  let effectiveTotal = (r.total != null && cqiTotalAdded > 0)
-                    ? round2(r.total + cqiTotalAdded)
-                    : r.total;
-                  // Cap total at 58% if original total was below 58%.
-                  const originalTotalPct = (r.total != null && maxTotal > 0) ? (r.total / maxTotal) * 100 : 0;
-                  if (effectiveTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
-                    const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
-                    effectiveTotal = Math.min(effectiveTotal, totalCap);
-                  }
-                  if (effectiveTotal != null) effectiveTotal = clamp(effectiveTotal, 0, maxTotal);
-                  const effectivePct = (effectiveTotal != null && maxTotal)
-                    ? round2((effectiveTotal / maxTotal) * 100)
-                    : r.pct;
-                  const totalChanged = cqiTotalAdded > 0;
+                  const totalChanged = activeTab === 'after-cqi' && (
+                    (r.effTotal == null && r.total != null)
+                    || (r.effTotal != null && r.total == null)
+                    || (r.effTotal != null && r.total != null && Math.abs(Number(r.effTotal) - Number(r.total)) > 0.0001)
+                  );
 
                   return (
                     <>
-                      {displayCols.map((col, i) => {
-                        let val = getDisplayValue(r.cells, col);
-                        let changed = false;
-
-                        if (activeTab === 'after-cqi' && col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
-                          const base = val;
-                          const coMax = Number(col.weight) || 0;
-                          const input = studentEntry?.[`co${col.co}`];
-                          if (base != null && Number.isFinite(base) && coMax > 0) {
-                            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
-                            if (add > 0) {
-                              changed = true;
-                              val = clamp(round2(Number(base) + add), 0, coMax);
-                            }
-                          }
-                        }
-
-                        return (
-                          <td
-                            key={col.key || i}
-                            style={{
-                              border: '1px solid #e5e7eb',
-                              padding: 6,
-                              textAlign: 'center',
-                              fontWeight: changed ? 900 : undefined,
-                              color: changed ? '#16a34a' : undefined,
-                              background: changed ? '#f0fdf4' : undefined,
-                            }}
-                          >
-                            {val == null ? '' : Number(val).toFixed(2)}
-                          </td>
-                        );
-                      })}
                       <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', fontWeight: 800, color: totalChanged ? '#16a34a' : undefined, background: totalChanged ? '#f0fdf4' : undefined }}>
-                        {effectiveTotal == null ? '' : Number(effectiveTotal).toFixed(2)}
+                        {r.effTotal == null ? '' : Number(r.effTotal).toFixed(2)}
                       </td>
                       <td style={{ border: '1px solid #e5e7eb', padding: 6, textAlign: 'center', color: totalChanged ? '#16a34a' : undefined, background: totalChanged ? '#f0fdf4' : undefined }}>
-                        {effectivePct == null ? '' : Number(effectivePct).toFixed(2)}
+                        {r.effPct == null ? '' : Math.round(Number(r.effPct))}
                       </td>
                     </>
                   );
@@ -3180,12 +3179,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                     📄 PDF
                   </button>
                   <button
-                    disabled
-                    title="Coming soon"
-                    style={{ flex: 1, padding: '14px 0', background: '#f3f4f6', color: '#9ca3af', border: '1px solid #e5e7eb', borderRadius: 8, cursor: 'not-allowed', fontWeight: 700, fontSize: 14 }}
+                    onClick={() => { handleExportExcel(); setExportStep('closed'); }}
+                    style={{ flex: 1, padding: '14px 0', background: '#047857', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: 14 }}
                   >
                     📊 Excel
-                    <div style={{ fontSize: 10, fontWeight: 400, marginTop: 2 }}>Coming Soon</div>
                   </button>
                 </div>
               </>

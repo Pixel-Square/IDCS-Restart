@@ -17,6 +17,7 @@ from datetime import timedelta
 import re
 import logging
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
 from urllib.parse import urlparse
 import posixpath
@@ -102,14 +103,20 @@ def _normalize_mobile_number(raw: str) -> str:
 
 def _set_verified_mobile_on_profile(user, mobile_number: str, verified_at):
     """Persist verified mobile number on the attached student/staff profile."""
-    if hasattr(user, 'student_profile') and getattr(user, 'student_profile') is not None:
-        sp = user.student_profile
+    try:
+        sp = getattr(user, 'student_profile', None)
+    except ObjectDoesNotExist:
+        sp = None
+    if sp is not None:
         sp.mobile_number = mobile_number
         sp.mobile_number_verified_at = verified_at
         sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
         return
-    if hasattr(user, 'staff_profile') and getattr(user, 'staff_profile') is not None:
-        st = user.staff_profile
+    try:
+        st = getattr(user, 'staff_profile', None)
+    except ObjectDoesNotExist:
+        st = None
+    if st is not None:
         st.mobile_number = mobile_number
         st.mobile_number_verified_at = verified_at
         st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
@@ -460,13 +467,20 @@ class MobileRemoveView(APIView):
             return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Remove mobile from profile
-        if hasattr(request.user, 'student_profile') and getattr(request.user, 'student_profile') is not None:
-            sp = request.user.student_profile
+        try:
+            sp = getattr(request.user, 'student_profile', None)
+        except ObjectDoesNotExist:
+            sp = None
+        try:
+            st = getattr(request.user, 'staff_profile', None)
+        except ObjectDoesNotExist:
+            st = None
+
+        if sp is not None:
             sp.mobile_number = ''
             sp.mobile_number_verified_at = None
             sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
-        elif hasattr(request.user, 'staff_profile') and getattr(request.user, 'staff_profile') is not None:
-            st = request.user.staff_profile
+        elif st is not None:
             st.mobile_number = ''
             st.mobile_number_verified_at = None
             st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
