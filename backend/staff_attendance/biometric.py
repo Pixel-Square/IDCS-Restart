@@ -126,9 +126,10 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
         changed = True
 
     if changed:
+        should_defer_an_until_out = bool(record.morning_in and not record.evening_out)
         _seed_record_defaults(record)
         record.source_file = source
-        record.update_status()
+        record.update_status(defer_an_until_out=should_defer_an_until_out)
         record.save()
 
     return record, created, changed, effective_direction
