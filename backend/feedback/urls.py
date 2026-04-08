@@ -11,6 +11,9 @@ from .views import (
     ActivateAllFeedbackFormsView,
     ActivateFilteredFeedbackFormsView,
     PublishFeedbackFormView,
+    ToggleAllowHODViewView,
+    PublishAllFeedbackFormsView,
+    DeleteAllDeactivatedFeedbackFormsView,
     GetResponseStatisticsView,
     GetResponseListView,
     GetStudentSubjectsView,
@@ -61,8 +64,17 @@ urlpatterns = [
     # API: Activate filtered deactivated forms (IQAC/Admin)
     path('activate-filtered/', ActivateFilteredFeedbackFormsView.as_view(), name='feedback-activate-filtered'),
     
+    # API: Publish all draft feedback forms (IQAC/Admin)
+    path('publish-all/', PublishAllFeedbackFormsView.as_view(), name='feedback-publish-all'),
+    
+    # API: Delete all deactivated feedback forms (IQAC/Admin)
+    path('delete-all-deactivated/', DeleteAllDeactivatedFeedbackFormsView.as_view(), name='feedback-delete-all-deactivated'),
+    
     # API: Publish Feedback Form (HOD)
     path('<int:form_id>/publish/', PublishFeedbackFormView.as_view(), name='feedback-publish'),
+    
+    # API: Toggle Allow HOD View (IQAC/Admin/HOD for own forms)
+    path('<int:form_id>/toggle-allow-hod-view/', ToggleAllowHODViewView.as_view(), name='feedback-toggle-allow-hod-view'),
     
     # API 7: Get Response Statistics (HOD)
     path('<int:form_id>/statistics/', GetResponseStatisticsView.as_view(), name='feedback-statistics'),
