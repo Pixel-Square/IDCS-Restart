@@ -185,6 +185,7 @@ class AttendanceSettingsSerializer(serializers.ModelSerializer):
         model = AttendanceSettings
         fields = [
             'id', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'lunch_from', 'lunch_to',
             'apply_time_based_absence', 'updated_by', 'updated_by_name',
             'created_at', 'updated_at'
         ]
@@ -202,6 +203,7 @@ class DepartmentAttendanceSettingsSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'departments', 'departments_info',
             'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'lunch_from', 'lunch_to',
             'apply_time_based_absence', 'enabled',
             'created_by', 'created_by_name', 'updated_by', 'updated_by_name',
             'created_at', 'updated_at'
@@ -230,6 +232,7 @@ class SpecialDepartmentDateAttendanceLimitSerializer(serializers.ModelSerializer
         fields = [
             'id', 'name', 'description', 'from_date', 'to_date',
             'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'lunch_from', 'lunch_to',
             'apply_time_based_absence', 'departments', 'departments_info', 'enabled',
             'created_by', 'created_by_name', 'updated_by', 'updated_by_name',
             'created_at', 'updated_at'
@@ -268,6 +271,7 @@ class StaffAttendanceTimeLimitOverrideSerializer(serializers.ModelSerializer):
             'id',
             'user', 'user_info',
             'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split',
+            'lunch_from', 'lunch_to',
             'apply_time_based_absence', 'enabled',
             'created_by', 'created_by_name',
             'updated_by', 'updated_by_name',

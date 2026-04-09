@@ -406,6 +406,16 @@ class AttendanceSettings(models.Model):
         default='13:00:00',
         help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
     )
+    lunch_from = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break start time"
+    )
+    lunch_to = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break end time"
+    )
     apply_time_based_absence = models.BooleanField(
         default=True,
         help_text="Enable time-based absence marking"
@@ -450,6 +460,16 @@ class DepartmentAttendanceSettings(models.Model):
     mid_time_split = models.TimeField(
         default='13:00:00',
         help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
+    )
+    lunch_from = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break start time"
+    )
+    lunch_to = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break end time"
     )
     apply_time_based_absence = models.BooleanField(
         default=True,
@@ -509,6 +529,8 @@ class StaffAttendanceTimeLimitOverride(models.Model):
     attendance_in_time_limit = models.TimeField(default='08:45:00')
     attendance_out_time_limit = models.TimeField(default='17:00:00')
     mid_time_split = models.TimeField(default='13:00:00')
+    lunch_from = models.TimeField(null=True, blank=True)
+    lunch_to = models.TimeField(null=True, blank=True)
     apply_time_based_absence = models.BooleanField(default=True)
     enabled = models.BooleanField(default=True)
 
@@ -546,6 +568,8 @@ class SpecialDepartmentDateAttendanceLimit(models.Model):
     attendance_in_time_limit = models.TimeField(default='08:45:00')
     attendance_out_time_limit = models.TimeField(default='17:00:00')
     mid_time_split = models.TimeField(default='13:00:00')
+    lunch_from = models.TimeField(null=True, blank=True)
+    lunch_to = models.TimeField(null=True, blank=True)
     apply_time_based_absence = models.BooleanField(default=True)
     departments = models.ManyToManyField(
         'academics.Department',

@@ -3,7 +3,7 @@ import io
 import calendar
 import re
 import traceback as tb_module
-from datetime import datetime, date as date_type, timedelta
+from datetime import datetime, date as date_type, timedelta, time as time_type
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from django.core.management import call_command
@@ -44,6 +44,262 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         else:
             # Regular users can only see their own records
             return AttendanceRecord.objects.filter(user=user)
+
+    def _resolve_attendance_limits(self, user, target_date):
+        """Resolve time limits using staff override -> special date -> department -> global."""
+        in_limit = time_type(8, 45)
+        out_limit = time_type(17, 0)
+        mid_split = time_type(13, 0)
+        lunch_from = None
+        lunch_to = None
+        apply_absence = True
+
+        staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+            user=user,
+            enabled=True,
+        ).first()
+        if staff_override:
+            return {
+                'in_limit': staff_override.attendance_in_time_limit,
+                'out_limit': staff_override.attendance_out_time_limit,
+                'mid_split': staff_override.mid_time_split,
+                'lunch_from': getattr(staff_override, 'lunch_from', None),
+                'lunch_to': getattr(staff_override, 'lunch_to', None),
+                'apply_absence': staff_override.apply_time_based_absence,
+            }
+
+        user_department = None
+        profile = getattr(user, 'staff_profile', None)
+        if profile:
+            try:
+                if hasattr(profile, 'get_current_department'):
+                    user_department = profile.get_current_department()
+            except Exception:
+                user_department = None
+            if not user_department:
+                user_department = getattr(profile, 'department', None)
+
+        if user_department:
+            special_settings = (
+                SpecialDepartmentDateAttendanceLimit.objects.filter(
+                    enabled=True,
+                    departments=user_department,
+                    from_date__lte=target_date,
+                )
+                .filter(
+                    Q(to_date__isnull=True, from_date=target_date)
+                    | Q(to_date__isnull=False, to_date__gte=target_date)
+                )
+                .order_by('-from_date', '-id')
+                .first()
+            )
+            if special_settings:
+                return {
+                    'in_limit': special_settings.attendance_in_time_limit,
+                    'out_limit': special_settings.attendance_out_time_limit,
+                    'mid_split': special_settings.mid_time_split,
+                    'lunch_from': getattr(special_settings, 'lunch_from', None),
+                    'lunch_to': getattr(special_settings, 'lunch_to', None),
+                    'apply_absence': special_settings.apply_time_based_absence,
+                }
+
+            department_settings = DepartmentAttendanceSettings.objects.filter(
+                departments=user_department,
+                enabled=True,
+            ).first()
+            if department_settings:
+                return {
+                    'in_limit': department_settings.attendance_in_time_limit,
+                    'out_limit': department_settings.attendance_out_time_limit,
+                    'mid_split': department_settings.mid_time_split,
+                    'lunch_from': getattr(department_settings, 'lunch_from', None),
+                    'lunch_to': getattr(department_settings, 'lunch_to', None),
+                    'apply_absence': department_settings.apply_time_based_absence,
+                }
+
+        global_settings = AttendanceSettings.objects.first()
+        if global_settings:
+            in_limit = global_settings.attendance_in_time_limit
+            out_limit = global_settings.attendance_out_time_limit
+            mid_split = global_settings.mid_time_split
+            lunch_from = getattr(global_settings, 'lunch_from', None)
+            lunch_to = getattr(global_settings, 'lunch_to', None)
+            apply_absence = global_settings.apply_time_based_absence
+
+        return {
+            'in_limit': in_limit,
+            'out_limit': out_limit,
+            'mid_split': mid_split,
+            'lunch_from': lunch_from,
+            'lunch_to': lunch_to,
+            'apply_absence': apply_absence,
+        }
+
+    def _get_gatepass_applications_by_user_date(self, user_ids, from_date, to_date):
+        """Return {(user_id, date): [applications]} for gatepass scans in range."""
+        if not user_ids:
+            return {}
+
+        from applications import models as app_models
+
+        apps = (
+            app_models.Application.objects.filter(
+                applicant_user_id__in=user_ids,
+            )
+            .filter(
+                Q(application_type__code__iexact='GATEPASS')
+                | Q(application_type__name__iexact='Gatepass')
+                | Q(application_type__name__icontains='gate pass')
+                | Q(application_type__name__icontains='gatepass')
+            )
+            .filter(
+                Q(gatepass_scanned_at__date__gte=from_date, gatepass_scanned_at__date__lte=to_date)
+                | Q(gatepass_in_scanned_at__date__gte=from_date, gatepass_in_scanned_at__date__lte=to_date)
+            )
+            .select_related('application_type')
+            .order_by('id')
+        )
+
+        result = {}
+        for app in apps:
+            app_dates = set()
+            if app.gatepass_scanned_at:
+                out_date = timezone.localtime(app.gatepass_scanned_at).date()
+                if from_date <= out_date <= to_date:
+                    app_dates.add(out_date)
+            if app.gatepass_in_scanned_at:
+                in_date = timezone.localtime(app.gatepass_in_scanned_at).date()
+                if from_date <= in_date <= to_date:
+                    app_dates.add(in_date)
+
+            for the_date in app_dates:
+                result.setdefault((app.applicant_user_id, the_date), []).append(app)
+
+        return result
+
+    def _format_minutes_hhmm(self, total_minutes):
+        if total_minutes is None:
+            return None
+        total_minutes = max(0, int(total_minutes))
+        return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+    def _compute_effective_hours_metrics(self, record, gatepass_apps, limits):
+        """Compute effective hours with gatepass deductions excluding lunch overlap."""
+        gate_out_display = None
+        gate_in_display = None
+
+        out_times = []
+        in_times = []
+        for app in gatepass_apps or []:
+            if app.gatepass_scanned_at:
+                local_out = timezone.localtime(app.gatepass_scanned_at)
+                if local_out.date() == record.date:
+                    out_times.append(local_out.time())
+            if app.gatepass_in_scanned_at:
+                local_in = timezone.localtime(app.gatepass_in_scanned_at)
+                if local_in.date() == record.date:
+                    in_times.append(local_in.time())
+
+        if out_times:
+            gate_out_display = min(out_times).strftime('%H:%M')
+        if in_times:
+            gate_in_display = max(in_times).strftime('%H:%M')
+
+        expected_minutes = None
+        try:
+            expected_delta = (
+                datetime.combine(record.date, limits['out_limit'])
+                - datetime.combine(record.date, limits['in_limit'])
+            )
+            if expected_delta.total_seconds() > 0:
+                expected_minutes = int(expected_delta.total_seconds() // 60)
+        except Exception:
+            expected_minutes = None
+
+        if not record.morning_in or not record.evening_out:
+            return {
+                'gate_out_time': gate_out_display,
+                'gate_in_time': gate_in_display,
+                'effective_hours': None,
+                'expected_hours': self._format_minutes_hhmm(expected_minutes),
+                'effective_hours_status': None,
+            }
+
+        work_start = datetime.combine(record.date, record.morning_in)
+        work_end = datetime.combine(record.date, record.evening_out)
+        if work_end <= work_start:
+            return {
+                'gate_out_time': gate_out_display,
+                'gate_in_time': gate_in_display,
+                'effective_hours': None,
+                'expected_hours': self._format_minutes_hhmm(expected_minutes),
+                'effective_hours_status': None,
+            }
+
+        try:
+            tz = timezone.get_current_timezone()
+            work_start_aw = timezone.make_aware(work_start, tz)
+            work_end_aw = timezone.make_aware(work_end, tz)
+        except Exception:
+            work_start_aw = work_start
+            work_end_aw = work_end
+
+        base_minutes = int((work_end_aw - work_start_aw).total_seconds() // 60)
+        total_deduction_minutes = 0
+
+        lunch_from = limits.get('lunch_from')
+        lunch_to = limits.get('lunch_to')
+        lunch_start_aw = None
+        lunch_end_aw = None
+        if lunch_from and lunch_to and lunch_to > lunch_from:
+            try:
+                tz = timezone.get_current_timezone()
+                lunch_start_aw = timezone.make_aware(datetime.combine(record.date, lunch_from), tz)
+                lunch_end_aw = timezone.make_aware(datetime.combine(record.date, lunch_to), tz)
+            except Exception:
+                lunch_start_aw = datetime.combine(record.date, lunch_from)
+                lunch_end_aw = datetime.combine(record.date, lunch_to)
+
+        for app in gatepass_apps or []:
+            if not (app.gatepass_scanned_at and app.gatepass_in_scanned_at):
+                continue
+
+            out_aw = timezone.localtime(app.gatepass_scanned_at)
+            in_aw = timezone.localtime(app.gatepass_in_scanned_at)
+            if in_aw <= out_aw:
+                continue
+
+            overlap_start = max(work_start_aw, out_aw)
+            overlap_end = min(work_end_aw, in_aw)
+            if overlap_end <= overlap_start:
+                continue
+
+            overlap_minutes = int((overlap_end - overlap_start).total_seconds() // 60)
+            if overlap_minutes <= 0:
+                continue
+
+            deduction_minutes = overlap_minutes
+            if lunch_start_aw and lunch_end_aw:
+                lunch_overlap_start = max(overlap_start, lunch_start_aw)
+                lunch_overlap_end = min(overlap_end, lunch_end_aw)
+                if lunch_overlap_end > lunch_overlap_start:
+                    lunch_overlap_minutes = int((lunch_overlap_end - lunch_overlap_start).total_seconds() // 60)
+                    deduction_minutes = max(0, deduction_minutes - lunch_overlap_minutes)
+
+            total_deduction_minutes += deduction_minutes
+
+        effective_minutes = max(0, base_minutes - total_deduction_minutes)
+        effective_status = None
+        if expected_minutes is not None:
+            effective_status = 'below' if effective_minutes < expected_minutes else 'ok'
+
+        return {
+            'gate_out_time': gate_out_display,
+            'gate_in_time': gate_in_display,
+            'effective_hours': self._format_minutes_hhmm(effective_minutes),
+            'expected_hours': self._format_minutes_hhmm(expected_minutes),
+            'effective_hours_status': effective_status,
+        }
 
     @action(detail=False, methods=['get'])
     def today_status(self, request):
@@ -193,8 +449,20 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 # Regular staff can only see their own records
                 queryset = queryset.filter(user=user)
         
+        if from_date_str and to_date_str:
+            lookup_from_date = from_date
+            lookup_to_date = to_date
+        else:
+            lookup_from_date = date_type(year, month, 1)
+            lookup_to_date = date_type(year, month, calendar.monthrange(year, month)[1])
+
         # Order by date
         records = queryset.order_by('date', 'user__username').select_related('user', 'user__staff_profile__department')
+        record_list = list(records)
+
+        user_ids = list({r.user_id for r in record_list})
+        gatepass_map = self._get_gatepass_applications_by_user_date(user_ids, lookup_from_date, lookup_to_date)
+        limits_cache = {}
         
         # Get COL template for checking approved forms
         from staff_requests.models import RequestTemplate, StaffRequest
@@ -202,7 +470,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         
         # Serialize the records
         data = []
-        for record in records:
+        for record in record_list:
             # Check if there's an approved COL form for this date
             has_approved_col_form = False
             if col_template:
@@ -214,6 +482,15 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     Q(form_data__date=record.date.isoformat()) |
                     Q(form_data__from_date=record.date.isoformat())
                 ).exists()
+
+            limits_cache_key = (record.user_id, record.date)
+            if limits_cache_key not in limits_cache:
+                limits_cache[limits_cache_key] = self._resolve_attendance_limits(record.user, record.date)
+            metrics = self._compute_effective_hours_metrics(
+                record,
+                gatepass_map.get((record.user_id, record.date), []),
+                limits_cache[limits_cache_key],
+            )
             
             data.append({
                 'id': record.id,
@@ -229,6 +506,11 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                 'evening_out': record.evening_out.strftime('%H:%M') if record.evening_out else None,
                 'notes': record.notes,
                 'has_approved_col_form': has_approved_col_form,
+                'gate_out_time': metrics.get('gate_out_time'),
+                'gate_in_time': metrics.get('gate_in_time'),
+                'effective_hours': metrics.get('effective_hours'),
+                'expected_hours': metrics.get('expected_hours'),
+                'effective_hours_status': metrics.get('effective_hours_status'),
             })
         
         # Calculate summary stats
@@ -631,6 +913,9 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             date__lte=month_end,
         ).select_related('user', 'user__staff_profile', 'user__staff_profile__department')
 
+        gatepass_map = self._get_gatepass_applications_by_user_date(staff_ids, month_start, month_end)
+        limits_cache = {}
+
         record_map = {(r.user_id, r.date): r for r in records}
 
         holidays = Holiday.objects.filter(date__gte=month_start, date__lte=month_end).prefetch_related('departments')
@@ -679,6 +964,19 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             diff = out_dt - in_dt
             total_minutes = int(diff.total_seconds() // 60)
             return f"{total_minutes // 60}:{total_minutes % 60:02d}"
+
+        def _effective_hrs(record, user_obj):
+            if not record:
+                return ''
+            cache_key = (user_obj.id, record.date)
+            if cache_key not in limits_cache:
+                limits_cache[cache_key] = self._resolve_attendance_limits(user_obj, record.date)
+            metrics = self._compute_effective_hours_metrics(
+                record,
+                gatepass_map.get((user_obj.id, record.date), []),
+                limits_cache[cache_key],
+            )
+            return metrics.get('effective_hours') or ''
 
         def _in_out_text(record):
             if not record or not record.morning_in or not record.evening_out:
@@ -773,7 +1071,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     continue
 
                 if report_type == '4':
-                    dur = _duration_hrs(rec)
+                    dur = _effective_hrs(rec, user_obj)
                     in_out = _in_out_text(rec)
                     status_text = _session_status_text(fn_code, an_code, overall_code)
                     if dur and in_out and status_text:
@@ -809,7 +1107,7 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
                     row['values'][key] = {'value': value, 'is_holiday': is_holiday}
                     continue
 
-                dur = _duration_hrs(rec)
+                dur = _effective_hrs(rec, user_obj) if report_type == '2' else _duration_hrs(rec)
                 status_text = _session_status_text(fn_code, an_code, overall_code)
                 if dur and status_text:
                     value = f"{status_text}\n{dur}"
@@ -2799,6 +3097,8 @@ class StaffAttendanceTimeLimitOverrideViewSet(viewsets.ModelViewSet):
         - attendance_in_time_limit (HH:MM:SS)
         - attendance_out_time_limit (HH:MM:SS)
         - mid_time_split (HH:MM:SS)
+        - lunch_from (HH:MM:SS, optional)
+        - lunch_to (HH:MM:SS, optional)
         - apply_time_based_absence (bool)
         - enabled (bool)
         """

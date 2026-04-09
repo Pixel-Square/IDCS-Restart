@@ -60,7 +60,7 @@ class HolidayAdmin(admin.ModelAdmin):
 
 @admin.register(AttendanceSettings)
 class AttendanceSettingsAdmin(admin.ModelAdmin):
-    list_display = ['id', 'attendance_in_time_limit', 'mid_time_split', 'attendance_out_time_limit', 'apply_time_based_absence', 'updated_by', 'updated_at']
+    list_display = ['id', 'attendance_in_time_limit', 'mid_time_split', 'attendance_out_time_limit', 'lunch_from', 'lunch_to', 'apply_time_based_absence', 'updated_by', 'updated_at']
     readonly_fields = ['created_at', 'updated_at']
     
     def save_model(self, request, obj, form, change):
@@ -80,7 +80,7 @@ class AttendanceSettingsAdmin(admin.ModelAdmin):
 
 @admin.register(DepartmentAttendanceSettings)
 class DepartmentAttendanceSettingsAdmin(admin.ModelAdmin):
-    list_display = ['name', 'get_departments', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split', 'enabled', 'updated_by', 'updated_at']
+    list_display = ['name', 'get_departments', 'attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split', 'lunch_from', 'lunch_to', 'enabled', 'updated_by', 'updated_at']
     list_filter = ['enabled', 'updated_at', 'departments']
     search_fields = ['name', 'description']
     filter_horizontal = ['departments']
@@ -91,7 +91,7 @@ class DepartmentAttendanceSettingsAdmin(admin.ModelAdmin):
             'fields': ('name', 'description', 'departments')
         }),
         ('Time Limits', {
-            'fields': ('attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split')
+            'fields': ('attendance_in_time_limit', 'attendance_out_time_limit', 'mid_time_split', 'lunch_from', 'lunch_to')
         }),
         ('Settings', {
             'fields': ('apply_time_based_absence', 'enabled')
