@@ -91,7 +91,6 @@ export default function PeriodAttendance(){
   const [students, setStudents] = useState<Student[]>([])
   const [marks, setMarks] = useState<Record<number,string>>({})
   // dailyLocks: maps student id → their daily attendance override reason
-  //   'ABSENT'        → period status is locked to Absent (cannot be changed)
   //   'OD' | 'LEAVE'  → period status is locked to that value (cannot be changed)
   //   'LATE'          → period status was forced to Present by daily LATE
   const [dailyLocks, setDailyLocks] = useState<Record<number, string>>({})
@@ -583,9 +582,8 @@ export default function PeriodAttendance(){
               (dailyData.students || []).forEach((student: any) => {
                 const status = student.status || 'P';
                 if (status === 'A') {
-                  // Mark as Absent and lock it
+                  // Keep Absent as the default period status, but do not lock it.
                   dailyMarks[student.student_id] = 'A';
-                  locksByStudent[student.student_id] = 'ABSENT';
                 } else if (status === 'OD' || status === 'LEAVE') {
                   dailyMarks[student.student_id] = status;
                   locksByStudent[student.student_id] = status;
@@ -622,9 +620,8 @@ export default function PeriodAttendance(){
           const settled = await Promise.allSettled(tasks)
           const updated = { ...initial }
           for (const s of settled){ if (s.status !== 'fulfilled' || !s.value) continue; const pj = s.value; const recs = pj.records || []; recs.forEach((r:any)=>{ const sid = r.student_pk || (r.student && r.student.id) || null; if (sid) updated[sid] = r.status || updated[sid] || 'A' }) }
-          // Re-apply ABSENT/OD/LEAVE locks so saved records can never override them
+          // Re-apply OD/LEAVE locks so saved records can never override them.
           for (const [sidStr, lock] of Object.entries(locksByStudent)) {
-            if (lock === 'ABSENT') updated[Number(sidStr)] = 'A'
             if (lock === 'OD' || lock === 'LEAVE') updated[Number(sidStr)] = lock
             if (lock === 'LATE') updated[Number(sidStr)] = 'P'
           }
@@ -782,9 +779,8 @@ export default function PeriodAttendance(){
               (dailyData.students || []).forEach((student: any) => {
                 const status = student.status || 'P';
                 if (status === 'A') {
-                  // Mark as Absent and lock it
+                  // Keep Absent as the default period status, but do not lock it.
                   if (initialMarks[student.student_id] !== undefined) initialMarks[student.student_id] = 'A';
-                  consecutiveLocks[student.student_id] = 'ABSENT';
                 } else if (status === 'OD' || status === 'LEAVE') {
                   if (initialMarks[student.student_id] !== undefined) initialMarks[student.student_id] = status;
                   consecutiveLocks[student.student_id] = status;
@@ -3089,9 +3085,9 @@ export default function PeriodAttendance(){
                           LATE: 'bg-yellow-50 text-yellow-800 border-yellow-300',
                           LEAVE: 'bg-purple-50 text-purple-800 border-purple-300'
                         }
-                        // Strict lock: if dailyLocks[student.student_id] is set to 'ABSENT', 'OD', 'LEAVE', or 'LATE', lock the selector
+                        // Daily attendance stays editable; period-wise lock is handled separately.
                         const lockReason = dailyLocks[student.student_id]
-                        const isLocked = lockReason === 'ABSENT' || lockReason === 'OD' || lockReason === 'LEAVE' || lockReason === 'LATE' || dailySessionData?.is_locked || dailySessionData?.is_read_only
+                        const isLocked = dailySessionData?.is_locked || dailySessionData?.is_read_only
                         return (
                           <tr key={student.student_id} className="hover:bg-slate-50">
                             <td className="py-3 px-2 sm:px-4 text-sm">
@@ -3156,11 +3152,6 @@ export default function PeriodAttendance(){
                                   <option value="LATE">Late</option>
                                   <option value="LEAVE">Leave</option>
                                 </select>
-                                {lockReason && (lockReason === 'ABSENT' || lockReason === 'OD' || lockReason === 'LEAVE' || lockReason === 'LATE') && (
-                                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                                    <Lock className="w-4 h-4 text-slate-400" aria-label={`Locked by daily status: ${lockReason}`}/>
-                                  </div>
-                                )}
                               </div>
                               {/* Mobile remarks input */}
                               <div className="mt-2 sm:hidden">
@@ -3552,10 +3543,10 @@ export default function PeriodAttendance(){
                 <tbody className="divide-y divide-slate-200">
                   {students.map(s=> {
                     const status = marks[s.id] || 'P'
-                    const dailyLock = dailyLocks[s.id] || null  // 'ABSENT' | 'OD' | 'LEAVE' | 'LATE' | null
+                    const dailyLock = dailyLocks[s.id] || null  // 'OD' | 'LEAVE' | 'LATE' | null; Absent stays editable
                     // assigned to someone else = view only for the original staff
                     const isAssignedToOther = !!(selected as any).assigned_to && !(selected as any).original_staff
-                    const isLocked = selected.attendance_session_locked || dailyLock === 'ABSENT' || dailyLock === 'OD' || dailyLock === 'LEAVE' || isAssignedToOther
+                    const isLocked = selected.attendance_session_locked || dailyLock === 'OD' || dailyLock === 'LEAVE' || dailyLock === 'LATE' || isAssignedToOther
                     const statusSelectClasses: Record<string,string> = {
                       P: 'bg-green-50 text-green-800 border-green-300',
                       A: 'bg-red-50 text-red-800 border-red-300',
@@ -3593,10 +3584,10 @@ export default function PeriodAttendance(){
                           <div className="flex items-center gap-2">
                             <span className={`inline-block w-3 h-3 rounded-full ${badgeCls}`} />
                             {isLocked && dailyLock ? (
-                              /* ABSENT / OD / LEAVE locked from daily attendance */
-                              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300 w-full" title={`Locked by daily attendance (${dailyLock === 'ABSENT' ? 'Absent' : dailyLock === 'OD' ? 'On Duty' : 'Leave'})`}>
+                              /* OD / LATE / LEAVE locked from daily attendance */
+                              <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 border rounded-lg text-sm font-medium bg-slate-100 text-slate-600 border-slate-300 w-full" title={`Locked by daily attendance (${dailyLock === 'OD' ? 'On Duty' : dailyLock === 'LATE' ? 'Late' : 'Leave'})`}>
                                 <Lock className="w-3 h-3 text-slate-400" />
-                                {dailyLock === 'ABSENT' ? 'Absent' : dailyLock === 'OD' ? 'On Duty' : 'Leave'}
+                                {dailyLock === 'OD' ? 'On Duty' : dailyLock === 'LATE' ? 'Late' : 'Leave'}
                               </div>
                             ) : (
                             <div className="relative inline-block w-full">
