@@ -1000,12 +1000,26 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return None
 
     def _get_user_in_time_limit(self, user):
-        """Resolve in-time limit using department-specific settings first, then global."""
+        """Resolve in-time limit with staff override, department, then global fallback."""
         from datetime import time
-        from staff_attendance.models import AttendanceSettings, DepartmentAttendanceSettings
+        from staff_attendance.models import (
+            AttendanceSettings,
+            DepartmentAttendanceSettings,
+            StaffAttendanceTimeLimitOverride,
+        )
 
         # Default fallback
         default_limit = time(hour=8, minute=45)
+
+        try:
+            staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+                user=user,
+                enabled=True,
+            ).first()
+            if staff_override and staff_override.attendance_in_time_limit:
+                return staff_override.attendance_in_time_limit
+        except Exception:
+            pass
 
         try:
             dept = None

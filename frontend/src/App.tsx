@@ -108,6 +108,8 @@ import MyProposalsPage from './pages/events/MyProposalsPage';
 import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import LmsPage from './pages/lms/LmsPage';
+import FilePreviewPage from './pages/lms/FilePreviewPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -334,6 +336,14 @@ export default function App() {
                 <Route
                   path="/announcements/sent"
                   element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
+                />
+                <Route
+                  path="/lms"
+                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<LmsPage user={user} />} />}
+                />
+                <Route
+                  path="/lms/preview/file/:materialId"
+                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<FilePreviewPage />} />}
                 />
                 <Route
                   path="/ps/staff-attendance/upload"

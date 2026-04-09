@@ -48,7 +48,7 @@ class AttendanceRecord(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.date} - {self.status}"
     
-    def update_status(self):
+    def update_status(self, defer_an_until_out: bool = False):
         """Auto-determine status based on morning_in, evening_out, and time limits.
         Preserves leave statuses (CL, OD, ML, COL, etc.) - only updates biometric statuses.
         
@@ -75,7 +75,7 @@ class AttendanceRecord(models.Model):
             return session_status in BIOMETRIC_STATUSES or (session_status is None and has_biometric)
         
         try:
-            # Get time limits: try department-specific first, then global
+            # Get time limits with fallback order: staff override -> special date -> department -> global
             in_limit = '08:45:00'
             out_limit = '17:00:00'
             mid_split = '13:00:00'
@@ -194,7 +194,12 @@ class AttendanceRecord(models.Model):
                     elif self.morning_in:
                         # Has morning_in but no evening_out - probably partial day
                         if self.morning_in <= mid_split:
-                            self.an_status = 'absent'  # Has FN but no AN
+                            # Realtime biometric flow can defer AN decision until
+                            # a valid OUT punch is captured.
+                            if defer_an_until_out:
+                                self.an_status = None
+                            else:
+                                self.an_status = 'absent'  # Has FN but no AN
                         else:
                             # Came after mid_split - no proper attendance
                             self.an_status = 'absent'

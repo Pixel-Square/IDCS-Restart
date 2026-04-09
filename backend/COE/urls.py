@@ -11,6 +11,11 @@ from .selection_views import CoeCourseSelectionView
 from .kv_views import CoeKeyValueStoreView
 from .marks_views import CoeStudentMarksView, CoeStudentMarksBulkView
 from .final_result_views import CoeFinalResultView
+try:
+    from .final_result_views import CoeResultCheckView, CoeResultCheckOptionsView
+except ImportError:
+    CoeResultCheckView = None
+    CoeResultCheckOptionsView = None
 from .views_save import CoeResetExamDummies, CoeSaveExamDummies
 from .external_staff_views import ExternalStaffListView, AssignExternalCodesView
 
@@ -31,3 +36,8 @@ urlpatterns = [
     path('external-staff/', ExternalStaffListView.as_view(), name='coe_external_staff'),
     path('external-staff/assign-codes/', AssignExternalCodesView.as_view(), name='coe_assign_external_codes'),
 ]
+
+if CoeResultCheckView is not None:
+    urlpatterns.append(path('result-check/', CoeResultCheckView.as_view(), name='coe_result_check'))
+if CoeResultCheckOptionsView is not None:
+    urlpatterns.append(path('result-check/options/', CoeResultCheckOptionsView.as_view(), name='coe_result_check_options'))

@@ -91,6 +91,13 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
     changed = False
     effective_direction = StaffBiometricPunchLog.Direction.IN
 
+    # Self-heal stale/invalid data from older/manual flows where OUT was stored
+    # equal to or earlier than IN (e.g., 08:32/08:32). Realtime policy should
+    # always treat this as no valid OUT yet.
+    if record.morning_in and record.evening_out and record.evening_out <= record.morning_in:
+        record.evening_out = None
+        changed = True
+
     # Realtime policy:
     # - First punch of the date is stored as IN (morning_in)
     # - OUT (evening_out) is stored only when a punch arrives at least 30 minutes after morning_in
@@ -119,9 +126,10 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
         changed = True
 
     if changed:
+        should_defer_an_until_out = bool(record.morning_in and not record.evening_out)
         _seed_record_defaults(record)
         record.source_file = source
-        record.update_status()
+        record.update_status(defer_an_until_out=should_defer_an_until_out)
         record.save()
 
     return record, created, changed, effective_direction

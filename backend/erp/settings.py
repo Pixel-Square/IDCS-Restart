@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'template_api',
     'reporting',
     'announcements.apps.AnnouncementsConfig',
+    'lms.apps.LmsConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')

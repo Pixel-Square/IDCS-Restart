@@ -868,7 +868,9 @@ export default function LabEntry({
 
     // Source of truth: if a DB lock row exists, mirror its state.
     // This ensures "Save & Lock" persists immediately and across reloads.
-    if (markLock?.exists) {
+    // Exception: when mark manager edit requests are disabled (Unlimited mode),
+    // allow the user to unlock locally without waiting for DB sync.
+    if (markLock?.exists && markManagerEditRequestsEnabled) {
       const nextLocked = Boolean(markLock?.mark_manager_locked);
       if (Boolean(draft.sheet.markManagerLocked) !== nextLocked) {
         setDraft((p) => ({
@@ -897,6 +899,7 @@ export default function LabEntry({
     subjectId,
     markLock?.exists,
     markLock?.mark_manager_locked,
+    markManagerEditRequestsEnabled,
     markManagerEditWindow?.allowed_by_approval,
     markManagerEditWindow?.approval_until,
     draft.sheet.markManagerLocked,
@@ -2259,16 +2262,21 @@ export default function LabEntry({
                   setProjectReviewValidationError('Title cannot be empty.');
                   return;
                 }
+                if (markManagerLocked && !markManagerEditRequestsEnabled) {
+                  // Unlimited mode: directly unlock so the user can re-edit settings inline
+                  setDraft((p) => ({ ...p, sheet: { ...p.sheet, markManagerLocked: false } }));
+                  return;
+                }
                 if (markManagerLocked && !editRequestsEnabled) {
                   return;
                 }
                 setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
               }}
               className="obe-btn obe-btn-success"
-              disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
+              disabled={!subjectId || markManagerBusy || (markManagerLocked && markManagerEditRequestsEnabled && !editRequestsEnabled)}
               style={{ minWidth: 100 }}
             >
-              {markManagerBusy ? 'Saving...' : markManagerLocked ? 'Request Edit' : 'Save & Lock'}
+              {markManagerBusy ? 'Saving...' : markManagerLocked ? (markManagerEditRequestsEnabled ? 'Request Edit' : 'Edit') : 'Save & Lock'}
             </button>
           </div>
 

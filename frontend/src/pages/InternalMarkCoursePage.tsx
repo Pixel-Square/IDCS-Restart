@@ -677,7 +677,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         return;
       }
       try {
-        const qp = `?teaching_assignment_id=${encodeURIComponent(String(selectedTaId))}`;
+        const qp = `?teaching_assignment_id=${encodeURIComponent(String(selectedTaId))}&include_page_entries=1`;
         const res = await fetchWithAuth(`/api/obe/cqi-published/${encodeURIComponent(String(courseId))}${qp}`);
         if (!mounted) return;
         if (res && res.ok) {
@@ -1931,7 +1931,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const cfgB = coB != null && cfgs ? cfgs[String(coB)] : null;
         const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
         const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
-        const legacyCoAEnabled = Boolean(sheet?.coAEnabled);
+        const legacyCoAEnabled = Boolean(sheet?.coAEnabled !== false);
         const legacyCoBEnabled = coB != null ? Boolean(sheet?.coBEnabled !== false) : false;
 
         const coAEnabled = cfgA ? Boolean(cfgA.enabled) : legacyCoAEnabled;
@@ -1964,8 +1964,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const get = (sid: number) => {
           const row = rowsByStudentId[String(sid)] || {};
           const marksByCo = (row as any)?.marksByCo && typeof (row as any).marksByCo === 'object' ? (row as any).marksByCo : {};
-          const rawA = marksByCo?.[String(coA)] ?? (row as any).marksA;
-          const rawB = coB != null ? (marksByCo?.[String(coB)] ?? (row as any).marksB) : [];
+          const rawA = marksByCo?.[String(coA)] ?? (row as any)?.marksA;
+          const rawB = coB != null ? (marksByCo?.[String(coB)] ?? (row as any)?.marksB) : [];
 
           const marksA = normalizeMarksArray(rawA).slice(0, coAEnabled ? expCountA : 0);
           const marksB = normalizeMarksArray(rawB).slice(0, coBEnabled ? expCountB : 0);
@@ -1992,7 +1992,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           };
         };
 
-        return { get, CO_MAX_A, CO_MAX_B };
+        return { get, CO_MAX_A: 2, CO_MAX_B: 2 };
       };
 
       const c1 = readCoPair(publishedLab.cia1, 1, 2);
@@ -2305,13 +2305,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       };
 
       const review1Co1 = ct === 'PROJECT'
-        ? (isPrbl ? scale(review1Total, 50, 30) : (review1Total == null ? null : clamp(review1Total, 0, 50)))
+        ? (isPrbl ? scale(review1Total, 50, 3) : (review1Total == null ? null : clamp(review1Total, 0, 50)))
         : getR1Co1();
       const review1Co2 = ct === 'PROJECT'
         ? null
         : getR1Co2();
       const review2Co3 = ct === 'PROJECT'
-        ? (isPrbl ? scale(review2Total, 50, 30) : (review2Total == null ? null : clamp(review2Total, 0, 50)))
+        ? (isPrbl ? scale(review2Total, 50, 3) : (review2Total == null ? null : clamp(review2Total, 0, 50)))
         : getR2Co3();
       const review2Co4 = ct === 'PROJECT'
         ? null
@@ -2356,7 +2356,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const avgMarks = (arr: Array<number | null>) => {
           const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
           if (!nums.length) return null;
-          return nums.reduce((s0, n) => s0 + n, 0) / nums.length;
+          return nums.reduce((s, n) => s + n, 0) / nums.length;
         };
 
         const get = (sid: number) => {
@@ -2745,7 +2745,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
     // Force all StuRollNo cells to text so Excel doesn't mangle leading zeros
     for (let i = 2; i < 2 + rows.length; i++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: i, c: 0 })];
+      const cell = ws[XLSX.utils.encode_cell({ r: i, c: 0 })] as XLSX.CellObject | undefined;
       if (cell) { cell.t = 's'; }
     }
     const wb = XLSX.utils.book_new();
@@ -2954,7 +2954,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                 const dept = (t as any).department;
                 const deptLabel = dept?.short_name || dept?.code || dept?.name || (t as any).department_name || '';
                 const sem = (t as any).semester;
-                const label = `${t.section_name || `TA ${t.id}`} ${sem ? `· Sem ${sem}` : ''} ${deptLabel ? `· ${deptLabel}` : ''}`;
+                const label = `${t.section_name || `TA ${t.id}`}${sem ? ` · Sem ${sem}` : ''}${deptLabel ? ` · ${deptLabel}` : ''}`;
                 return (
                   <option key={t.id} value={t.id}>{label}</option>
                 );

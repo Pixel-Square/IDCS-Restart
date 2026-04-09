@@ -9,6 +9,8 @@
 const DEPT_ALIAS_GROUPS: string[][] = [
   ['MECH', 'ME'],
   ['CIVIL', 'CE'],
+  ['AIDS', 'AI&DS'],
+  ['AIML', 'AI&ML'],
 ];
 
 /** Check if two department labels refer to the same department. */

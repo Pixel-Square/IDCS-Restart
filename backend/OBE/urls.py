@@ -103,6 +103,7 @@ urlpatterns = [
     path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
 
     path('edit-request', views.edit_request_create),
+    path('edit-request/', views.edit_request_create),
     path('edit-requests/my-latest', views.edit_requests_my_latest),
     path('edit-requests/pending', views.edit_requests_pending),
     path('edit-requests/hod/pending', views.edit_requests_hod_pending),

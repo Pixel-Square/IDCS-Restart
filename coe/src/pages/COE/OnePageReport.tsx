@@ -353,6 +353,30 @@ export default function OnePageReport() {
                 },
               } as BundleSearchResult;
             }
+            // No named bundle match found in authBundles.
+            // But if the store has authoritative courseDummies for this course,
+            // replace the student list with the persisted dummies (same logic as BundleBarcodeView).
+            const authDummies = Array.isArray(authCourse?.courseDummies)
+              ? authCourse!.courseDummies.map((d: string) => String(d || '').trim()).filter(Boolean)
+              : [];
+            if (authDummies.length > 0) {
+              const resolvedFromAuth: BundleStudent[] = authDummies.map((dummy) => {
+                const saved = savedByDummy.get(dummy);
+                const persisted = persistedByDummy[dummy];
+                const current = studentsByDummy.get(dummy);
+                const marksData = readStudentTotalMarks(dummy);
+                return {
+                  dummy,
+                  reg_no: saved?.reg_no || persisted?.reg_no || current?.reg_no || '',
+                  name: saved?.name || persisted?.name || current?.name || '-',
+                  hasSavedMarks: marksData.hasSavedMarks,
+                  totalMarks: marksData.totalMarks,
+                };
+              });
+              // Replace students with the authoritative list for standard bundle chunking
+              students.length = 0;
+              students.push(...resolvedFromAuth);
+            }
           } catch (e) {
             // ignore KV errors and fallback to generated bundles
           }

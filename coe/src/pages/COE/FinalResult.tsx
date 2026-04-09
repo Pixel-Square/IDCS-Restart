@@ -6,25 +6,50 @@ import { fetchCoeFinalResult, type CoeFinalResultEntry } from '../../services/co
    ═══════════════════════════════════════════════════════════════ */
 
 /**
- * Course codes that need a non-standard "-R" suffix (e.g. with extra spaces).
- * All other course codes get a plain "-R" appended.
- * This mapping is EXCLUSIVE to the Final Result page.
+ * ONLY these course codes are allowed in the Final Result export.
+ * Key = base course code (without -R), Value = exact formatted output.
+ * Any course code NOT in this map will be excluded from results.
  */
-const SPECIAL_COURSE_CODE_R: Record<string, string> = {
+const ALLOWED_COURSE_CODES: Record<string, string> = {
+  '20AI8903': '20AI8903-R',
+  '20AM8904': '20AM8904-R',
+  '20CE8925': '20CE8925-R',
+  '20CE8926': '20CE8926-R',
+  '20CS8901': '20CS8901-R',
+  '20CS8902': '20CS8902-R',
+  '20CS8908': '20CS8908-R',
+  '20EC8901': '20EC8901-R',
+  '20EC8904': '20EC8904-R',
+  '20EC8905': '20EC8905-R',
+  '20EE8902': '20EE8902-R',
+  '20EE8907': '20EE8907-R',
+  '20ME8106': '20ME8106-R',
+  '20ME8103': '20ME8103-R',
+  '20GE7811': '20GE7811-R',
+  '20HS8801': '20HS8801-R',
+  '20CE0803': '20CE0803-R',
   '20AI0912': '20AI0912 - R',
+  '20EC8803': '20EC8803-R',
+  '20CS6801': '20CS6801-R',
+  '20GE7812': '20GE7812-R',
+  '20AI0913': '20AI0913-R',
+  '20CS8802': '20CS8802-R',
+  '20EE7802': '20EE7802-R',
+  '20CS6802': '20CS6802-R',
+  '20RE8801': '20RE8801-R',
 };
 
-/** Append the correct "-R" suffix for the Final Result export. */
+/**
+ * Format course code for the Final Result export.
+ * Returns the exact allowed formatted code, or empty string if not allowed.
+ */
 function formatCourseCode(code: string): string {
   if (!code) return '';
-  const trimmed = code.trim();
-  if (!trimmed) return '';
-  // Already has -R → leave as-is
-  if (trimmed.endsWith('-R') || trimmed.endsWith('- R')) return trimmed;
-  // Special formatting
-  if (SPECIAL_COURSE_CODE_R[trimmed]) return SPECIAL_COURSE_CODE_R[trimmed];
-  // Default: append -R directly (no space)
-  return `${trimmed}-R`;
+  // Strip any existing -R / - R suffix to get the base code
+  const base = code.trim().replace(/\s*-\s*R\s*$/, '').trim();
+  if (!base) return '';
+  // Return the exact formatted code if allowed, otherwise empty string
+  return ALLOWED_COURSE_CODES[base] || '';
 }
 
 const DEPARTMENTS = ['CSE', 'MECH', 'ECE', 'EEE', 'CIVIL', 'AI&DS', 'AI&ML', 'IT'] as const;
@@ -98,6 +123,20 @@ const SEMESTER_CLASS_CODE: Record<string, string> = {
 
 /* ═══════════════════════════════════════════════════════════════ */
 
+/**
+ * Max mark per QP type — must match OnePageReport's getMaxMarksForQpType.
+ */
+function getMaxMarksForQpType(qpType: string | undefined): number {
+  switch ((qpType || 'QP1').trim().toUpperCase()) {
+    case 'TCPR': return 80;
+    case 'OE':   return 60;
+    case 'QP1':
+    case 'QP2':
+    case 'TCPL':
+    default:     return 100;
+  }
+}
+
 type ExcelRow = {
   'Register Number*': string;
   'Student Name': string;
@@ -149,20 +188,32 @@ export default function FinalResult() {
       const deptCategoryCode = DEPT_CATEGORY_CODE[selectedDept] || '';
       const semClassCode = SEMESTER_CLASS_CODE[`${selectedDept}::${selectedSem}`] || '';
 
-      // Build Excel rows — one row per student per course (already resolved by backend)
-      const result: ExcelRow[] = resp.results.map((r: CoeFinalResultEntry) => ({
-        'Register Number*': r.reg_no || '',
-        'Student Name': r.name || '',
-        'Degree Code*': 'UG',
-        'Program Code*': programCode,
-        'Dept/school category Code*': deptCategoryCode,
-        'Semester/Class Code*': semClassCode,
-        'Course Code*': formatCourseCode(r.course_code),
-        'Sub Exam Code*': 'Theory',
-        'Assessment Type': '',
-        'Examination Code*': 'End Semester Examination',
-        'External Mark*': r.total_marks,
-      }));
+      // Build Excel rows — only for ALLOWED course codes.
+      // Backend now returns total_marks already capped by qp_type (OE≤60, TCPR≤80, etc.)
+      // We apply a safety cap on the frontend as well using the returned qp_type.
+      const result: ExcelRow[] = resp.results
+        .filter((r: CoeFinalResultEntry) => {
+          const formatted = formatCourseCode(r.course_code);
+          return formatted !== '';
+        })
+        .map((r: CoeFinalResultEntry) => {
+          const maxMark = getMaxMarksForQpType(r.qp_type);
+          const rawMark = Math.max(0, Math.floor(Number(r.total_marks || 0)));
+          const externalMark = Math.min(rawMark, maxMark);
+          return {
+            'Register Number*': r.reg_no || '',
+            'Student Name': r.name || '',
+            'Degree Code*': 'UG',
+            'Program Code*': programCode,
+            'Dept/school category Code*': deptCategoryCode,
+            'Semester/Class Code*': semClassCode,
+            'Course Code*': formatCourseCode(r.course_code),
+            'Sub Exam Code*': 'Theory-1',
+            'Assessment Type': '',
+            'Examination Code*': 'End Semester Examination',
+            'External Mark*': externalMark,
+          };
+        });
 
       setRows(result);
     } catch (err: any) {

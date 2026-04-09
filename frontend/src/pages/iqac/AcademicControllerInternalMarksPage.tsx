@@ -169,6 +169,15 @@ function studyYearFromSemester(value: unknown): string {
   return String(Math.ceil(n / 2));
 }
 
+function splitIntoChunks<T>(items: T[], chunkSize: number): T[][] {
+  if (chunkSize <= 0) return [items];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    out.push(items.slice(i, i + chunkSize));
+  }
+  return out;
+}
+
 export default function AcademicControllerInternalMarksPage(): JSX.Element {
   const [rows, setRows] = useState<InternalMarkRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -612,53 +621,76 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       setDownloading(true);
       setError(null);
 
-      const params = new URLSearchParams();
-      if (appliedFilters.regulation !== 'all') params.set('regulation', appliedFilters.regulation);
-      if (appliedFilters.semester !== 'all') params.set('semester', appliedFilters.semester);
-      if (appliedFilters.batch !== 'all') params.set('batch', appliedFilters.batch);
-      if (appliedFilters.year !== 'all') params.set('academic_year', appliedFilters.year);
+      const baseParams = new URLSearchParams();
+      if (appliedFilters.regulation !== 'all') baseParams.set('regulation', appliedFilters.regulation);
+      if (appliedFilters.semester !== 'all') baseParams.set('semester', appliedFilters.semester);
+      if (appliedFilters.batch !== 'all') baseParams.set('batch', appliedFilters.batch);
+      if (appliedFilters.year !== 'all') baseParams.set('academic_year', appliedFilters.year);
       if (appliedFilters.department !== 'all') {
         const pick = exportableRows.find((r) => canonText(r.department) === canonText(appliedFilters.department) && r.department_id != null);
-        if (pick?.department_id != null) params.set('department_id', String(pick.department_id));
+        if (pick?.department_id != null) baseParams.set('department_id', String(pick.department_id));
       }
       if (appliedFilters.section !== 'all') {
         const pick = exportableRows.find((r) => canonText(r.section) === canonText(appliedFilters.section) && r.section_id != null);
-        if (pick?.section_id != null) params.set('section_id', String(pick.section_id));
+        if (pick?.section_id != null) baseParams.set('section_id', String(pick.section_id));
       }
 
       const taIds = exportableRows
         .map((r) => Number(r.teaching_assignment_id))
         .filter((id) => Number.isFinite(id) && id > 0);
-      if (taIds.length) {
-        params.set('ta_ids', Array.from(new Set(taIds)).join(','));
-      }
 
-      const url = `/api/academics/iqac/internal-marks/export/${params.toString() ? `?${params.toString()}` : ''}`;
-      const res = await fetchWithAuth(url);
-      if (!res.ok) {
-        let text = '';
-        try {
-          text = await res.text();
-          // Strip HTML tags if server returned an HTML error page
-          if (text.includes('<html') || text.includes('<!doctype') || text.includes('<!DOCTYPE')) {
-            const match = text.match(/<title>(.*?)<\/title>/i);
-            text = match ? match[1] : `Server Error (${res.status})`;
-          }
-        } catch {
-          text = `Server Error (${res.status})`;
+      const uniqueTaIds = Array.from(new Set(taIds));
+
+      const triggerDownload = (blob: Blob, fileName: string) => {
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(href);
+      };
+
+      const fetchExport = async (ids: number[]) => {
+        const params = new URLSearchParams(baseParams);
+        if (ids.length) {
+          params.set('ta_ids', ids.join(','));
         }
-        throw new Error(text || 'Failed to download ZIP export');
+        const url = `/api/academics/iqac/internal-marks/export/${params.toString() ? `?${params.toString()}` : ''}`;
+        const res = await fetchWithAuth(url);
+        if (!res.ok) {
+          let text = '';
+          try {
+            text = await res.text();
+            if (text.includes('<html') || text.includes('<!doctype') || text.includes('<!DOCTYPE')) {
+              const match = text.match(/<title>(.*?)<\/title>/i);
+              text = match ? match[1] : `Server Error (${res.status})`;
+            }
+          } catch {
+            text = `Server Error (${res.status})`;
+          }
+          throw new Error(text || 'Failed to download ZIP export');
+        }
+        return res.blob();
+      };
+
+      // Try single request first (existing behavior). If server fails, fallback to chunked requests.
+      try {
+        const blob = await fetchExport(uniqueTaIds);
+        triggerDownload(blob, `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`);
+        return;
+      } catch (singleErr: any) {
+        const shouldChunk = uniqueTaIds.length > 60;
+        if (!shouldChunk) throw singleErr;
       }
 
-      const blob = await res.blob();
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = href;
-      a.download = `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(href);
+      const taChunks = splitIntoChunks(uniqueTaIds, 40);
+      const stamp = new Date().toISOString().slice(0, 10);
+      for (let i = 0; i < taChunks.length; i += 1) {
+        const blob = await fetchExport(taChunks[i]);
+        triggerDownload(blob, `internal_marks_${stamp}_part_${i + 1}_of_${taChunks.length}.zip`);
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to download ZIP export');
     } finally {

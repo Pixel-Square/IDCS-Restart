@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .models import CoeArrearStudent, CoeAssignmentStore, CoeCourseSelectionStore, CoeExamDummy, CoeKeyValueStore, CoeStudentMarks
+from .models import (
+    CoeArrearStudent, CoeAssignmentStore, CoeCourseSelectionStore,
+    CoeExamDummy, CoeFinalResult, CoeKeyValueStore, CoeStudentMarks,
+)
 
 
 @admin.register(CoeExamDummy)
@@ -50,3 +53,16 @@ class CoeStudentMarksAdmin(admin.ModelAdmin):
 	search_fields = ('dummy_number',)
 	list_filter = ('qp_type',)
 	readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(CoeFinalResult)
+class CoeFinalResultAdmin(admin.ModelAdmin):
+	list_display = (
+		'reg_no', 'student_name', 'department', 'semester',
+		'course_code', 'course_name', 'dummy_number',
+		'qp_type', 'total_marks', 'max_marks', 'updated_at',
+	)
+	search_fields = ('reg_no', 'student_name', 'course_code', 'course_name', 'dummy_number')
+	list_filter = ('department', 'semester', 'qp_type')
+	readonly_fields = ('created_at', 'updated_at')
+	ordering = ('department', 'semester', 'course_code', 'reg_no')

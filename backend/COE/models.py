@@ -120,3 +120,43 @@ class CoeStudentMarks(models.Model):
     def __str__(self):
         return f"{self.dummy_number} ({self.qp_type})"
 
+
+class CoeFinalResult(models.Model):
+    """
+    Structured final result table.
+    Each row = one student × one course, linked to the dummy that produced the marks.
+    Populated/refreshed from the final-result resolution logic.
+    """
+
+    reg_no = models.CharField(max_length=64, db_index=True)
+    student_name = models.CharField(max_length=255, blank=True, default='')
+    department = models.CharField(max_length=32, db_index=True)
+    semester = models.CharField(max_length=16, db_index=True)
+    course_code = models.CharField(max_length=64, db_index=True)
+    course_name = models.CharField(max_length=255, blank=True, default='')
+    dummy_number = models.CharField(max_length=64, db_index=True)
+    qp_type = models.CharField(max_length=16, default='QP1')
+    total_marks = models.IntegerField(default=0, help_text='Computed total, capped by QP type max')
+    max_marks = models.IntegerField(default=100, help_text='Max possible mark for this QP type')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['department', 'semester', 'course_code', 'reg_no']
+        verbose_name = 'COE Final Result'
+        verbose_name_plural = 'COE Final Results'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['department', 'semester', 'reg_no', 'course_code'],
+                name='uniq_coe_final_result_dept_sem_reg_course',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['department', 'semester']),
+            models.Index(fields=['reg_no', 'semester']),
+            models.Index(fields=['dummy_number']),
+        ]
+
+    def __str__(self):
+        return f"{self.reg_no} | {self.course_code} | {self.dummy_number} → {self.total_marks}/{self.max_marks}"
+

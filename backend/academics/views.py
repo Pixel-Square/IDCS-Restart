@@ -303,6 +303,35 @@ def _user_is_iqac_admin(user) -> bool:
     return 'obe.master.manage' in perms
 
 
+def _build_mark_upload_workbook(*, rows):
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Mark Upload'
+    ws.append(['StuRollNo', 'Mark', 'IsAbs', 'StuNm', 'InEligible', 'rsSts'])
+    ws.append(['Roll No', 'Marks', 'Is Absent', 'Student Name', 'InEligible', 'Result Status'])
+
+    for row in rows:
+        reg_no = str(row.get('reg_no') or '')
+        ws.append([
+            reg_no,
+            row.get('mark'),
+            'N',
+            str(row.get('name') or ''),
+            None,
+            None,
+        ])
+
+    for row_no in range(3, ws.max_row + 1):
+        ws.cell(row=row_no, column=1).number_format = '@'
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read()
+
+
 class MyTeachingAssignmentsView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -809,6 +838,7 @@ class IqacInternalMarksBulkExportView(APIView):
         from openpyxl import Workbook
         from OBE.models import FinalInternalMark
         from OBE.services.final_internal_marks import (
+            _resolve_qp_type,
             _compute_weighted_final_total_theory_like,
             recompute_final_internal_marks,
         )
@@ -931,12 +961,17 @@ class IqacInternalMarksBulkExportView(APIView):
         with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
             for key, course_tas in grouped.items():
                 code, course_name, sem_no, _dept_id, dept_name, reg_label, batch_name = key
-
-                subject = Subject.objects.filter(code__iexact=code).first()
                 merged_students = {}
                 ta_ids_for_course = [int(t.id) for t in course_tas if getattr(t, 'id', None)]
                 if not ta_ids_for_course:
                     continue
+
+                qp_type = ''
+                for ta in course_tas:
+                    qp_type = str(_resolve_qp_type(ta) or '').strip()
+                    if qp_type:
+                        break
+                scaled_max = 60 if 'QP1FINAL' in qp_type.upper().replace(' ', '') else 100
 
                 fim_qs = (
                     FinalInternalMark.objects.filter(teaching_assignment_id__in=ta_ids_for_course)
@@ -988,22 +1023,20 @@ class IqacInternalMarksBulkExportView(APIView):
 
                 rows = sorted(merged_students.values(), key=lambda r: (self._safe_text(r.get('reg_no')), self._safe_text(r.get('name'))))
 
-                wb = Workbook()
-                ws = wb.active
-                ws.title = 'Internal Marks'
-                ws.append(['S.no', 'Register number', 'Student name', 'Section', 'Final Internal mark'])
-
-                for idx, row in enumerate(rows, start=1):
-                    ws.append([
-                        idx,
-                        self._safe_text(row.get('reg_no')),
-                        self._safe_text(row.get('name')),
-                        self._safe_text(row.get('section')),
-                        row.get('total') if row.get('total') is not None else '-',
-                    ])
-
-                ws.auto_filter.ref = f"A1:E{ws.max_row}"
-                ws.freeze_panes = 'A2'
+                upload_rows = []
+                for row in rows:
+                    total = self._safe_float(row.get('total'))
+                    mark = None
+                    if total is not None:
+                        try:
+                            mark = int(round((float(total) / 40.0) * scaled_max))
+                        except Exception:
+                            mark = None
+                    upload_rows.append({
+                        'reg_no': self._safe_text(row.get('reg_no')),
+                        'name': self._safe_text(row.get('name')),
+                        'mark': mark,
+                    })
 
                 meta = []
                 if reg_label:
@@ -1017,10 +1050,7 @@ class IqacInternalMarksBulkExportView(APIView):
                 base_name = f"{code}_{course_name}_{'_'.join(meta)}"
                 filename = f"{self._safe_filename(base_name)[:140]}.xlsx"
 
-                wb_buf = io.BytesIO()
-                wb.save(wb_buf)
-                wb_buf.seek(0)
-                zf.writestr(filename, wb_buf.read())
+                zf.writestr(filename, _build_mark_upload_workbook(rows=upload_rows))
                 file_count += 1
 
         if file_count == 0:
@@ -1577,6 +1607,39 @@ class IqacInternalMarksCourseExportView(APIView):
         if not rows:
             return Response({'detail': 'No internal marks found for this teaching assignment.'}, status=404)
 
+        upload_rows = []
+        for row in rows:
+            mark = row.get('total_100')
+            if mark is None:
+                mark = row.get('base_total_100')
+            if mark is None:
+                final_mark = self._safe_float(row.get('final_mark'))
+                if final_mark is not None:
+                    try:
+                        raw = (float(final_mark) / 40.0) * scaled_max
+                        mark = int(decimal.Decimal(str(raw)).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP))
+                    except Exception:
+                        mark = None
+            elif mark is not None:
+                try:
+                    mark = int(mark)
+                except Exception:
+                    mark = None
+
+            upload_rows.append({
+                'reg_no': self._safe_text(row.get('reg_no')),
+                'name': self._safe_text(row.get('name')),
+                'mark': mark,
+            })
+
+        filename = f"{self._safe_filename(course_code)} {self._safe_filename(course_name)}.xlsx"
+        response = HttpResponse(
+            _build_mark_upload_workbook(rows=upload_rows),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
         def _extract_review_mark_from_lab_data(lab_data, student_id):
             if not isinstance(lab_data, dict):
                 return None
@@ -1621,17 +1684,8 @@ class IqacInternalMarksCourseExportView(APIView):
         ws.title = 'Internal Marks'
 
         if is_project_course:
-            # ── Project courses: comprehensive layout matching Theory format ──
-            # Two-header layout with Review 1/2 Before & After CQI, FIM Before/After CQI
-            from django.db.models import Q as _QP
+            # Project courses keep the simple layout
             from .models import Subject as _SubjectModel
-            from OBE.models import ObeCqiPublished
-            from OBE.services.final_internal_marks import (
-                _compute_cqi_add as _cqi_add,
-                _pick_scoped_row as _pick_row,
-                _safe_float as _sfp,
-                _round2 as _r2p,
-            )
 
             _subject_obj = ta.subject
             if _subject_obj is None:
@@ -1647,7 +1701,7 @@ class IqacInternalMarksCourseExportView(APIView):
                     return {}
                 rows_qs = list(
                     LabPublishedSheet.objects.filter(subject_id=_subject_obj.id, assessment=assessment_key)
-                    .filter(_QP(teaching_assignment_id=ta_id) | _QP(teaching_assignment__isnull=True))
+                    .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
                     .order_by('-updated_at')
                 )
                 exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
@@ -1674,84 +1728,10 @@ class IqacInternalMarksCourseExportView(APIView):
                 review1_lab_data = _pick_lab_data('review1')
                 review2_lab_data = _pick_lab_data('review2')
 
-            # ── Fetch CQI published snapshot for this project course ──
-            cqi_entries = {}
-            cqi_co_set = set()
-            if _subject_obj is not None:
-                cqi_rows = list(
-                    ObeCqiPublished.objects.filter(subject_id=_subject_obj.id)
-                    .filter(_QP(teaching_assignment_id=ta_id) | _QP(teaching_assignment__isnull=True))
-                    .order_by('-published_at')
-                )
-                cqi_row = _pick_row(cqi_rows, ta_id)
-                if cqi_row:
-                    cqi_entries = cqi_row.entries if isinstance(getattr(cqi_row, 'entries', None), dict) else {}
-                    cqi_nums = cqi_row.co_numbers if isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
-                    cqi_co_set = {int(n) for n in cqi_nums if n is not None}
-
-            def _vp(x):
-                return _r2p(x) if x is not None else '-'
-
-            # Project weights: Review 1 = 50 (mapped to CO1), Review 2 = 50 (mapped to CO2)
-            PROJ_R1_MAX = 50.0
-            PROJ_R2_MAX = 50.0
-            PROJ_TOTAL_MAX = 100.0
-
-            # ── Build section + column header rows ──
-            header_sections = ['', '', '']  # S.no, Name, Reg placeholders
-            header_cols = ['S.no', "Student's Name", 'Register Number']
-
-            # Review 1 (Before CQI)
-            header_sections.append('Review 1 (Before CQI)')
-            header_cols.append('Mark')
-            # Review 2 (Before CQI)
-            header_sections.append('Review 2 (Before CQI)')
-            header_cols.append('Mark')
-            # Review 1 (After CQI)
-            header_sections.append('Review 1 (After CQI)')
-            header_cols.append('Mark')
-            # Review 2 (After CQI)
-            header_sections.append('Review 2 (After CQI)')
-            header_cols.append('Mark')
-            # FIM (Before CQI)
-            header_sections.append('FIM (Before CQI)')
-            header_cols.append('100')
-            # FIM (After CQI)
-            header_sections.append('FIM (After CQI)')
-            header_cols.append('100')
-
-            ws.append(header_sections)
-            ws.append(header_cols)
-
-            # ── Merge and style section header cells ──
-            try:
-                from openpyxl.styles import Font, Alignment
-                section_ranges = {}
-                for ci, sec in enumerate(header_sections, start=1):
-                    if sec:
-                        if sec not in section_ranges:
-                            section_ranges[sec] = [ci, ci]
-                        else:
-                            section_ranges[sec][1] = ci
-                for sec, (start_col, end_col) in section_ranges.items():
-                    if start_col < end_col:
-                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-                    cell = ws.cell(row=1, column=start_col)
-                    cell.font = Font(bold=True)
-                    cell.alignment = Alignment(horizontal='center')
-                for ci in range(1, len(header_cols) + 1):
-                    ws.cell(row=2, column=ci).font = Font(bold=True)
-            except Exception:
-                pass
-
-            # ── Write data rows ──
-            proj_totals_before = {}
-            proj_totals_after = {}
+            ws.append(['S.no', 'Register number', "Student's name", 'Review 1', 'Review 2', '100'])
 
             for idx, row in enumerate(rows, start=1):
                 sid = int(row.get('student_id') or 0)
-
-                # Get raw review marks (before CQI)
                 r1 = self._safe_float(review1_map.get(sid))
                 r2 = self._safe_float(review2_map.get(sid))
                 if r1 is None:
@@ -1759,60 +1739,20 @@ class IqacInternalMarksCourseExportView(APIView):
                 if r2 is None:
                     r2 = _extract_review_mark_from_lab_data(review2_lab_data, sid)
                 if r1 is not None:
-                    r1 = round(max(0.0, min(PROJ_R1_MAX, float(r1))), 2)
+                    r1 = round(max(0.0, min(50.0, float(r1))), 2)
                 if r2 is not None:
-                    r2 = round(max(0.0, min(PROJ_R2_MAX, float(r2))), 2)
-
-                # FIM before CQI
-                fim_before = round((r1 or 0.0) + (r2 or 0.0), 2) if (r1 is not None or r2 is not None) else None
-
-                # Apply CQI to each review (mapped as CO1=Review1, CO2=Review2)
-                cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
-                r1_after = r1
-                r2_after = r2
-                r1_add = 0.0
-                r2_add = 0.0
-
-                if r1 is not None and 1 in cqi_co_set:
-                    inp_co1 = _sfp((cqi_student or {}).get('co1'))
-                    r1_add = _cqi_add(co_value=r1, co_max=PROJ_R1_MAX, input_mark=inp_co1)
-                    r1_after = _r2p(min(PROJ_R1_MAX, r1 + r1_add))
-
-                if r2 is not None and 2 in cqi_co_set:
-                    inp_co2 = _sfp((cqi_student or {}).get('co2'))
-                    r2_add = _cqi_add(co_value=r2, co_max=PROJ_R2_MAX, input_mark=inp_co2)
-                    r2_after = _r2p(min(PROJ_R2_MAX, r2 + r2_add))
-
-                # FIM after CQI
-                fim_after = round((r1_after or 0.0) + (r2_after or 0.0), 2) if (r1_after is not None or r2_after is not None) else None
-
-                # Cap FIM at 100
-                if fim_before is not None:
-                    fim_before = min(PROJ_TOTAL_MAX, fim_before)
-                if fim_after is not None:
-                    fim_after = min(PROJ_TOTAL_MAX, fim_after)
-
-                proj_totals_before[sid] = fim_before
-                proj_totals_after[sid] = fim_after
-
-                row_data = [
+                    r2 = round(max(0.0, min(50.0, float(r2))), 2)
+                proj_total = round((r1 or 0.0) + (r2 or 0.0), 2) if (r1 is not None or r2 is not None) else None
+                ws.append([
                     idx,
-                    self._safe_text(row.get('name')),
                     self._safe_text(row.get('reg_no')),
-                    _vp(r1),            # Review 1 Before CQI
-                    _vp(r2),            # Review 2 Before CQI
-                    _vp(r1_after),      # Review 1 After CQI
-                    _vp(r2_after),      # Review 2 After CQI
-                    fim_before if fim_before is not None else '-',   # FIM Before CQI /100
-                    fim_after if fim_after is not None else '-',     # FIM After CQI /100
-                ]
-                ws.append(row_data)
-
-            total_cols = len(header_cols)
-            from openpyxl.utils import get_column_letter as _gcl_proj
-            last_letter = _gcl_proj(total_cols)
-            ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
-            ws.freeze_panes = 'A3'
+                    self._safe_text(row.get('name')),
+                    r1 if r1 is not None else '-',
+                    r2 if r2 is not None else '-',
+                    proj_total if proj_total is not None else '-',
+                ])
+            ws.auto_filter.ref = f"A1:F{ws.max_row}"
+            ws.freeze_panes = 'A2'
 
         else:
             # ── Theory / Special courses: comprehensive all-in-one sheet ──
@@ -2162,12 +2102,7 @@ class IqacInternalMarksCourseExportView(APIView):
             pass
 
         for row in rows:
-            if is_project_course:
-                # For project courses, use the FIM After CQI total (/100)
-                sid = int(row.get('student_id') or 0)
-                t100 = proj_totals_after.get(sid) if sid > 0 else None
-            else:
-                t100 = row.get('total_100')
+            t100 = row.get('total_100')
             ws2.append([
                 self._safe_text(row.get('name')),
                 self._safe_text(row.get('reg_no')),
@@ -3400,6 +3335,92 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
             'teaching_assignment_id': ta.id,
             'weights': obj.weights,
         })
+    queryset = SpecialCourseAssessmentEditRequest.objects.select_related('selection', 'selection__curriculum_row', 'selection__academic_year', 'requested_by', 'reviewed_by')
+    serializer_class = SpecialCourseAssessmentEditRequestSerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        user = self.request.user
+        if _user_is_iqac_admin(user):
+            return self.queryset
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile:
+            return SpecialCourseAssessmentEditRequest.objects.none()
+        return self.queryset.filter(requested_by=staff_profile)
+
+    @action(detail=True, methods=['post'], permission_classes=(IsAuthenticated,), url_path='review', url_name='review')
+    def review(self, request, pk=None):
+        """IQAC/admin approves/rejects an edit request.
+
+        POST body:
+          { "status": "APPROVED"|"REJECTED", "can_edit_minutes": 60 }
+        """
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'You do not have permission to review requests.'}, status=403)
+
+        obj = self.get_object()
+        data = request.data or {}
+        new_status = str(data.get('status') or '').upper().strip()
+        if new_status not in {SpecialCourseAssessmentEditRequest.STATUS_APPROVED, SpecialCourseAssessmentEditRequest.STATUS_REJECTED}:
+            return Response({'detail': 'Invalid status. Use APPROVED or REJECTED.'}, status=400)
+
+        minutes = data.get('can_edit_minutes')
+        try:
+            minutes_i = int(minutes) if minutes is not None else 60
+        except Exception:
+            minutes_i = 60
+        minutes_i = max(5, min(minutes_i, 24 * 60))
+
+        obj.status = new_status
+        obj.reviewed_by = request.user
+        obj.reviewed_at = timezone.now()
+        obj.used_at = None
+        if new_status == SpecialCourseAssessmentEditRequest.STATUS_APPROVED:
+            obj.can_edit_until = timezone.now() + timedelta(minutes=minutes_i)
+        else:
+            obj.can_edit_until = None
+        obj.save()
+
+        # Mirror the review decision into the central OBE edit queue so IQAC UIs
+        # that consume `ObeEditRequest` see the updated status and approval window.
+        try:
+            from OBE.models import ObeEditRequest
+
+            # Resolve the faculty User associated with the staff profile who requested this edit
+            staff_user = None
+            try:
+                staff_user = getattr(getattr(obj, 'requested_by', None), 'user', None)
+            except Exception:
+                staff_user = None
+
+            # Best-effort subject code used when we created the ObeEditRequest earlier
+            subject_code = None
+            try:
+                subject_code = getattr(getattr(obj.selection, 'curriculum_row', None), 'course_code', None) or getattr(getattr(getattr(obj.selection, 'curriculum_row', None), 'master', None), 'course_code', None) or ''
+            except Exception:
+                subject_code = ''
+
+            if staff_user is not None:
+                qs = ObeEditRequest.objects.filter(
+                    staff_user=staff_user,
+                    academic_year=obj.selection.academic_year,
+                    subject_code=subject_code,
+                    assessment='model',
+                    scope='MARK_MANAGER',
+                )
+                for o in qs:
+                    try:
+                        if new_status == SpecialCourseAssessmentEditRequest.STATUS_APPROVED:
+                            o.mark_approved(request.user, window_minutes=minutes_i)
+                        else:
+                            o.mark_rejected(request.user)
+                        o.save()
+                    except Exception:
+                        continue
+        except Exception:
+            # best-effort only; don't surface failures to the caller
+            pass
+        return Response(self.get_serializer(obj).data)
 
 
 class SpecialCourseEnabledAssessmentsView(APIView):

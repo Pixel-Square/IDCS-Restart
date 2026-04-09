@@ -386,32 +386,72 @@ export default function CourseList() {
       doc.setFontSize(14);
       doc.text(`SYLLABUS - ${row.courseCode} ${row.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-      // Build rows
-      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-        return [
-          idx + 1,
-          r.content_type || '-',
-          r.part_no || '-',
-          r.topics || '-',
-          r.sub_topics || '-',
-          r.bt_level || '-'
-        ];
-      });
+      // Group rows by unit
+      type UnitGroup = { unitNum: number; unitName: string; co: string; rows: any[] };
+      const unitGroups: UnitGroup[] = [];
+      let currentGroup: UnitGroup | null = null;
+      let rowCounter = 0;
+      for (const r of (cdap.rows || []) as any[]) {
+        if (r.unit && r.unit_name) {
+          const unitNum = parseInt(String(r.unit), 10) || r.unit_index || unitGroups.length + 1;
+          const rawCo = (r.co || '').trim();
+          const coLabel = `CO${unitNum}`;
+          const coText = rawCo
+            ? (rawCo.toUpperCase().startsWith(coLabel.toUpperCase()) ? rawCo : `${coLabel}: ${rawCo}`)
+            : '-';
+          currentGroup = { unitNum, unitName: r.unit_name, co: coText, rows: [] };
+          unitGroups.push(currentGroup);
+        }
+        if (currentGroup) {
+          rowCounter++;
+          currentGroup.rows.push([
+            rowCounter,
+            r.content_type || '-',
+            r.part_no || '-',
+            r.topics || '-',
+            r.sub_topics || '-',
+            r.bt_level || '-'
+          ]);
+        }
+      }
 
-      autoTable(doc, {
-        startY: 32,
-        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-        body: tableBody,
-        styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
-        headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
-        columnStyles: {
-           3: { cellWidth: 50 },
-           4: { cellWidth: 50 },
-        },
-        margin: { left: 14, right: 14 }
-      });
+      let finalY = 32;
+      for (const group of unitGroups) {
+        if (finalY + 30 > doc.internal.pageSize.getHeight()) {
+          doc.addPage();
+          finalY = 20;
+        }
+        // Unit header with CO
+        autoTable(doc, {
+          startY: finalY,
+          head: [[
+            { content: `UNIT ${group.unitNum}`, colSpan: 1, styles: { halign: 'center', cellWidth: 18 } },
+            { content: `SYLLABUS (UNIT NAME)\n${group.unitName}`, colSpan: 1 },
+            { content: `COURSE OUTCOME (CO)\n${group.co}`, colSpan: 1 },
+          ]],
+          body: [],
+          styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+          headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255], fontStyle: 'bold' },
+          columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 60 } },
+          margin: { left: 14, right: 14 },
+        });
+        finalY = (doc as any).lastAutoTable?.finalY || finalY + 12;
 
-      let finalY = (doc as any).lastAutoTable?.finalY || 50;
+        // Content rows for this unit
+        autoTable(doc, {
+          startY: finalY,
+          head: [['#', 'CONTENT TYPE', 'PART NO.', 'TOPICS TO BE COVERED (SYLLABUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
+          body: group.rows,
+          styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+          headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
+          columnStyles: {
+            3: { cellWidth: 50 },
+            4: { cellWidth: 50 },
+          },
+          margin: { left: 14, right: 14 },
+        });
+        finalY = ((doc as any).lastAutoTable?.finalY || finalY) + 4;
+      }
 
       // Add References
       if (cdap.books) {
@@ -504,31 +544,70 @@ export default function CourseList() {
       doc.setFontSize(14);
       doc.text(`SYLLABUS - ${cdapCurrentRow.courseCode} ${cdapCurrentRow.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-      const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-        return [
-          idx + 1,
-          r.content_type || '-',
-          r.part_no || '-',
-          r.topics || '-',
-          r.sub_topics || '-',
-          r.bt_level || '-'
-        ];
-      });
+      // Group rows by unit
+      type UnitGroupDl = { unitNum: number; unitName: string; co: string; rows: any[] };
+      const unitGroupsDl: UnitGroupDl[] = [];
+      let currentGroupDl: UnitGroupDl | null = null;
+      let rowCounterDl = 0;
+      for (const r of (cdap.rows || []) as any[]) {
+        if (r.unit && r.unit_name) {
+          const unitNum = parseInt(String(r.unit), 10) || r.unit_index || unitGroupsDl.length + 1;
+          const rawCo = (r.co || '').trim();
+          const coLabel = `CO${unitNum}`;
+          const coText = rawCo
+            ? (rawCo.toUpperCase().startsWith(coLabel.toUpperCase()) ? rawCo : `${coLabel}: ${rawCo}`)
+            : '-';
+          currentGroupDl = { unitNum, unitName: r.unit_name, co: coText, rows: [] };
+          unitGroupsDl.push(currentGroupDl);
+        }
+        if (currentGroupDl) {
+          rowCounterDl++;
+          currentGroupDl.rows.push([
+            rowCounterDl,
+            r.content_type || '-',
+            r.part_no || '-',
+            r.topics || '-',
+            r.sub_topics || '-',
+            r.bt_level || '-'
+          ]);
+        }
+      }
 
-      autoTable(doc, {
-        startY: 32,
-        head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-        body: tableBody,
-        styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
-        headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
-        columnStyles: {
-           3: { cellWidth: 50 },
-           4: { cellWidth: 50 },
-        },
-        margin: { left: 14, right: 14 }
-      });
+      let finalY = 32;
+      for (const group of unitGroupsDl) {
+        if (finalY + 30 > doc.internal.pageSize.getHeight()) {
+          doc.addPage();
+          finalY = 20;
+        }
+        autoTable(doc, {
+          startY: finalY,
+          head: [[
+            { content: `UNIT ${group.unitNum}`, colSpan: 1, styles: { halign: 'center', cellWidth: 18 } },
+            { content: `SYLLABUS (UNIT NAME)\n${group.unitName}`, colSpan: 1 },
+            { content: `COURSE OUTCOME (CO)\n${group.co}`, colSpan: 1 },
+          ]],
+          body: [],
+          styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+          headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255], fontStyle: 'bold' },
+          columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 60 } },
+          margin: { left: 14, right: 14 },
+        });
+        finalY = (doc as any).lastAutoTable?.finalY || finalY + 12;
 
-      let finalY = (doc as any).lastAutoTable?.finalY || 32;
+        autoTable(doc, {
+          startY: finalY,
+          head: [['#', 'CONTENT TYPE', 'PART NO.', 'TOPICS TO BE COVERED (SYLLABUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
+          body: group.rows,
+          styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+          headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
+          columnStyles: {
+            3: { cellWidth: 50 },
+            4: { cellWidth: 50 },
+          },
+          margin: { left: 14, right: 14 },
+        });
+        finalY = ((doc as any).lastAutoTable?.finalY || finalY) + 4;
+      }
 
       if (cdap.books) {
          if (finalY + 30 > doc.internal.pageSize.getHeight()) {
@@ -637,31 +716,70 @@ export default function CourseList() {
           doc.setFontSize(14);
           doc.text(`SYLLABUS - ${row.courseCode} ${row.courseName}`, pageWidth / 2, 25, { align: 'center' });
 
-          const tableBody = (cdap.rows || []).map((r: any, idx: number) => {
-            return [
-              idx + 1,
-              r.content_type || '-',
-              r.part_no || '-',
-              r.topics || '-',
-              r.sub_topics || '-',
-              r.bt_level || '-'
-            ];
-          });
+          // Group rows by unit
+          type UnitGroupBulk = { unitNum: number; unitName: string; co: string; rows: any[] };
+          const unitGroupsBulk: UnitGroupBulk[] = [];
+          let currentGroupBulk: UnitGroupBulk | null = null;
+          let rowCounterBulk = 0;
+          for (const r of (cdap.rows || []) as any[]) {
+            if (r.unit && r.unit_name) {
+              const unitNum = parseInt(String(r.unit), 10) || r.unit_index || unitGroupsBulk.length + 1;
+              const rawCo = (r.co || '').trim();
+              const coLabel = `CO${unitNum}`;
+              const coText = rawCo
+                ? (rawCo.toUpperCase().startsWith(coLabel.toUpperCase()) ? rawCo : `${coLabel}: ${rawCo}`)
+                : '-';
+              currentGroupBulk = { unitNum, unitName: r.unit_name, co: coText, rows: [] };
+              unitGroupsBulk.push(currentGroupBulk);
+            }
+            if (currentGroupBulk) {
+              rowCounterBulk++;
+              currentGroupBulk.rows.push([
+                rowCounterBulk,
+                r.content_type || '-',
+                r.part_no || '-',
+                r.topics || '-',
+                r.sub_topics || '-',
+                r.bt_level || '-'
+              ]);
+            }
+          }
 
-          autoTable(doc, {
-            startY: 32,
-            head: [['#', 'Content type', 'PART NO.', 'TOPICS TO BE COVERED (SYLLBUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
-            body: tableBody,
-            styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
-            headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
-            columnStyles: {
-              3: { cellWidth: 50 },
-              4: { cellWidth: 50 },
-            },
-            margin: { left: 14, right: 14 }
-          });
+          let finalY = 32;
+          for (const group of unitGroupsBulk) {
+            if (finalY + 30 > doc.internal.pageSize.getHeight()) {
+              doc.addPage();
+              finalY = 20;
+            }
+            autoTable(doc, {
+              startY: finalY,
+              head: [[
+                { content: `UNIT ${group.unitNum}`, colSpan: 1, styles: { halign: 'center', cellWidth: 18 } },
+                { content: `SYLLABUS (UNIT NAME)\n${group.unitName}`, colSpan: 1 },
+                { content: `COURSE OUTCOME (CO)\n${group.co}`, colSpan: 1 },
+              ]],
+              body: [],
+              styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
+              headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255], fontStyle: 'bold' },
+              columnStyles: { 0: { cellWidth: 18 }, 1: { cellWidth: 60 } },
+              margin: { left: 14, right: 14 },
+            });
+            finalY = (doc as any).lastAutoTable?.finalY || finalY + 12;
 
-          let finalY = (doc as any).lastAutoTable?.finalY || 32;
+            autoTable(doc, {
+              startY: finalY,
+              head: [['#', 'CONTENT TYPE', 'PART NO.', 'TOPICS TO BE COVERED (SYLLABUS TOPICS)', 'SUB TOPICS (WHAT TO BE TAUGHT)', 'BT LEVEL']],
+              body: group.rows,
+              styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+              headStyles: { fillColor: [63, 81, 181], textColor: [255, 255, 255] },
+              columnStyles: {
+                3: { cellWidth: 50 },
+                4: { cellWidth: 50 },
+              },
+              margin: { left: 14, right: 14 },
+            });
+            finalY = ((doc as any).lastAutoTable?.finalY || finalY) + 4;
+          }
 
           if (cdap.books) {
             if (finalY + 30 > doc.internal.pageSize.getHeight()) {

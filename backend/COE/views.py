@@ -42,7 +42,7 @@ def _normalize_department_label(raw_values: list[str]) -> str | None:
             return 'EEE'
         if any(p in ('IT', 'INFORMATION TECHNOLOGY') for p in parts) or 'INFORMATION TECHNOLOGY' in joined:
             return 'IT'
-        if any(p in ('MECH', 'ME') for p in parts) or 'MECHANICAL' in joined:
+        if any(p in ('MECH', 'ME', 'RE') for p in parts) or 'MECHANICAL' in joined or 'RESEARCH' in joined:
             return 'MECH'
         return None
 

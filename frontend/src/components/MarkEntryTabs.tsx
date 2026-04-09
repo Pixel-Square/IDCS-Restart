@@ -1327,6 +1327,7 @@ export default function MarkEntryTabs({
                       label="LAB 1"
                       coA={1}
                       coB={2}
+                      allCos={[1, 2, 3, 4, 5]}
                     />
                   ) : (
                     <Formative1List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />
@@ -1343,6 +1344,7 @@ export default function MarkEntryTabs({
                       label="LAB 2"
                       coA={2}
                       coB={3}
+                      allCos={[1, 2, 3, 4, 5]}
                     />
                   ) : (
                     <Formative2List subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />

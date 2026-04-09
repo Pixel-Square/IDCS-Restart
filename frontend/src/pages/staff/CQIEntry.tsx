@@ -2074,8 +2074,9 @@ export default function CQIEntry({
 
     const numValue = parsed as number;
     if (numValue < 0 || numValue > 10) {
+      window.alert('Entered value should be less than or equal to 10.');
       setCqiErrors(prev => ({ ...prev, [`${studentId}_${coKey}`]: 'Value must be between 0 and 10' }));
-      setCqiEntries(prev => ({ ...prev, [studentId]: { ...prev[studentId], [coKey]: numValue } }));
+      setCqiEntries(prev => ({ ...prev, [studentId]: { ...prev[studentId], [coKey]: null } }));
       return;
     }
 
@@ -2252,14 +2253,7 @@ export default function CQIEntry({
             Students below {THRESHOLD_PERCENT}% threshold require CQI intervention
           </div>
         </div>
-        <button 
-          onClick={handleSave}
-          className="obe-btn obe-btn-primary"
-          style={{ minWidth: 100 }}
-          disabled={tableBlocked}
-        >
-          Save CQI
-        </button>
+        
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button
                       type="button"
@@ -2277,46 +2271,9 @@ export default function CQIEntry({
           >
             {debugMode ? 'DEBUG ON' : 'DEBUG'}
           </button>
-          <button
-            type="button"
-            onClick={() => setHeaderMaxVisible((s) => !s)}
-            className="obe-btn"
-            style={{ minWidth: 120 }}
-          >
-            {headerMaxVisible ? 'Hide Header Max' : 'Show Header Max'}
-          </button>
+          
 
-          <button
-            type="button"
-            onClick={async () => {
-              // Save draft to server
-              if (!subjectId || !teachingAssignmentId) return alert('Missing subject/teaching assignment');
-              if (tableBlocked) return;
-              try {
-                const payload = buildCqiPayload(cqiEntries);
-                const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${cqiQuery}`, {
-                  method: 'PUT',
-                  body: JSON.stringify(payload),
-                }).catch(() => null);
-                if (res && res.ok) {
-                  const j = await res.json().catch(() => null);
-                  setDraftLog(j || { updated_at: new Date().toISOString(), updated_by: null });
-                  setDirty(false);
-                  alert('Draft saved to server');
-                } else {
-                  const txt = res ? await res.text().catch(() => '') : '';
-                  alert(txt || 'Failed to save draft');
-                }
-              } catch (e: any) {
-                alert('Failed to save draft: ' + String(e?.message || e));
-              }
-            }}
-            className="obe-btn"
-            style={{ minWidth: 110 }}
-            disabled={tableBlocked}
-          >
-            Save Draft
-          </button>
+          
 
           {!publishedEditLocked ? (
             <button
@@ -2605,19 +2562,19 @@ export default function CQIEntry({
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 BEFORE CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Total / Max
+                  
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 AFTER CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Total / Max
+                
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 TOTAL
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Sum of selected COs
+              
                 </div>
               </th>
                   {coNumbers.map(coNum => (
@@ -2639,11 +2596,7 @@ export default function CQIEntry({
                         </div>
                       )}
                       <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                        {headerMaxVisible ? (
-                          <>Max: {headerMaxes[coNum] != null ? round2(headerMaxes[coNum] as number) : '—'}</>
-                        ) : (
-                          <>&nbsp;</>
-                        )}
+                        
                       </div>
                 </th>
               ))}
