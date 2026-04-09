@@ -2030,6 +2030,31 @@ class GatepassCheckView(APIView):
             gate_window = _extract_gate_window(in_pending)
             gate_end = gate_window.get('end') if isinstance(gate_window, dict) else None
             late_return = bool(gate_end and now > gate_end)
+            cooldown_until = None
+            cooldown_remaining_seconds = 0
+            if in_pending.gatepass_scanned_at:
+                cooldown_until = in_pending.gatepass_scanned_at + timedelta(minutes=5)
+                if now < cooldown_until:
+                    cooldown_remaining_seconds = int((cooldown_until - now).total_seconds())
+                    return Response(
+                        {
+                            "allowed": False,
+                            "reason": "in_scan_cooldown",
+                            "message": "IN scan can be recorded only after 5 minutes from OUT scan.",
+                            "cooldown": True,
+                            "cooldown_until": cooldown_until.isoformat(),
+                            "cooldown_remaining_seconds": max(cooldown_remaining_seconds, 0),
+                            "application_id": in_pending.id,
+                            "application_type": in_pending.application_type.name,
+                            "profile_type": profile_type,
+                            "profile": profile_data,
+                            "student": student_data,
+                            "staff": staff_data,
+                            "approval_timeline": [],
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+
             with transaction.atomic():
                 locked = app_models.Application.objects.select_for_update().get(pk=in_pending.pk)
                 # Double-check still pending IN scan.
