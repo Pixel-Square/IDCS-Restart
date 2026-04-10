@@ -468,10 +468,6 @@ class StudentProfile(models.Model):
     mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
     profile_image = models.ImageField(upload_to='profile_images/', null=True, blank=True)
 
-    # RFID UID assigned via IDCSScan hardware scanner (for staff)
-    rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
-                                help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
-
     # RFID UID assigned via IDCSScan hardware scanner
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')

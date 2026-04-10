@@ -17,6 +17,11 @@ from idcsscan.views import (
     GatepassOfflinePullAllView,
     GatepassOfflineIgnoreAllView,
     BulkEntryPeopleView,
+    FingerprintEnrollView,
+    FingerprintListView,
+    FingerprintDeactivateView,
+    FingerprintStatusView,
+    FingerprintResetAllView,
 )
 
 urlpatterns = [
@@ -49,4 +54,11 @@ urlpatterns = [
     path('gatepass-offline/ignore-all/', GatepassOfflineIgnoreAllView.as_view(), name='idscan-gatepass-offline-ignore-all'),
     path('rfreader/scans/export.csv', RFReaderScanExportCsvView.as_view(), name='idscan-rfreader-scans-export-csv'),
     path('bulk-entry/people/', BulkEntryPeopleView.as_view(), name='idscan-bulk-entry-people'),
+
+    # Fingerprint enrollment
+    path('fingerprint/enroll/',     FingerprintEnrollView.as_view(),     name='idscan-fingerprint-enroll'),
+    path('fingerprint/list/',       FingerprintListView.as_view(),       name='idscan-fingerprint-list'),
+    path('fingerprint/deactivate/', FingerprintDeactivateView.as_view(), name='idscan-fingerprint-deactivate'),
+    path('fingerprint/status/',     FingerprintStatusView.as_view(),     name='idscan-fingerprint-status'),
+    path('fingerprint/reset-all/',  FingerprintResetAllView.as_view(),  name='idscan-fingerprint-reset-all'),
 ]

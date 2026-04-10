@@ -103,7 +103,6 @@ urlpatterns = [
     path('publish-requests/<int:req_id>/reject', views.publish_request_reject),
 
     path('edit-request', views.edit_request_create),
-    path('edit-request/', views.edit_request_create),
     path('edit-requests/my-latest', views.edit_requests_my_latest),
     path('edit-requests/pending', views.edit_requests_pending),
     path('edit-requests/hod/pending', views.edit_requests_hod_pending),
@@ -121,7 +120,6 @@ urlpatterns = [
     path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),
     path('iqac/class-type-weights', views.class_type_weights_list),
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
-    path('iqac/special-courses', views.special_courses_list),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),

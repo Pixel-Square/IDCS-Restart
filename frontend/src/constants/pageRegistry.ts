@@ -76,6 +76,7 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { path: '/idscan/cards-data',          label: 'Cards Data',                    icon: 'Database',      group: 'RFID',     roles: ['LIBRARY', 'SECURITY', 'IQAC'] },
   { path: '/idscan/gatepass',            label: 'Gatepass Scanner',              icon: 'ScanLine',      group: 'RFID',     roles: ['SECURITY'] },
   { path: '/idscan/gatescan',            label: 'GateScan',                      icon: 'ScanLine',      group: 'RFID',     roles: ['SECURITY'] },
+  { path: '/idscan/fingerprint',         label: 'Fingerprint Enroll',            icon: 'Fingerprint',   group: 'RFID',     roles: ['LIBRARY', 'SECURITY', 'IQAC'] },
 
   // ── HR ────────────────────────────────────────────────────────────────────
   { path: '/hr/request-templates',       label: 'Request Templates',             icon: 'FileText',      group: 'HR',       roles: ['HR'] },

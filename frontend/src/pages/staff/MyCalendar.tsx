@@ -282,10 +282,10 @@ export default function MyCalendarPage() {
     if (!attendance) return null;
     const parts: string[] = [];
     if (attendance.gate_out_time) {
-      parts.push(`Gate Out: ${attendance.gate_out_time}`);
+      parts.push(`GO: ${attendance.gate_out_time}`);
     }
     if (attendance.gate_in_time) {
-      parts.push(`Gate In: ${attendance.gate_in_time}`);
+      parts.push(`GI: ${attendance.gate_in_time}`);
     }
     return parts.length ? parts.join(' | ') : null;
   };
@@ -561,6 +561,14 @@ export default function MyCalendarPage() {
                 <div className="flex items-center gap-2">
                   <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
                   <span className="text-gray-700">Leave/OD/COL</span>
+                </div>
+                 <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GO - Gate OUT </span>
+                </div>
+                 <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GI - Gate IN</span>
                 </div>
               </div>
               {attendanceSettings && (
