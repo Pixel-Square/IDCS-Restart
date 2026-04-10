@@ -416,6 +416,10 @@ class AttendanceSettings(models.Model):
         blank=True,
         help_text="Optional lunch break end time"
     )
+    essl_skip_minutes = models.PositiveIntegerField(
+        default=30,
+        help_text="Minimum minutes after first biometric punch before mapping a second punch as OUT"
+    )
     apply_time_based_absence = models.BooleanField(
         default=True,
         help_text="Enable time-based absence marking"

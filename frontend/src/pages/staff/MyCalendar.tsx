@@ -278,14 +278,21 @@ export default function MyCalendarPage() {
     return String(status).toUpperCase();
   };
 
+  const getSessionCodeClass = (status?: string | null) => {
+    const code = getSessionCode(status);
+    if (code === 'P') return 'text-green-700';
+    if (code === 'A') return 'text-red-700';
+    return 'text-gray-700';
+  };
+
   const formatGateLine = (attendance?: AttendanceRecord) => {
     if (!attendance) return null;
     const parts: string[] = [];
     if (attendance.gate_out_time) {
-      parts.push(`Gate Out: ${attendance.gate_out_time}`);
+      parts.push(`GO: ${attendance.gate_out_time}`);
     }
     if (attendance.gate_in_time) {
-      parts.push(`Gate In: ${attendance.gate_in_time}`);
+      parts.push(`GI: ${attendance.gate_in_time}`);
     }
     return parts.length ? parts.join(' | ') : null;
   };
@@ -562,6 +569,14 @@ export default function MyCalendarPage() {
                   <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
                   <span className="text-gray-700">Leave/OD/COL</span>
                 </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GO - Gate OUT</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GI - Gate IN</span>
+                </div>
               </div>
               {attendanceSettings && (
                 <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
@@ -696,7 +711,12 @@ export default function MyCalendarPage() {
                             <div className={`${getEffectiveHoursClass(attendance)} truncate`}>
                               Eff {attendance.effective_hours || 'No Data'}
                             </div>
-                            <div className="font-medium text-gray-700 truncate">FN: {getSessionCode(attendance.fn_status)}, AN: {getSessionCode(attendance.an_status)}</div>
+                            <div className="font-medium truncate">
+                              <span className="text-gray-700">FN: </span>
+                              <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                              <span className="text-gray-700">, AN: </span>
+                              <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
+                            </div>
                           </>
                         ) : isEarnedCol(dateStr) ? (
                           <div className="font-semibold text-blue-700">Worked</div>
@@ -725,8 +745,11 @@ export default function MyCalendarPage() {
                                 Eff.Hrs: {attendance.effective_hours || 'No Data'}
                               </div>
                               {/* Show FN/AN status on holidays */}
-                              <div className="font-medium text-gray-700 mt-1">
-                                FN: {getSessionCode(attendance.fn_status)} AN: {getSessionCode(attendance.an_status)}
+                              <div className="font-medium mt-1">
+                                <span className="text-gray-700">FN: </span>
+                                <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                                <span className="text-gray-700"> AN: </span>
+                                <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
                               </div>
                               {attendance.has_approved_col_form && (
                                 <div className="font-medium text-blue-700 mt-1">✓ Worked (COL)</div>
@@ -776,8 +799,11 @@ export default function MyCalendarPage() {
                             );
                           })()}
                           <div className="text-sm mt-1">
-                            <div className="font-medium text-gray-700">
-                              FN: {getSessionCode(attendance.fn_status)} AN: {getSessionCode(attendance.an_status)}
+                            <div className="font-medium">
+                              <span className="text-gray-700">FN: </span>
+                              <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                              <span className="text-gray-700"> AN: </span>
+                              <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
                             </div>
                             {isHalfDayLeave && (
                               <div className="text-sm text-purple-600 font-bold mt-0.5">
