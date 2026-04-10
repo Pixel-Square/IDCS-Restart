@@ -2947,6 +2947,7 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
                 defaults={
                     'attendance_in_time_limit': '08:45:00',
                     'attendance_out_time_limit': '17:45:00',
+                    'essl_skip_minutes': 30,
                     'apply_time_based_absence': True,
                     'updated_by': request.user
                 }

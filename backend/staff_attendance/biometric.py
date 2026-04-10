@@ -7,7 +7,7 @@ from django.db import IntegrityError
 from django.utils import timezone
 
 from academics.models import StaffProfile
-from .models import AttendanceRecord, StaffBiometricPunchLog
+from .models import AttendanceRecord, AttendanceSettings, StaffBiometricPunchLog
 
 
 def normalize_uid(raw_uid: str) -> str:
@@ -70,6 +70,18 @@ def _seed_record_defaults(record: AttendanceRecord):
         record.an_status = 'absent'
 
 
+def _resolve_essl_skip_minutes() -> int:
+    """Resolve fallback skip window for realtime eSSL punch mapping."""
+    default_minutes = 30
+    try:
+        settings = AttendanceSettings.objects.first()
+        if settings and settings.essl_skip_minutes is not None:
+            return max(0, int(settings.essl_skip_minutes))
+    except Exception:
+        return default_minutes
+    return default_minutes
+
+
 def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, source: str = 'essl_realtime'):
     local_dt = timezone.localtime(punch_dt)
     target_date = local_dt.date()
@@ -90,6 +102,7 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
 
     changed = False
     effective_direction = StaffBiometricPunchLog.Direction.IN
+    skip_minutes = _resolve_essl_skip_minutes()
 
     # Self-heal stale/invalid data from older/manual flows where OUT was stored
     # equal to or earlier than IN (e.g., 08:32/08:32). Realtime policy should
@@ -100,8 +113,8 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
 
     # Realtime policy:
     # - First punch of the date is stored as IN (morning_in)
-    # - OUT (evening_out) is stored only when a punch arrives at least 30 minutes after morning_in
-    # - Punches before that 30-min threshold are ignored for attendance (but still logged in StaffBiometricPunchLog)
+    # - OUT (evening_out) is stored only when a punch arrives at least `essl_skip_minutes` after morning_in
+    # - Punches before that threshold are ignored for attendance (but still logged in StaffBiometricPunchLog)
     if not record.morning_in:
         record.morning_in = punch_time
         changed = True
@@ -113,7 +126,7 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
         if punch_dt_local < morning_dt:
             punch_dt_local = morning_dt
 
-        if (punch_dt_local - morning_dt) < timedelta(minutes=30):
+        if (punch_dt_local - morning_dt) < timedelta(minutes=skip_minutes):
             # Too soon: skip setting OUT.
             effective_direction = 'SKIPPED'
         else:

@@ -125,6 +125,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const [outTimeLimit, setOutTimeLimit] = useState('17:45');
   const [lunchFromLimit, setLunchFromLimit] = useState('');
   const [lunchToLimit, setLunchToLimit] = useState('');
+  const [esslSkippingTime, setEsslSkippingTime] = useState(30);
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(false);
 
@@ -393,6 +394,8 @@ const StaffAttendanceUpload: React.FC = () => {
       setOutTimeLimit(settings.attendance_out_time_limit.substring(0, 5));
       setLunchFromLimit(settings.lunch_from ? settings.lunch_from.substring(0, 5) : '');
       setLunchToLimit(settings.lunch_to ? settings.lunch_to.substring(0, 5) : '');
+      const skipMinutes = parseInt(String(settings.essl_skip_minutes ?? 30), 10);
+      setEsslSkippingTime(Number.isNaN(skipMinutes) ? 30 : skipMinutes);
       setApplyTimeLimits(settings.apply_time_based_absence);
     } catch (err: any) {
       console.error('Failed to fetch attendance settings:', err);
@@ -509,6 +512,7 @@ const StaffAttendanceUpload: React.FC = () => {
         attendance_out_time_limit: `${outTimeLimit}:00`,
         lunch_from: lunchFromLimit ? `${lunchFromLimit}:00` : null,
         lunch_to: lunchToLimit ? `${lunchToLimit}:00` : null,
+        essl_skip_minutes: esslSkippingTime,
         apply_time_based_absence: applyTimeLimits
       });
       
@@ -1595,6 +1599,25 @@ const StaffAttendanceUpload: React.FC = () => {
                 onChange={(e) => setLunchToLimit(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                eSSL skipping time (minutes)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={esslSkippingTime}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  setEsslSkippingTime(Number.isNaN(parsed) ? 0 : parsed);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Realtime punches within this many minutes after first IN punch are skipped for OUT mapping
+              </p>
             </div>
           </div>
           
