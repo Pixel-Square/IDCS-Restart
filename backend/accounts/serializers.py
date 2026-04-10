@@ -139,6 +139,13 @@ class MeSerializer(serializers.Serializer):
     profileEdited = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
 
+    @staticmethod
+    def _safe_related_profile(obj, attr_name):
+        try:
+            return getattr(obj, attr_name, None)
+        except Exception:
+            return None
+
     def get_under_construction(self, obj):
         try:
             from .models import SiteConfiguration
@@ -231,19 +238,22 @@ class MeSerializer(serializers.Serializer):
 
     def get_profile_type(self, obj):
         # Explicit profile type for frontend
-        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
+        student_profile = self._safe_related_profile(obj, 'student_profile')
+        if student_profile is not None:
             return 'STUDENT'
-        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
+        staff_profile = self._safe_related_profile(obj, 'staff_profile')
+        if staff_profile is not None:
             return 'STAFF'
-        if hasattr(obj, 'ext_staff_profile') and obj.ext_staff_profile is not None:
+        ext_staff_profile = self._safe_related_profile(obj, 'ext_staff_profile')
+        if ext_staff_profile is not None:
             return 'EXT_STAFF'
         return None
 
     def get_profile(self, obj):
         profile_image_url = self.get_profile_image(obj)
         # Minimal profile payload to avoid touching academic serializers
-        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
-            sp = obj.student_profile
+        sp = self._safe_related_profile(obj, 'student_profile')
+        if sp is not None:
             # prefer the active assignment (current_section) over legacy `section` field
             cur_sec = None
             try:
@@ -275,8 +285,8 @@ class MeSerializer(serializers.Serializer):
                 } if department else None,
                 'status': sp.status,
             }
-        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
-            st = obj.staff_profile
+        st = self._safe_related_profile(obj, 'staff_profile')
+        if st is not None:
             return {
                 'staff_id': st.staff_id,
                 'profile_image': profile_image_url,
@@ -293,8 +303,8 @@ class MeSerializer(serializers.Serializer):
                 'status': st.status,
             }
 
-        if hasattr(obj, 'ext_staff_profile') and obj.ext_staff_profile is not None:
-            ext = obj.ext_staff_profile
+        ext = self._safe_related_profile(obj, 'ext_staff_profile')
+        if ext is not None:
             mobile_value = str(getattr(ext, 'mobile', '') or getattr(obj, 'mobile_no', '') or '')
             return {
                 'staff_id': getattr(ext, 'external_id', '') or getattr(ext, 'faculty_id', ''),
@@ -314,14 +324,16 @@ class MeSerializer(serializers.Serializer):
 
     def get_student_profile(self, obj):
         """Return student profile with ID if user is a student."""
-        if hasattr(obj, 'student_profile') and obj.student_profile is not None:
-            return {'id': obj.student_profile.id}
+        student_profile = self._safe_related_profile(obj, 'student_profile')
+        if student_profile is not None:
+            return {'id': student_profile.id}
         return None
 
     def get_staff_profile(self, obj):
         """Return staff profile with ID if user is staff."""
-        if hasattr(obj, 'staff_profile') and obj.staff_profile is not None:
-            return {'id': obj.staff_profile.id}
+        staff_profile = self._safe_related_profile(obj, 'staff_profile')
+        if staff_profile is not None:
+            return {'id': staff_profile.id}
         return None
 
     def get_college(self, obj):

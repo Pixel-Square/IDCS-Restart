@@ -1021,6 +1021,40 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             pass
         return None
 
+    def _resolve_students_from_ids(self, student_ids):
+        normalized_ids = []
+        for raw_id in (student_ids or []):
+            try:
+                parsed = int(raw_id)
+            except Exception:
+                continue
+            if parsed > 0:
+                normalized_ids.append(parsed)
+
+        if not normalized_ids:
+            return StudentProfile.objects.none()
+
+        unique_ids = list(dict.fromkeys(normalized_ids))
+        students_qs = StudentProfile.objects.filter(pk__in=unique_ids)
+        found_ids = set(students_qs.values_list('id', flat=True))
+        missing_ids = [sid for sid in unique_ids if sid not in found_ids]
+
+        if missing_ids:
+            try:
+                from curriculum.models import ElectiveChoice
+                mapped_student_ids = list(
+                    ElectiveChoice.objects.filter(pk__in=missing_ids)
+                    .exclude(student_id__isnull=True)
+                    .values_list('student_id', flat=True)
+                )
+                if mapped_student_ids:
+                    combined_ids = list(found_ids.union({int(sid) for sid in mapped_student_ids if sid}))
+                    students_qs = StudentProfile.objects.filter(pk__in=combined_ids)
+            except Exception:
+                pass
+
+        return students_qs
+
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
@@ -1054,7 +1088,13 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
 
         batch = super().create(validated_data)
         if student_ids:
-            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            sts = self._resolve_students_from_ids(student_ids)
+            if not sts.exists():
+                try:
+                    batch.delete()
+                except Exception:
+                    pass
+                raise serializers.ValidationError('No valid students found for the selected student IDs')
             # If section explicitly provided, ensure all selected students belong to it.
             try:
                 if section_obj is not None:
@@ -1104,7 +1144,9 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 pass
         inst = super().update(instance, validated_data)
         if student_ids is not None:
-            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            sts = self._resolve_students_from_ids(student_ids)
+            if student_ids and not sts.exists():
+                raise serializers.ValidationError('No valid students found for the selected student IDs')
             try:
                 # enforce section consistency when section is set
                 sec = getattr(inst, 'section', None)

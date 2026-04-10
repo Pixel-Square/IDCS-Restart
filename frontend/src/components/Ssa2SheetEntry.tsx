@@ -745,10 +745,16 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     teachingAssignmentId,
   ]);
 
-  const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[]) => {
+  const mergeRosterIntoRows = (students: TeachingAssignmentRosterStudent[], publishedSnapshot?: PublishedSsa2Response | null) => {
     setSheet((prev) => {
       const existingById = new Map<number, Ssa2Row>();
       const existingByReg = new Map<string, Ssa2Row>();
+      const publishedMarks = (publishedSnapshot as any)?.marks && typeof (publishedSnapshot as any).marks === 'object'
+        ? (publishedSnapshot as any).marks
+        : {};
+      const publishedSplits = (publishedSnapshot as any)?.co_splits && typeof (publishedSnapshot as any).co_splits === 'object'
+        ? (publishedSnapshot as any).co_splits
+        : {};
       for (const r of prev.rows || []) {
         if (typeof (r as any).studentId === 'number') existingById.set((r as any).studentId, r as any);
         if (r.registerNo) existingByReg.set(String(r.registerNo), r);
@@ -759,25 +765,50 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         .sort(compareStudentName)
         .map((s) => {
           const prevRow = existingById.get(s.id) || existingByReg.get(String(s.reg_no || ''));
+          const prevCo3 = readFiniteNumber((prevRow as any)?.co3);
+          const prevCo4 = readFiniteNumber((prevRow as any)?.co4);
+          const prevTotal = readFiniteNumber((prevRow as any)?.total);
+          const hasLocalMarks = prevCo3 != null || prevCo4 != null || prevTotal != null;
+
+          const sid = String(s.id);
+          const publishedTotalRaw = (publishedMarks as any)?.[sid];
+          const publishedTotal = readFiniteNumber(publishedTotalRaw);
+          const split = (publishedSplits as any)?.[sid] && typeof (publishedSplits as any)?.[sid] === 'object'
+            ? (publishedSplits as any)[sid]
+            : null;
+          let publishedCo3 = split ? readFiniteNumber((split as any).co3) : null;
+          let publishedCo4 = split ? readFiniteNumber((split as any).co4) : null;
+
+          if (publishedTotal != null) {
+            if (publishedCo3 == null) publishedCo3 = Number(publishedTotal) / 2;
+            if (publishedCo4 == null) publishedCo4 = Number(publishedTotal) / 2;
+          }
+
           return {
             studentId: s.id,
             section: String(s.section || ''),
             registerNo: String(s.reg_no || ''),
             name: String(s.name || ''),
             co3:
-              typeof (prevRow as any)?.co3 === 'number'
-                ? clamp(Number((prevRow as any).co3), 0, CO_MAX.co3)
-                : '',
+              hasLocalMarks
+                ? (typeof (prevRow as any)?.co3 === 'number'
+                    ? clamp(Number((prevRow as any).co3), 0, CO_MAX.co3)
+                    : '')
+                : (publishedCo3 != null ? clamp(Number(publishedCo3), 0, CO_MAX.co3) : ''),
             co4:
-              typeof (prevRow as any)?.co4 === 'number'
-                ? clamp(Number((prevRow as any).co4), 0, CO_MAX.co4)
-                : '',
+              hasLocalMarks
+                ? (typeof (prevRow as any)?.co4 === 'number'
+                    ? clamp(Number((prevRow as any).co4), 0, CO_MAX.co4)
+                    : '')
+                : (publishedCo4 != null ? clamp(Number(publishedCo4), 0, CO_MAX.co4) : ''),
             total:
-              typeof (prevRow as any)?.total === 'number'
-                ? clamp(Number((prevRow as any).total), 0, MAX_ASMT2)
-                : (prevRow as any)?.total === ''
-                  ? ''
-                  : '',
+              hasLocalMarks
+                ? (typeof (prevRow as any)?.total === 'number'
+                    ? clamp(Number((prevRow as any).total), 0, MAX_ASMT2)
+                    : (prevRow as any)?.total === ''
+                      ? ''
+                      : '')
+                : (publishedTotal != null ? clamp(Number(publishedTotal), 0, MAX_ASMT2) : ''),
             reviewCoMarks: (prevRow as any)?.reviewCoMarks,
           };
         });
@@ -861,8 +892,15 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         }
       }
 
+      let publishedSnapshot: PublishedSsa2Response | null = null;
+      try {
+        publishedSnapshot = await fetchPublished(String(subjectId));
+      } catch {
+        publishedSnapshot = null;
+      }
+
       // final roster count ready
-      mergeRosterIntoRows(roster);
+      mergeRosterIntoRows(roster, publishedSnapshot);
     } catch (e: any) {
       setRosterError(e?.message || 'Failed to load roster');
     } finally {

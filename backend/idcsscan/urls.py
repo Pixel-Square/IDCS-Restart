@@ -22,6 +22,7 @@ from idcsscan.views import (
     FingerprintDeactivateView,
     FingerprintStatusView,
     FingerprintResetAllView,
+    FingerprintIdentifyView,
 )
 
 urlpatterns = [
@@ -61,4 +62,5 @@ urlpatterns = [
     path('fingerprint/deactivate/', FingerprintDeactivateView.as_view(), name='idscan-fingerprint-deactivate'),
     path('fingerprint/status/',     FingerprintStatusView.as_view(),     name='idscan-fingerprint-status'),
     path('fingerprint/reset-all/',  FingerprintResetAllView.as_view(),  name='idscan-fingerprint-reset-all'),
+    path('fingerprint/identify/',   FingerprintIdentifyView.as_view(), name='idscan-fingerprint-identify'),
 ]

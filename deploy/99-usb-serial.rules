@@ -1,0 +1,7 @@
+# udev rule: grant rw access to USB-serial adapters used for fingerprint/RFID
+# Place in /etc/udev/rules.d/99-usb-serial.rules and run:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", MODE="0666"

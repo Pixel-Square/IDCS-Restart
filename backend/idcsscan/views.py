@@ -2908,3 +2908,81 @@ class FingerprintResetAllView(APIView):
             {"detail": f"{updated} fingerprint(s) deactivated.", "count": updated},
             status=status.HTTP_200_OK,
         )
+
+
+class FingerprintIdentifyView(APIView):
+    """
+    POST /api/idscan/fingerprint/identify/
+
+    Body: { "template_b64": "<base64>" }
+
+    NOTE: This performs an exact-byte equality lookup against stored
+    `FingerprintEnrollment.template` values. This is a best-effort / simple
+    server-side matcher — for robust biometric matching a proper matcher/SDK
+    should be integrated.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data or {}
+        b64 = (data.get("template_b64") or "").strip()
+        if not b64:
+            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import base64
+
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception:
+            return Response({"detail": "Invalid base64 data."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(raw) < 8:
+            return Response({"detail": "Template too small."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Exact-match search (limited but useful for deterministic templates)
+        enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
+        if not enrollment:
+            return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Build a compact user payload similar to FingerprintStatusView
+        user = enrollment.user
+        user_name = user.get_full_name() or user.username
+        identifier = ""
+        user_type = "unknown"
+        department = ""
+        profile_image = ""
+        if hasattr(user, 'student_profile'):
+            sp = user.student_profile
+            user_type = 'student'
+            identifier = getattr(sp, 'reg_no', '')
+            department = getattr(sp, 'department', '') or ''
+            if getattr(sp, 'profile_image', None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    profile_image = ''
+        elif hasattr(user, 'staff_profile'):
+            sp = user.staff_profile
+            user_type = 'staff'
+            identifier = getattr(sp, 'staff_id', '')
+            department = getattr(sp, 'department', '') or ''
+            if getattr(sp, 'profile_image', None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    profile_image = ''
+
+        return Response(
+            {
+                "user_id": user.id,
+                "user_name": user_name,
+                "user_type": user_type,
+                "identifier": identifier,
+                "department": department,
+                "profile_image": profile_image,
+                "enrollment_id": enrollment.id,
+                "finger": enrollment.finger,
+            },
+            status=status.HTTP_200_OK,
+        )

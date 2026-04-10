@@ -1308,12 +1308,25 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const isTcpl = normalizeClassType(classType) === 'TCPL';
 
     const readTcplLabPair = (snapshot: any | null) => {
-      const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
-      const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
-      const expCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
-      const expCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
-      const expMaxA = Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
-      const expMaxB = Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25;
+      const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object'
+        ? snapshot.sheet
+        : (snapshot && typeof snapshot === 'object' ? snapshot : {});
+      const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object'
+        ? sheet.rowsByStudentId
+        : {};
+      const cfgs = sheet?.coConfigs && typeof sheet.coConfigs === 'object' ? (sheet.coConfigs as any) : null;
+      const cfg1 = cfgs ? cfgs['1'] : null;
+      const cfg2 = cfgs ? cfgs['2'] : null;
+
+      const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
+      const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
+      const expCountA = cfg1 ? clamp(Number(cfg1.expCount ?? 0), 0, 12) : legacyExpCountA;
+      const expCountB = cfg2 ? clamp(Number(cfg2.expCount ?? 0), 0, 12) : legacyExpCountB;
+
+      const expMaxA = cfg1 && Number.isFinite(Number(cfg1.expMax)) ? Number(cfg1.expMax)
+        : Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
+      const expMaxB = cfg2 && Number.isFinite(Number(cfg2.expMax)) ? Number(cfg2.expMax)
+        : Number.isFinite(Number(sheet?.expMaxB)) ? Number(sheet.expMaxB) : 25;
       const ciaEnabled = (sheet as any)?.ciaExamEnabled !== false;
       const HALF = DEFAULT_LAB_CIA_EXAM_MAX / 2;
       const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
@@ -1321,12 +1334,17 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
 
       const get = (sid: number) => {
         const row = rowsByStudentId[String(sid)] || {};
-        const marksA = normalizeMarksArray((row as any)?.marksA, expCountA);
-        const marksB = normalizeMarksArray((row as any)?.marksB, expCountB);
+        const marksByCo = (row as any)?.marksByCo && typeof (row as any)?.marksByCo === 'object'
+          ? (row as any).marksByCo
+          : {};
+        const rawA = marksByCo?.['1'] ?? (row as any)?.marksA;
+        const rawB = marksByCo?.['2'] ?? (row as any)?.marksB;
+        const marksA = normalizeMarksArray(rawA, expCountA);
+        const marksB = normalizeMarksArray(rawB, expCountB);
         const avgA = avgMarks(marksA);
         const avgB = avgMarks(marksB);
         const ciaExamRaw = (row as any)?.ciaExam;
-        const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
+        const ciaExamNum = toNumOrNull(ciaExamRaw);
         const hasAny = avgA != null || avgB != null || ciaExamNum != null;
 
         const a = !hasAny ? null : (avgA ?? 0) + (ciaEnabled ? (ciaExamNum ?? 0) / 2 : 0);
