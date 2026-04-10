@@ -115,7 +115,10 @@ const getInitialFormData = (): FeedbackFormData => ({
   years: [],
   semesters: [],
   sections: [],
-  common_comment_enabled: false,
+  common_comment_enabled: true,
+  allow_hod_view: false,
+  anonymous: false,
+  form_name: '',
 });
 
 type FeedbackFormData = {
@@ -132,6 +135,9 @@ type FeedbackFormData = {
   semesters: number[];
   sections: number[];
   common_comment_enabled: boolean;
+  allow_hod_view: boolean;
+  anonymous: boolean;
+  form_name: string;
 };
 
 type FeedbackForm = {
@@ -158,6 +164,9 @@ type FeedbackForm = {
   is_submitted?: boolean;
   submission_status?: string;
   common_comment_enabled?: boolean;
+  allow_hod_view?: boolean;
+  anonymous?: boolean;
+  form_name?: string;
 };
 
 type ResponseStatistics = {
@@ -194,6 +203,7 @@ type ResponseDetail = {
 
 type ResponseListData = {
   feedback_form_id: number;
+  form_name?: string;
   target_type?: string;
   target_display?: string;
   context_display?: string;
@@ -204,6 +214,7 @@ type ResponseListData = {
     user_name: string;
     register_number: string | null;
   }[];
+  total_students: number;
   total_responded: number;
   total_non_responded: number;
 };
@@ -466,6 +477,10 @@ export default function FeedbackPage() {
   const [exportingSubjectWiseReport, setExportingSubjectWiseReport] = useState(false);
   const [deactivatingAllForms, setDeactivatingAllForms] = useState(false);
   const [activatingAllForms, setActivatingAllForms] = useState(false);
+  const [publishingAllForms, setPublishingAllForms] = useState(false);
+  const [showPublishAllConfirm, setShowPublishAllConfirm] = useState(false);
+  const [deletingAllDeactivated, setDeletingAllDeactivated] = useState(false);
+  const [showDeleteAllDeactivatedConfirm, setShowDeleteAllDeactivatedConfirm] = useState(false);
 
   const [commonExportOpen, setCommonExportOpen] = useState(false);
   const [commonExportMode, setCommonExportMode] = useState<'EXPORT' | 'DEACTIVATE' | 'ACTIVATE' | 'NON_RESPONDERS'>('EXPORT');
@@ -900,10 +915,10 @@ export default function FeedbackPage() {
         target_audience: principalTargetAudience,
         is_anonymous: principalTargetAudience.includes('STUDENT') ? principalIsAnonymous : false,
         questions: principalQuestions.map(q => {
-          let questionType: 'rating' | 'text' | 'radio' = 'rating';
-          if (q.allow_own_type) {
-            questionType = 'radio';
-          } else if (q.allow_comment && !q.allow_rating) {
+          // Don't set a special question_type for Own Type
+          // Backend will determine it based on allow_own_type flag
+          let questionType: 'rating' | 'text' = 'rating';
+          if (q.allow_comment && !q.allow_rating) {
             questionType = 'text';
           }
 
@@ -912,8 +927,9 @@ export default function FeedbackPage() {
             question_type: questionType,
             allow_rating: q.allow_rating,
             allow_comment: q.allow_comment,
+            allow_own_type: q.allow_own_type,
             is_mandatory: q.is_mandatory,
-            options: q.allow_own_type ? q.options.map(opt => opt.trim()).filter(Boolean) : [],
+            options: q.allow_own_type ? [] : (q.options.map(opt => opt.trim()).filter(Boolean) || []),
           };
         }),
       };
@@ -1339,6 +1355,7 @@ export default function FeedbackPage() {
         const normalizedForms = (data || []).map((form: any) => ({
           ...form,
           common_comment_enabled: Boolean(form.common_comment_enabled),
+          allow_hod_view: Boolean(form.allow_hod_view),
           questions: normalizeQuestions(form.questions || []),
         }));
 
@@ -1395,6 +1412,34 @@ export default function FeedbackPage() {
     } catch (error) {
       console.error('Error toggling form active status:', error);
       alert('An error occurred while updating form status');
+    }
+  };
+
+  const handleToggleAllowHODView = async (formId: number) => {
+    try {
+      const response = await fetchWithAuth(`/api/feedback/${formId}/toggle-allow-hod-view/`, {
+        method: 'POST',
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        // Update local state to reflect the change immediately
+        setFeedbackForms((prevForms) =>
+          prevForms.map((form) =>
+            form.id === formId
+              ? { ...form, allow_hod_view: data.allow_hod_view }
+              : form
+          )
+        );
+        // Show success message
+        console.log(`Allow HOD view ${data.allow_hod_view ? 'enabled' : 'disabled'} successfully`);
+      } else {
+        console.error('Error toggling allow HOD view');
+        alert('Failed to update allow HOD view setting');
+      }
+    } catch (error) {
+      console.error('Error toggling allow HOD view:', error);
+      alert('An error occurred while updating the setting');
     }
   };
 
@@ -1602,6 +1647,100 @@ export default function FeedbackPage() {
     await openBulkFilterModal('ACTIVATE');
   };
 
+  const handlePublishAllForms = async () => {
+    if (!canDepartmentScopedCreate) return;
+    setShowPublishAllConfirm(true);
+  };
+
+  const closePublishAllConfirm = () => {
+    setShowPublishAllConfirm(false);
+  };
+
+  const handlePublishAllConfirm = async () => {
+    if (!canDepartmentScopedCreate) return;
+    setPublishingAllForms(true);
+    try {
+      const response = await fetchWithAuth('/api/feedback/publish-all/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to publish feedback forms';
+        try {
+          const data = await response.json();
+          errorMessage = data?.detail || errorMessage;
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json().catch(() => ({}));
+      await fetchFeedbackForms();
+      if (typeof data?.count === 'number') {
+        showToast(`All Draft Forms Published Successfully - ${data.count} form${data.count === 1 ? '' : 's'} published`);
+      } else {
+        showToast('All Draft Forms Published Successfully');
+      }
+      closePublishAllConfirm();
+    } catch (error: any) {
+      console.error('[Feedback] Publish all failed:', error);
+      showToast(error?.message || 'Failed to publish feedback forms');
+    } finally {
+      setPublishingAllForms(false);
+    }
+  };
+
+  const handleDeleteAllDeactivated = async () => {
+    if (!canDepartmentScopedCreate) return;
+    setShowDeleteAllDeactivatedConfirm(true);
+  };
+
+  const closeDeleteAllDeactivatedConfirm = () => {
+    setShowDeleteAllDeactivatedConfirm(false);
+  };
+
+  const handleDeleteAllDeactivatedConfirm = async () => {
+    if (!canDepartmentScopedCreate) return;
+    setDeletingAllDeactivated(true);
+    try {
+      const response = await fetchWithAuth('/api/feedback/delete-all-deactivated/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to delete feedback forms';
+        try {
+          const data = await response.json();
+          errorMessage = data?.detail || errorMessage;
+        } catch {
+          // Keep fallback message.
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json().catch(() => ({}));
+      await fetchFeedbackForms();
+      if (typeof data?.count === 'number') {
+        showToast(`All Deactivated Forms Deleted Successfully - ${data.count} form${data.count === 1 ? '' : 's'} deleted`);
+      } else {
+        showToast('All Deactivated Forms Deleted Successfully');
+      }
+      closeDeleteAllDeactivatedConfirm();
+    } catch (error: any) {
+      console.error('[Feedback] Delete all deactivated failed:', error);
+      showToast(error?.message || 'Failed to delete feedback forms');
+    } finally {
+      setDeletingAllDeactivated(false);
+    }
+  };
+
   const openCommonExport = async () => {
     if (!canDepartmentScopedCreate) return;
     await openBulkFilterModal('EXPORT');
@@ -1697,12 +1836,16 @@ export default function FeedbackPage() {
       return;
     }
 
-    setCommonExportSelectedYears((prev) => {
-      if (prev.includes(yearValue)) {
-        return prev.filter((y) => y !== yearValue);
-      }
-      return [...prev, yearValue].sort((a, b) => a - b);
-    });
+    const newSelectedYears = commonExportSelectedYears.includes(yearValue)
+      ? commonExportSelectedYears.filter((y) => y !== yearValue)
+      : [...commonExportSelectedYears, yearValue].sort((a, b) => a - b);
+    
+    setCommonExportSelectedYears(newSelectedYears);
+    
+    // Auto-select "All Years" if all individual years are now selected
+    if (newSelectedYears.length === commonExportYears.length && commonExportYears.length > 0) {
+      setCommonExportAllYears(true);
+    }
   };
 
   const getCommonExportDepartmentSummary = () => {
@@ -2041,10 +2184,22 @@ export default function FeedbackPage() {
     }
 
     setSubjectWiseReportSelectedYears((prev) => {
+      let newSelection: number[];
       if (prev.includes(yearValue)) {
-        return prev.filter((y) => y !== yearValue);
+        newSelection = prev.filter((y) => y !== yearValue);
+      } else {
+        newSelection = [...prev, yearValue].sort((a, b) => a - b);
       }
-      return [...prev, yearValue].sort((a, b) => a - b);
+      
+      // Auto-select "All Years" if all individual years are now selected
+      if (newSelection.length === subjectWiseReportYears.length && subjectWiseReportYears.length > 0) {
+        setSubjectWiseReportAllYears(true);
+      } else if (subjectWiseReportAllYears) {
+        // Auto-unselect "All Years" if any year was unselected
+        setSubjectWiseReportAllYears(false);
+      }
+      
+      return newSelection;
     });
   };
 
@@ -2356,6 +2511,7 @@ export default function FeedbackPage() {
       department: form.department || activeDepartment?.id || null,
       status: (form.status as 'DRAFT' | 'ACTIVE') || 'DRAFT',
       common_comment_enabled: Boolean((form as any).common_comment_enabled),
+      allow_hod_view: Boolean((form as any).allow_hod_view),
       questions: (form.questions || []).map((q, idx) => ({
         id: q.id,
         ui_id: `saved-${q.id || idx}-${Date.now()}`,
@@ -2396,6 +2552,10 @@ export default function FeedbackPage() {
     }
     if (!formData.type) {
       setSubmitError('Please select feedback type');
+      return;
+    }
+    if (!formData.form_name || !formData.form_name.trim()) {
+      setSubmitError('Please enter a form name');
       return;
     }
     if (formData.questions.length === 0) {
@@ -2491,6 +2651,7 @@ export default function FeedbackPage() {
       }
       
       const payload = {
+        form_name: formData.form_name,
         target_type: formData.target_type,
         type: formData.type,
         departments: departmentsToSend,  // Send array of departments
@@ -2499,6 +2660,8 @@ export default function FeedbackPage() {
         department: formData.department,
         status: formData.status,
         common_comment_enabled: Boolean(formData.common_comment_enabled),
+        allow_hod_view: Boolean(formData.allow_hod_view),
+        anonymous: Boolean(formData.anonymous),
         questions: formData.questions.map((q) => ({
           id: q.id,
           question: q.question,
@@ -3106,7 +3269,12 @@ export default function FeedbackPage() {
                           <input
                             type="checkbox"
                             checked={q.allow_own_type}
-                            onChange={(e) => updatePrincipalQuestion(q.id, prev => ({ ...prev, allow_own_type: e.target.checked }))}
+                            onChange={(e) => updatePrincipalQuestion(q.id, prev => ({ 
+                              ...prev, 
+                              allow_own_type: e.target.checked,
+                              // Clear options when Own Type is enabled (mutual exclusivity)
+                              options: e.target.checked ? [] : prev.options
+                            }))}
                             className="w-4 h-4 text-indigo-600 border-slate-300 rounded"
                           />
                           Own Type
@@ -3539,7 +3707,7 @@ export default function FeedbackPage() {
                             ...formData,
                             target_type: 'STAFF',
                             type: '',
-                            common_comment_enabled: false,
+                            common_comment_enabled: true,
                             questions: [],
                           });
                           return;
@@ -3635,6 +3803,73 @@ export default function FeedbackPage() {
                         </span>
                       </button>
                     </div>
+                  </div>
+                )}
+
+                {/* Form Name */}
+                {formData.type && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Form Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.form_name}
+                      onChange={(e) => setFormData({ ...formData, form_name: e.target.value.slice(0, 255) })}
+                      placeholder="e.g., Q1 Faculty Feedback, End of Semester Evaluation"
+                      maxLength={255}
+                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white text-slate-900 text-sm"
+                    />
+                  </div>
+                )}
+
+                {/* Allow HOD to View Responses Checkbox - Only for IQAC/Admin and STUDENT feedback */}
+                {formData.type && formData.target_type === 'STUDENT' && (user?.roles?.includes('IQAC') || user?.roles?.includes('ADMIN')) && (
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={formData.allow_hod_view}
+                        onChange={(e) => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            allow_hod_view: e.target.checked,
+                          }));
+                        }}
+                        className="mt-1 w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">Allow HOD to View Responses</p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          When enabled, department HODs can view responses filtered by their department. Otherwise, only the form creator can view responses.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                )}
+
+                {/* Anonymous Feedback Checkbox - Only for IQAC/Admin and STUDENT feedback */}
+                {formData.type && formData.target_type === 'STUDENT' && (user?.roles?.includes('IQAC') || user?.roles?.includes('ADMIN')) && (
+                  <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={formData.anonymous}
+                        onChange={(e) => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            anonymous: e.target.checked,
+                          }));
+                        }}
+                        className="mt-1 w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">Anonymous Feedback</p>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          When enabled, student names and register numbers will be hidden from responses, exports, and reports while preserving data for internal tracking.
+                        </p>
+                      </div>
+                    </label>
                   </div>
                 )}
 
@@ -3995,7 +4230,7 @@ export default function FeedbackPage() {
                         </label>
                       </div>
                     )}
-                    
+
                     {/* Existing questions */}
                     {formData.questions.length > 0 && (
                       <div className="space-y-3">
@@ -4251,7 +4486,7 @@ export default function FeedbackPage() {
               <h2 className="text-xl font-semibold text-slate-800">Your Feedback Forms</h2>
               {canDepartmentScopedCreate && (
                 <div className="flex items-center gap-2">
-                  {canDepartmentScopedCreate && (
+                  {(isIQACUser || canDepartmentScopedCreate) && (
                     <button
                       type="button"
                       onClick={openCommonExport}
@@ -4262,7 +4497,7 @@ export default function FeedbackPage() {
                     </button>
                   )}
 
-                  {canDepartmentScopedCreate && (
+                  {(isIQACUser || canDepartmentScopedCreate) && (
                     <button
                       type="button"
                       onClick={openSubjectWiseReportModal}
@@ -4273,7 +4508,7 @@ export default function FeedbackPage() {
                     </button>
                   )}
 
-                  {canDepartmentScopedCreate && (
+                  {(isIQACUser || canDepartmentScopedCreate) && (
                     <button
                       type="button"
                       onClick={openNonRespondersExport}
@@ -4284,14 +4519,27 @@ export default function FeedbackPage() {
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={handleDeactivateAllForms}
-                    disabled={deactivatingAllForms}
-                    className="px-4 py-2 rounded-lg transition-colors text-sm font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {deactivatingAllForms ? 'Deactivating...' : 'Deactivate All'}
-                  </button>
+                  {canDepartmentScopedCreate && feedbackForms.some(f => f.status === 'DRAFT') && (
+                    <button
+                      type="button"
+                      onClick={handlePublishAllForms}
+                      disabled={publishingAllForms}
+                      className="px-4 py-2 rounded-lg transition-colors text-sm font-medium bg-green-100 text-green-700 hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {publishingAllForms ? 'Publishing...' : 'Publish All'}
+                    </button>
+                  )}
+
+                  {(isIQACUser || canDepartmentScopedCreate) && (
+                    <button
+                      type="button"
+                      onClick={handleDeactivateAllForms}
+                      disabled={deactivatingAllForms}
+                      className="px-4 py-2 rounded-lg transition-colors text-sm font-medium bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {deactivatingAllForms ? 'Deactivating...' : 'Deactivate All'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -4326,6 +4574,23 @@ export default function FeedbackPage() {
                             const stats = responseStats[form.id];
                             const isDraft = form.status === 'DRAFT';
                             const isDeactivated = !form.active && form.status === 'ACTIVE';
+                            
+                            // Role-based visibility logic (exact spec)
+                            const isIQAC = user?.roles?.includes('IQAC');
+                            const isAdmin = user?.roles?.includes('ADMIN');
+                            const isHOD = user?.roles?.includes('HOD');
+                            const isOwner = form.created_by === user?.id;
+                            
+                            // Permissions
+                            const canView = isIQAC || isAdmin || isOwner || (isHOD && form.allow_hod_view);
+                            const canExport = canView; // Same as canView
+                            const canEdit = isIQAC || isAdmin || isOwner;
+                            
+                            // Hide card if HOD and not allowed to view
+                            if (isHOD && !canView && !isOwner) {
+                              return null;
+                            }
+                            
                             return (
                               <div
                                 key={form.id}
@@ -4339,7 +4604,7 @@ export default function FeedbackPage() {
                               >
                                 <div className="flex items-start justify-between">
                                   <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-2">
+                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
                                       <h3 className={`text-lg font-semibold ${
                                         isDeactivated ? 'text-slate-500' : 'text-slate-800'
                                       }`}>
@@ -4367,7 +4632,21 @@ export default function FeedbackPage() {
                                           Deactivated
                                         </span>
                                       )}
+                                      {/* Anonymous Badge */}
+                                      {form.anonymous && (
+                                        <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-800 font-medium">
+                                          Anonymous
+                                        </span>
+                                      )}
                                     </div>
+                                    {/* Form Name Display */}
+                                    {form.form_name && (
+                                      <p className={`text-sm font-medium mb-3 ${
+                                        isDeactivated ? 'text-slate-400' : 'text-slate-700'
+                                      }`}>
+                                        {form.form_name}
+                                      </p>
+                                    )}
                                     <div className={`flex items-center gap-4 text-sm mb-3 ${
                                       isDeactivated ? 'text-slate-500' : 'text-slate-600'
                                     }`}>
@@ -4444,12 +4723,12 @@ export default function FeedbackPage() {
                                       </button>
                                     )}
                                     
-                                    {/* View Responses Button (not for draft, and only if active) */}
-                                    {!isDraft && form.active && (
+                                    {/* View Responses Button */}
+                                    {!isDraft && form.active && canView && (
                                       <button
                                         onClick={() => handleViewResponses(form.id)}
                                         disabled={loadingResponseView}
-                                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className={`px-4 py-2 text-white rounded-lg transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-700`}
                                       >
                                         {loadingResponseView ? (
                                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -4461,7 +4740,9 @@ export default function FeedbackPage() {
                                     )}
 
                                     {/* Export Responses (published forms only) */}
-                                    {!isDraft && (
+                                    {/* HOD can export their own forms and IQAC forms with allow_hod_view=true */}
+                                    {/* IQAC uses "Common Export" header button instead */}
+                                    {!isDraft && form.active && canExport && !isIQACUser && (
                                       <button
                                         onClick={() => handleExportResponsesExcel(form.id)}
                                         disabled={exportingFormId === form.id}
@@ -4475,25 +4756,25 @@ export default function FeedbackPage() {
                                         {exportingFormId === form.id ? 'Exporting...' : 'Export'}
                                       </button>
                                     )}
-
-                                    {/* For deactivated forms, show View Responses but with muted styling */}
-                                    {!isDraft && !form.active && (
+                                    
+                                    {/* Allow HOD View Toggle (only for IQAC/Admin and student feedback, not draft) */}
+                                    {!isDraft && canEdit && form.target_type === 'STUDENT' && (
                                       <button
-                                        onClick={() => handleViewResponses(form.id)}
-                                        disabled={loadingResponseView}
-                                        className="px-4 py-2 bg-slate-400 text-white rounded-lg hover:bg-slate-500 transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        onClick={() => handleToggleAllowHODView(form.id)}
+                                        className={`px-3 py-2 rounded-lg transition-colors text-sm font-medium flex items-center gap-2 ${
+                                          form.allow_hod_view
+                                            ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                        }`}
+                                        title={form.allow_hod_view ? 'Disable HOD access to responses' : 'Enable HOD access to responses'}
                                       >
-                                        {loadingResponseView ? (
-                                          <Loader2 className="w-4 h-4 animate-spin" />
-                                        ) : (
-                                          <FileText className="w-4 h-4" />
-                                        )}
-                                        {loadingResponseView ? 'Loading...' : 'View Responses'}
+                                        <CircleDot className="w-4 h-4" />
+                                        HOD View: {form.allow_hod_view ? 'ON' : 'OFF'}
                                       </button>
                                     )}
-
-                                    {/* Toggle Active/Inactive (not for draft) */}
-                                    {!isDraft && (
+                                    
+                                    {/* Activate/Deactivate (only owners/IQAC, not HOD viewing IQAC feedback) */}
+                                    {!isDraft && canEdit && (
                                       <button
                                         onClick={() => handleToggleActive(form.id)}
                                         className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium ${
@@ -4529,7 +4810,7 @@ export default function FeedbackPage() {
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
-                              {canDepartmentScopedCreate && (
+                              {isIQACUser && (
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -4550,6 +4831,30 @@ export default function FeedbackPage() {
                                 </button>
                               )}
 
+                              {canDepartmentScopedCreate && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteAllDeactivated();
+                                  }}
+                                  disabled={deletingAllDeactivated}
+                                  className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                >
+                                  {deletingAllDeactivated ? (
+                                    <span className="inline-flex items-center gap-2">
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                      Deleting...
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <Trash2 className="w-4 h-4" />
+                                      Delete All
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
                               <ChevronDown
                                 className={`w-5 h-5 text-slate-600 transition-transform ${
                                   showDeactivatedForms ? 'transform rotate-180' : ''
@@ -4564,6 +4869,17 @@ export default function FeedbackPage() {
                                 const stats = responseStats[form.id];
                                 const isDraft = form.status === 'DRAFT';
                                 const isDeactivated = !form.active && form.status === 'ACTIVE';
+                                
+                                // Role-based visibility logic (same as active forms)
+                                const isIQAC = user?.roles?.includes('IQAC');
+                                const isAdmin = user?.roles?.includes('ADMIN');
+                                const isHOD = user?.roles?.includes('HOD');
+                                const isOwner = form.created_by === user?.id;
+                                
+                                const canView = isIQAC || isAdmin || isOwner || (isHOD && form.allow_hod_view);
+                                const canExport = canView;
+                                const canEdit = isIQAC || isAdmin || isOwner;
+                                
                                 return (
                                   <div
                                     key={form.id}
@@ -4586,6 +4902,12 @@ export default function FeedbackPage() {
                                             Deactivated
                                           </span>
                                         </div>
+                                        {/* Form Name Display */}
+                                        {form.form_name && (
+                                          <p className="text-sm font-medium mb-3 text-slate-400">
+                                            {form.form_name}
+                                          </p>
+                                        )}
                                         <div className="flex items-center gap-4 text-sm mb-3 text-slate-500">
                                           <span className="flex items-start gap-1">
                                             <Users className="w-4 h-4 mt-0.5" />
@@ -4622,19 +4944,22 @@ export default function FeedbackPage() {
 
                                       {/* Action Buttons */}
                                       <div className="flex items-center gap-2">
-                                        <button
-                                          onClick={() => handleViewResponses(form.id)}
-                                          disabled={loadingResponseView}
-                                          className="px-4 py-2 bg-slate-400 text-white rounded-lg hover:bg-slate-500 transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                          {loadingResponseView ? (
-                                            <Loader2 className="w-4 h-4 animate-spin" />
-                                          ) : (
-                                            <FileText className="w-4 h-4" />
-                                          )}
-                                          {loadingResponseView ? 'Loading...' : 'View Responses'}
-                                        </button>
+                                        {canView && (
+                                          <button
+                                            onClick={() => handleViewResponses(form.id)}
+                                            disabled={loadingResponseView}
+                                            className="px-4 py-2 bg-slate-400 text-white rounded-lg hover:bg-slate-500 transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                          >
+                                            {loadingResponseView ? (
+                                              <Loader2 className="w-4 h-4 animate-spin" />
+                                            ) : (
+                                              <FileText className="w-4 h-4" />
+                                            )}
+                                            {loadingResponseView ? 'Loading...' : 'View Responses'}
+                                          </button>
+                                        )}
 
+                                        {canExport && !isIQACUser && (
                                           <button
                                             onClick={() => handleExportResponsesExcel(form.id)}
                                             disabled={exportingFormId === form.id}
@@ -4647,21 +4972,26 @@ export default function FeedbackPage() {
                                             )}
                                             {exportingFormId === form.id ? 'Exporting...' : 'Export'}
                                           </button>
+                                        )}
 
-                                        <button
-                                          onClick={() => handleToggleActive(form.id)}
-                                          className="px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg transition-colors text-sm font-medium"
-                                        >
-                                          Activate
-                                        </button>
+                                        {canEdit && (
+                                          <button
+                                            onClick={() => handleToggleActive(form.id)}
+                                            className="px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg transition-colors text-sm font-medium"
+                                          >
+                                            Activate
+                                          </button>
+                                        )}
 
-                                        <button
-                                          onClick={() => handleDeleteFeedback(form.id)}
-                                          className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-colors"
-                                          title="Delete feedback form"
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
+                                        {canEdit && (
+                                          <button
+                                            onClick={() => handleDeleteFeedback(form.id)}
+                                            className="p-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-colors"
+                                            title="Delete feedback form"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -4894,6 +5224,109 @@ export default function FeedbackPage() {
           </div>
         )}
 
+        {/* Publish All Confirmation Modal */}
+        {showPublishAllConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-sm w-full">
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-800">Publish All Draft Forms</h3>
+                <button
+                  type="button"
+                  onClick={closePublishAllConfirm}
+                  disabled={publishingAllForms}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-5 h-5 text-slate-600" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <p className="text-slate-700">
+                  Are you sure you want to publish all draft feedback forms?
+                </p>
+                <p className="text-sm text-slate-600">
+                  This will change all draft forms to active status and make them visible to students and staff.
+                </p>
+              </div>
+
+              <div className="p-5 border-t border-slate-200 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closePublishAllConfirm}
+                  disabled={publishingAllForms}
+                  className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePublishAllConfirm}
+                  disabled={publishingAllForms}
+                  className="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {publishingAllForms ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4" />
+                  )}
+                  {publishingAllForms ? 'Publishing...' : 'Publish All'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showDeleteAllDeactivatedConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-sm w-full">
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-slate-800">Delete All Feedback Forms</h3>
+                <button
+                  type="button"
+                  onClick={closeDeleteAllDeactivatedConfirm}
+                  disabled={deletingAllDeactivated}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-5 h-5 text-slate-600" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <p className="text-slate-700">
+                  Are you sure you want to permanently delete all deactivated feedback forms?
+                </p>
+                <p className="text-sm text-red-600 font-medium">
+                  This action cannot be undone.
+                </p>
+              </div>
+
+              <div className="p-5 border-t border-slate-200 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeDeleteAllDeactivatedConfirm}
+                  disabled={deletingAllDeactivated}
+                  className="px-5 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteAllDeactivatedConfirm}
+                  disabled={deletingAllDeactivated}
+                  className="px-5 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {deletingAllDeactivated ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  {deletingAllDeactivated ? 'Deleting...' : 'Delete All'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Subject Wise Report Modal */}
         {subjectWiseReportOpen && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -5106,6 +5539,11 @@ export default function FeedbackPage() {
               <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-800">Response Details</h2>
+                  {selectedResponseView.form_name && (
+                    <p className="text-sm font-medium text-slate-700 mt-1">
+                      Form: {selectedResponseView.form_name}
+                    </p>
+                  )}
                   {getClassContextLines(selectedResponseView).map((line, idx) => (
                     <p key={`resp-ctx-${idx}`} className="text-xs text-slate-600 mt-1">{line}</p>
                   ))}
@@ -5121,7 +5559,7 @@ export default function FeedbackPage() {
                     </span>
                     <span className="text-slate-400">•</span>
                     <span className="text-slate-600 font-medium">
-                      Total: {selectedResponseView.total_responded + selectedResponseView.total_non_responded}
+                      Total: {selectedResponseView.total_students}
                     </span>
                   </div>
                 </div>
@@ -5296,15 +5734,20 @@ export default function FeedbackPage() {
                               <div className="flex items-center justify-between mb-1.5">
                                 <div className="flex items-center gap-2">
                                   <div className="w-7 h-7 bg-green-600 rounded-full flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
-                                    {resp.user_name.charAt(0).toUpperCase()}
+                                    {isAnonymous ? '●' : resp.user_name.charAt(0).toUpperCase()}
                                   </div>
                                   <div className="leading-tight">
                                     <p className="font-semibold text-slate-800 text-xs">
-                                      {resp.user_name}
-                                      {resp.register_number && (
+                                      {isAnonymous ? 'Anonymous Responder' : resp.user_name}
+                                      {!isAnonymous && resp.register_number && (
                                         <span className="text-slate-600 font-normal ml-1 text-xs">({resp.register_number})</span>
                                       )}
                                     </p>
+                                    {isAnonymous && (
+                                      <span className="text-xs px-1 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium inline-block mt-0.5">
+                                        Anonymous
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                                 <div className="text-right text-xs text-slate-500 leading-tight">
@@ -5429,10 +5872,15 @@ export default function FeedbackPage() {
                         </div>
                       </div>
                     </div>
-                  ) : (
+                  ) : selectedResponseView.total_students > 0 ? (
                     <div className="text-center py-8 bg-green-50 rounded-lg border border-green-200">
                       <CheckCircle className="w-12 h-12 text-green-400 mx-auto mb-3" />
                       <p className="text-slate-600 font-medium">Great! Everyone has responded</p>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 bg-yellow-50 rounded-lg border border-yellow-200">
+                      <AlertCircle className="w-12 h-12 text-yellow-400 mx-auto mb-3" />
+                      <p className="text-slate-600 font-medium">No students/staff matched the filters</p>
                     </div>
                   )}
                 </div>
@@ -5530,9 +5978,22 @@ export default function FeedbackPage() {
                       <div className="flex-1">
                         {isStudentUser ? (
                           <>
-                            <h3 className="text-lg font-semibold text-slate-800 mb-2">
-                              {form.context_display || form.target_display || (form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Feedback')}
-                            </h3>
+                            <div className="flex items-center gap-2 mb-2 flex-wrap">
+                              <h3 className="text-lg font-semibold text-slate-800">
+                                {form.context_display || form.target_display || (form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Feedback')}
+                              </h3>
+                              {form.anonymous && (
+                                <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-800 font-medium">
+                                  Anonymous
+                                </span>
+                              )}
+                            </div>
+                            {/* Form Name Display for Student */}
+                            {form.form_name && (
+                              <p className="text-sm font-medium mb-2 text-slate-700">
+                                {form.form_name}
+                              </p>
+                            )}
                             <div className="flex items-center gap-1 text-sm text-slate-600">
                               <FileText className="w-4 h-4" />
                               {form.questions.length} questions
@@ -5540,7 +6001,7 @@ export default function FeedbackPage() {
                           </>
                         ) : (
                           <>
-                            <div className="flex items-center gap-2 mb-2">
+                            <div className="flex items-center gap-2 mb-2 flex-wrap">
                               <h3 className="text-lg font-semibold text-slate-800">
                                 {form.type === 'SUBJECT_FEEDBACK' ? 'Subject Feedback' : 'Common Feedback'}
                               </h3>
@@ -5556,7 +6017,18 @@ export default function FeedbackPage() {
                               }`}>
                                 {form.is_submitted ? 'Responded' : 'Pending'}
                               </span>
+                              {form.anonymous && (
+                                <span className="text-xs px-2 py-1 rounded-full bg-purple-100 text-purple-800 font-medium">
+                                  Anonymous
+                                </span>
+                              )}
                             </div>
+                            {/* Form Name Display for Non-Student */}
+                            {form.form_name && (
+                              <p className="text-sm font-medium mb-3 text-slate-700">
+                                {form.form_name}
+                              </p>
+                            )}
                             <div className="flex items-center gap-4 text-sm text-slate-600">
                               <span className="flex items-start gap-1">
                                 <Users className="w-4 h-4 mt-0.5" />

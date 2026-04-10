@@ -46,6 +46,7 @@ from .views import (
     BatchListView,
     IqacInternalMarksBulkExportView,
     IqacInternalMarksCourseExportView,
+    StudentProfileUpdateView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -133,6 +134,7 @@ urlpatterns = [
     path('remove-secondary-section/', RemoveSecondarySectionView.as_view()),
     path('students/import/', StudentBulkImportView.as_view()),
     path('students/import/template/', StudentImportTemplateDownloadView.as_view()),
+    path('students/<int:student_id>/', StudentProfileUpdateView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
     path('student/marks/', StudentMarksView.as_view()),

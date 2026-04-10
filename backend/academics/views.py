@@ -5985,9 +5985,9 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
 
                 # ── Daily-attendance override ──────────────────────────────────────────
                 # If the student has a daily attendance record for this section/date:
-                #   A (Absent)  → force 'A' status (locked; cannot change)
                 #   OD / LEAVE  → force the same status (locked; cannot differ per period)
                 #   LATE        → force Present ('P') for every period
+                #   A (Absent)  → leave the submitted period status unchanged.
                 # Any other daily status leaves the submitted status_val unchanged.
                 daily_override = None
                 try:
@@ -6003,11 +6003,7 @@ class PeriodAttendanceSessionViewSet(viewsets.ModelViewSet):
                         
                         _daily_rec = _DAR.objects.filter(session=_daily_session, student=stu).first()
                         if _daily_rec:
-                            if _daily_rec.status == 'A':
-                                # Force Absent when daily attendance is Absent
-                                status_val = 'A'
-                                daily_override = 'ABSENT'
-                            elif _daily_rec.status in ('OD', 'LEAVE'):
+                            if _daily_rec.status in ('OD', 'LEAVE'):
                                 status_val = _daily_rec.status
                                 daily_override = _daily_rec.status
                             elif _daily_rec.status == 'LATE':
@@ -9086,6 +9082,122 @@ class AllStudentsView(APIView):
         except Exception as e:
             logging.getLogger(__name__).exception('AllStudentsView error: %s', e)
             return Response({'error': 'Server error', 'detail': str(e)}, status=500)
+
+
+class StudentProfileUpdateView(APIView):
+    """Update editable student details (username/email/status/section)."""
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, student_id: int):
+        user = request.user
+        perms = set(get_user_permissions(user) or [])
+        allowed = user.is_superuser or bool(
+            perms.intersection({
+                'students.view_all_students',
+                'students.view_department_students',
+                'academics.view_my_students',
+                'academics.view_mentees',
+            })
+        )
+        if not allowed:
+            return Response({'error': 'Permission denied'}, status=403)
+
+        student = StudentProfile.objects.select_related(
+            'user',
+            'section__batch__course__department',
+            'section__batch__department',
+            'home_department',
+        ).filter(pk=student_id).first()
+        if not student:
+            return Response({'error': 'Student not found'}, status=404)
+
+        data = request.data or {}
+        user_obj = student.user
+
+        username_changed = False
+        email_changed = False
+
+        username = str(data.get('username', user_obj.username or '')).strip()
+        if username and username != user_obj.username:
+            from accounts.models import User
+            exists = User.objects.filter(username__iexact=username).exclude(pk=user_obj.pk).exists()
+            if exists:
+                return Response({'error': 'Username already exists'}, status=400)
+            user_obj.username = username
+            username_changed = True
+
+        if 'email' in data:
+            email = str(data.get('email') or '').strip()
+            if email != (user_obj.email or ''):
+                from accounts.models import User
+                exists = User.objects.filter(email__iexact=email).exclude(pk=user_obj.pk).exists() if email else False
+                if exists:
+                    return Response({'error': 'Email already exists'}, status=400)
+                user_obj.email = email
+                email_changed = True
+
+        if username_changed or email_changed:
+            update_fields = []
+            if username_changed:
+                update_fields.append('username')
+            if email_changed:
+                update_fields.append('email')
+            user_obj.save(update_fields=update_fields)
+
+        if 'status' in data:
+            status_value = str(data.get('status') or '').strip().upper()
+            valid_statuses = {'ACTIVE', 'INACTIVE', 'ALUMNI', 'DEBAR'}
+            if status_value not in valid_statuses:
+                return Response({'error': 'Invalid status value'}, status=400)
+            student.status = status_value
+
+        if 'section_id' in data or 'section' in data:
+            raw_section = data.get('section_id', data.get('section'))
+            if raw_section in (None, '', 'null'):
+                student.section = None
+            else:
+                try:
+                    section_id = int(raw_section)
+                except (TypeError, ValueError):
+                    return Response({'error': 'Invalid section_id'}, status=400)
+                section_obj = Section.objects.filter(pk=section_id).first()
+                if not section_obj:
+                    return Response({'error': 'Section not found'}, status=404)
+                student.section = section_obj
+
+        try:
+            student.save()
+        except Exception as exc:
+            return Response({'error': str(exc)}, status=400)
+
+        student.refresh_from_db()
+
+        section_obj = getattr(student, 'section', None)
+        batch = getattr(section_obj, 'batch', None) if section_obj else None
+        course = getattr(batch, 'course', None) if batch else None
+        dept = (getattr(course, 'department', None) if course else None) or (getattr(batch, 'department', None) if batch else None)
+        home_dept = getattr(student, 'home_department', None)
+
+        display_name = f"{getattr(user_obj, 'first_name', '')} {getattr(user_obj, 'last_name', '')}".strip() or user_obj.username
+
+        return Response({
+            'id': student.pk,
+            'reg_no': student.reg_no,
+            'name': display_name,
+            'username': user_obj.username,
+            'first_name': getattr(user_obj, 'first_name', '') or '',
+            'last_name': getattr(user_obj, 'last_name', '') or '',
+            'email': getattr(user_obj, 'email', '') or '',
+            'status': (student.status or 'ACTIVE').lower(),
+            'section_id': getattr(section_obj, 'id', None),
+            'section_name': getattr(section_obj, 'name', None),
+            'batch': getattr(batch, 'name', None),
+            'department_code': getattr(dept, 'code', None) if dept else None,
+            'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+            'department_name': getattr(dept, 'name', None) if dept else None,
+            'home_department_code': getattr(home_dept, 'code', None) if home_dept else None,
+            'home_department_short_name': getattr(home_dept, 'short_name', None) if home_dept else None,
+        }, status=200)
 
 
 class BatchYearViewSet(viewsets.ModelViewSet):

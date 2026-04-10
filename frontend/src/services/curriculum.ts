@@ -66,6 +66,31 @@ export type CurriculumPendingCountResponse = {
   totalPending: number;
   departmentCounts: CurriculumPendingDepartmentCount[];
 };
+
+export type ElectiveChoiceItem = {
+  id: number;
+  student_id?: number | null;
+  student_reg_no?: string | null;
+  student_name?: string | null;
+  student_username?: string | null;
+  section_id?: number | null;
+  section_name?: string | null;
+  elective_subject_id?: number | null;
+  elective_subject_code?: string | null;
+  elective_subject_name?: string | null;
+  parent_id?: number | null;
+  parent_name?: string | null;
+  department_id?: number | null;
+  department_code?: string | null;
+  department_name?: string | null;
+  regulation?: string | null;
+  semester?: number | null;
+  academic_year_id?: number | null;
+  academic_year_name?: string | null;
+  is_active?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
 import fetchWithAuth from './fetchAuth';
 import { getApiBase } from './apiBase';
 
@@ -208,6 +233,74 @@ export async function fetchElectives(params?: { department_id?: number; regulati
   const data = await res.json();
   // Handle both paginated and non-paginated responses
   return Array.isArray(data) ? data : (data.results || []);
+}
+
+export async function fetchElectiveChoices(params?: {
+  elective_subject_id?: number;
+  parent_id?: number;
+  parent_name?: string;
+  department_id?: number;
+  regulation?: string;
+  semester?: number;
+  section_id?: number;
+  search?: string;
+  academic_year?: string;
+  is_active?: boolean;
+  include_inactive?: boolean;
+  page?: number;
+  page_size?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.elective_subject_id) qs.set('elective_subject_id', String(params.elective_subject_id));
+  if (params?.parent_id) qs.set('parent_id', String(params.parent_id));
+  if (params?.parent_name) qs.set('parent_name', params.parent_name);
+  if (params?.department_id) qs.set('department_id', String(params.department_id));
+  if (params?.regulation) qs.set('regulation', params.regulation);
+  if (params?.semester) qs.set('semester', String(params.semester));
+  if (params?.section_id) qs.set('section_id', String(params.section_id));
+  if (params?.search) qs.set('search', params.search);
+  if (params?.academic_year) qs.set('academic_year', params.academic_year);
+  if (typeof params?.is_active === 'boolean') qs.set('is_active', params.is_active ? 'true' : 'false');
+  if (typeof params?.include_inactive === 'boolean') qs.set('include_inactive', params.include_inactive ? 'true' : 'false');
+  if (params?.page) qs.set('page', String(params.page));
+  if (params?.page_size) qs.set('page_size', String(params.page_size));
+  const url = `/api/curriculum/elective-choices/?${qs.toString()}`;
+  const res = await fetchWithAuth(url);
+  if (!res.ok) throw new Error('Failed to fetch elective choices');
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return {
+      results: data,
+      count: data.length,
+      page: 1,
+      page_size: data.length,
+      total_pages: 1,
+    };
+  }
+  return {
+    results: Array.isArray(data?.results) ? data.results : [],
+    count: Number(data?.count || 0),
+    page: Number(data?.page || 1),
+    page_size: Number(data?.page_size || 10),
+    total_pages: Number(data?.total_pages || 1),
+  };
+}
+
+export async function updateElectiveChoice(payload: {
+  choice_id: number;
+  elective_subject_id?: number | null;
+  academic_year_id?: number | null;
+  is_active?: boolean;
+}) {
+  const res = await fetchWithAuth('/api/curriculum/elective-choices/', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || 'Failed to update elective choice');
+  }
+  return res.json();
 }
 
 export async function createElective(payload: Partial<DeptRow> & { parent: number; semester_id?: number; department_id?: number }) {

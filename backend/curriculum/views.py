@@ -4,8 +4,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
 from django.http import HttpResponse
+from django.core.paginator import Paginator, EmptyPage
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType
-from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, DepartmentGroupSerializer
+from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer
 from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
@@ -507,43 +508,165 @@ class CurriculumPendingCountView(APIView):
 class ElectiveChoicesView(APIView):
     permission_classes = (IsAuthenticated,)
 
+    def _can_manage(self, user):
+        perms = get_user_permissions(user)
+        return bool(
+            user.is_superuser
+            or user.groups.filter(name__in=['IQAC', 'HAA']).exists()
+            or 'curriculum.import_elective_choices' in perms
+            or 'academics.manage_curriculum' in perms
+            or 'academics.change_elective_teaching' in perms
+        )
+
     def get(self, request):
-        # Accept either elective_subject_id or parent_id (CurriculumDepartment id)
-        es_id = request.query_params.get('elective_subject_id') or request.query_params.get('elective')
-        parent_id = request.query_params.get('parent_id') or request.query_params.get('parent')
-        results = []
         try:
             from .models import ElectiveChoice
-            qs = ElectiveChoice.objects.filter(is_active=True).select_related('student__user', 'elective_subject', 'academic_year')
+            qs = ElectiveChoice.objects.select_related(
+                'student__user',
+                'student__section',
+                'elective_subject',
+                'elective_subject__department',
+                'elective_subject__parent',
+                'academic_year',
+            )
+
+            es_id = request.query_params.get('elective_subject_id') or request.query_params.get('elective')
+            parent_id = request.query_params.get('parent_id') or request.query_params.get('parent')
+            parent_name = request.query_params.get('parent_name')
+            department_id = request.query_params.get('department_id')
+            regulation = request.query_params.get('regulation')
+            semester = request.query_params.get('semester')
+            section_id = request.query_params.get('section_id')
+            search = request.query_params.get('search') or request.query_params.get('q')
+            academic_year = request.query_params.get('academic_year')
+            is_active = request.query_params.get('is_active')
+            include_inactive = str(request.query_params.get('include_inactive', '')).strip().lower() in {'1', 'true', 'yes', 'y'}
+            page_raw = request.query_params.get('page', '1')
+            page_size_raw = request.query_params.get('page_size', '10')
+
             if es_id:
                 try:
                     qs = qs.filter(elective_subject_id=int(es_id))
                 except Exception:
                     return Response({'results': []})
-            elif parent_id:
+            if parent_id:
                 try:
                     qs = qs.filter(elective_subject__parent_id=int(parent_id))
                 except Exception:
                     return Response({'results': []})
-            else:
-                return Response({'results': []})
+            if parent_name:
+                qs = qs.filter(elective_subject__parent__course_name__iexact=str(parent_name).strip())
+            if department_id:
+                try:
+                    dept_id = int(department_id)
+                    qs = qs.filter(Q(elective_subject__department_id=dept_id) | Q(elective_subject__parent__department_id=dept_id))
+                except Exception:
+                    return Response({'results': []})
+            if regulation:
+                qs = qs.filter(elective_subject__regulation__iexact=regulation)
+            if semester:
+                try:
+                    qs = qs.filter(elective_subject__semester__number=int(semester))
+                except Exception:
+                    return Response({'results': []})
+            if section_id:
+                try:
+                    qs = qs.filter(student__section_id=int(section_id))
+                except Exception:
+                    return Response({'results': []})
+            if academic_year:
+                qs = qs.filter(academic_year__name__icontains=academic_year)
+            if not include_inactive and (is_active is None or str(is_active).strip() == ''):
+                qs = qs.filter(is_active=True)
+            elif is_active is not None and str(is_active).strip() != '':
+                active_value = str(is_active).strip().lower() in {'1', 'true', 'yes', 'y'}
+                qs = qs.filter(is_active=active_value)
+            if search:
+                qs = qs.filter(
+                    Q(student__reg_no__icontains=search)
+                    | Q(student__user__username__icontains=search)
+                    | Q(student__user__first_name__icontains=search)
+                    | Q(student__user__last_name__icontains=search)
+                    | Q(elective_subject__course_code__icontains=search)
+                    | Q(elective_subject__course_name__icontains=search)
+                )
 
-            for c in qs:
-                st = getattr(c, 'student', None)
-                if not st:
-                    continue
-                results.append({
-                    'id': st.pk,
-                    'reg_no': getattr(st, 'reg_no', None),
-                    'username': getattr(getattr(st, 'user', None), 'username', None),
-                    'section_id': getattr(st, 'section_id', None),
-                    'section_name': str(getattr(st, 'section', '')),
-                    'academic_year': getattr(getattr(c, 'academic_year', None), 'name', None),
-                })
+            ordered_qs = qs.order_by('student__section__name', 'student__reg_no', 'elective_subject__course_code')
+
+            try:
+                page = max(1, int(page_raw))
+            except Exception:
+                page = 1
+            try:
+                page_size = max(1, min(100, int(page_size_raw)))
+            except Exception:
+                page_size = 10
+
+            paginator = Paginator(ordered_qs, page_size)
+            total_count = paginator.count
+            total_pages = max(1, paginator.num_pages)
+            try:
+                page_obj = paginator.page(page)
+            except EmptyPage:
+                page = total_pages
+                page_obj = paginator.page(page)
+
+            results = ElectiveChoiceSerializer(page_obj.object_list, many=True).data
         except Exception:
-            return Response({'results': []})
+            return Response({'results': [], 'count': 0, 'page': 1, 'page_size': 10, 'total_pages': 1})
 
-        return Response({'results': results})
+        return Response({
+            'results': results,
+            'count': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+        })
+
+    def patch(self, request):
+        if not self._can_manage(request.user):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        choice_id = request.data.get('choice_id') or request.data.get('id')
+        if not choice_id:
+            return Response({'detail': 'choice_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from .models import ElectiveChoice
+            choice = ElectiveChoice.objects.select_related('student__user', 'student__section', 'elective_subject', 'academic_year').get(pk=int(choice_id))
+        except (ValueError, TypeError, ElectiveChoice.DoesNotExist):
+            return Response({'detail': 'Elective choice not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        elective_subject_id = request.data.get('elective_subject_id')
+        academic_year_id = request.data.get('academic_year_id')
+        is_active_raw = request.data.get('is_active')
+
+        if elective_subject_id not in (None, '', 'null'):
+            try:
+                choice.elective_subject_id = int(elective_subject_id)
+            except (ValueError, TypeError):
+                return Response({'detail': 'Invalid elective_subject_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if academic_year_id not in (None, '', 'null'):
+            try:
+                choice.academic_year_id = int(academic_year_id)
+            except (ValueError, TypeError):
+                return Response({'detail': 'Invalid academic_year_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if is_active_raw not in (None, ''):
+            choice.is_active = str(is_active_raw).strip().lower() in {'1', 'true', 'yes', 'y'}
+
+        duplicate = ElectiveChoice.objects.filter(
+            student_id=choice.student_id,
+            elective_subject_id=choice.elective_subject_id,
+            academic_year_id=choice.academic_year_id,
+        ).exclude(pk=choice.pk).exists()
+        if duplicate:
+            return Response({'detail': 'An elective choice already exists for this student and academic year.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        choice.created_by = choice.created_by or request.user
+        choice.save()
+        return Response(ElectiveChoiceSerializer(choice).data)
 
 
 class DepartmentGroupViewSet(viewsets.ReadOnlyModelViewSet):

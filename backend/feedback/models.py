@@ -124,6 +124,20 @@ class FeedbackForm(models.Model):
         default=False,
         help_text='If True, collect one common comment per subject (or form) instead of per-question comments.'
     )
+    allow_hod_view = models.BooleanField(
+        default=False,
+        help_text='If True, department HOD can view responses for this form (filtered by their department)'
+    )
+    anonymous = models.BooleanField(
+        default=False,
+        help_text='If True, student names and register numbers will be hidden from responses and exports'
+    )
+    form_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text='Custom name/title for the feedback form'
+    )
     status = models.CharField(
         max_length=10,
         choices=STATUS_CHOICES,
@@ -274,6 +288,26 @@ class FeedbackResponse(models.Model):
         blank=True,
         related_name='feedback_responses',
         help_text='Teaching assignment this feedback relates to (for subject feedback). Subject and staff can be accessed via teaching_assignment.subject and teaching_assignment.staff'
+    )
+    
+    # Subject fields - store subject directly for PE/OE/EE support
+    # Even when teaching_assignment is NULL, subject can be stored via elective_subject
+    subject = models.ForeignKey(
+        'academics.Subject',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='feedback_responses',
+        help_text='Subject being rated (can be from teaching_assignment.subject or elective)'
+    )
+    
+    elective_subject = models.ForeignKey(
+        'curriculum.ElectiveSubject',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='feedback_responses_elective',
+        help_text='Elective subject being rated (for PE/OE/EE subjects)'
     )
     
     answer_star = models.PositiveSmallIntegerField(

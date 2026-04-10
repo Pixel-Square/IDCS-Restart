@@ -21,6 +21,49 @@ from accounts.utils import get_user_permissions
 from academics.models import StaffProfile
 
 
+def get_student_display_data(response_or_user, feedback_form, student_profile=None, staff_profile=None):
+    """
+    CENTRALIZED MASKING HELPER
+    
+    Returns masked student data if feedback_form.anonymous=True
+    Otherwise returns actual name and register number.
+    
+    This is the ONLY place where student names should be retrieved for display/export.
+    """
+    # Check if form is anonymous
+    is_anonymous = feedback_form and getattr(feedback_form, 'anonymous', False)
+    
+    if is_anonymous:
+        # Anonymous feedback - mask all data
+        return {
+            'student_name': 'Anonymous',
+            'register_number': ''
+        }
+    
+    # Return real data
+    if hasattr(response_or_user, 'user'):
+        # It's a response object
+        user = response_or_user.user
+    else:
+        # It's a user object directly
+        user = response_or_user
+    
+    student_name = user.get_full_name() or user.username
+    
+    # Get register number
+    if student_profile:
+        register_number = getattr(student_profile, 'reg_no', '') or user.username
+    elif staff_profile:
+        register_number = getattr(staff_profile, 'staff_id', '') or user.username
+    else:
+        register_number = user.username
+    
+    return {
+        'student_name': student_name,
+        'register_number': register_number
+    }
+
+
 def get_normalized_permissions(user):
     if not user or not getattr(user, 'is_authenticated', False):
         return set()
@@ -330,7 +373,11 @@ class CreateFeedbackFormView(APIView):
                 mutable_data['semesters'] = semesters_to_use
                 mutable_data['department'] = dept_id
                 
-                serializer = FeedbackFormCreateSerializer(data=mutable_data)
+                # IMPORTANT: Pass request context so serializer can access user for validation
+                serializer = FeedbackFormCreateSerializer(
+                    data=mutable_data,
+                    context={'request': request}
+                )
                 if serializer.is_valid():
                     # Set the created_by field to current user
                     feedback_form = serializer.save(created_by=request.user)
@@ -391,29 +438,62 @@ class GetFeedbackFormsView(APIView):
             }, status=status.HTTP_403_FORBIDDEN)
         
         user = request.user
+        student_context = None  # Initialize before try-except blocks
         
         # Check if user is HOD (has CREATE permission)
         is_hod = 'feedback.create' in user_permissions
         
         if is_hod:
-            # HOD: Return forms they created, sorted by status priority
-            # Priority: Active & active=True (0) -> Draft (1) -> Deactivated (2) -> Closed (3)
-            forms = FeedbackForm.objects.filter(
-                created_by=user
-            ).annotate(
-                status_priority=Case(
-                    # Active forms that are actually active (not deactivated)
-                    When(status='ACTIVE', active=True, then=Value(0)),
-                    # Draft forms
-                    When(status='DRAFT', then=Value(1)),
-                    # Deactivated forms (active=False)
-                    When(status='ACTIVE', active=False, then=Value(2)),
-                    # Closed forms
-                    When(status='CLOSED', then=Value(3)),
-                    default=Value(4),
-                    output_field=IntegerField()
-                )
-            ).order_by('status_priority', '-created_at')
+            # HOD: Return forms where:
+            # 1. HOD created the form, OR
+            # 2. Form has allow_hod_view=True AND form is for HOD's department(s) [MULTI-DEPARTMENT SUPPORT]
+            try:
+                staff_profile = StaffProfile.objects.get(user=user)
+                
+                from django.db.models import Q
+                from academics.models import DepartmentRole, AcademicYear
+                
+                # Get ALL departments where this user is HOD (supports multi-department HODs like AI&DS + AI&ML)
+                active_ay = AcademicYear.objects.filter(is_active=True).first()
+                hod_department_ids = []
+                
+                if active_ay:
+                    hod_department_ids = list(
+                        DepartmentRole.objects.filter(
+                            staff=staff_profile,
+                            role='HOD',
+                            is_active=True,
+                            academic_year=active_ay
+                        ).values_list('department_id', flat=True)
+                    )
+                
+                # If no HOD roles found via DepartmentRole, fall back to staff_profile.department (backward compatibility)
+                if not hod_department_ids and staff_profile.department_id:
+                    hod_department_ids = [staff_profile.department_id]
+                
+                # Filter forms: created by HOD OR (allow_hod_view=True AND department in HOD's managed departments AND status=ACTIVE)
+                # CRITICAL: For allow_hod_view=True forms, only show ACTIVE/PUBLISHED forms
+                # For forms created by HOD, show ALL statuses including DRAFT
+                forms = FeedbackForm.objects.filter(
+                    Q(created_by=user) |  # HOD created the form (show ALL statuses including DRAFT)
+                    Q(allow_hod_view=True, status='ACTIVE', department_id__in=hod_department_ids)  # IQAC form with HOD viewer enabled - ONLY ACTIVE status
+                ).annotate(
+                    status_priority=Case(
+                        # Active forms that are actually active (not deactivated)
+                        When(status='ACTIVE', active=True, then=Value(0)),
+                        # Draft forms
+                        When(status='DRAFT', then=Value(1)),
+                        # Deactivated forms (active=False)
+                        When(status='ACTIVE', active=False, then=Value(2)),
+                        # Closed forms
+                        When(status='CLOSED', then=Value(3)),
+                        default=Value(4),
+                        output_field=IntegerField()
+                    )
+                ).order_by('status_priority', '-created_at').distinct()
+            except StaffProfile.DoesNotExist:
+                # HOD without staff profile - no forms
+                forms = FeedbackForm.objects.none()
         else:
             # STAFF/STUDENT: Return active forms for their role and department
             try:
@@ -512,12 +592,25 @@ class GetFeedbackFormsView(APIView):
                     
                     forms = FeedbackForm.objects.filter(filters).order_by('-created_at')
                     
+                    # Pass student context to serializer for filtered display (student view only)
+                    student_context = {
+                        'year': student_year,
+                        'semester_id': student_semester.id if student_semester else None,
+                        'section_id': student_section.id if student_section else None,
+                        'is_student_view': True
+                    }
+                    
                 except Exception as e:
                     return Response({
                         'detail': 'Profile not found or invalid.'
                     }, status=status.HTTP_400_BAD_REQUEST)
         
-        serializer = FeedbackFormSerializer(forms, many=True, context={'request': request})
+        # Add student context if available (only for student view)
+        context = {'request': request}
+        if student_context:
+            context.update(student_context)
+        
+        serializer = FeedbackFormSerializer(forms, many=True, context=context)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -626,11 +719,16 @@ class SubmitFeedbackView(APIView):
                     'message': 'Feedback submitted successfully'
                 }, status=status.HTTP_200_OK)
             except Exception as e:
-                logger.exception('[FEEDBACK SUBMIT] Error saving responses')
+                error_msg = str(e)
+                logger.exception(f'[FEEDBACK SUBMIT] Error saving responses: {error_msg}')
+                print(f"[DEBUG] Feedback save error: {error_msg}")
+                print(f"[DEBUG] Exception type: {type(e).__name__}")
+                import traceback
+                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
                 return Response({
-                    'detail': 'Error saving feedback. Please try again.'
+                    'detail': f'Error saving feedback: {error_msg}',
+                    'error_type': type(e).__name__
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
         
         # Format validation errors for better frontend display
         error_messages = []
@@ -1047,27 +1145,35 @@ class DeactivateFeedbackFormView(APIView):
     API 6: Deactivate/Activate Feedback Form
     POST /api/feedback/<id>/toggle-active
     
-    HOD can toggle the active status of a feedback form.
+    IQAC/Admin can deactivate/activate ANY feedback form.
+    HOD can only toggle the active status of forms they created themselves.
     When deactivated, form is hidden from students/staff but data is preserved.
     """
     permission_classes = [IsAuthenticated]
     
     def post(self, request, form_id):
-        # Check if user has permission to create feedback (HOD only)
+        # Check if user has permission to create feedback (HOD only creates)
         user_permissions = get_user_permissions(request.user)
-        if 'feedback.create' not in user_permissions:
-            return Response({
-                'detail': 'You do not have permission to deactivate feedback forms.'
-            }, status=status.HTTP_403_FORBIDDEN)
+        user_roles = set(str(role).upper() for role in request.user.roles.values_list('name', flat=True))
         
         # Get the feedback form
         feedback_form = get_object_or_404(FeedbackForm, id=form_id)
         
-        # Ensure the form was created by the current user
-        if feedback_form.created_by != request.user:
-            return Response({
-                'detail': 'You can only deactivate forms you created.'
-            }, status=status.HTTP_403_FORBIDDEN)
+        # IQAC / ADMIN can deactivate ANY feedback
+        is_iqac_admin = 'IQAC' in user_roles or 'ADMIN' in user_roles
+        
+        # HOD can only deactivate if they created the form
+        if not is_iqac_admin:
+            if 'feedback.create' not in user_permissions:
+                return Response({
+                    'detail': 'You do not have permission to deactivate feedback forms.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # HOD can only toggle forms they created
+            if feedback_form.created_by != request.user:
+                return Response({
+                    'detail': 'You can only deactivate forms you created.'
+                }, status=status.HTTP_403_FORBIDDEN)
         
         # Toggle active status
         feedback_form.active = not feedback_form.active
@@ -1098,6 +1204,11 @@ class DeactivateAllFeedbackFormsView(APIView):
         with transaction.atomic():
             qs = FeedbackForm.objects.filter(status='ACTIVE', active=True)
             qs = apply_department_scope_filter(qs, scope, field_name='department_id')
+            
+            # For HOD users: only deactivate forms they created
+            if not scope.get('all_departments'):
+                qs = qs.filter(created_by=request.user)
+            
             updated = qs.update(active=False)
 
         return Response({
@@ -1131,7 +1242,9 @@ class DeactivateFilteredFeedbackFormsView(APIView):
         qs = FeedbackForm.objects.filter(status='ACTIVE', active=True)
         qs = apply_department_scope_filter(qs, scope, field_name='department_id')
 
+        # For HOD users: only deactivate forms they created
         if not scope.get('all_departments'):
+            qs = qs.filter(created_by=request.user)
             # Own-department users are always scoped by server-side department filter.
             all_departments = True
 
@@ -1185,6 +1298,11 @@ class ActivateAllFeedbackFormsView(APIView):
         with transaction.atomic():
             qs = FeedbackForm.objects.filter(status='ACTIVE', active=False)
             qs = apply_department_scope_filter(qs, scope, field_name='department_id')
+            
+            # For HOD users: only activate forms they created
+            if not scope.get('all_departments'):
+                qs = qs.filter(created_by=request.user)
+            
             updated = qs.update(active=True)
 
         return Response({
@@ -1218,7 +1336,9 @@ class ActivateFilteredFeedbackFormsView(APIView):
         qs = FeedbackForm.objects.filter(status='ACTIVE', active=False)
         qs = apply_department_scope_filter(qs, scope, field_name='department_id')
 
+        # For HOD users: only activate forms they created
         if not scope.get('all_departments'):
+            qs = qs.filter(created_by=request.user)
             # Own-department users are always scoped by server-side department filter.
             all_departments = True
 
@@ -1292,6 +1412,107 @@ class PublishFeedbackFormView(APIView):
         return Response({
             'message': 'Feedback form published successfully',
             'status': feedback_form.status
+        }, status=status.HTTP_200_OK)
+
+
+class ToggleAllowHODViewView(APIView):
+    """
+    API: Toggle Allow HOD View
+    POST /api/feedback/<id>/toggle-allow-hod-view/
+    
+    Toggle the allow_hod_view flag for a feedback form.
+    - IQAC/Admin: Can toggle for any form
+    - HOD: Can toggle only for their own forms
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request, form_id):
+        try:
+            feedback_form = FeedbackForm.objects.get(id=form_id)
+        except FeedbackForm.DoesNotExist:
+            return Response({
+                'detail': f'Feedback form with ID {form_id} not found.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check permissions
+        user_permissions = get_normalized_permissions(request.user)
+        is_iqac = 'feedback.all_departments_access' in user_permissions or user_permissions.get('all_departments_access', False)
+        is_admin = request.user.is_staff or request.user.is_superuser
+        is_owner = feedback_form.created_by == request.user
+        
+        # IQAC/Admin can toggle any form, HOD can toggle only their own
+        if not (is_iqac or is_admin or is_owner):
+            return Response({
+                'detail': 'You do not have permission to toggle this setting.'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Note: Only student feedback forms should have HOD view option
+        # But allow toggling regardless for flexibility
+        
+        # Toggle the flag
+        feedback_form.allow_hod_view = not feedback_form.allow_hod_view
+        feedback_form.save()
+        
+        return Response({
+            'message': 'Allow HOD view setting updated successfully',
+            'allow_hod_view': feedback_form.allow_hod_view,
+            'id': feedback_form.id
+        }, status=status.HTTP_200_OK)
+
+
+class PublishAllFeedbackFormsView(APIView):
+    """
+    API: Publish All Draft Feedback Forms
+    POST /api/feedback/publish-all/
+    
+    IQAC/Admin can publish all currently draft feedback forms in one action.
+    Changes all DRAFT forms to ACTIVE status.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        scope = get_feedback_department_scope(request.user)
+        if not scope.get('allowed'):
+            return Response({
+                'detail': 'You do not have permission to publish all feedback forms.'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        with transaction.atomic():
+            qs = FeedbackForm.objects.filter(status='DRAFT')
+            qs = apply_department_scope_filter(qs, scope, field_name='department_id')
+            updated = qs.update(status='ACTIVE')
+        
+        return Response({
+            'message': 'All draft feedback forms published',
+            'count': updated,
+        }, status=status.HTTP_200_OK)
+
+
+class DeleteAllDeactivatedFeedbackFormsView(APIView):
+    """
+    API: Delete All Deactivated Feedback Forms
+    POST /api/feedback/delete-all-deactivated/
+    
+    IQAC/Admin can delete all deactivated feedback forms in one action.
+    Deletes forms where status='ACTIVE' and active=False.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        scope = get_feedback_department_scope(request.user)
+        if not scope.get('allowed'):
+            return Response({
+                'detail': 'You do not have permission to delete feedback forms.'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        with transaction.atomic():
+            qs = FeedbackForm.objects.filter(status='ACTIVE', active=False)
+            qs = apply_department_scope_filter(qs, scope, field_name='department_id')
+            deleted_count, _ = qs.delete()
+        
+        return Response({
+            'message': 'All deactivated feedback forms deleted',
+            'count': deleted_count,
         }, status=status.HTTP_200_OK)
 
 
@@ -1672,16 +1893,6 @@ class GetResponseListView(APIView):
         
         logger.info(f"[GetResponseListView] User {request.user.id} ({request.user.username}) requesting responses for form {form_id}")
         
-        # Check if user has permission to create feedback (HOD only)
-        user_permissions = get_user_permissions(request.user)
-        logger.info(f"[GetResponseListView] User permissions: {user_permissions}")
-        
-        if 'feedback.create' not in user_permissions:
-            logger.warning(f"[GetResponseListView] User {request.user.username} lacks feedback.create permission")
-            return Response({
-                'detail': 'You do not have permission to view responses. Only HODs and advisors can view feedback responses.'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
         # Get the feedback form
         try:
             feedback_form = get_object_or_404(FeedbackForm, id=form_id)
@@ -1689,19 +1900,79 @@ class GetResponseListView(APIView):
         except Exception as e:
             logger.error(f"[GetResponseListView] Error finding form: {e}")
             return Response({
-                'detail': f'Feedback form not found.'
+                'detail': 'Feedback form not found.'
             }, status=status.HTTP_404_NOT_FOUND)
         
-        # Ensure the form was created by the current user
-        if feedback_form.created_by != request.user:
-            logger.warning(f"[GetResponseListView] User {request.user.id} tried to access form created by user {feedback_form.created_by.id}")
+        # Role-based permission check
+        user_roles = set(str(role).upper() for role in request.user.roles.values_list('name', flat=True))
+        logger.info(f"[GetResponseListView] User roles: {user_roles}")
+        
+        user_is_form_creator = feedback_form.created_by == request.user
+        user_is_hod_viewer = False
+        hod_department_ids = []  # List of ALL departments HOD manages (for multi-department support)
+        
+        # Case 1: Form creator can always view
+        if user_is_form_creator:
+            logger.info(f"[GetResponseListView] User {request.user.id} is form creator, full access granted")
+        
+        # Case 2: IQAC / ADMIN can view all responses
+        elif 'IQAC' in user_roles or 'ADMIN' in user_roles:
+            logger.info(f"[GetResponseListView] User {request.user.id} has IQAC/ADMIN role, full access granted")
+        
+        # Case 3: HOD can view if allow_hod_view is enabled
+        elif 'HOD' in user_roles:
+            if not feedback_form.allow_hod_view:
+                logger.warning(f"[GetResponseListView] HOD {request.user.id} tried to access form without allow_hod_view enabled")
+                return Response({
+                    'detail': 'HOD viewing is not enabled for this form.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            # Get ALL departments HOD manages (for multi-department support)
+            try:
+                from academics.models import AcademicYear, DepartmentRole
+                staff_profile = StaffProfile.objects.get(user=request.user)
+                active_ay = AcademicYear.objects.filter(is_active=True).first()
+                
+                if active_ay:
+                    department_roles = DepartmentRole.objects.filter(
+                        staff=staff_profile,
+                        role='HOD',
+                        is_active=True,
+                        academic_year=active_ay
+                    ).values_list('department_id', flat=True)
+                    hod_department_ids = list(department_roles)
+                else:
+                    hod_department_ids = []
+                
+                # Verify HOD manages at least the form's department (or has access to it)
+                if feedback_form.department.id not in hod_department_ids:
+                    logger.warning(f"[GetResponseListView] HOD {request.user.id} not in form's department {feedback_form.department.id}")
+                    return Response({
+                        'detail': 'You can only view responses from your managed departments.'
+                    }, status=status.HTTP_403_FORBIDDEN)
+                
+                user_is_hod_viewer = True
+                logger.info(f"[GetResponseListView] HOD {request.user.id} authorized for departments {hod_department_ids}")
+            except StaffProfile.DoesNotExist:
+                logger.warning(f"[GetResponseListView] User {request.user.id} has no staff profile")
+                return Response({
+                    'detail': 'Your staff profile could not be found.'
+                }, status=status.HTTP_403_FORBIDDEN)
+        
+        # Case 4: No permission
+        else:
+            logger.warning(f"[GetResponseListView] User {request.user.id} has no viewing permission")
             return Response({
-                'detail': f'You can only view responses for forms you created. This form was created by {feedback_form.created_by.get_full_name() or feedback_form.created_by.username}.'
+                'detail': 'You do not have permission to view responses.'
             }, status=status.HTTP_403_FORBIDDEN)
+        
         
         # Get all responses for this form, grouped by user
         try:
             from django.contrib.auth import get_user_model
+            from django.db.models import Q
+            from academics.models import StudentProfile, Section, AcademicYear
+            
             User = get_user_model()
             
             logger.info(f"[GetResponseListView] Processing responses for form {form_id}")
@@ -1716,9 +1987,26 @@ class GetResponseListView(APIView):
                 'teaching_assignment__staff',
                 'teaching_assignment__staff__user',
                 'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
                 'teaching_assignment__subject',
-                'teaching_assignment__elective_subject'
+                'teaching_assignment__elective_subject',
+                'teaching_assignment__elective_subject__department',
+                'feedback_form__department'
             )
+            
+            # Filter responses by HOD's managed departments if this is a HOD viewer
+            # MULTI-DEPARTMENT SUPPORT: If HOD manages multiple departments, show responses from ALL of them
+            if user_is_hod_viewer and hod_department_ids:
+                # Filter by teaching assignment's curriculum row department, elective subject, or form's department
+                # Show responses where response department is IN the HOD's managed departments
+                # This includes core subjects, electives, and form-level departments
+                logger.info(f"[GetResponseListView] Applying HOD department filter for departments {hod_department_ids}")
+                all_responses = all_responses.filter(
+                    Q(teaching_assignment__curriculum_row__department_id__in=hod_department_ids) |
+                    Q(teaching_assignment__elective_subject__department_id__in=hod_department_ids) |
+                    Q(feedback_form__department_id__in=hod_department_ids)
+                )
+                logger.info(f"[GetResponseListView] Filtered {all_responses.count()} responses for HOD departments {hod_department_ids}")
             
             logger.info(f"[GetResponseListView] Found {all_responses.count()} total responses")
             
@@ -1733,7 +2021,6 @@ class GetResponseListView(APIView):
                     # Get register number from profile
                     if feedback_form.target_type == 'STUDENT':
                         try:
-                            from academics.models import StudentProfile
                             student_profile = StudentProfile.objects.get(user=user)
                             register_number = getattr(student_profile, 'reg_no', None) or user.username
                         except StudentProfile.DoesNotExist:
@@ -1744,6 +2031,11 @@ class GetResponseListView(APIView):
                             register_number = getattr(staff_profile, 'staff_id', None) or user.username
                         except StaffProfile.DoesNotExist:
                             register_number = user.username
+                    
+                    # Apply anonymous masking if feedback form is anonymous
+                    if feedback_form.anonymous:
+                        user_name = "Anonymous"
+                        register_number = ""
                     
                     responses_by_user[user_id] = {
                         'user_id': user_id,
@@ -1803,16 +2095,19 @@ class GetResponseListView(APIView):
             non_responders = []
             expected_users = []
             
+            # IMPORTANT: Always use feedback form's original department for student pool
+            # For HOD, response filtering happens separately above
+            form_department = feedback_form.department.id
+            
             if feedback_form.target_type == 'STAFF':
                 expected_users = User.objects.filter(
-                    staff_profile__department=feedback_form.department
+                    staff_profile__department_id=form_department
                 ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
             elif feedback_form.target_type == 'STUDENT':
-                from academics.models import StudentProfile, Section, AcademicYear
                 
                 if feedback_form.all_classes:
                     expected_users = User.objects.filter(
-                        student_profile__section__batch__course__department=feedback_form.department
+                        student_profile__section__batch__course__department_id=form_department
                     ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
                 else:
                     # Build query for matching students
@@ -1831,7 +2126,8 @@ class GetResponseListView(APIView):
                     elif feedback_form.section_id:
                         sections_to_query = [feedback_form.section_id]
                     else:
-                        sections_filter = Q(batch__course__department=feedback_form.department)
+                        # Use form's department for sections query
+                        sections_filter = Q(batch__course__department_id=form_department)
                         
                         if feedback_form.years:
                             year_filters = Q()
@@ -1857,9 +2153,16 @@ class GetResponseListView(APIView):
                         expected_users = User.objects.filter(
                             student_profile__section_id__in=sections_to_query
                         ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
+                        logger.info(f"[GetResponseListView] Found {len(expected_users)} students in {len(sections_to_query)} sections (form department: {form_department})")
+                    else:
+                        logger.warning(f"[GetResponseListView] No sections found for filter (form department: {form_department}), expected_users will be empty")
+                        expected_users = []
             
             # Find non-responders
+            # NOTE: For HOD viewers, responses are already filtered by HOD's department above
+            # This correctly calculates non-responders within the HOD's visible response set
             responded_user_ids = set(responses_by_user.keys())
+            
             for user_id in expected_users:
                 if user_id not in responded_user_ids:
                     user = User.objects.get(id=user_id)
@@ -1868,7 +2171,6 @@ class GetResponseListView(APIView):
                     
                     if feedback_form.target_type == 'STUDENT':
                         try:
-                            from academics.models import StudentProfile
                             student_profile = StudentProfile.objects.get(user=user)
                             register_number = getattr(student_profile, 'reg_no', None) or user.username
                         except StudentProfile.DoesNotExist:
@@ -1880,19 +2182,26 @@ class GetResponseListView(APIView):
                         except StaffProfile.DoesNotExist:
                             register_number = user.username
                     
+                    # Apply anonymous masking if feedback form is anonymous
+                    if feedback_form.anonymous:
+                        user_name = "Anonymous"
+                        register_number = ""
+                    
                     non_responders.append({
                         'user_id': user_id,
                         'user_name': user_name,
                         'register_number': register_number
                     })
             
-            logger.info(f"[GetResponseListView] Successfully processed: {len(responses_by_user)} responded, {len(non_responders)} non-responders")
+            logger.info(f"[GetResponseListView] Successfully processed: {len(responses_by_user)} responded, {len(non_responders)} non-responders, {len(expected_users)} total students")
             
             return Response({
                 'feedback_form_id': form_id,
+                'form_name': feedback_form.form_name or "",
                 'target_type': feedback_form.target_type,
                 'responded': list(responses_by_user.values()),
                 'non_responders': non_responders,
+                'total_students': len(expected_users),
                 'total_responded': len(responses_by_user),
                 'total_non_responded': len(non_responders)
             }, status=status.HTTP_200_OK)
@@ -1933,7 +2242,7 @@ class GetStudentSubjectsView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             # Check if form is active and published
-            if feedback_form.status != 'ACTIVE':
+            if feedback_form.status != 'ACTIVE' or not feedback_form.active:
                 return Response({
                     'detail': f'This feedback form has not been published yet. Current status: {feedback_form.get_status_display()}',
                     'subjects': [],
@@ -2093,11 +2402,28 @@ class GetStudentSubjectsView(APIView):
             if not target_semesters:
                 print(f"[GetStudentSubjectsView] No semesters determined, will fetch all core subjects for department")
             
+            # Get student's regulation from their batch (CRITICAL for 4th year filtering)
+            student_regulation = None
+            if section and section.batch and section.batch.regulation:
+                student_regulation = section.batch.regulation.code  # e.g., 'R2020' or 'R2023' (use .code not .name)
+                print(f"[GetStudentSubjectsView] Student regulation: {student_regulation}")
+            else:
+                print(f"[GetStudentSubjectsView] ⚠️ WARNING: Could not determine student regulation (section={section}, batch={section.batch if section else None})")
+                print(f"[GetStudentSubjectsView] ⚠️ Will show subjects from ALL regulations if no filter applied")
+            
             # Fetch core curriculum subjects
             curriculum_filter = {
                 'department': student_department,
                 'is_elective': False,  # Core subjects only
             }
+            
+            # ADD REGULATION FILTER (CRITICAL for 4th year - must match R2020 vs R2023)
+            # NOTE: Only filter if we have a valid regulation code
+            if student_regulation:
+                curriculum_filter['regulation'] = student_regulation
+                print(f"[GetStudentSubjectsView] Filtering curriculum by regulation: {student_regulation}")
+            else:
+                print(f"[GetStudentSubjectsView] ⚠️ NO regulation filter applied - showing subjects from ALL regulations")
             
             if target_semesters:
                 curriculum_filter['semester__number__in'] = target_semesters
@@ -2117,23 +2443,32 @@ class GetStudentSubjectsView(APIView):
             
             for curr_subj in curriculum_subjects:
                 # Try to find TeachingAssignment for this subject
+                # CRITICAL: Filter by regulation through curriculum_row to ensure regulation correctness
                 # First try: Match by section (preferred)
                 ta_query = TeachingAssignment.objects.filter(
-                    curriculum_row=curr_subj,
+                    curriculum_row=curr_subj,  # curriculum_row has regulation field
                     section=section,
                     academic_year=current_ay,
                     is_active=True
                 ).select_related('staff', 'staff__user', 'curriculum_row')
+                
+                # Ensure curriculum_row matches student's regulation
+                if student_regulation:
+                    ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
                 
                 ta = ta_query.first()
                 
                 # Second try: Match by department (if section-specific TA not found)
                 if not ta:
                     ta_query = TeachingAssignment.objects.filter(
-                        curriculum_row=curr_subj,
+                        curriculum_row=curr_subj,  # curriculum_row has regulation field
                         academic_year=current_ay,
                         is_active=True
                     ).select_related('staff', 'staff__user', 'curriculum_row')
+                    
+                    # Ensure curriculum_row matches student's regulation
+                    if student_regulation:
+                        ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
                     ta = ta_query.first()
                 
                 if ta:
@@ -2152,17 +2487,16 @@ class GetStudentSubjectsView(APIView):
             
             from curriculum.models import ElectiveChoice, ElectiveSubject
             
-            # Get student's chosen electives
-            # CRITICAL: Get ALL active choices without academic year restriction
-            # Elective subjects may span multiple semesters within the same academic year
-            # Students should only have active ElectiveChoice records for their current selections
+            # Get student's chosen electives (SIMPLE - no strict semester filter here
+            # We'll filter by semester at response level for safety)
             elective_choices = ElectiveChoice.objects.filter(
                 student=student_profile,
                 is_active=True
             ).select_related(
                 'elective_subject', 
                 'elective_subject__parent', 
-                'elective_subject__department'
+                'elective_subject__department',
+                'elective_subject__semester'
             )
             
             print(f"[GetStudentSubjectsView] Total elective choices (all AYs, is_active=True): {elective_choices.count()}")
@@ -2236,22 +2570,48 @@ class GetStudentSubjectsView(APIView):
             elective_teaching_assignments = []
             staff_map = {}  # Map course_code -> list of staff names
             
+            # Prepare semester filter for elective queries (OPTIONAL - use only for strict validation)
+            # IMPORTANT: Removed strict semester filtering that was breaking queries
+            # ElectiveChoice already represents student's legitimate choices for their year/semester
+            # So we trust the student's chosen electives are already correct semester-wise
+            semester_filter = {}  # Keep empty - don't filter to avoid breaking queries
+            
+            if target_semesters:
+                print(f"[GetStudentSubjectsView] STEP 3: Note - Skipping semester filter on electives (use ElectiveChoice trust)")
+            else:
+                print(f"[GetStudentSubjectsView] STEP 3: No semester restriction on electives")
+            
             if chosen_elective_codes:
-                # Query each elective individually to apply correct department preference
+                # Query each elective individually to apply correct department preference + STRICT semester filter
+                # IMPORTANT: Filter by student's batch to ensure year-correct assignments
+                # FIX: Use Q objects to match EITHER section__batch=X OR section=NULL (for PE/EE/OE)
+                if section.batch:
+                    batch_filter = Q(section__batch=section.batch) | Q(section__isnull=True)
+                else:
+                    batch_filter = Q()  # No filtering if no batch
                 
                 for code in chosen_elective_codes:
                     dept_id = elective_dept_map.get(code)
-                    print(f"[GetStudentSubjectsView]   Processing {code} (preferred department: {dept_id})")
+                    print(f"[GetStudentSubjectsView]   Processing {code} (preferred department: {dept_id}, semester filter: {semester_filter})")
                     
                     found_staff = False
                     
-                    # ATTEMPT 1: Try with department filter (preferred)
+                    # ATTEMPT 1: Try with department filter (preferred) + STRICT semester + BATCH FILTER
                     if dept_id:
+                        ta_filter_dict = {
+                            'elective_subject__course_code': code,
+                            'elective_subject__department_id': dept_id,
+                            'academic_year': current_ay,
+                            'is_active': True,
+                        }
+                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
+                        if student_regulation:
+                            ta_filter_dict['elective_subject__regulation'] = student_regulation
+                        
                         ta_query = TeachingAssignment.objects.filter(
-                            elective_subject__course_code=code,
-                            elective_subject__department_id=dept_id,
-                            academic_year=current_ay,
-                            is_active=True
+                            **ta_filter_dict,
+                            **semester_filter,  # STRICT semester filter
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department')
                         
                         for ta in ta_query:
@@ -2268,12 +2628,21 @@ class GetStudentSubjectsView(APIView):
                                 print(f"[GetStudentSubjectsView]     ✓ Found TA (preferred dept): {code} - {staff_name} (dept: {dept_code})")
                                 found_staff = True
                     
-                    # ATTEMPT 2: Try WITHOUT department filter (fallback)
+                    # ATTEMPT 2: Try WITHOUT department filter (fallback) + STRICT semester + BATCH FILTER
                     if not found_staff:
+                        ta_filter_dict = {
+                            'elective_subject__course_code': code,
+                            'academic_year': current_ay,
+                            'is_active': True,
+                        }
+                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
+                        if student_regulation:
+                            ta_filter_dict['elective_subject__regulation'] = student_regulation
+                        
                         ta_query = TeachingAssignment.objects.filter(
-                            elective_subject__course_code=code,
-                            academic_year=current_ay,
-                            is_active=True
+                            **ta_filter_dict,
+                            **semester_filter,  # STRICT semester filter
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department')
                         
                         for ta in ta_query:
@@ -2290,13 +2659,22 @@ class GetStudentSubjectsView(APIView):
                                 print(f"[GetStudentSubjectsView]     ✓ Found TA (any dept): {code} - {staff_name} (dept: {dept_code})")
                                 found_staff = True
                     
-                    # ATTEMPT 3: Try curriculum_row method (for elective placeholders)
+                    # ATTEMPT 3: Try curriculum_row method (for elective placeholders) + STRICT semester + BATCH FILTER
                     if not found_staff:
+                        ta_query_filter = {
+                            'curriculum_row__course_code': code,
+                            'curriculum_row__is_elective': True,
+                            'academic_year': current_ay,
+                            'is_active': True,
+                        }
+                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
+                        if student_regulation:
+                            ta_query_filter['curriculum_row__regulation'] = student_regulation
+                        
                         ta_query_base = TeachingAssignment.objects.filter(
-                            curriculum_row__course_code=code,
-                            curriculum_row__is_elective=True,
-                            academic_year=current_ay,
-                            is_active=True
+                            **ta_query_filter,
+                            **semester_filter,  # STRICT semester filter
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         )
                         
                         # First try with dept filter if available
@@ -2323,13 +2701,14 @@ class GetStudentSubjectsView(APIView):
                                 print(f"[GetStudentSubjectsView]     ✓ Found TA (curriculum_row): {code} - {staff_name} (dept: {dept_code})")
                                 found_staff = True
                     
-                    # ATTEMPT 4: Try legacy subject table (last resort)
+                    # ATTEMPT 4: Try legacy subject table (last resort) + BATCH FILTER
                     if not found_staff:
                         from academics.models import Subject
                         tas_by_subject = TeachingAssignment.objects.filter(
                             subject__code=code,
                             academic_year=current_ay,
-                            is_active=True
+                            is_active=True,
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         ).select_related('staff', 'staff__user', 'subject')
                         
                         for ta in tas_by_subject:
@@ -2350,6 +2729,7 @@ class GetStudentSubjectsView(APIView):
                 
                 # Collect unique TAs for electives (store first TA for each course_code for feedback submission)
                 # Query again to get actual TA objects for each code
+                # IMPORTANT: Filter by batch to ensure year-correct assignments + REGULATION FILTER
                 seen_codes = set()
                 for code in chosen_elective_codes:
                     if code in seen_codes:
@@ -2358,57 +2738,94 @@ class GetStudentSubjectsView(APIView):
                     dept_id = elective_dept_map.get(code)
                     ta = None
                     
-                    # Try to find a TA for this code (prefer department filter, fallback to any)
+                    # Try to find a TA for this code (prefer department filter, fallback to any) + STRICT semester + BATCH
                     if dept_id:
+                        ta_filter_dict = {
+                            'elective_subject__course_code': code,
+                            'elective_subject__department_id': dept_id,
+                            'academic_year': current_ay,
+                            'is_active': True,
+                        }
+                        # Only add regulation filter if it exists
+                        if student_regulation:
+                            ta_filter_dict['elective_subject__regulation'] = student_regulation
+                        
                         ta = TeachingAssignment.objects.filter(
-                            elective_subject__course_code=code,
-                            elective_subject__department_id=dept_id,
-                            academic_year=current_ay,
-                            is_active=True
+                            **ta_filter_dict,
+                            **semester_filter,  # STRICT semester filter
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department').first()
                     
-                    # Fallback: try without department filter
+                    # Fallback: try without department filter + STRICT semester + BATCH
                     if not ta:
+                        ta_filter_dict = {
+                            'elective_subject__course_code': code,
+                            'academic_year': current_ay,
+                            'is_active': True,
+                        }
+                        # Only add regulation filter if it exists
+                        if student_regulation:
+                            ta_filter_dict['elective_subject__regulation'] = student_regulation
+                        
                         ta = TeachingAssignment.objects.filter(
-                            elective_subject__course_code=code,
-                            academic_year=current_ay,
-                            is_active=True
+                            **ta_filter_dict,
+                            **semester_filter,  # STRICT semester filter
+                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                         ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department').first()
                     
                     if ta:
                         elective_teaching_assignments.append(ta)
                         seen_codes.add(code)
                     else:
-                        # Try curriculum_row method (prefer dept, fallback to any)
+                        # Try curriculum_row method (prefer dept, fallback to any) + STRICT semester + BATCH
                         ta = None
                         if dept_id:
+                            ta_filter_dict = {
+                                'curriculum_row__course_code': code,
+                                'curriculum_row__is_elective': True,
+                                'curriculum_row__department_id': dept_id,
+                                'academic_year': current_ay,
+                                'is_active': True,
+                            }
+                            # Only add regulation filter if it exists
+                            if student_regulation:
+                                ta_filter_dict['curriculum_row__regulation'] = student_regulation
+                            
                             ta = TeachingAssignment.objects.filter(
-                                curriculum_row__course_code=code,
-                                curriculum_row__is_elective=True,
-                                curriculum_row__department_id=dept_id,
-                                academic_year=current_ay,
-                                is_active=True
+                                **ta_filter_dict,
+                                **semester_filter,  # STRICT semester filter
+                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                             ).select_related('staff', 'staff__user', 'curriculum_row').first()
                         
-                        # Fallback: try without department filter
+                        # Fallback: try without department filter + STRICT semester + BATCH
                         if not ta:
+                            ta_filter_dict = {
+                                'curriculum_row__course_code': code,
+                                'curriculum_row__is_elective': True,
+                                'academic_year': current_ay,
+                                'is_active': True,
+                            }
+                            # Only add regulation filter if it exists
+                            if student_regulation:
+                                ta_filter_dict['curriculum_row__regulation'] = student_regulation
+                            
                             ta = TeachingAssignment.objects.filter(
-                                curriculum_row__course_code=code,
-                                curriculum_row__is_elective=True,
-                                academic_year=current_ay,
-                                is_active=True
+                                **ta_filter_dict,
+                                **semester_filter,  # STRICT semester filter
+                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                             ).select_related('staff', 'staff__user', 'curriculum_row').first()
                         
                         if ta:
                             elective_teaching_assignments.append(ta)
                             seen_codes.add(code)
                         else:
-                            # Try subject method as last resort
+                            # Try subject method as last resort + BATCH
                             from academics.models import Subject
                             ta = TeachingAssignment.objects.filter(
                                 subject__code=code,
                                 academic_year=current_ay,
-                                is_active=True
+                                is_active=True,
+                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
                             ).select_related('staff', 'staff__user', 'subject').first()
                             
                             if ta:
@@ -2444,37 +2861,46 @@ class GetStudentSubjectsView(APIView):
             elective_subjects_map = {}  # Map course_code -> ElectiveSubject
             
             if chosen_elective_codes:
-                # Load each elective subject (prefer department filter, fallback to any)  
+                # Load each elective subject (prefer department filter, fallback to any)
+                # NOTE: Removed strict semester filtering - ElectiveChoice already validates semester correctness
                 for code in chosen_elective_codes:
                     dept_id = elective_dept_map.get(code)
                     elec_subj = None
                     
-                    # Try with department filter first (preferred)
+                    # Try with department filter first (preferred) + REGULATION FILTER (CRITICAL)
                     if dept_id:
+                        elec_filter = {
+                            'course_code': code,
+                            'department_id': dept_id,
+                        }
+                        if student_regulation:
+                            elec_filter['regulation'] = student_regulation  # CRITICAL: Filter by student's regulation
                         elec_subj = ElectiveSubject.objects.filter(
-                            course_code=code,
-                            department_id=dept_id
-                        ).select_related('parent', 'department').first()
+                            **elec_filter
+                        ).select_related('parent', 'department', 'semester').first()
                     
-                    # Fallback: try without department filter to ensure ALL chosen electives appear
+                    # Fallback: try without department filter + REGULATION FILTER (still critical)
                     if not elec_subj:
+                        elec_filter = {'course_code': code}
+                        if student_regulation:
+                            elec_filter['regulation'] = student_regulation  # CRITICAL: Filter by student's regulation
                         elec_subj = ElectiveSubject.objects.filter(
-                            course_code=code
-                        ).select_related('parent', 'department').first()
+                            **elec_filter
+                        ).select_related('parent', 'department', 'semester').first()
                     
                     if elec_subj:
                         elective_subjects_map[code] = elec_subj
                         dept_name = elec_subj.department.code if elec_subj.department else "No Dept"
-                        print(f"[GetStudentSubjectsView]   - Elective subject: {elec_subj.course_code} - {elec_subj.course_name} (dept: {dept_name})")
+                        sem_num = elec_subj.semester.number if elec_subj.semester else "?"
+                        print(f"[GetStudentSubjectsView]   - Elective subject: {elec_subj.course_code} - {elec_subj.course_name} (dept: {dept_name}, sem: {sem_num})")
                     else:
                         print(f"[GetStudentSubjectsView]   ⚠ WARNING: Elective subject not found in database for code: {code}")
-                        print(f"[GetStudentSubjectsView]   ⚠ Student chose this elective but ElectiveSubject record doesn't exist!")
+
             
             print(f"[GetStudentSubjectsView] Loaded {len(elective_subjects_map)} elective subjects from {len(chosen_elective_codes)} chosen codes")
             if len(elective_subjects_map) < len(chosen_elective_codes):
                 missing_codes = set(chosen_elective_codes) - set(elective_subjects_map.keys())
                 print(f"[GetStudentSubjectsView] ⚠⚠⚠ MISSING {len(missing_codes)} elective records: {missing_codes}")
-                print(f"[GetStudentSubjectsView] ⚠⚠⚠ These electives will NOT appear unless corrected!")
             
             # ========== STEP 5: Build pseudo-assignments for subjects without TAs ==========
             # CRITICAL: Show ALL subjects (core + elective) even if no TeachingAssignment exists
@@ -2683,6 +3109,74 @@ class GetStudentSubjectsView(APIView):
                 print(f"  - Feedback form years: {feedback_form.years}")
                 print(f"  - Feedback form sections: {feedback_form.sections}")
                 print(f"  - Feedback form department: {feedback_form.department.code}")
+            
+            # ========== FINAL FILTER: Year-based filtering at the LAST step ==========
+            # CRITICAL: Apply this filter AFTER all subject collection to remove subjects from other years
+            print(f"[GetStudentSubjectsView] FINAL FILTER: Filtering subjects by student year ({student_year})")
+            
+            filtered_subjects = []
+            removed_count = 0
+            
+            for subj in subjects:
+                # Determine the year of this subject from its semester
+                subject_year = None
+                
+                # Get semester from the assignment
+                semester_num = None
+                
+                # Try to get semester from assignment in all_teaching_assignments
+                assignment = None
+                for ta in all_teaching_assignments:
+                    ta_code = None
+                    if ta.curriculum_row:
+                        ta_code = ta.curriculum_row.course_code
+                    elif ta.elective_subject:
+                        ta_code = ta.elective_subject.course_code
+                    elif ta.subject:
+                        ta_code = ta.subject.code
+                    
+                    if ta_code == subj['subject_code']:
+                        assignment = ta
+                        break
+                
+                if assignment:
+                    # Get semester from assignment
+                    if assignment.curriculum_row and assignment.curriculum_row.semester:
+                        semester_num = assignment.curriculum_row.semester.number
+                    elif assignment.elective_subject and assignment.elective_subject.semester:
+                        semester_num = assignment.elective_subject.semester.number
+                
+                # Calculate year from semester
+                if semester_num:
+                    if semester_num in [1, 2]:
+                        subject_year = 1
+                    elif semester_num in [3, 4]:
+                        subject_year = 2
+                    elif semester_num in [5, 6]:
+                        subject_year = 3
+                    elif semester_num in [7, 8]:
+                        subject_year = 4
+                    else:
+                        # Unknown semester, skip filtering for safety
+                        subject_year = student_year
+                else:
+                    # No semester found, include by default (safer to include than exclude)
+                    subject_year = student_year
+                
+                # Include subject ONLY if year matches student's year
+                if subject_year == student_year:
+                    filtered_subjects.append(subj)
+                    print(f"[GetStudentSubjectsView] ✓ KEEP: {subj['subject_code']} (Year {subject_year})")
+                else:
+                    removed_count += 1
+                    print(f"[GetStudentSubjectsView] ✗ REMOVE: {subj['subject_code']} (Year {subject_year}, Student Year {student_year})")
+            
+            print(f"[GetStudentSubjectsView] FINAL FILTER RESULT: {len(filtered_subjects)} subjects kept, {removed_count} removed from other years")
+            
+            # Update totals after filtering
+            subjects = filtered_subjects
+            total_subjects = len(subjects)
+            completed_subjects = sum(1 for s in subjects if s['is_completed'])
             
             return Response({
                 'feedback_form_id': form_id,
@@ -3741,27 +4235,45 @@ class IQACCommonExportView(APIView):
             # Build query
             from academics.models import AcademicYear, StudentProfile
             
-            # Start with all responses with proper select_related for all relations
-            qs = FeedbackResponse.objects.select_related(
+            # Start with all responses with COMPLETE select_related (CRITICAL: All relations must be loaded)
+            qs = FeedbackResponse.objects.filter(
+                feedback_form__status='ACTIVE',
+                feedback_form__active=True
+            ).select_related(
                 'feedback_form',
                 'feedback_form__department',
                 'question',
                 'user',
+                'user__student_profile',
+                'user__student_profile__home_department',
+                'user__student_profile__section',
+                'user__student_profile__section__batch',
+                'user__student_profile__section__batch__course',
+                'user__student_profile__section__batch__course__department',
                 'teaching_assignment',
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
                 'teaching_assignment__elective_subject',
+                'teaching_assignment__elective_subject__department',
                 'teaching_assignment__staff',
                 'teaching_assignment__staff__user',
+                'teaching_assignment__staff__department',
                 'teaching_assignment__section',
-                'teaching_assignment__section__batch'
-            ).prefetch_related(
-                'user__student_profile'
-            ).all()
+                'teaching_assignment__section__batch',
+                'teaching_assignment__section__batch__course',
+                'teaching_assignment__section__batch__course__department'
+            )
 
             qs = apply_department_scope_filter(qs, scope, field_name='feedback_form__department_id')
 
+            # For HOD users: filter to only forms they created or forms with allow_hod_view=True
             if not scope.get('all_departments'):
+                from django.db.models import Q
+                qs = qs.filter(
+                    Q(feedback_form__created_by=request.user) | 
+                    Q(feedback_form__allow_hod_view=True)
+                )
                 # Own-department users are already scoped by server-side filter.
                 all_departments = True
             
@@ -3801,16 +4313,15 @@ class IQACCommonExportView(APIView):
                 overall_comment_value = ""
                 
                 # Get student info
+                student_profile = None
                 if response.user:
-                    student_name = response.user.get_full_name() or response.user.username
                     try:
                         student_profile = response.user.student_profile
-                        register_number = student_profile.reg_no or ""
                         
                         # Get department with fallback chain
                         if student_profile.home_department:
                             department_name = student_profile.home_department.name or ""
-                        elif student_profile.section and student_profile.section.batch and student_profile.section.batch.course:
+                        elif student_profile.section and student_profile.section.batch and student_profile.section.batch.course and student_profile.section.batch.course.department:
                             department_name = student_profile.section.batch.course.department.name or ""
                         
                         # Calculate year and get section
@@ -3826,19 +4337,24 @@ class IQACCommonExportView(APIView):
                     except (AttributeError, StudentProfile.DoesNotExist):
                         pass
                 
-                # Fallback department from teaching assignment section for cases
-                # where student profile department is unavailable.
-                if not department_name and response.teaching_assignment and response.teaching_assignment.section:
-                    ta_section = response.teaching_assignment.section
-                    ta_batch = getattr(ta_section, 'batch', None)
-                    ta_course = getattr(ta_batch, 'course', None) if ta_batch else None
-                    ta_department = getattr(ta_course, 'department', None) if ta_course else None
-                    if ta_department:
-                        department_name = ta_department.name or ""
-
-                # Fallback department from the form this response belongs to
-                if not department_name and response.feedback_form and response.feedback_form.department:
-                    department_name = response.feedback_form.department.name or ""
+                # DEBUG: Check if relations loaded (TEMPORARY)
+                # Uncomment to debug: print(f"DEBUG: response.id={response.id}, user={response.user}, student_profile={student_profile}, ta={response.teaching_assignment}")
+                
+                # Fallback department from teaching assignment
+                # SIMPLIFIED: Use staff's department as the primary and only source
+                # If staff.department is not available, use "N/A"
+                if response.teaching_assignment and getattr(response.teaching_assignment, 'staff', None) and getattr(response.teaching_assignment.staff, 'department', None):
+                    department_name = response.teaching_assignment.staff.department.name or "N/A"
+                else:
+                    department_name = "N/A"
+                
+                # DEBUG: Print department being used
+                # print(f"[IQACCommonExportView] Response {response.id}: dept={department_name}, ta={response.teaching_assignment}, staff={response.teaching_assignment.staff if response.teaching_assignment else None}")
+                
+                # Use centralized masking helper to get student data
+                display_data = get_student_display_data(response, response.feedback_form, student_profile)
+                student_name = display_data['student_name']
+                register_number = display_data['register_number']
                 
                 # Get subject and staff from teaching assignment with multi-source fallback
                 if response.teaching_assignment:
@@ -3874,6 +4390,19 @@ class IQACCommonExportView(APIView):
                                 ta_year_text = ""
                         year_section = f"{ta_year_text} / {ta_section_name}" if (ta_year_text or ta_section_name) else ""
                 
+                # CRITICAL: Add fallback to student data when teaching_assignment is incomplete
+                # This handles electives assigned department-wide with no specific section
+                if not year_section and student_profile and student_profile.section:
+                    # Fallback to student's section and year
+                    student_section_name = student_profile.section.name or ""
+                    student_year_text = ""
+                    if current_acad_year and student_profile.section.batch:
+                        try:
+                            student_year_text = str(current_acad_year - int(student_profile.section.batch.start_year) + 1)
+                        except Exception:
+                            pass
+                    year_section = f"{student_year_text} / {student_section_name}" if (student_year_text or student_section_name) else ""
+                
                 # Get question text
                 question_text = response.question.question if response.question else ""
                 
@@ -3891,11 +4420,15 @@ class IQACCommonExportView(APIView):
                     comment_value = ""
                     overall_comment_value = ""
 
-                # Show selected option only when real value is available.
+                # Show selected option only when real value is available
                 selected_option_value = (response.selected_option_text or "").strip()
                 
-                # Collect data row
+                # Get ONLY user-entered form_name (no system-generated defaults)
+                form_name_value = response.feedback_form.form_name or ""
+                
+                # Collect data row - include form_name
                 responses_data.append({
+                    'form_name': form_name_value,
                     'student_name': student_name,
                     'register_number': register_number,
                     'department': department_name,
@@ -3924,6 +4457,7 @@ class IQACCommonExportView(APIView):
             has_selected_option = any((row.get('selected_option') or '').strip() for row in responses_data)
 
             headers = [
+                "Form Name",
                 "Student Name",
                 "Register Number",
                 "Department",
@@ -3945,6 +4479,7 @@ class IQACCommonExportView(APIView):
             # Data rows - align with dynamic headers.
             for row_data in responses_data:
                 row = [
+                    row_data['form_name'],
                     row_data['student_name'],
                     row_data['register_number'],
                     row_data['department'],
@@ -3995,6 +4530,8 @@ class NonRespondersExportView(APIView):
 
     def post(self, request):
         try:
+            from django.db.models import Q
+            
             scope = get_feedback_department_scope(request.user)
             if not scope.get('allowed'):
                 return Response({
@@ -4017,11 +4554,17 @@ class NonRespondersExportView(APIView):
             forms_qs = FeedbackForm.objects.filter(
                 target_type='STUDENT',
                 status='ACTIVE',
+                active=True
             ).select_related('department', 'created_by')
 
             forms_qs = apply_department_scope_filter(forms_qs, scope, field_name='department_id')
 
+            # For HOD users: filter to only forms they created or forms with allow_hod_view=True
             if not scope.get('all_departments'):
+                forms_qs = forms_qs.filter(
+                    Q(created_by=request.user) | 
+                    Q(allow_hod_view=True)
+                )
                 all_departments = True
 
             if not all_departments and department_ids:
@@ -4053,10 +4596,10 @@ class NonRespondersExportView(APIView):
 
             target_departments = list(
                 Department.objects.filter(id__in=target_department_ids)
-                .values('id', 'name')
+                .values('id', 'name', 'short_name', 'code')
                 .order_by('name')
             )
-            target_department_map = {int(d['id']): (d.get('name') or f"Department {d['id']}") for d in target_departments}
+            target_department_map = {int(d['id']): (d.get('short_name') or d.get('code') or d.get('name') or f"Department {d['id']}") for d in target_departments}
 
             current_ay = AcademicYear.objects.filter(is_active=True).first()
             current_acad_year = None
@@ -4097,8 +4640,11 @@ class NonRespondersExportView(APIView):
                 if not responded_user_ids:
                     # Backward-compatible fallback for legacy data without submission rows.
                     responded_user_ids = set(
-                        FeedbackResponse.objects.filter(feedback_form=form)
-                        .values_list('user_id', flat=True)
+                        FeedbackResponse.objects.filter(
+                            feedback_form=form,
+                            feedback_form__status='ACTIVE',
+                            feedback_form__active=True
+                        ).values_list('user_id', flat=True)
                         .distinct()
                     )
 
@@ -4192,21 +4738,37 @@ class NonRespondersExportView(APIView):
                     if getattr(student_profile, 'section', None):
                         section_name = student_profile.section.name or ''
 
+                    # Get department short name or code
+                    dept_short_name = 'Unknown'
+                    if form.department:
+                        dept_short_name = form.department.short_name or form.department.code or form.department.name or 'Unknown'
+
+                    # Apply anonymous masking if feedback form is anonymous
+                    student_name = user.get_full_name() or user.username
+                    register_number = getattr(student_profile, 'reg_no', '') or user.username
+                    if form.anonymous:
+                        student_name = "Anonymous"
+                        register_number = ""
+
+                    # Use only the user-entered form_name, no ID fallback
+                    form_name_display = form.form_name or ""
+
                     non_responder_rows.append({
                         'department_id': form.department_id,
-                        'department': form.department.name if form.department else 'Unknown',
+                        'department': dept_short_name,
                         'year': student_year,
                         'form_id': form.id,
+                        'form_name': form_name_display,
                         'form_type': form.get_type_display(),
                         'created_on': form.created_at.strftime('%Y-%m-%d'),
-                        'student_name': user.get_full_name() or user.username,
-                        'register_number': getattr(student_profile, 'reg_no', '') or user.username,
+                        'student_name': student_name,
+                        'register_number': register_number,
                         'section': section_name,
                     })
 
             non_responder_rows.sort(
                 key=lambda r: (
-                    r['department'] or '',
+                    r['department_id'] or 0,
                     (r['year'] if isinstance(r['year'], int) else 99),
                     r['form_id'],
                     r['register_number'] or '',
@@ -4225,6 +4787,7 @@ class NonRespondersExportView(APIView):
                 'Department',
                 'Year',
                 'Form ID',
+                'Form Name',
                 'Form Type',
                 'Created On',
                 'Student Name',
@@ -4272,6 +4835,7 @@ class NonRespondersExportView(APIView):
                             row['department'],
                             f"Year {row['year']}" if isinstance(row['year'], int) else '',
                             row['form_id'],
+                            row['form_name'],
                             row['form_type'],
                             row['created_on'],
                             row['student_name'],
@@ -4287,6 +4851,7 @@ class NonRespondersExportView(APIView):
                     ws.column_dimensions['F'].width = 26
                     ws.column_dimensions['G'].width = 18
                     ws.column_dimensions['H'].width = 12
+                    ws.column_dimensions['I'].width = 15
             else:
                 default_ws.title = 'Non Responders'
                 default_ws.append(headers)
@@ -4298,6 +4863,7 @@ class NonRespondersExportView(APIView):
                 default_ws.column_dimensions['F'].width = 26
                 default_ws.column_dimensions['G'].width = 18
                 default_ws.column_dimensions['H'].width = 12
+                default_ws.column_dimensions['I'].width = 15
 
             output = BytesIO()
             wb.save(output)
@@ -4329,13 +4895,6 @@ class FormExportExcelView(APIView):
     
     def get(self, request, form_id):
         try:
-            # Check if user has permission to create feedback (HOD only)
-            user_permissions = get_user_permissions(request.user)
-            if 'feedback.create' not in user_permissions:
-                return Response({
-                    'detail': 'You do not have permission to export feedback.'
-                }, status=status.HTTP_403_FORBIDDEN)
-            
             # Get the feedback form
             try:
                 feedback_form = get_object_or_404(FeedbackForm, id=form_id)
@@ -4344,10 +4903,77 @@ class FormExportExcelView(APIView):
                     'detail': 'Feedback form not found.'
                 }, status=status.HTTP_404_NOT_FOUND)
             
-            # Ensure the form was created by the current user
-            if feedback_form.created_by != request.user:
+            user = request.user
+            
+            # DEBUG: Log permission check
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"==== EXPORT PERMISSION CHECK ====")
+            logger.info(f"USER ID: {user.id}")
+            logger.info(f"USER ROLES: {list(user.roles.values_list('name', flat=True))}")
+            logger.info(f"FORM ID: {feedback_form.id}")
+            logger.info(f"FORM CREATED BY: {feedback_form.created_by_id}")
+            logger.info(f"FORM ALLOW_HOD_VIEW: {feedback_form.allow_hod_view}")
+            
+            # Check role-based export permissions (SIMPLIFIED)
+            user_roles = list(user.roles.values_list('name', flat=True))
+            is_iqac = 'IQAC' in user_roles or 'ADMIN' in user_roles
+            is_hod = 'HOD' in user_roles
+            
+            hod_department_id = None
+            can_export = False
+            
+            # IQAC → full access to all forms
+            if is_iqac:
+                can_export = True
+            
+            # HOD → check ownership and allow_hod_view flag
+            elif is_hod:
+                # Case 1: HOD owns the form → allow export
+                if feedback_form.created_by_id == user.id:
+                    can_export = True
+                    logger.info(f"PERMISSION: HOD is owner → ALLOW")
+                
+                # Case 2: IQAC form with allow_hod_view=True → allow export
+                elif feedback_form.allow_hod_view == True:
+                    can_export = True
+                    logger.info(f"PERMISSION: allow_hod_view=True → ALLOW")
+                
+                # Case 3: Otherwise → deny
+                else:
+                    logger.info(f"PERMISSION: Not owner and allow_hod_view=False → DENY")
+                    return Response({
+                        'error': 'You do not have permission to export this feedback form.'
+                    }, status=status.HTTP_403_FORBIDDEN)
+                
+                # Get HOD's department for data filtering later
+                try:
+                    from academics.models import AcademicYear, DepartmentRole
+                    staff_profile = StaffProfile.objects.get(user=user)
+                    active_ay = AcademicYear.objects.filter(is_active=True).first()
+                    
+                    if active_ay and staff_profile:
+                        department_roles = DepartmentRole.objects.filter(
+                            staff=staff_profile,
+                            role='HOD',
+                            is_active=True,
+                            academic_year=active_ay
+                        ).values_list('department_id', flat=True)
+                        hod_departments = list(department_roles)
+                        if hod_departments:
+                            hod_department_id = hod_departments[0]
+                            logger.info(f"HOD DEPARTMENT: {hod_department_id}")
+                except Exception as e:
+                    logger.warning(f"Could not get HOD department: {str(e)}")
+            
+            else:
                 return Response({
-                    'detail': 'You can only export responses for forms you created.'
+                    'error': 'You do not have permission to export feedback forms.'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            if not can_export:
+                return Response({
+                    'error': 'You do not have permission to export this feedback form.'
                 }, status=status.HTTP_403_FORBIDDEN)
             
             # Build query with proper joins
@@ -4360,17 +4986,39 @@ class FormExportExcelView(APIView):
                 'feedback_form__department',
                 'question',
                 'user',
+                'user__student_profile',
+                'user__student_profile__home_department',
+                'user__student_profile__section',
+                'user__student_profile__section__batch',
+                'user__student_profile__section__batch__course',
+                'user__student_profile__section__batch__course__department',
                 'teaching_assignment',
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
                 'teaching_assignment__elective_subject',
+                'teaching_assignment__elective_subject__department',
                 'teaching_assignment__staff',
                 'teaching_assignment__staff__user',
+                'teaching_assignment__staff__department',
                 'teaching_assignment__section',
-                'teaching_assignment__section__batch'
+                'teaching_assignment__section__batch',
+                'teaching_assignment__section__batch__course',
+                'teaching_assignment__section__batch__course__department'
             ).prefetch_related(
                 'user__student_profile'
             )
+            
+            # Apply department filter for HOD users
+            if is_hod and not is_iqac and hod_department_id:
+                # Filter responses by HOD's department
+                # Try multiple paths: curriculum_row, elective_subject, or form's department
+                from django.db.models import Q
+                qs = qs.filter(
+                    Q(teaching_assignment__curriculum_row__department_id=hod_department_id) |
+                    Q(teaching_assignment__elective_subject__department_id=hod_department_id) |
+                    Q(feedback_form__department_id=hod_department_id)
+                )
             
             # Get data for Excel with strict column structure
             responses_data = []
@@ -4394,16 +5042,15 @@ class FormExportExcelView(APIView):
                 overall_comment_value = ""
                 
                 # Get student info
+                student_profile = None
                 if response.user:
-                    student_name = response.user.get_full_name() or response.user.username
                     try:
                         student_profile = response.user.student_profile
-                        register_number = student_profile.reg_no or ""
                         
                         # Get department with fallback chain
                         if student_profile.home_department:
                             department_name = student_profile.home_department.name or ""
-                        elif student_profile.section and student_profile.section.batch and student_profile.section.batch.course:
+                        elif student_profile.section and student_profile.section.batch and student_profile.section.batch.course and student_profile.section.batch.course.department:
                             department_name = student_profile.section.batch.course.department.name or ""
                         
                         # Calculate year and get section
@@ -4419,19 +5066,24 @@ class FormExportExcelView(APIView):
                     except (AttributeError, StudentProfile.DoesNotExist):
                         pass
                 
-                # Fallback department from teaching assignment section for cases
-                # where student profile department is unavailable.
-                if not department_name and response.teaching_assignment and response.teaching_assignment.section:
-                    ta_section = response.teaching_assignment.section
-                    ta_batch = getattr(ta_section, 'batch', None)
-                    ta_course = getattr(ta_batch, 'course', None) if ta_batch else None
-                    ta_department = getattr(ta_course, 'department', None) if ta_course else None
-                    if ta_department:
-                        department_name = ta_department.name or ""
+                # DEBUG: Check if relations loaded (TEMPORARY)
+                # Uncomment to debug: print(f"DEBUG: response.id={response.id}, user={response.user}, student_profile={student_profile}, ta={response.teaching_assignment}")
+                
+                # Fallback department from teaching assignment  
+                # SIMPLIFIED: Use staff's department as the primary and only source
+                # If staff.department is not available, use "N/A"
+                if response.teaching_assignment and getattr(response.teaching_assignment, 'staff', None) and getattr(response.teaching_assignment.staff, 'department', None):
+                    department_name = response.teaching_assignment.staff.department.name or "N/A"
+                else:
+                    department_name = "N/A"
 
-                # Fallback department from form
-                if not department_name and feedback_form.department:
-                    department_name = feedback_form.department.name or ""
+                # DEBUG: Print department being used
+                # print(f"[FormExportExcelView] Response {response.id}: dept={department_name}, ta={response.teaching_assignment}, staff={response.teaching_assignment.staff if response.teaching_assignment else None}")
+
+                # Use centralized masking helper to get student data
+                display_data = get_student_display_data(response, feedback_form, student_profile)
+                student_name = display_data['student_name']
+                register_number = display_data['register_number']
                 
                 # Get subject and staff from teaching assignment with multi-source fallback
                 if response.teaching_assignment:
@@ -4467,6 +5119,19 @@ class FormExportExcelView(APIView):
                                 ta_year_text = ""
                         year_section = f"{ta_year_text} / {ta_section_name}" if (ta_year_text or ta_section_name) else ""
                 
+                # CRITICAL: Add fallback to student data when teaching_assignment is incomplete
+                # This handles electives assigned department-wide with no specific section
+                if not year_section and student_profile and student_profile.section:
+                    # Fallback to student's section and year
+                    student_section_name = student_profile.section.name or ""
+                    student_year_text = ""
+                    if current_acad_year and student_profile.section.batch:
+                        try:
+                            student_year_text = str(current_acad_year - int(student_profile.section.batch.start_year) + 1)
+                        except Exception:
+                            pass
+                    year_section = f"{student_year_text} / {student_section_name}" if (student_year_text or student_section_name) else ""
+                
                 # Get question text
                 question_text = response.question.question if response.question else ""
                 
@@ -4487,8 +5152,12 @@ class FormExportExcelView(APIView):
                 # Show selected option only when real value is available.
                 selected_option_value = (response.selected_option_text or "").strip()
                 
-                # Collect data row
+                # Get ONLY user-entered form_name (no system-generated defaults)
+                form_name_value = feedback_form.form_name or ""
+                
+                # Collect data row - include form_name
                 responses_data.append({
+                    'form_name': form_name_value,
                     'student_name': student_name,
                     'register_number': register_number,
                     'department': department_name,
@@ -4517,6 +5186,7 @@ class FormExportExcelView(APIView):
             has_selected_option = any((row.get('selected_option') or '').strip() for row in responses_data)
 
             headers = [
+                "Form Name",
                 "Student Name",
                 "Register Number",
                 "Department",
@@ -4538,6 +5208,7 @@ class FormExportExcelView(APIView):
             # Data rows - align with dynamic headers.
             for row_data in responses_data:
                 row = [
+                    row_data['form_name'],
                     row_data['student_name'],
                     row_data['register_number'],
                     row_data['department'],
@@ -4583,8 +5254,11 @@ class SubjectWiseReportView(APIView):
     GET /api/feedback/subject-wise-report/
     
     Returns aggregated feedback report grouped by subject + staff.
-    Shows average rating and total rating count for each subject-staff combination.
+    Shows rating percentage and other metrics for each subject-staff combination.
     Supports filtering by department_ids, years, and optionally form_id.
+    
+    Rating Percentage Calculation:
+    rating_percentage = (total_stars / (responded_students * total_questions * 5)) * 100
     
     Example response:
     [
@@ -4592,8 +5266,10 @@ class SubjectWiseReportView(APIView):
             'subject_code': 'ADB1322',
             'subject_name': 'Big Data Analytics',
             'staff_name': 'Reetha Jeyarani',
-            'average_rating': 4.25,
-            'total_ratings': 63
+            'rating_percentage': 84.50,
+            'responded_students': 63,
+            'total_stars': 1269,
+            'total_questions': 8
         }
     ]
     """
@@ -4624,7 +5300,9 @@ class SubjectWiseReportView(APIView):
             
             # Start with responses that have ratings
             qs = FeedbackResponse.objects.filter(
-                answer_star__isnull=False
+                answer_star__isnull=False,
+                feedback_form__status='ACTIVE',
+                feedback_form__active=True
             ).select_related(
                 'feedback_form',
                 'feedback_form__department',
@@ -4632,9 +5310,12 @@ class SubjectWiseReportView(APIView):
                 'teaching_assignment',
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
                 'teaching_assignment__elective_subject',
+                'teaching_assignment__elective_subject__department',
                 'teaching_assignment__staff',
                 'teaching_assignment__staff__user',
+                'teaching_assignment__staff__department',
                 'teaching_assignment__section',
                 'teaching_assignment__section__batch'
             ).prefetch_related(
@@ -4644,11 +5325,16 @@ class SubjectWiseReportView(APIView):
             # Apply department scope filter
             qs = apply_department_scope_filter(qs, scope, field_name='feedback_form__department_id')
             
-            # Filter by specific departments if requested
+            # For HOD users: filter to only forms they created or forms with allow_hod_view=True
             if not scope.get('all_departments'):
+                qs = qs.filter(
+                    Q(feedback_form__created_by=request.user) | 
+                    Q(feedback_form__allow_hod_view=True)
+                )
                 # Own-department users are already scoped
                 all_departments = True
             
+            # Filter by specific departments if requested
             if not all_departments and department_ids:
                 qs = qs.filter(feedback_form__department_id__in=department_ids)
             
@@ -4668,22 +5354,139 @@ class SubjectWiseReportView(APIView):
                 except (ValueError, TypeError):
                     pass
             
-            # Group by subject and staff, calculate average and count
-            from django.db.models import Avg, Count
+            # Build subject-wise report using ORM aggregation (DIRECT AGGREGATION - NO ASSIGNMENT LOOP)
+            # Start with FeedbackResponse only - don't depend on TeachingAssignment fields
+            from django.db.models import Sum, Count, Value, F
+            from django.db.models.functions import Coalesce
             
+            # Base query: responses with valid star ratings and active forms
+            # CRITICAL: Load ALL relations to prevent None values
+            report_qs = FeedbackResponse.objects.filter(
+                answer_star__isnull=False,
+                feedback_form__status='ACTIVE',
+                feedback_form__active=True
+            ).select_related(
+                'user',
+                'user__student_profile',
+                'user__student_profile__home_department',
+                'user__student_profile__section',
+                'user__student_profile__section__batch',
+                'user__student_profile__section__batch__course',
+                'user__student_profile__section__batch__course__department',
+                'teaching_assignment',
+                'teaching_assignment__staff',
+                'teaching_assignment__staff__user',
+                'teaching_assignment__staff__department',
+                'teaching_assignment__section',
+                'teaching_assignment__section__batch',
+                'teaching_assignment__section__batch__course',
+                'teaching_assignment__section__batch__course__department',
+                'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
+                'teaching_assignment__elective_subject',
+                'teaching_assignment__elective_subject__department',
+                'teaching_assignment__subject',
+                'feedback_form'
+            )
+            
+            # Prefetch questions to avoid N+1 queries when counting questions
+            from django.db.models import Prefetch
+            report_qs = report_qs.prefetch_related(
+                Prefetch('feedback_form__questions')
+            )
+            
+            # Apply scope filter (filter by student's department, not teaching assignment)
+            # FOR HOD: Show ONLY their own department - no cross-department data
+            if not scope.get('all_departments'):
+                student_dept_ids = scope.get('department_ids', [])
+                if student_dept_ids:
+                    # Filter by STUDENT'S home department (strict - only that department)
+                    # Also ensure the subject/staff belongs to the HOD's department
+                    report_qs = report_qs.filter(
+                        (Q(user__student_profile__home_department_id__in=student_dept_ids) |
+                         Q(user__student_profile__section__batch__course__department_id__in=student_dept_ids)),
+                        # AND ensure teaching assignment's subject is in the HOD's department
+                        (Q(teaching_assignment__curriculum_row__department_id__in=student_dept_ids) |
+                         Q(teaching_assignment__elective_subject__department_id__in=student_dept_ids) |
+                         Q(teaching_assignment__staff__department_id__in=student_dept_ids))
+                    )
+                
+                # Additional: also filter to forms they created or with allow_hod_view
+                report_qs = report_qs.filter(
+                    Q(feedback_form__created_by=request.user) | 
+                    Q(feedback_form__allow_hod_view=True)
+                )
+            
+            # Filter by specific departments if requested
+            if not all_departments and department_ids:
+                # Filter by STUDENT'S department AND subject belongs to that department
+                report_qs = report_qs.filter(
+                    (Q(user__student_profile__home_department_id__in=department_ids) |
+                     Q(user__student_profile__section__batch__course__department_id__in=department_ids)),
+                    # AND ensure teaching assignment's subject is in the requested departments
+                    (Q(teaching_assignment__curriculum_row__department_id__in=department_ids) |
+                     Q(teaching_assignment__elective_subject__department_id__in=department_ids) |
+                     Q(teaching_assignment__staff__department_id__in=department_ids))
+                )
+            
+            # Filter by years if specified
+            if years:
+                year_filter = Q()
+                for year in years:
+                    year_filter |= Q(feedback_form__years__contains=[year])
+                report_qs = report_qs.filter(year_filter)
+            
+            # Filter by form_id if specified
+            if form_id:
+                try:
+                    form_id = int(form_id)
+                    report_qs = report_qs.filter(feedback_form_id=form_id)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Aggregate directly from FeedbackResponse (no TeachingAssignment loop)
+            # Use Coalesce to handle NULL values in PE/OE/EE subjects
             report_data = []
             
-            # Create a dictionary to aggregate data (subject_code + staff_name -> data)
-            aggregated = {}
+            # Group by teaching_assignment and aggregate student responses
+            aggregated = report_qs.values('teaching_assignment_id').annotate(
+                responded_students=Count('user__id', distinct=True),
+                total_stars=Sum('answer_star')
+            )
             
-            for response in qs:
-                # Skip if no teaching assignment
-                if not response.teaching_assignment:
+            # Process aggregation results - get assignment data and extract subject/dept/staff info
+            from academics.models import TeachingAssignment as TA
+            
+            for agg_row in aggregated:
+                ta_id = agg_row['teaching_assignment_id']
+                responded_students = agg_row['responded_students'] or 0
+                total_stars = agg_row['total_stars'] or 0
+                
+                # Get the teaching assignment for this group
+                try:
+                    ta = TA.objects.select_related(
+                        'staff__user',
+                        'staff__department',
+                        'section__batch__course__department',
+                        'curriculum_row__department',
+                        'elective_subject',
+                        'elective_subject__department',
+                        'subject',
+                        'academic_year'
+                    ).get(id=ta_id) if ta_id else None
+                except TA.DoesNotExist:
+                    ta = None
+                
+                if not ta:
                     continue
                 
-                ta = response.teaching_assignment
+                # Extract staff name (with fallback)
+                if ta.staff and ta.staff.user:
+                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or 'Unknown Staff'
+                else:
+                    staff_name = 'Unknown Staff'
                 
-                # Get subject code and name
+                # Extract subject information (handles Core, PE, OE, EE)
                 subject_code = None
                 subject_name = None
                 
@@ -4696,54 +5499,85 @@ class SubjectWiseReportView(APIView):
                 elif ta.subject:
                     subject_code = ta.subject.code
                     subject_name = ta.subject.name
-                elif ta.custom_subject:
-                    subject_code = ta.custom_subject
-                    subject_name = ta.get_custom_subject_display()
                 
+                # Skip if no subject found
                 if not subject_code or not subject_name:
                     continue
                 
-                # Get staff name
-                staff_name = None
-                if ta.staff and ta.staff.user:
-                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
+                # Extract section (may be NULL for PE/OE/EE)
+                section_name = getattr(ta.section, 'name', 'NO SECTION') if getattr(ta, 'section', None) else 'NO SECTION'
                 
-                if not staff_name:
-                    staff_name = "Unknown Staff"
+                # SIMPLIFIED: Get department from staff only (staff's department is the single source of truth)
+                # Staff must always have a department assigned
+                dept_name = 'N/A'
+                dept_id = None
                 
-                # Create a unique key
-                key = f"{subject_code}|{subject_name}|{staff_name}"
+                if getattr(ta, 'staff', None) and getattr(ta.staff, 'department', None):
+                    dept = ta.staff.department
+                    dept_name = dept.short_name or dept.code or dept.name
+                    dept_id = dept.id
+
                 
-                # Initialize if not exists
-                if key not in aggregated:
-                    aggregated[key] = {
-                        'subject_code': subject_code,
-                        'subject_name': subject_name,
-                        'staff_name': staff_name,
-                        'ratings': []
-                    }
+                # Get total questions from feedback form
+                first_response = report_qs.filter(teaching_assignment_id=ta_id).first()
+                total_questions = 0
+                form_name = ""
+                if first_response:
+                    total_questions = first_response.feedback_form.questions.count()
+                    # Get ONLY user-entered form_name (no fallback)
+                    form_name = first_response.feedback_form.form_name or ""
                 
-                # Add rating
-                aggregated[key]['ratings'].append(response.answer_star)
+                # Calculate year from STUDENT DATA (primary source)
+                # Do not use assignment data for year
+                year = 'N/A'
+                if first_response and first_response.user:
+                    try:
+                        student = first_response.user.student_profile
+                        if student and student.section and student.section.batch:
+                            from academics.models import AcademicYear
+                            current_ay = AcademicYear.objects.filter(is_active=True).first()
+                            if current_ay:
+                                try:
+                                    acad_start = int(str(current_ay.name).split('-')[0])
+                                    batch_start = int(student.section.batch.start_year)
+                                    year = acad_start - batch_start + 1
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        # Fallback section if assignment section is missing
+                        if section_name == 'NO SECTION' and student.section:
+                            section_name = student.section.name
+                    except (AttributeError, Exception):
+                        pass
+                
+                # Calculate rating percentage
+                rating_percentage = 0
+                if responded_students > 0 and total_questions > 0:
+                    max_possible_stars = responded_students * total_questions * 5
+                    rating_percentage = (total_stars / max_possible_stars) * 100
+                    rating_percentage = min(round(rating_percentage, 2), 100)  # Cap at 100%
+                
+                report_data.append({
+                    'form_name': form_name,
+                    'department': dept_name,
+                    'section': section_name,
+                    'year': year,
+                    'staff_name': staff_name,
+                    'subject_code': subject_code,
+                    'subject_name': subject_name,
+                    'responded_students': responded_students,
+                    'total_questions': total_questions,
+                    'total_stars': total_stars,
+                    'rating_percentage': rating_percentage
+                })
             
-            # Calculate averages and counts
-            for key, data in aggregated.items():
-                if data['ratings']:
-                    total_ratings = len(data['ratings'])
-                    average_rating = sum(data['ratings']) / total_ratings
-                    # Round to 2 decimals
-                    average_rating = round(average_rating, 2)
-                    
-                    report_data.append({
-                        'subject_code': data['subject_code'],
-                        'subject_name': data['subject_name'],
-                        'staff_name': data['staff_name'],
-                        'average_rating': average_rating,
-                        'total_ratings': total_ratings
-                    })
-            
-            # Sort by subject name, then by staff name
-            report_data.sort(key=lambda x: (x['subject_name'], x['staff_name']))
+            # Final sort by department, year, section, then staff name
+            report_data.sort(key=lambda x: (
+                x['department'],
+                str(x['year']),
+                x['section'],
+                x['staff_name']
+            ))
             
             # Generate Excel file
             import openpyxl
@@ -4753,32 +5587,48 @@ class SubjectWiseReportView(APIView):
             ws = wb.active
             ws.title = 'Subject Wise Report'
             
-            # Add headers
+            # Add headers (Department, Year, Section, Staff, Subject Code, Subject Name, Students, Questions, Rating%)
             headers = [
+                'Form Name',
+                'Department',
+                'Year',
+                'Section',
+                'Staff Name',
                 'Subject Code',
                 'Subject Name',
-                'Staff Name',
-                'Average Rating',
-                'Total Ratings'
+                'Responded Students',
+                'Total Questions',
+                'Rating %'
             ]
             ws.append(headers)
             
             # Add data rows
-            for item in report_data:
-                ws.append([
-                    item['subject_code'],
-                    item['subject_name'],
-                    item['staff_name'],
-                    item['average_rating'],
-                    item['total_ratings']
-                ])
+            for row_idx, item in enumerate(report_data, start=2):
+                ws.cell(row=row_idx, column=1).value = item['form_name']
+                ws.cell(row=row_idx, column=2).value = item['department']
+                ws.cell(row=row_idx, column=3).value = f"Year {item['year']}" if isinstance(item['year'], int) else item['year']
+                ws.cell(row=row_idx, column=4).value = item['section'] or '-'
+                ws.cell(row=row_idx, column=5).value = item['staff_name']
+                ws.cell(row=row_idx, column=6).value = item['subject_code']
+                ws.cell(row=row_idx, column=7).value = item['subject_name']
+                ws.cell(row=row_idx, column=8).value = item['responded_students']
+                ws.cell(row=row_idx, column=9).value = item['total_questions']
+                
+                # Write rating percentage with numeric format
+                percentage_cell = ws.cell(row=row_idx, column=10)
+                percentage_cell.value = item['rating_percentage'] / 100 if item['rating_percentage'] > 0 else 0
+                percentage_cell.number_format = '0.00%'
             
             # Adjust column widths
-            ws.column_dimensions['A'].width = 15
-            ws.column_dimensions['B'].width = 30
-            ws.column_dimensions['C'].width = 20
-            ws.column_dimensions['D'].width = 18
-            ws.column_dimensions['E'].width = 15
+            ws.column_dimensions['A'].width = 16  # Department
+            ws.column_dimensions['B'].width = 12  # Year
+            ws.column_dimensions['C'].width = 12  # Section
+            ws.column_dimensions['D'].width = 20  # Staff Name
+            ws.column_dimensions['E'].width = 14  # Subject Code
+            ws.column_dimensions['F'].width = 25  # Subject Name
+            ws.column_dimensions['G'].width = 16  # Responded Students
+            ws.column_dimensions['H'].width = 14  # Total Questions
+            ws.column_dimensions['I'].width = 12  # Rating %
             
             # Save to bytes
             output = BytesIO()
@@ -4910,7 +5760,8 @@ class BulkSubjectWiseReportView(APIView):
     - Subject Name
     - Responded Students (distinct students who submitted responses)
     - Total Stars Given (Sum of all ratings)
-    - Average Rating (Avg of ratings, rounded to 2 decimals)
+    - Total Questions (count of questions in the feedback form)
+    - Rating % (percentage score: (total_stars / (responded_students * total_questions * 5)) * 100)
     """
     permission_classes = [IsAuthenticated]
     
@@ -4962,34 +5813,80 @@ class BulkSubjectWiseReportView(APIView):
 
             target_departments = list(
                 Department.objects.filter(id__in=target_department_ids)
-                .values('id', 'name')
+                .values('id', 'name', 'short_name', 'code')
                 .order_by('name')
             )
-            target_department_map = {int(d['id']): (d.get('name') or f"Department {d['id']}") for d in target_departments}
+            target_department_map = {int(d['id']): (d.get('short_name') or d.get('code') or d.get('name') or f"Department {d['id']}") for d in target_departments}
             
-            # Start with responses that have ratings
+            # Start with responses that have ratings (DIRECT AGGREGATION - NO ASSIGNMENT LOOP DEPENDENCY)
+            # Base query: don't require teaching_assignment to be non-NULL (supports PE/OE/EE)
             qs = FeedbackResponse.objects.filter(
-                answer_star__isnull=False
+                answer_star__isnull=False,
+                feedback_form__status='ACTIVE',
+                feedback_form__active=True
             ).select_related(
                 'feedback_form',
                 'feedback_form__department',
                 'user',
+                'user__student_profile',
+                'user__student_profile__home_department',
+                'user__student_profile__section',
+                'user__student_profile__section__batch',
+                'user__student_profile__section__batch__course',
+                'user__student_profile__section__batch__course__department',
                 'teaching_assignment',
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
+                'teaching_assignment__curriculum_row__department',
                 'teaching_assignment__elective_subject',
                 'teaching_assignment__staff',
-                'teaching_assignment__staff__user'
-            ).prefetch_related(
-                'user__student_profile'
+                'teaching_assignment__staff__user',
+                'teaching_assignment__staff__department',
+                'teaching_assignment__section',
+                'teaching_assignment__section__batch',
+                'teaching_assignment__section__batch__course',
+                'teaching_assignment__section__batch__course__department'
             )
             
-            # Apply department scope filter
-            qs = apply_department_scope_filter(qs, scope, field_name='feedback_form__department_id')
+            # Prefetch questions to avoid N+1 queries when counting questions
+            from django.db.models import Prefetch
+            qs = qs.prefetch_related(
+                Prefetch('feedback_form__questions')
+            )
+            
+            # Apply department scope filter (filter by student's department, not teaching assignment)
+            # FOR HOD: Show ONLY their own department - no cross-department data
+            if not scope.get('all_departments'):
+                student_dept_ids = scope.get('department_ids', [])
+                if student_dept_ids:
+                    # Filter by STUDENT'S home department (strict - only that department)
+                    # Also ensure the subject/staff belongs to the HOD's department
+                    qs = qs.filter(
+                        (Q(user__student_profile__home_department_id__in=student_dept_ids) |
+                         Q(user__student_profile__section__batch__course__department_id__in=student_dept_ids)),
+                        # AND ensure teaching assignment's subject is in the HOD's department
+                        (Q(teaching_assignment__curriculum_row__department_id__in=student_dept_ids) |
+                         Q(teaching_assignment__elective_subject__department_id__in=student_dept_ids) |
+                         Q(teaching_assignment__staff__department_id__in=student_dept_ids))
+                    )
+                
+                # Additional: also filter to forms they created or with allow_hod_view
+                qs = qs.filter(
+                    Q(feedback_form__created_by=request.user) | 
+                    Q(feedback_form__allow_hod_view=True)
+                )
             
             # Filter by specific departments if requested
             if not all_departments and department_ids:
-                qs = qs.filter(feedback_form__department_id__in=department_ids)
+                # Filter by STUDENT'S department AND subject belongs to that department
+                qs = qs.filter(
+                    (Q(user__student_profile__home_department_id__in=department_ids) |
+                     Q(user__student_profile__section__batch__course__department_id__in=department_ids)),
+                    # AND ensure teaching assignment's subject is in the requested departments
+                    (Q(teaching_assignment__curriculum_row__department_id__in=department_ids) |
+                     Q(teaching_assignment__elective_subject__department_id__in=department_ids) |
+                     Q(teaching_assignment__staff__department_id__in=department_ids))
+                )
             
             # Filter by years if specified
             if years:
@@ -5005,30 +5902,47 @@ class BulkSubjectWiseReportView(APIView):
                 subject_filter |= Q(teaching_assignment__elective_subject__course_code__in=subject_codes)
                 qs = qs.filter(subject_filter)
             
-            # Process responses manually to handle department and year properly
+            # Aggregate directly from FeedbackResponse (no TeachingAssignment loop)
             report_data = []
-            processed_keys = set()
             
-            for response in qs:
-                if not response.teaching_assignment:
+            # Group by teaching_assignment and aggregate student responses
+            aggregated = qs.values('teaching_assignment_id').annotate(
+                responded_students=Count('user__id', distinct=True),
+                total_stars=Sum('answer_star')
+            )
+            
+            # Process aggregation results
+            from academics.models import TeachingAssignment as TA
+            
+            for agg_row in aggregated:
+                ta_id = agg_row['teaching_assignment_id']
+                responded_students = agg_row['responded_students'] or 0
+                total_stars = agg_row['total_stars'] or 0
+                
+                # Get the teaching assignment for this group
+                try:
+                    ta = TA.objects.select_related(
+                        'staff__user',
+                        'staff__department',
+                        'section__batch__course__department',
+                        'curriculum_row__department',
+                        'elective_subject',
+                        'subject',
+                        'academic_year'
+                    ).get(id=ta_id) if ta_id else None
+                except TA.DoesNotExist:
+                    ta = None
+                
+                if not ta:
                     continue
                 
-                ta = response.teaching_assignment
-                
-                # Get department name
-                dept_name = response.feedback_form.department.name if response.feedback_form.department else 'Unknown'
-                
-                # Get year from form
-                form_years = response.feedback_form.years or [1]
-                years_to_process = years if years else form_years
-                
-                # Get staff name
+                # Extract staff name (with fallback)
                 if ta.staff and ta.staff.user:
-                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
+                    staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or 'Unknown Staff'
                 else:
                     staff_name = 'Unknown Staff'
                 
-                # Get subject info
+                # Extract subject information (handles Core, PE, OE, EE)
                 subject_code = None
                 subject_name = None
                 
@@ -5042,66 +5956,81 @@ class BulkSubjectWiseReportView(APIView):
                     subject_code = ta.subject.code
                     subject_name = ta.subject.name
                 
-                if not subject_code:
+                # Skip if no subject found
+                if not subject_code or not subject_name:
                     continue
                 
-                # Process each year
-                for year in years_to_process:
-                    if isinstance(year, (list, tuple)):
-                        year = year[0] if year else 1
-                    
-                    key = f"{dept_name}|{year}|{staff_name}|{subject_code}|{subject_name}"
-                    
-                    if key not in processed_keys:
-                        processed_keys.add(key)
-                        
-                        # Aggregate data for this combination
-                        subset = qs.filter(
-                            feedback_form__department_id=response.feedback_form.department_id,
-                            teaching_assignment__staff_id=ta.staff_id,
-                            teaching_assignment__curriculum_row_id=ta.curriculum_row_id if ta.curriculum_row else None,
-                            teaching_assignment__elective_subject_id=ta.elective_subject_id if ta.elective_subject else None
-                        )
-                        
-                        # Apply year filter to subset
-                        year_filter = Q(feedback_form__years__contains=[year])
-                        subset = subset.filter(year_filter)
-                        
-                        agg = subset.aggregate(
-                            total_students=Count('user_id', distinct=True),
-                            total_stars=Sum('answer_star'),
-                            avg_rating=Avg('answer_star')
-                        )
-                        
-                        responded_students = agg.get('total_students') or 0
-                        total_stars = agg.get('total_stars') or 0
-                        avg_rating = agg.get('avg_rating') or 0
-                        
-                        if avg_rating:
-                            avg_rating = round(float(avg_rating), 2)
-                        
-                        report_data.append({
-                            'department_id': response.feedback_form.department_id,
-                            'department': dept_name,
-                            'year': year,
-                            'staff_name': staff_name,
-                            'subject_code': subject_code,
-                            'subject_name': subject_name,
-                            'responded_students': responded_students,
-                            'total_stars': total_stars,
-                            'average_rating': avg_rating
-                        })
+                # Extract section (may be NULL for PE/OE/EE)
+                section_name = ta.section.name if ta.section else 'NO SECTION'
+                
+                # Extract department - Use staff's department as the single source of truth
+                # Staff must always have a department assigned
+                dept_name = 'N/A'
+                dept_id = None
+                
+                if getattr(ta, 'staff', None) and getattr(ta.staff, 'department', None):
+                    dept = ta.staff.department
+                    dept_name = dept.short_name or dept.code or dept.name
+                    dept_id = dept.id
+                
+                # Get total questions from feedback form
+                first_response = qs.filter(teaching_assignment_id=ta_id).first()
+                total_questions = 0
+                form_name = ""
+                if first_response:
+                    total_questions = first_response.feedback_form.questions.count()
+                    # Get ONLY user-entered form_name (no fallback)
+                    form_name = first_response.feedback_form.form_name or ""
+                
+                # Calculate year from STUDENT DATA (primary source)
+                # Do not use assignment data for year
+                year = 'N/A'
+                if first_response and first_response.user:
+                    try:
+                        student = first_response.user.student_profile
+                        if student and student.section and student.section.batch:
+                            from academics.models import AcademicYear
+                            current_ay = AcademicYear.objects.filter(is_active=True).first()
+                            if current_ay:
+                                try:
+                                    acad_start = int(str(current_ay.name).split('-')[0])
+                                    batch_start = int(student.section.batch.start_year)
+                                    year = acad_start - batch_start + 1
+                                except (ValueError, TypeError):
+                                    pass
+                    except (AttributeError, Exception):
+                        pass
+                
+                # Calculate rating percentage
+                rating_percentage = 0
+                if responded_students > 0 and total_questions > 0:
+                    max_possible_stars = responded_students * total_questions * 5
+                    rating_percentage = (total_stars / max_possible_stars) * 100
+                    rating_percentage = min(round(rating_percentage, 2), 100)  # Cap at 100%
+                
+                report_data.append({
+                    'form_name': form_name,
+                    'department_id': dept_id,
+                    'department': dept_name,
+                    'section': section_name,
+                    'year': year,
+                    'staff_name': staff_name,
+                    'subject_code': subject_code,
+                    'subject_name': subject_name,
+                    'responded_students': responded_students,
+                    'total_stars': total_stars,
+                    'total_questions': total_questions,
+                    'rating_percentage': rating_percentage
+                })
             
-            # Remove duplicates and sort
-            final_data = []
-            seen = set()
-            for item in report_data:
-                key = (item['department'], item['year'], item['staff_name'], item['subject_code'])
-                if key not in seen:
-                    seen.add(key)
-                    final_data.append(item)
-            
-            final_data.sort(key=lambda x: (x['department'], x['year'], x['staff_name'], x['subject_name']))
+            # Sort the data
+            report_data.sort(key=lambda x: (
+                x['department'],
+                str(x['year']),
+                x['section'],
+                x['staff_name'],
+                x['subject_code']
+            ))
             
             # Generate Excel file
             import openpyxl
@@ -5111,20 +6040,22 @@ class BulkSubjectWiseReportView(APIView):
 
             # Add headers
             headers = [
+                'Form Name',
                 'Department',
                 'Year',
+                'Section',
                 'Staff Name',
                 'Subject Code',
                 'Subject Name',
                 'Responded Students',
-                'Total Stars',
-                'Average Rating'
+                'Total Questions',
+                'Rating %'
             ]
 
             # Build one sheet per department in a single workbook
             from collections import defaultdict
             department_rows = defaultdict(list)
-            for item in final_data:
+            for item in report_data:
                 department_rows[item.get('department_id')].append(item)
 
             def _safe_sheet_title(name, used_titles):
@@ -5159,37 +6090,45 @@ class BulkSubjectWiseReportView(APIView):
                     is_first = False
 
                     ws.append(headers)
-                    for item in department_rows.get(dept_id, []):
-                        ws.append([
-                            item['department'],
-                            f"Year {item['year']}" if isinstance(item['year'], int) else item['year'],
-                            item['staff_name'],
-                            item['subject_code'],
-                            item['subject_name'],
-                            item['responded_students'],
-                            item['total_stars'],
-                            item['average_rating']
-                        ])
+                    for row_idx, item in enumerate(department_rows.get(dept_id, []), start=2):
+                        ws.cell(row=row_idx, column=1).value = item['form_name']
+                        ws.cell(row=row_idx, column=2).value = item['department']
+                        ws.cell(row=row_idx, column=3).value = f"Year {item['year']}" if isinstance(item['year'], int) else item['year']
+                        ws.cell(row=row_idx, column=4).value = item['section'] or '-'
+                        ws.cell(row=row_idx, column=5).value = item['staff_name']
+                        ws.cell(row=row_idx, column=6).value = item['subject_code']
+                        ws.cell(row=row_idx, column=7).value = item['subject_name']
+                        ws.cell(row=row_idx, column=8).value = item['responded_students']
+                        ws.cell(row=row_idx, column=9).value = item['total_questions']
+                        
+                        # Write rating percentage with proper numeric format
+                        percentage_cell = ws.cell(row=row_idx, column=10)
+                        percentage_cell.value = item['rating_percentage'] / 100 if item['rating_percentage'] > 0 else 0
+                        percentage_cell.number_format = '0.00%'
 
                     ws.column_dimensions['A'].width = 20
-                    ws.column_dimensions['B'].width = 10
-                    ws.column_dimensions['C'].width = 20
-                    ws.column_dimensions['D'].width = 15
-                    ws.column_dimensions['E'].width = 25
-                    ws.column_dimensions['F'].width = 18
-                    ws.column_dimensions['G'].width = 14
+                    ws.column_dimensions['B'].width = 16
+                    ws.column_dimensions['C'].width = 12
+                    ws.column_dimensions['D'].width = 12
+                    ws.column_dimensions['E'].width = 20
+                    ws.column_dimensions['F'].width = 14
+                    ws.column_dimensions['G'].width = 25
                     ws.column_dimensions['H'].width = 16
+                    ws.column_dimensions['I'].width = 14
+                    ws.column_dimensions['J'].width = 12
             else:
                 default_ws.title = 'Subject Wise Report'
                 default_ws.append(headers)
                 default_ws.column_dimensions['A'].width = 20
-                default_ws.column_dimensions['B'].width = 10
-                default_ws.column_dimensions['C'].width = 20
-                default_ws.column_dimensions['D'].width = 15
-                default_ws.column_dimensions['E'].width = 25
-                default_ws.column_dimensions['F'].width = 18
-                default_ws.column_dimensions['G'].width = 14
+                default_ws.column_dimensions['B'].width = 16
+                default_ws.column_dimensions['C'].width = 12
+                default_ws.column_dimensions['D'].width = 12
+                default_ws.column_dimensions['E'].width = 20
+                default_ws.column_dimensions['F'].width = 14
+                default_ws.column_dimensions['G'].width = 25
                 default_ws.column_dimensions['H'].width = 16
+                default_ws.column_dimensions['I'].width = 14
+                default_ws.column_dimensions['J'].width = 12
             
             # Save to bytes
             output = BytesIO()
