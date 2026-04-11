@@ -581,6 +581,7 @@ export type QpPatternExam = 'CIA' | 'CIA1' | 'CIA2' | 'MODEL' | 'SSA1' | 'SSA2' 
 export type QpPatternConfig = {
   marks: number[];
   cos?: Array<number | string>;
+  btls?: Array<number>;
 };
 
 export type QpPatternResponse = {
@@ -621,6 +622,17 @@ function normalizeQpPattern(raw: any): QpPatternConfig {
     // IMPORTANT: preserve positional alignment (cos[i] corresponds to marks[i]).
     // Filtering entries can shift indices and apply the wrong CO mapping.
     if (cos) out.cos = cos;
+
+    // BTL (Bloom's Taxonomy Level) per question
+    const btlsRaw = Array.isArray((raw as any).btls) ? (raw as any).btls : undefined;
+    const btls = btlsRaw
+      ? btlsRaw.map((v: any) => {
+          const n = Number(v);
+          return Number.isFinite(n) && n >= 1 && n <= 6 ? n : 1;
+        })
+      : undefined;
+    if (btls) out.btls = btls;
+
     return out;
   }
 
@@ -668,6 +680,7 @@ export async function upsertIqacQpPattern(payload: { class_type: string; questio
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
       cos: Array.isArray(payload.pattern?.cos) ? payload.pattern.cos : undefined,
+      btls: Array.isArray(payload.pattern?.btls) ? payload.pattern.btls : undefined,
     },
   };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });
@@ -781,6 +794,7 @@ export async function upsertIqacBatchQpPattern(payload: { batch_id: number; clas
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
       cos: Array.isArray(payload.pattern?.cos) ? payload.pattern.cos : undefined,
+      btls: Array.isArray(payload.pattern?.btls) ? payload.pattern.btls : undefined,
     },
   };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });

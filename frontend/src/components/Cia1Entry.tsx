@@ -287,7 +287,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
-  const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
+  const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string>; btls?: Array<number> } | null>(null);
   const [iqacPatternLoading, setIqacPatternLoading] = useState(false);
   const [iqacPatternError, setIqacPatternError] = useState<string | null>(null);
   const [subjectPayload, setSubjectPayload] = useState<any>(null);
@@ -383,17 +383,19 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
     const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    const btls = Array.isArray((iqacPattern as any)?.btls) ? (iqacPattern as any).btls : null;
     if (Array.isArray(marks) && marks.length) {
       const derived = marks
         .map((max, idx) => {
           const fallback = baseFromMaster[idx];
           const coRaw = cos ? cos[idx] : undefined;
+          const btlRaw = btls ? btls[idx] : undefined;
           return {
             key: `q${idx + 1}`,
             label: `Q${idx + 1}`,
             max: Number(max) || 0,
             co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coPair.a as any))) as CoValue,
-            btl: (fallback?.btl ?? 1) as 1 | 2 | 3 | 4 | 5 | 6,
+            btl: (btlRaw != null && Number(btlRaw) >= 1 && Number(btlRaw) <= 6 ? Number(btlRaw) : (fallback?.btl ?? 1)) as 1 | 2 | 3 | 4 | 5 | 6,
           };
         })
         .filter((q) => Boolean(q.key));
@@ -2517,8 +2519,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               </tr>
               <tr>
                 {questions.map((q) => (
-                  <th key={q.key} style={{ ...cellTh, width: 46, minWidth: 46 }}>
-                    {q.max}
+                  <th key={`max-${q.key}`} style={{ ...cellTh, width: 46, minWidth: 46 }}>
+                    <div>{q.max}</div>
+                    <div style={{ fontSize: '0.7em', color: '#6b7280' }}>B{q.btl}</div>
                   </th>
                 ))}
                 {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (

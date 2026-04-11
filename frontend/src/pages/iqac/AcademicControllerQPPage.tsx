@@ -81,7 +81,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const [reviewCfgErr, setReviewCfgErr] = useState<string | null>(null);
 
   // Question-wise pattern for CIA/MODEL
-  type PatternRow = { marks: string; co: string };
+  type PatternRow = { marks: string; co: string; btl: string };
   
   // CO-wise pattern for SSA/FA
   type CoWisePatternRow = { 
@@ -214,9 +214,12 @@ export default function AcademicControllerQPPage(): JSX.Element {
             return s;
           };
 
+          const btls = Array.isArray((data as any)?.pattern?.btls) ? (data as any).pattern.btls : [];
+
           const normalized: PatternRow[] = marks.map((m: any, idx: number) => ({
             marks: String(m),
             co: cos[idx] == null ? '' : storedCoToUi(cos[idx]),
+            btl: btls[idx] != null ? String(btls[idx]) : '1',
           }));
           setPatternRows(normalized);
           setCoWiseRows([]);
@@ -358,9 +361,12 @@ export default function AcademicControllerQPPage(): JSX.Element {
             return s;
           };
 
+          const btls = Array.isArray((data as any)?.pattern?.btls) ? (data as any).pattern.btls : [];
+
           const normalized: PatternRow[] = marks.map((m: any, idx: number) => ({
             marks: String(m),
             co: cos[idx] == null ? '' : storedCoToUi(cos[idx]),
+            btl: btls[idx] != null ? String(btls[idx]) : '1',
           }));
           setPatternRows(normalized);
           setCoWiseRows([]);
@@ -465,7 +471,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
     } else {
       const examKey = tab === 'custom' ? String(selectedCustomExam || '') : String(selectedExam || '');
       const defaultCo = examKey === 'CIA2' || examKey === 'SSA2' || examKey === 'FORMATIVE2' ? '3' : '1';
-      setPatternRows((prev) => [...prev, { marks: '', co: defaultCo }]);
+      setPatternRows((prev) => [...prev, { marks: '', co: defaultCo, btl: '1' }]);
     }
   };
 
@@ -480,7 +486,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const updateMarks = (idx: number, value: string) => {
     setPatternRows((prev) => {
       const copy = [...prev];
-      const existing = copy[idx] || { marks: '', co: '' };
+      const existing = copy[idx] || { marks: '', co: '', btl: '1' };
       copy[idx] = { ...existing, marks: value };
       return copy;
     });
@@ -489,8 +495,17 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const updateCo = (idx: number, value: string) => {
     setPatternRows((prev) => {
       const copy = [...prev];
-      const existing = copy[idx] || { marks: '', co: '' };
+      const existing = copy[idx] || { marks: '', co: '', btl: '1' };
       copy[idx] = { ...existing, co: value };
+      return copy;
+    });
+  };
+
+  const updateBtl = (idx: number, value: string) => {
+    setPatternRows((prev) => {
+      const copy = [...prev];
+      const existing = copy[idx] || { marks: '', co: '', btl: '1' };
+      copy[idx] = { ...existing, btl: value };
       return copy;
     });
   };
@@ -518,6 +533,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
     try {
       let marks: number[] = [];
       let cos: (number | string)[] = [];
+      let btls: number[] = [];
 
       if (isCoWisePattern) {
         // For SSA/FA: Only store marks for the visible/relevant COs
@@ -543,7 +559,11 @@ export default function AcademicControllerQPPage(): JSX.Element {
         cos = extractedCos;
       } else {
         // For CIA/MODEL: Question-wise format
-        const cleaned = patternRows.map((r) => ({ marks: String(r.marks ?? '').trim(), co: String((r as any)?.co ?? '').trim() }));
+        const cleaned = patternRows.map((r) => ({ 
+          marks: String(r.marks ?? '').trim(), 
+          co: String((r as any)?.co ?? '').trim(),
+          btl: String((r as any)?.btl ?? '1').trim(),
+        }));
         if (cleaned.length && cleaned.some((r) => !r.marks || !r.co)) {
           setError('Enter marks and CO for all rows (or delete empty rows).');
           return;
@@ -574,6 +594,12 @@ export default function AcademicControllerQPPage(): JSX.Element {
           setError('CO values must be valid for all rows.');
           return;
         }
+
+        // Extract BTL values (default to 1 if not specified)
+        btls = cleaned.map((r) => {
+          const n = Number(r.btl);
+          return Number.isFinite(n) && n >= 1 && n <= 6 ? n : 1;
+        });
       }
 
       setIsSaving(true);
@@ -587,7 +613,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
           class_type: customBackendKey.class_type,
           question_paper_type: customBackendKey.question_paper_type,
           exam: customBackendKey.exam,
-          pattern: { marks, cos },
+          pattern: { marks, cos, btls },
         });
         setLastSavedAt(saved?.updated_at ?? null);
         setCustomIsOverride(Boolean(saved?.is_override));
@@ -597,7 +623,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
           class_type: backendKey.class_type,
           question_paper_type: backendKey.question_paper_type,
           exam: backendKey.exam,
-          pattern: { marks, cos },
+          pattern: { marks, cos, btls },
         });
         setLastSavedAt(saved?.updated_at ?? null);
         setMessage('Saved.');
@@ -903,13 +929,14 @@ export default function AcademicControllerQPPage(): JSX.Element {
                   <th style={{ textAlign: 'left', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>Q.No</th>
                   <th style={{ textAlign: 'left', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>Marks</th>
                   <th style={{ textAlign: 'left', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>CO</th>
+                  <th style={{ textAlign: 'left', fontSize: 12, color: '#6b7280', padding: '8px 6px', borderBottom: '1px solid #e5e7eb', fontWeight: 800 }}>BTL</th>
                   <th style={{ width: 120, borderBottom: '1px solid #e5e7eb' }} />
                 </tr>
               </thead>
               <tbody>
                 {patternRows.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ padding: 10, color: '#6b7280' }}>No questions yet. Click + to add.</td>
+                    <td colSpan={5} style={{ padding: 10, color: '#6b7280' }}>No questions yet. Click + to add.</td>
                   </tr>
                 ) : (
                   patternRows.map((r, idx) => (
@@ -924,7 +951,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
                           value={r.marks}
                           onChange={(e) => updateMarks(idx, e.target.value)}
                           placeholder="Marks"
-                          style={{ maxWidth: 160 }}
+                          style={{ maxWidth: 120 }}
                         />
                       </td>
                       <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>
@@ -932,7 +959,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
                           className="obe-input"
                           value={String((r as any)?.co ?? '')}
                           onChange={(e) => updateCo(idx, e.target.value)}
-                          style={{ maxWidth: 160 }}
+                          style={{ maxWidth: 100 }}
                         >
                           <option value="">Select</option>
                           <option value="1">1</option>
@@ -945,13 +972,28 @@ export default function AcademicControllerQPPage(): JSX.Element {
                         </select>
                       </td>
                       <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>
+                        <select
+                          className="obe-input"
+                          value={String((r as any)?.btl ?? '1')}
+                          onChange={(e) => updateBtl(idx, e.target.value)}
+                          style={{ maxWidth: 80 }}
+                        >
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                          <option value="4">4</option>
+                          <option value="5">5</option>
+                          <option value="6">6</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>
                         <button type="button" className="obe-btn obe-btn-danger" onClick={() => deleteRow(idx)}>
                           Delete
                         </button>
                       </td>
                     </tr>
                   ))
-                )}
+                )}}
               </tbody>
             </table>
           )}
