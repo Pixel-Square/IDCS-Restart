@@ -87,6 +87,21 @@ def get_subject_feedback_completion(feedback_form, user):
                     fallback_tas = fallback_tas.filter(elective_subject__regulation=regulation_code)
                 if effective_semester_id:
                     fallback_tas = fallback_tas.filter(elective_subject__semester_id=effective_semester_id)
+                
+                # FILTER BY STUDENT YEAR: Only include assignments from student's batch/year
+                # Calculate student's year to ensure we only get assignments for their current year
+                from academics.models import AcademicYear
+                if batch and batch.start_year:
+                    try:
+                        current_ay = AcademicYear.objects.filter(is_active=True).first()
+                        if current_ay:
+                            acad_start = int(str(current_ay.name).split('-')[0])
+                            student_year_delta = acad_start - int(batch.start_year)
+                            # Filter fallback assignments to only sections from student's batch
+                            fallback_tas = fallback_tas.filter(section__batch=batch)
+                    except Exception:
+                        pass  # If year calculation fails, don't filter (keep existing behavior)
+                
                 eligible_assignment_ids.update(fallback_tas.values_list('id', flat=True))
 
         total_subjects = len(eligible_assignment_ids)
@@ -152,6 +167,31 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
             return RoleAssignment.objects.filter(user=user, role__name__iexact='IQAC').exists()
         except Exception:
             return False
+    
+    def _user_can_create_own_type(self, user) -> bool:
+        """Check if user can create Own Type questions (IQAC or HOD)."""
+        if not user or not getattr(user, 'is_authenticated', False):
+            return False
+
+        role_names = set(
+            user.roles.values_list('name', flat=True)
+        ) if hasattr(user, 'roles') else set()
+        role_names_upper = {str(name).upper() for name in role_names}
+        # Allow both IQAC and HOD to create Own Type questions
+        if 'IQAC' in role_names_upper or 'HOD' in role_names_upper:
+            return True
+
+        try:
+            from django.db.models import Q
+            from academics.models import RoleAssignment
+            # Check RoleAssignment for IQAC or HOD roles
+            return RoleAssignment.objects.filter(
+                user=user
+            ).filter(
+                Q(role__name__iexact='IQAC') | Q(role__name__iexact='HOD')
+            ).exists()
+        except Exception:
+            return False
         
     def validate(self, data):
         """Ensure at least one answer method is enabled."""
@@ -164,10 +204,10 @@ class FeedbackQuestionSerializer(serializers.ModelSerializer):
         allow_rating = data.get('allow_rating', True)
         allow_comment = data.get('allow_comment', True)
 
-        # Restrict advanced question types to IQAC only.
-        if question_type in {'rating_radio_comment', 'radio'} and not self._user_is_iqac(user):
+        # Restrict advanced question types to IQAC and HOD only.
+        if question_type in {'rating_radio_comment', 'radio'} and not self._user_can_create_own_type(user):
             raise serializers.ValidationError({
-                'question_type': 'Own Type questions are allowed only for IQAC.'
+                'question_type': 'Own Type questions are allowed only for IQAC and HOD.'
             })
 
         # Normalize behavior by question type.
@@ -272,6 +312,7 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'target_type', 'type', 'status', 'created_at', 'updated_at',
             'created_by', 'created_by_name', 'questions', 'active',
+            'allow_hod_view', 'anonymous', 'form_name',
             'department',
             'common_comment_enabled',
             'year', 'semester_number', 'section_name', 'regulation_name',
@@ -382,6 +423,81 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
     def get_sections_display(self, obj):
         return [item['display_name'] for item in self._get_section_display_entries(obj)]
 
+    def get_class_context_display_for_student(self, obj, student_year, student_semester_id):
+        """Build class targeting display filtered to student's own year/semester only."""
+        if obj.target_type != 'STUDENT':
+            return []
+
+        def ordinal(value):
+            mapping = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th'}
+            return mapping.get(value, str(value))
+
+        entries = self._get_section_display_entries(obj)
+        
+        # Filter entries to only student's year and semester
+        filtered_entries = []
+        for item in entries:
+            item_year = item.get('year')
+            item_sem = item.get('semester_number')
+            
+            # Keep only if year matches
+            if item_year != student_year:
+                continue
+            
+            # Keep only if semester matches (or semester not specified)
+            if student_semester_id and item_sem:
+                from academics.models import Semester
+                try:
+                    student_sem = Semester.objects.get(id=student_semester_id)
+                    if item_sem != student_sem.number:
+                        continue
+                except Semester.DoesNotExist:
+                    pass
+            
+            filtered_entries.append(item)
+        
+        grouped = {}
+        for item in filtered_entries:
+            dept = item.get('department_label') or 'Department'
+            year = item.get('year') if item.get('year') and item.get('year') != 99 else obj.year
+            sem = item.get('semester_number')
+            
+            key = (str(dept), year, sem)
+            grouped.setdefault(key, [])
+            section_name = item.get('section_name')
+            if section_name and section_name not in grouped[key]:
+                grouped[key].append(section_name)
+
+        lines = []
+        for (dept, year, sem), section_names in sorted(grouped.items(), key=lambda row: (row[0][0], row[0][1] or 99, str(row[0][2] or ''))):
+            year_label = f"{ordinal(year)} Year" if year else 'Year'
+            sem_label = f"Sem {sem}" if sem else 'Sem'
+            if section_names:
+                section_label = 'Sections' if len(section_names) > 1 else 'Section'
+                sections_text = ', '.join(sorted(section_names))
+                lines.append(f"{dept} - {year_label} - {sem_label} - {section_label} {sections_text}")
+            else:
+                lines.append(f"{dept} - {year_label} - {sem_label}")
+
+        # Fallback to simple format if no section entries
+        if not lines and student_year:
+            dept_obj = getattr(obj, 'department', None)
+            dept = (dept_obj.short_name or dept_obj.code or dept_obj.name) if dept_obj else 'Department'
+            year_label = f"{ordinal(student_year)} Year"
+            
+            if student_semester_id:
+                from academics.models import Semester
+                try:
+                    student_sem = Semester.objects.get(id=student_semester_id)
+                    sem_label = f"Sem {student_sem.number}"
+                    lines.append(f"{dept} - {year_label} - {sem_label}")
+                except Semester.DoesNotExist:
+                    lines.append(f"{dept} - {year_label}")
+            else:
+                lines.append(f"{dept} - {year_label}")
+        
+        return lines
+
     def get_class_context_display(self, obj):
         """Build compact class targeting lines grouped by department, year and semester."""
         if obj.target_type != 'STUDENT':
@@ -449,12 +565,28 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         return lines
 
     def get_context_display(self, obj):
-        """Generate consolidated class targeting display for cards and detail headers."""
+        """Generate consolidated class targeting display for cards and detail headers.
+        
+        For student views: Show ONLY the student's own year/semester.
+        For IQAC/other views: Show ALL years/semesters (combined view).
+        """
         if obj.target_type == 'STAFF':
             return 'Staff Feedback'
         if obj.target_type != 'STUDENT':
             return 'Feedback'
 
+        # Check if this is a student view with specific student context
+        is_student_view = self.context.get('is_student_view', False)
+        student_year = self.context.get('year')
+        student_semester_id = self.context.get('semester_id')
+        
+        # For student view, use filtered class context display
+        if is_student_view and student_year is not None:
+            class_lines = self.get_class_context_display_for_student(obj, student_year, student_semester_id)
+            if class_lines:
+                return class_lines[0]
+        
+        # For IQAC/other views, show full combined display
         class_lines = self.get_class_context_display(obj)
         if class_lines:
             return class_lines[0]
@@ -462,25 +594,50 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
         parts = []
 
         year_names = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th'}
-        if obj.years and len(obj.years) > 0:
-            year_labels = [f"{year_names.get(y, str(y))} Year" for y in obj.years]
-            parts.append(', '.join(year_labels))
-        elif obj.year:
-            parts.append(f"{year_names.get(obj.year, str(obj.year))} Year")
+        
+        # For student view, show only student's year; for others, show all years
+        if is_student_view and student_year is not None:
+            parts.append(f"{year_names.get(student_year, str(student_year))} Year")
+        else:
+            # IQAC/combined view: show all years
+            if obj.years and len(obj.years) > 0:
+                year_labels = [f"{year_names.get(y, str(y))} Year" for y in obj.years]
+                parts.append(', '.join(year_labels))
+            elif obj.year:
+                parts.append(f"{year_names.get(obj.year, str(obj.year))} Year")
 
         sem_nums = []
-        if obj.semesters and len(obj.semesters) > 0:
+        # For student view, show only student's semester; for others, show all semesters
+        if is_student_view and student_semester_id is not None:
             from academics.models import Semester
-            sem_nums = sorted(Semester.objects.filter(id__in=obj.semesters).values_list('number', flat=True))
-        elif obj.semester:
-            sem_nums = [obj.semester.number]
+            try:
+                sem_obj = Semester.objects.get(id=student_semester_id)
+                sem_nums = [sem_obj.number]
+            except Semester.DoesNotExist:
+                sem_nums = []
+        else:
+            # IQAC/combined view: show all semesters
+            if obj.semesters and len(obj.semesters) > 0:
+                from academics.models import Semester
+                sem_nums = sorted(Semester.objects.filter(id__in=obj.semesters).values_list('number', flat=True))
+            elif obj.semester:
+                sem_nums = [obj.semester.number]
 
         if sem_nums:
             parts.append(f"Sem {', '.join(map(str, sem_nums))}")
 
         sections_display = self.get_sections_display(obj)
         if sections_display:
-            parts.append(', '.join(sections_display))
+            # For student view, only show their section
+            if is_student_view:
+                student_section_id = self.context.get('section_id')
+                if student_section_id:
+                    filtered_sections = [s for s in sections_display 
+                                        if str(student_section_id) in str(obj.sections or [])]
+                    if filtered_sections:
+                        parts.append(', '.join(filtered_sections))
+            else:
+                parts.append(', '.join(sections_display))
         elif obj.section:
             parts.append(f"Section {obj.section.name}")
 
@@ -548,6 +705,9 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             'year', 'semester', 'section', 'regulation',
             'years', 'semesters', 'sections',
             'common_comment_enabled',
+            'allow_hod_view',
+            'anonymous',
+            'form_name',
         ]
     
     def validate(self, data):
@@ -744,7 +904,7 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
         """Validate that feedback form exists and is active."""
         try:
             form = FeedbackForm.objects.get(id=value)
-            if form.status != 'ACTIVE':
+            if form.status != 'ACTIVE' or not form.active:
                 raise serializers.ValidationError('This feedback form is not active.')
             return value
         except FeedbackForm.DoesNotExist:
@@ -935,6 +1095,24 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                     except Exception:
                         selected_option_text = None
 
+                # Extract subject information from teaching_assignment
+                # This ensures PE/OE/EE subjects are queryable in reports
+                subject = None
+                elective_subject = None
+                
+                if teaching_assignment:
+                    # Prefer curriculum_row's subject reference
+                    if teaching_assignment.curriculum_row:
+                        # CurriculumDepartment doesn't have a direct subject FK, 
+                        # so we'll store the teaching_assignment which points to it
+                        pass
+                    # Check for elective_subject
+                    if teaching_assignment.elective_subject:
+                        elective_subject = teaching_assignment.elective_subject
+                    # Fallback to subject
+                    elif teaching_assignment.subject:
+                        subject = teaching_assignment.subject
+
                 FeedbackResponse.objects.create(
                     feedback_form_id=feedback_form_id,
                     user=user,
@@ -943,6 +1121,8 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                     answer_text='' if common_comment_enabled else str(response_data.get('answer_text', '')).strip(),
                     common_comment=common_comment_value if common_comment_enabled else None,
                     teaching_assignment=teaching_assignment,
+                    subject=subject,
+                    elective_subject=elective_subject,
                     selected_option_text=selected_option_text,
                 )
         

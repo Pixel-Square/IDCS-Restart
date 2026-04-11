@@ -29,7 +29,7 @@ import { ModalPortal } from './ModalPortal';
 import { fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { isLabClassType, normalizeObeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
@@ -453,6 +453,7 @@ export default function LabCourseMarksEntry({
     (publishConsumedApprovals == null || markManagerUnlockedUntil !== (publishConsumedApprovals.markManagerUnlockedUntil ?? null));
 
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
   const entryOpen =
     !isPublished
       ? Boolean(editAllowed)
@@ -3087,7 +3088,7 @@ export default function LabCourseMarksEntry({
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
                 onClick={() => {
-                  if (markManagerLocked && !editRequestsEnabled) {
+                  if (markManagerLocked && !markManagerEditRequestsEnabled) {
                     return;
                   }
                   if (markManagerLocked) {
@@ -3114,7 +3115,7 @@ export default function LabCourseMarksEntry({
                   setMarkManagerModal({ mode: 'confirm' });
                 }}
                 className="obe-btn obe-btn-success"
-                disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
+                disabled={!subjectId || markManagerBusy || (markManagerLocked && !markManagerEditRequestsEnabled)}
                 style={markManagerBusy ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
               >
                 {markManagerLocked ? 'Edit' : 'Save'}

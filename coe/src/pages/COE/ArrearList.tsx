@@ -1,15 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import {
   CoeArrearRecord,
+  CourseSelectionData,
   bulkUpsertCoeArrears,
   deleteCoeArrear,
   fetchCoeArrears,
+  fetchCoeCourseSel,
 } from '../../services/coe';
 import {
   appendRetrivalEntry,
   clearRetrivalApplyPayload,
   readRetrivalApplyPayload,
 } from '../../utils/retrivalStore';
+
+// Helper to get course key as in CourseList
+const getCourseKey = (row: { department: string; semester: string; courseCode: string; courseName: string }) =>
+  [row.department, row.semester, row.courseCode, row.courseName].map((v) => String(v ?? '').trim().toUpperCase()).join('::');
+// Helper to get filter key as in CourseList
+const getFilterKey = (dept: string, sem: string) => `${dept.toUpperCase()}::${sem.toUpperCase()}`;
 
 type ArrearStudent = {
   id?: number;
@@ -51,7 +59,23 @@ const ArrearList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [courseSelMap, setCourseSelMap] = useState<Record<string, CourseSelectionData>>({});
   const [logsLoading, setLogsLoading] = useState(false);
+
+  useEffect(() => {
+    // Find first non-empty dept/sem from rows
+    const firstRow = rows.find((r) => r.dept && r.sem);
+    if (!firstRow) {
+      setCourseSelMap({});
+      return;
+    }
+    const filterKey = getFilterKey(firstRow.dept, firstRow.sem);
+    fetchCoeCourseSel(filterKey)
+      .then((res) => {
+        setCourseSelMap(res.selections || {});
+      })
+      .catch(() => setCourseSelMap({}));
+  }, [rows]);
   const [logsError, setLogsError] = useState<string | null>(null);
   const [logs, setLogs] = useState<CoeArrearRecord[]>([]);
   const GENERAL_REMOVE_CONFIRM_MESSAGE = 'Are you sure you want to remove this item?';
@@ -239,18 +263,27 @@ const ArrearList: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      // transform rows into expected payload shape (if backend expects different keys, adapt here)
-      const payload = rows.map((r) => ({
-        batch: r.batch,
-        department: r.dept,
-        semester: r.sem,
-        course_code: r.courseCode,
-        course_name: r.courseName,
-        student_register_number: r.registerNumber,
-        student_name: r.studentName,
-      }));
+      // Map each row to include qpType from courseSelMap
+      const payload = rows.map((r) => {
+        const courseKey = getCourseKey({
+          department: r.dept,
+          semester: r.sem,
+          courseCode: r.courseCode,
+          courseName: r.courseName,
+        });
+        const sel = courseSelMap[courseKey];
+        return {
+          batch: r.batch,
+          department: r.dept,
+          semester: r.sem,
+          course_code: r.courseCode,
+          course_name: r.courseName,
+          student_register_number: r.registerNumber,
+          student_name: r.studentName,
+          qp_type: sel?.qpType || 'QP1',
+        };
+      });
       await bulkUpsertCoeArrears(payload);
-      // simple success behaviour: reload empty row
       setRows([defaultRow]);
       if (logsOpen) {
         await fetchLogs();

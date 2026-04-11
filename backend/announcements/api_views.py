@@ -35,7 +35,7 @@ class AnnouncementPagination(PageNumberPagination):
 
 
 class AnnouncementListView(APIView):
-    permission_classes = [IsAuthenticated, HasAnnouncementPagePermission]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         scope = AnnouncementScopeService.build_scope(request.user)

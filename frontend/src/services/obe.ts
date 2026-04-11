@@ -323,6 +323,70 @@ export async function requestTeachingAssignmentEnabledAssessmentsEdit(teachingAs
   return res.json();
 }
 
+// --- Special course QP pattern (per teaching assignment) ---
+
+export type SpecialQpQuestion = {
+  key: string;
+  label: string;
+  max: number;
+  co: number | string;  // 1 | 2 | 3 | 4 | 5 | '1&2' | '3&4'
+  btl: number;           // 1–6
+};
+
+export type SpecialQpPatternResponse = {
+  exam: string;
+  pattern: { questions: SpecialQpQuestion[] } | null;
+};
+
+export async function fetchSpecialQpPattern(teachingAssignmentId: number, exam: string): Promise<SpecialQpPatternResponse> {
+  const url = `${apiBase()}/api/academics/teaching-assignments/${encodeURIComponent(String(teachingAssignmentId))}/special-qp-pattern/?exam=${encodeURIComponent(exam)}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 404) return { exam, pattern: null };
+  if (!res.ok) await parseError(res, 'Failed to fetch special QP pattern');
+  return res.json();
+}
+
+export async function saveSpecialQpPattern(teachingAssignmentId: number, exam: string, questions: SpecialQpQuestion[]): Promise<SpecialQpPatternResponse> {
+  const url = `${apiBase()}/api/academics/teaching-assignments/${encodeURIComponent(String(teachingAssignmentId))}/special-qp-pattern/`;
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    body: JSON.stringify({ exam, pattern: { questions } }),
+  });
+  if (!res.ok) await parseError(res, 'Failed to save special QP pattern');
+  return res.json();
+}
+
+// ------ Special Course CO Weights ------
+
+export type SpecialCourseItem = {
+  id: number;
+  subject_code: string;
+  subject_name: string;
+  section_name: string;
+  academic_year: string;
+  department: string;
+  staff_name: string;
+  co_weights: Record<string, number>;
+};
+
+export async function fetchSpecialCoursesList(): Promise<SpecialCourseItem[]> {
+  const url = `${apiBase()}/api/obe/iqac/special-courses`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (!res.ok) await parseError(res, 'Failed to fetch special courses');
+  const data = await res.json();
+  return Array.isArray(data?.results) ? data.results : [];
+}
+
+export async function saveSpecialCourseCoWeights(teachingAssignmentId: number, weights: Record<string, number>): Promise<{ teaching_assignment_id: number; weights: Record<string, number> }> {
+  const url = `${apiBase()}/api/academics/teaching-assignments/${encodeURIComponent(String(teachingAssignmentId))}/special-co-weights/`;
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    body: JSON.stringify({ weights }),
+  });
+  if (!res.ok) await parseError(res, 'Failed to save CO weights');
+  return res.json();
+}
+
 export async function fetchSpecialCourseEnabledAssessments(courseCode: string, academicYearId?: number): Promise<string[]> {
   const qp = academicYearId ? `?academic_year_id=${encodeURIComponent(String(academicYearId))}` : '';
   const url = `${apiBase()}/api/academics/special-courses/${encodeURIComponent(String(courseCode))}/enabled_assessments/${qp}`;

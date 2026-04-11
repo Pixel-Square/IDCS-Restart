@@ -24,7 +24,7 @@ interface AvailableUser {
 
 interface ExtStaffProfile {
   id: number;
-  ext_uid: string;
+  external_id: string;
   username: string;
   email: string;
   full_name: string;
@@ -390,7 +390,7 @@ export default function ExtStaffProfilesPage() {
     const q = profileSearch.toLowerCase();
     return (
       !q ||
-      p.ext_uid.toLowerCase().includes(q) ||
+      p.external_id.toLowerCase().includes(q) ||
       p.username.toLowerCase().includes(q) ||
       p.email.toLowerCase().includes(q) ||
       p.full_name.toLowerCase().includes(q)
@@ -431,7 +431,7 @@ export default function ExtStaffProfilesPage() {
         <div>
           <div style={{ fontSize: 22, fontWeight: 900, color: '#111827' }}>External Staff Profiles</div>
           <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4 }}>
-            Select a user from the left panel (click <strong>+</strong> or drag into the table) to create an External Staff Profile with a unique 16-character UID.
+            Select a user from the left panel (click <strong>+</strong> or drag into the table) to create an External Staff Profile with a unique 6-digit External ID.
           </div>
         </div>
         <button
@@ -693,7 +693,7 @@ export default function ExtStaffProfilesPage() {
                         title="Select All"
                       />
                     </th>
-                    {['#', 'Salutation', 'Username', 'Full Name', 'Faculty ID', 'Mobile', 'Gender', 'UG Spec', 'PG Spec', 'PhD', 'Experience', 'Engg Exp', 'DOB', 'Account Holder', 'Account No', 'Bank', 'Branch', 'IFSC', 'Passbook', 'Ext UID', 'Status', 'Action'].map((h) => (
+                    {['#', 'Salutation', 'Username', 'Full Name', 'Faculty ID', 'Mobile', 'Gender', 'UG Spec', 'PG Spec', 'PhD', 'Experience', 'Engg Exp', 'DOB', 'Account Holder', 'Account No', 'Bank', 'Branch', 'IFSC', 'Passbook', 'External ID', 'Status', 'Action'].map((h) => (
                       <th
                         key={h}
                         style={{
@@ -787,9 +787,9 @@ export default function ExtStaffProfilesPage() {
                                 fontWeight: 800,
                               }}
                             >
-                              {p.ext_uid}
+                              {p.external_id}
                             </code>
-                            <CopyButton text={p.ext_uid} />
+                            <CopyButton text={p.external_id} />
                           </div>
                         </td>
                         <td style={{ padding: '8px 10px' }}>
@@ -869,9 +869,9 @@ export default function ExtStaffProfilesPage() {
           >
             <div style={{ fontWeight: 900, fontSize: 15, color: '#111827', marginBottom: 8 }}>Remove External Staff Profile</div>
             <div style={{ fontSize: 13, color: '#374151', marginBottom: 16 }}>
-              Remove <strong>@{confirmDelete.username}</strong> and their Ext UID{' '}
+              Remove <strong>@{confirmDelete.username}</strong> and their External ID{' '}
               <code style={{ background: '#f3f4f6', borderRadius: 4, padding: '1px 5px', fontFamily: 'monospace', fontSize: 12 }}>
-                {confirmDelete.ext_uid}
+                {confirmDelete.external_id}
               </code>
               ? The user account will not be deleted.
             </div>

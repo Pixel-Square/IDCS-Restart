@@ -761,10 +761,25 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
             v = _clamp(v, 0.0, mx)
         final_co_values[co] = _round2(v)
 
+    # OE Theory (QP1FINAL) courses convert to 60 instead of 100
+    scaled_max = 60.0 if is_qp1_final else 100.0
+    _raw_100 = (final_total / 40.0) * scaled_max if 40.0 > 0 else None
+    _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
+    _raw_base_100 = (base_total / 40.0) * scaled_max if 40.0 > 0 and base_total is not None else None
+    _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
     return {
         'total_40': final_total,
-        'total_100': _round2((final_total / 40.0) * 100.0) if 40.0 > 0 else None,
+        'total_100': _total_100,
+        'base_total_100': _base_total_100,
+        'scaled_max': scaled_max,
         'base_total_40': _round2(base_total),
+        'base_co_values_40': {
+            'co1': _safe_float(co_values.get(1)),
+            'co2': _safe_float(co_values.get(2)),
+            'co3': _safe_float(co_values.get(3)),
+            'co4': _safe_float(co_values.get(4)),
+            'co5': _safe_float(co_values.get(5)),
+        },
         'co_values_40': {
             'co1': final_co_values.get(1),
             'co2': final_co_values.get(2),

@@ -16,6 +16,11 @@ interface AttendanceRecord {
   an_status: string | null;
   morning_in: string | null;
   evening_out: string | null;
+  gate_out_time: string | null;
+  gate_in_time: string | null;
+  effective_hours: string | null;
+  expected_hours: string | null;
+  effective_hours_status: 'ok' | 'below' | null;
   has_approved_col_form: boolean;
 }
 
@@ -256,6 +261,40 @@ export default function MyCalendarPage() {
     // Parse attendance_out_time_limit (format: HH:MM:SS)
     const cutoff = new Date(`2000-01-01 ${attendanceSettings.attendance_out_time_limit}`);
     return t < cutoff;
+  };
+
+  const getEffectiveHoursClass = (attendance?: AttendanceRecord) => {
+    if (!attendance || !attendance.effective_hours) return 'text-gray-700';
+    if (attendance.effective_hours_status === 'below') return 'text-red-700 font-semibold';
+    if (attendance.effective_hours_status === 'ok') return 'text-green-700 font-semibold';
+    return 'text-gray-700';
+  };
+
+  const getSessionCode = (status?: string | null) => {
+    const s = (status || '').toLowerCase();
+    if (!s) return '-';
+    if (s === 'present') return 'P';
+    if (s === 'absent') return 'A';
+    return String(status).toUpperCase();
+  };
+
+  const getSessionCodeClass = (status?: string | null) => {
+    const code = getSessionCode(status);
+    if (code === 'P') return 'text-green-700';
+    if (code === 'A') return 'text-red-700';
+    return 'text-gray-700';
+  };
+
+  const formatGateLine = (attendance?: AttendanceRecord) => {
+    if (!attendance) return null;
+    const parts: string[] = [];
+    if (attendance.gate_out_time) {
+      parts.push(`GO: ${attendance.gate_out_time}`);
+    }
+    if (attendance.gate_in_time) {
+      parts.push(`GI: ${attendance.gate_in_time}`);
+    }
+    return parts.length ? parts.join(' | ') : null;
   };
 
   const handleDateClick = (day: number) => {
@@ -530,6 +569,14 @@ export default function MyCalendarPage() {
                   <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
                   <span className="text-gray-700">Leave/OD/COL</span>
                 </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GO - Gate OUT</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-100 border-2 border-purple-300 rounded"></div>
+                  <span className="text-gray-700">GI - Gate IN</span>
+                </div>
               </div>
               {attendanceSettings && (
                 <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-600">
@@ -585,6 +632,7 @@ export default function MyCalendarPage() {
                 const holidayInfo = isHoliday(dateStr);
                 const attendance = getAttendanceForDate(day);
                 const hasAttendance = !!attendance;
+                const gateLine = formatGateLine(attendance);
                 const lateIn = attendance && isTimeInLate(attendance.morning_in);
                 const earlyOut = attendance && isTimeOutEarly(attendance.evening_out);
                 const highlightClass = lateIn || earlyOut ? 'ring-2 ring-yellow-300' : '';
@@ -648,8 +696,7 @@ export default function MyCalendarPage() {
                             <div className="font-semibold text-gray-700 truncate">{holidayInfo.name}</div>
                             {hasAttendance && (
                               <div className="text-gray-700">
-                                {attendance.fn_status?.toUpperCase() === 'PRESENT' ? 'P' : attendance.fn_status?.slice(0, 2)} /
-                                {attendance.an_status?.toUpperCase() === 'PRESENT' ? 'P' : attendance.an_status?.slice(0, 2)}
+                                {getSessionCode(attendance.fn_status)} / {getSessionCode(attendance.an_status)}
                               </div>
                             )}
                           </>
@@ -657,14 +704,24 @@ export default function MyCalendarPage() {
                           <div className="font-semibold text-purple-700 truncate">{displayLeaveStatus}</div>
                         ) : hasAttendance ? (
                           <>
-                            {attendance.morning_in && <div className={`${lateIn ? 'text-red-700 font-semibold' : 'text-gray-700'} truncate`}>In {attendance.morning_in}</div>}
-                            {attendance.evening_out && <div className={`${earlyOut ? 'text-red-700 font-semibold' : 'text-gray-700'} truncate`}>Out {attendance.evening_out}</div>}
-                            <div className="font-medium text-gray-700 truncate">FN {attendance.fn_status} / AN {attendance.an_status}</div>
+                            <div className={`${lateIn || earlyOut ? 'text-red-700 font-semibold' : 'text-gray-700'} truncate`}>
+                              In {attendance.morning_in || 'No Data'} Out {attendance.evening_out || 'No Data'}
+                            </div>
+                            {gateLine && <div className="text-indigo-700 truncate">{gateLine}</div>}
+                            <div className={`${getEffectiveHoursClass(attendance)} truncate`}>
+                              Eff {attendance.effective_hours || 'No Data'}
+                            </div>
+                            <div className="font-medium truncate">
+                              <span className="text-gray-700">FN: </span>
+                              <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                              <span className="text-gray-700">, AN: </span>
+                              <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
+                            </div>
                           </>
                         ) : isEarnedCol(dateStr) ? (
                           <div className="font-semibold text-blue-700">Worked</div>
                         ) : (
-                          <div className="text-gray-500 text-[10px] flex items-center gap-1"><Plus className="w-3 h-3" />Add</div>
+                          <div className="text-gray-500 text-[10px] flex items-center gap-1"><Plus className="w-3 h-3" />No Data</div>
                         )}
                       </div>
 
@@ -678,48 +735,21 @@ export default function MyCalendarPage() {
                             {holidayInfo.name}
                           </div>
                           {hasAttendance && (
-                            <div className="text-sm text-gray-700 space-y-0.5 mt-1">
+                            <div className="text-xs text-gray-700 space-y-0.5 mt-1 leading-tight">
                               {/* Show IN/OUT times on holidays */}
-                              {attendance.morning_in && (
-                                <div title={attendance.morning_in} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
-                                  In: {attendance.morning_in}
-                                </div>
-                              )}
-                              {attendance.evening_out && (
-                                <div title={attendance.evening_out} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
-                                  Out: {attendance.evening_out}
-                                </div>
-                              )}
+                              <div title={`In: ${attendance.morning_in || 'No Data'} Out: ${attendance.evening_out || 'No Data'}`} className={`${lateIn || earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                In: {attendance.morning_in || 'No Data'} Out: {attendance.evening_out || 'No Data'}
+                              </div>
+                              {gateLine && <div className="text-indigo-700" title={gateLine}>{gateLine}</div>}
+                              <div className={`${getEffectiveHoursClass(attendance)}`}>
+                                Eff.Hrs: {attendance.effective_hours || 'No Data'}
+                              </div>
                               {/* Show FN/AN status on holidays */}
-                              <div className="text-sm space-y-0.5 mt-1">
-                                {attendance.fn_status && (
-                                  <div className={`font-medium ${
-                                    attendance.fn_status === 'present' ? 'text-green-700' : 
-                                    attendance.fn_status === 'absent' ? 'text-red-700' : 
-                                    !isCoreStatus(attendance.fn_status) ? 'text-purple-700' :
-                                    'text-yellow-700'
-                                  }`}>
-                                    FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
-                                         attendance.fn_status === 'OD' ? 'On Duty' :
-                                         attendance.fn_status === 'COL' ? 'Comp Off' :
-                                         attendance.fn_status === 'ML' ? 'Med.Leave' :
-                                         attendance.fn_status}
-                                  </div>
-                                )}
-                                {attendance.an_status && (
-                                  <div className={`font-medium ${
-                                    attendance.an_status === 'present' ? 'text-green-700' : 
-                                    attendance.an_status === 'absent' ? 'text-red-700' : 
-                                    !isCoreStatus(attendance.an_status) ? 'text-purple-700' :
-                                    'text-yellow-700'
-                                  }`}>
-                                    AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
-                                         attendance.an_status === 'OD' ? 'On Duty' :
-                                         attendance.an_status === 'COL' ? 'Comp Off' :
-                                         attendance.an_status === 'ML' ? 'Med.Leave' :
-                                         attendance.an_status}
-                                  </div>
-                                )}
+                              <div className="font-medium mt-1">
+                                <span className="text-gray-700">FN: </span>
+                                <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                                <span className="text-gray-700"> AN: </span>
+                                <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
                               </div>
                               {attendance.has_approved_col_form && (
                                 <div className="font-medium text-blue-700 mt-1">✓ Worked (COL)</div>
@@ -749,7 +779,7 @@ export default function MyCalendarPage() {
                           </div>
                         </div>
                       ) : hasAttendance ? (
-                          <div className="text-sm text-gray-700 space-y-0.5">
+                          <div className="text-xs text-gray-700 space-y-0.5 leading-tight">
                           {(() => {
                             // Display times as-is from backend (no swapping)
                             // Backend stores: morning_in (entry time), evening_out (exit time)
@@ -758,48 +788,23 @@ export default function MyCalendarPage() {
                             
                             return (
                               <>
-                                {inTime && (
-                                  <div title={inTime} className={`${lateIn ? 'text-red-700 font-semibold' : ''}`}>
-                                    In: {inTime}
-                                  </div>
-                                )}
-                                {outTime && (
-                                  <div title={outTime} className={`${earlyOut ? 'text-red-700 font-semibold' : ''}`}>
-                                    Out: {outTime}
-                                  </div>
-                                )}
+                                <div title={`In: ${inTime || 'No Data'} Out: ${outTime || 'No Data'}`} className={`${lateIn || earlyOut ? 'text-red-700 font-semibold' : ''}`}>
+                                  In: {inTime || 'No Data'} Out: {outTime || 'No Data'}
+                                </div>
+                                {gateLine && <div className="text-indigo-700" title={gateLine}>{gateLine}</div>}
+                                <div className={`${getEffectiveHoursClass(attendance)}`}>
+                                  Eff.Hrs: {attendance.effective_hours || 'No Data'}
+                                </div>
                               </>
                             );
                           })()}
-                          <div className="text-sm space-y-0.5 mt-1">
-                            {attendance.fn_status && (
-                              <div className={`font-medium ${
-                                attendance.fn_status === 'present' ? 'text-green-700' : 
-                                attendance.fn_status === 'absent' ? 'text-red-700' : 
-                                !isCoreStatus(attendance.fn_status) ? 'text-purple-700' :
-                                'text-yellow-700'
-                              }`}>
-                                FN: {attendance.fn_status === 'CL' ? 'Cas.Leave' :
-                                     attendance.fn_status === 'OD' ? 'On Duty' :
-                                     attendance.fn_status === 'COL' ? 'Comp Off' :
-                                     attendance.fn_status === 'ML' ? 'Med.Leave' :
-                                     attendance.fn_status}
-                              </div>
-                            )}
-                            {attendance.an_status && (
-                              <div className={`font-medium ${
-                                attendance.an_status === 'present' ? 'text-green-700' : 
-                                attendance.an_status === 'absent' ? 'text-red-700' : 
-                                !isCoreStatus(attendance.an_status) ? 'text-purple-700' :
-                                'text-yellow-700'
-                              }`}>
-                                AN: {attendance.an_status === 'CL' ? 'Cas.Leave' :
-                                     attendance.an_status === 'OD' ? 'On Duty' :
-                                     attendance.an_status === 'COL' ? 'Comp Off' :
-                                     attendance.an_status === 'ML' ? 'Med.Leave' :
-                                     attendance.an_status}
-                              </div>
-                            )}
+                          <div className="text-sm mt-1">
+                            <div className="font-medium">
+                              <span className="text-gray-700">FN: </span>
+                              <span className={getSessionCodeClass(attendance.fn_status)}>{getSessionCode(attendance.fn_status)}</span>
+                              <span className="text-gray-700"> AN: </span>
+                              <span className={getSessionCodeClass(attendance.an_status)}>{getSessionCode(attendance.an_status)}</span>
+                            </div>
                             {isHalfDayLeave && (
                               <div className="text-sm text-purple-600 font-bold mt-0.5">
                                 HALF DAY
@@ -834,7 +839,7 @@ export default function MyCalendarPage() {
                       {!holidayInfo && !displayLeaveStatus && !hasAttendance && (
                         <div className="hidden sm:flex text-xs text-gray-500 text-center items-center justify-center gap-1">
                           <Plus className="w-3 h-3" />
-                          Add
+                          No Data
                         </div>
                       )}
                     </div>

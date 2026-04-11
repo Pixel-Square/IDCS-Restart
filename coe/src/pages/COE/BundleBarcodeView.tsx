@@ -8,14 +8,28 @@ import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionS
 import { getAttendanceFilterKey, readCourseAbsenteesMap } from './attendanceStore';
 import { getSemesterStartSequence, generateDummyNumber } from './dummySequence';
 import { readShuffledLists, hydrateShuffledListStore, PersistedShuffledByDummy } from './shuffledListStore';
+import { kvHydrate } from '../../utils/coeKvStore';
+import { isSameDept } from '../../utils/deptAliases';
 
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
+
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
+
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
   AIML: '2',
-  RE: '9',
-  SH: '0',
   CIVIL: '3',
   CSE: '4',
   ECE: '5',
@@ -79,21 +93,6 @@ function barcodeDataUrlForValue(value: string): string {
   return canvas.toDataURL('image/png');
 }
 
-function writeCourseBundleDummyStore(store: Record<string, any>) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem('coe-course-bundle-dummies-v1', JSON.stringify(store));
-}
-
-function readCourseBundleDummyStore(): Record<string, any> {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem('coe-course-bundle-dummies-v1');
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
 export default function BundleBarcodeView() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -111,8 +110,11 @@ export default function BundleBarcodeView() {
     useEffect(() => {
     let active = true;
     (async () => {
-      // Hydrate shuffled list store from DB
-      await hydrateShuffledListStore().catch(() => {});
+      // Hydrate stores from DB
+      await Promise.all([
+        hydrateShuffledListStore(),
+        kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
+      ]).catch(() => {});
       if (!active) return;
 
       setLoading(true);
@@ -124,8 +126,9 @@ export default function BundleBarcodeView() {
         ]);
         if (!active) return;
 
-        const currentFilterKeyVal = getCurrentFilterKey(department, semester);
-        const persistedByDummy = readShuffledLists()[currentFilterKeyVal] || {};
+        const semesterDigit = getSemesterDigit(semester);
+        const filterKey = getCurrentFilterKey(department, semester);
+        const persistedByDummy = readShuffledLists()[filterKey] || {};
         const savedByDummy = new Map((response.saved_dummies || []).filter((r) => r.semester === semester).map((r) => [r.dummy, r]));
         const selectionMap = await fetchCourseSelectionMapFromApi(department, semester);
         const absentCourseMap = readCourseAbsenteesMap(getAttendanceFilterKey(department, semester));
@@ -160,54 +163,107 @@ export default function BundleBarcodeView() {
                 return { reg_no: resolvedRegNo, name: resolvedName, dummy, isShuffled: Boolean(saved || persisted) };
               });
 
-              const mappedInDbCount = students.filter((student) => {
+              const bundleStore = readCourseBundleDummyStore();
+              const deptFilterKey = `${deptBlock.department}::${semester}`;
+              const courseBundleMap = bundleStore[deptFilterKey] || bundleStore[filterKey] || {};
+              const normalizedCourseCode = String(course.course_code || '').trim();
+              const normalizedCourseName = String(course.course_name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+              let matchingKeys: string[] = [];
+              if (normalizedCourseCode) {
+                const prefix = `${deptBlock.department}::${semester}::${normalizedCourseCode}::`;
+                const candidates = Object.keys(courseBundleMap).filter((k) => k.startsWith(prefix));
+                if (candidates.length <= 1) {
+                  matchingKeys = candidates;
+                } else {
+                  const exactByName = candidates.filter((k) => String((k.split('::')[3] || '')).trim().toLowerCase().replace(/\s+/g, ' ') === normalizedCourseName);
+                  matchingKeys = exactByName.length > 0 ? exactByName : candidates;
+                }
+              }
+              const authKey = matchingKeys.length > 0 ? matchingKeys[0] : null;
+              const authCourse = authKey ? courseBundleMap[authKey] : null;
+              const authDummies = Array.isArray(authCourse?.courseDummies)
+                ? authCourse!.courseDummies.map((d: string) => String(d || '').trim()).filter(Boolean)
+                : [];
+              let resolvedStudents = students;
+              if (authDummies.length > 0) {
+                const studentsByDummy = new Map(students.map((s) => [String(s.dummy || '').trim(), s]));
+                resolvedStudents = authDummies.map((dummy) => {
+                  const current = studentsByDummy.get(dummy);
+                  const saved = savedByDummy.get(dummy);
+                  const persisted = persistedByDummy[dummy];
+                  return {
+                    reg_no: saved?.reg_no || persisted?.reg_no || current?.reg_no || '',
+                    name: saved?.name || persisted?.name || current?.name || '-',
+                    dummy,
+                    isShuffled: Boolean(saved || persisted || current?.isShuffled),
+                  };
+                });
+              }
+
+              const mappedInDbCount = resolvedStudents.filter((student) => {
                 const saved = savedByDummy.get(student.dummy);
                 const persisted = persistedByDummy[student.dummy];
                 return Boolean(saved || persisted);
               }).length;
 
               const isCourseFullyMappedInDb = originalStudents.length > 0 && mappedInDbCount === originalStudents.length;
-              const isCourseShuffledInDb = students.some((student) => student.isShuffled);
+              const isCourseShuffledInDb = resolvedStudents.some((student) => student.isShuffled);
 
               // if (!isCourseFullyMappedInDb || !isCourseShuffledInDb) return;
-              gathered.push({ department: deptBlock.department, course_code: course.course_code, course_name: course.course_name, students });
+              gathered.push({ department: deptBlock.department, course_code: course.course_code, course_name: course.course_name, students: resolvedStudents });
             });
         });
 
-        // Build bundles
+        // Build bundles from regular courses
         const allBundles: { bundleName: string; students: BundleStudent[]; course_code?: string; course_name?: string; department?: string }[] = [];
+        const includedCourseKeys = new Set<string>();
         gathered.forEach((course) => {
           const deptShort = DEPARTMENT_SHORT[course.department] || String(course.department || '').slice(0, 2).toUpperCase();
-          const grouped = chunkStudents(course.students, bundleSize).map((students, i) => ({ 
-            bundleName: `${course.course_code || 'COURSE'}${deptShort}${String(i + 1).padStart(3, '0')}`, 
-            students 
-          }));
+          const grouped = chunkStudents(course.students, bundleSize).map((students, i) => ({ bundleName: `${course.course_code || 'COURSE'}${deptShort}${String(i + 1).padStart(3, '0')}`, students }));
           grouped.forEach((b) => allBundles.push({ ...b, course_code: course.course_code, course_name: course.course_name, department: course.department }));
+          const ck = getCourseKey({ department: course.department, semester, courseCode: course.course_code || '', courseName: course.course_name || '' });
+          includedCourseKeys.add(ck);
         });
 
-        // Inject Additional Bundles from localStorage
-        const additionalFilterKey = getCurrentFilterKey(department, semester);
+        // Append additional bundles from AdditionalPage store
         const bundleStore = readCourseBundleDummyStore();
-        const additionalForFilter = bundleStore[additionalFilterKey] || {};
-        
-        Object.entries(additionalForFilter).forEach(([cCode, cData]: [string, any]) => {
-          if (cData.bundles) {
-            Object.entries(cData.bundles).forEach(([bName, dummieList]: [string, any]) => {
-              if (bName.endsWith('-ADD')) {
-                const addStudents: BundleStudent[] = (dummieList || []).map((d: string) => {
-                  const p = persistedByDummy[d] || {};
-                  return { reg_no: p.reg_no || '?', name: p.name || '?', dummy: d, isShuffled: true };
-                });
+        const shuffledLists = readShuffledLists();
+        const existingBundleNames = new Set(allBundles.map((b) => b.bundleName));
+
+        Object.entries(bundleStore).forEach(([storeKey, courseBundleMap]) => {
+          const [storedDept, storedSem] = storeKey.split('::');
+          if (storedSem !== semester) return;
+          if (department !== 'ALL' && !isSameDept(storedDept, department)) return;
+
+          const shuffledForFilter = shuffledLists[storeKey] || {};
+
+          Object.entries(courseBundleMap).forEach(([courseKey, courseData]) => {
+            const parts = courseKey.split('::');
+            const courseDept = parts[0] || storedDept;
+            const courseCode = parts[2] || '';
+            const courseName = parts[3] || '';
+
+            Object.entries(courseData.bundles || {}).forEach(([bundleName, dummies]) => {
+              // Skip bundles that already exist in regular bundles (they overlap with standard allocation)
+              if (existingBundleNames.has(bundleName)) return;
+
+              const students: BundleStudent[] = (dummies || []).map((dummy) => {
+                const info = shuffledForFilter[dummy] || { reg_no: '', name: '-' };
+                return { reg_no: info.reg_no, name: info.name, dummy, isShuffled: true };
+              });
+
+              if (students.length > 0) {
                 allBundles.push({
-                  bundleName: bName,
-                  students: addStudents,
-                  course_code: cCode,
-                  department: department, 
-                  course_name: 'Additional Student'
+                  bundleName: bundleName,
+                  students,
+                  course_code: courseCode,
+                  course_name: courseName,
+                  department: courseDept,
                 });
+                existingBundleNames.add(bundleName);
               }
             });
-          }
+          });
         });
 
         if (!active) return;

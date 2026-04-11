@@ -30,7 +30,7 @@ import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { normalizeObeClassType } from '../constants/classTypes';
@@ -386,6 +386,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     Boolean(markManagerApprovalUntil) &&
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
   const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
   const showPublishedLockPanel = Boolean(isPublished && publishedEditLocked);
@@ -807,7 +808,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
-    if (!editRequestsEnabled) {
+    if (!markManagerEditRequestsEnabled) {
       alert('Edit requests are disabled by IQAC.');
       return;
     }

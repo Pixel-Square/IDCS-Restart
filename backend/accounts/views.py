@@ -17,7 +17,9 @@ from datetime import timedelta
 import re
 import logging
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from urllib.parse import urlparse
 import posixpath
 import os
@@ -102,14 +104,20 @@ def _normalize_mobile_number(raw: str) -> str:
 
 def _set_verified_mobile_on_profile(user, mobile_number: str, verified_at):
     """Persist verified mobile number on the attached student/staff profile."""
-    if hasattr(user, 'student_profile') and getattr(user, 'student_profile') is not None:
-        sp = user.student_profile
+    try:
+        sp = getattr(user, 'student_profile', None)
+    except ObjectDoesNotExist:
+        sp = None
+    if sp is not None:
         sp.mobile_number = mobile_number
         sp.mobile_number_verified_at = verified_at
         sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
         return
-    if hasattr(user, 'staff_profile') and getattr(user, 'staff_profile') is not None:
-        st = user.staff_profile
+    try:
+        st = getattr(user, 'staff_profile', None)
+    except ObjectDoesNotExist:
+        st = None
+    if st is not None:
         st.mobile_number = mobile_number
         st.mobile_number_verified_at = verified_at
         st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
@@ -460,13 +468,20 @@ class MobileRemoveView(APIView):
             return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Remove mobile from profile
-        if hasattr(request.user, 'student_profile') and getattr(request.user, 'student_profile') is not None:
-            sp = request.user.student_profile
+        try:
+            sp = getattr(request.user, 'student_profile', None)
+        except ObjectDoesNotExist:
+            sp = None
+        try:
+            st = getattr(request.user, 'staff_profile', None)
+        except ObjectDoesNotExist:
+            st = None
+
+        if sp is not None:
             sp.mobile_number = ''
             sp.mobile_number_verified_at = None
             sp.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
-        elif hasattr(request.user, 'staff_profile') and getattr(request.user, 'staff_profile') is not None:
-            st = request.user.staff_profile
+        elif st is not None:
             st.mobile_number = ''
             st.mobile_number_verified_at = None
             st.save(update_fields=['mobile_number', 'mobile_number_verified_at'])
@@ -523,13 +538,20 @@ class ChangePasswordView(APIView):
         return Response({'ok': True, 'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
 
 
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+
 class ProfileUpdateView(APIView):
-    """Allow authenticated users to update their profile information (name, email, username)."""
+    """Allow authenticated users to update their profile information (name, email, username).
+
+    Accept multipart/form-data for profile image uploads (PATCH with FormData).
+    """
     permission_classes = (permissions.IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def patch(self, request):
         user = request.user
-        
+
         # Extract fields that can be updated
         first_name = request.data.get('first_name')
         last_name = request.data.get('last_name')
@@ -537,6 +559,61 @@ class ProfileUpdateView(APIView):
         profile_edited = request.data.get('profileEdited', request.data.get('profile_edited'))
         username = request.data.get('username')
         profile_image = request.FILES.get('profile_image')
+
+        # Backwards-compat: some older cached frontend builds may send a
+        # base64-encoded image inside JSON under `profile_image` instead of
+        # as multipart file. Accept that here so clients don't need to clear
+        # cache immediately after a deploy.
+        if profile_image is None:
+            raw = (request.data or {}).get('profile_image')
+            if isinstance(raw, str) and raw.strip():
+                import base64, imghdr
+
+                data = raw.strip()
+                b64 = None
+                content_type = ''
+                # data:<mime>;base64,<data>
+                if data.startswith('data:') and ';base64,' in data:
+                    try:
+                        header, b64part = data.split(';base64,', 1)
+                        content_type = header.split(':', 1)[1] if ':' in header else ''
+                        b64 = b64part
+                    except Exception:
+                        b64 = None
+                else:
+                    # assume raw is plain base64
+                    b64 = data
+
+                if b64:
+                    try:
+                        decoded = base64.b64decode(b64)
+                        # try to detect image type
+                        kind = imghdr.what(None, h=decoded) or ''
+                        ext = '.jpg'
+                        if kind == 'png':
+                            ext = '.png'
+                            content_type = content_type or 'image/png'
+                        elif kind in ('jpeg', 'jpg'):
+                            ext = '.jpg'
+                            content_type = content_type or 'image/jpeg'
+                        else:
+                            # leave as jpg if detection fails
+                            content_type = content_type or 'image/jpeg'
+
+                        filename = f"profile_images/{uuid.uuid4().hex}{ext}"
+                        content_file = ContentFile(decoded)
+                        # default_storage.save accepts a File-like object; pass ContentFile
+                        try:
+                            saved_name = default_storage.save(filename, content_file)
+                            # emulate an uploaded file by setting profile_image variable
+                            profile_image = True  # sentinel to indicate save done
+                            _legacy_saved_name = saved_name
+                        except Exception:
+                            log.exception('Failed to save base64 profile image')
+                            return Response({'detail': 'Failed to save profile image.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    except Exception:
+                        # fallthrough; treat as no image
+                        profile_image = None
 
         # Allow name/email edits without one-time restriction.
 
@@ -577,17 +654,25 @@ class ProfileUpdateView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-            filename = str(getattr(profile_image, 'name', '') or '').strip()
-            ext = os.path.splitext(filename)[1].lower()
-            content_type = str(getattr(profile_image, 'content_type', '') or '').lower()
-            allowed_ext = {'.jpg', '.jpeg', '.png'}
-            allowed_types = {'image/jpeg', 'image/jpg', 'image/png'}
+            # If we already saved a legacy base64 payload above, use that saved_name
+            if isinstance(profile_image, bool) and profile_image and '_legacy_saved_name' in locals():
+                saved_name = _legacy_saved_name
+            else:
+                filename = str(getattr(profile_image, 'name', '') or '').strip()
+                ext = os.path.splitext(filename)[1].lower()
+                content_type = str(getattr(profile_image, 'content_type', '') or '').lower()
+                allowed_ext = {'.jpg', '.jpeg', '.png'}
+                allowed_types = {'image/jpeg', 'image/jpg', 'image/png'}
 
-            if ext not in allowed_ext and content_type not in allowed_types:
-                return Response({'detail': 'Only JPG, JPEG, and PNG images are allowed.'}, status=status.HTTP_400_BAD_REQUEST)
+                if ext not in allowed_ext and content_type not in allowed_types:
+                    return Response({'detail': 'Only JPG, JPEG, and PNG images are allowed.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            unique_name = f"profile_images/{uuid.uuid4().hex}{ext if ext in allowed_ext else '.jpg'}"
-            saved_name = default_storage.save(unique_name, profile_image)
+                unique_name = f"profile_images/{uuid.uuid4().hex}{ext if ext in allowed_ext else '.jpg'}"
+                try:
+                    saved_name = default_storage.save(unique_name, profile_image)
+                except Exception as e:
+                    log.exception('Failed to save profile image')
+                    return Response({'detail': 'Failed to save profile image.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             old_value = ''
 
@@ -599,15 +684,23 @@ class ProfileUpdateView(APIView):
                     old_value = str(getattr(student_profile.profile_image, 'name', '') or '').strip().lstrip('/')
                 except Exception:
                     old_value = ''
-                student_profile.profile_image = saved_name
-                student_profile.save(update_fields=['profile_image'])
+                try:
+                    from academics.models import StudentProfile
+                    StudentProfile.objects.filter(pk=student_profile.pk).update(profile_image=saved_name)
+                except Exception:
+                    log.exception('Failed saving student_profile.profile_image (user_id=%s) saved_name=%s', getattr(user, 'id', None), saved_name)
+                    return Response({'detail': 'Failed to save profile image.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             elif staff_profile is not None:
                 try:
                     old_value = str(getattr(staff_profile.profile_image, 'name', '') or '').strip().lstrip('/')
                 except Exception:
                     old_value = ''
-                staff_profile.profile_image = saved_name
-                staff_profile.save(update_fields=['profile_image'])
+                try:
+                    from academics.models import StaffProfile
+                    StaffProfile.objects.filter(pk=staff_profile.pk).update(profile_image=saved_name)
+                except Exception:
+                    log.exception('Failed saving staff_profile.profile_image (user_id=%s) saved_name=%s', getattr(user, 'id', None), saved_name)
+                    return Response({'detail': 'Failed to save profile image.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
                 old_value = str(getattr(user, 'profile_image', '') or '').strip().lstrip('/')
                 user.profile_image = saved_name
@@ -623,11 +716,21 @@ class ProfileUpdateView(APIView):
                     pass
 
         if updated:
-            user.save()
+            try:
+                user.save()
+            except Exception as e:
+                log.exception('Failed to save user after profile update')
+                return Response({'detail': 'Failed to update profile.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Return updated user data
-        serializer = MeSerializer(user)
-        return Response({'ok': True, 'user': serializer.data}, status=status.HTTP_200_OK)
+        try:
+            # Return updated user data
+            serializer = MeSerializer(user)
+            return Response({'ok': True, 'user': serializer.data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Log full exception to help debug unexpected serialization errors
+            log.exception('Unhandled exception while serializing updated user in ProfileUpdateView')
+            return Response({'detail': 'Internal server error while returning updated profile.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 
 
 def _can_approve_profile_image_unlock(user) -> bool:

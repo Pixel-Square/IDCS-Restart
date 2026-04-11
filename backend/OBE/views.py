@@ -5108,7 +5108,7 @@ def model_publish_sheet(request, subject_id: str):
     if data is None or not isinstance(data, dict):
         return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from .models import ModelPublishedSheet
+    from .models import ModelPublishedSheet, ModelExamMark, ModelExamCOMark
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
 
@@ -5118,6 +5118,61 @@ def model_publish_sheet(request, subject_id: str):
         teaching_assignment=ta,
         defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
     )
+    
+    # NEW LOGIC: Store calculated CO entries to the explicit DB tables if passed by the frontend
+    co_marks_array = body.get('coMarks', [])
+    if isinstance(co_marks_array, list) and len(co_marks_array) > 0:
+        with transaction.atomic():
+            for student_item in co_marks_array:
+                try:
+                    sid = int(student_item.get('studentId'))
+                except (ValueError, TypeError):
+                    continue
+                
+                student = StudentProfile.objects.filter(id=sid).first()
+                if not student:
+                    continue
+                    
+                total_mark = student_item.get('total')
+                total_dec = _coerce_decimal_or_none(total_mark)
+                
+                if total_dec is None:
+                    # Missing or absent entirely, wipe clean logic
+                    mark_parent = ModelExamMark.objects.filter(subject=subject, student=student, teaching_assignment=ta).first()
+                    if mark_parent:
+                        mark_parent.delete()
+                    continue
+                
+                # Fetch or create the parent record
+                mark_parent, _ = ModelExamMark.objects.update_or_create(
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    defaults={'total_mark': total_dec}
+                )
+                
+                # Update the child CO marks dynamically depending on what the frontend mapped
+                co_breakdown = student_item.get('coBreakdown', {})
+                if isinstance(co_breakdown, dict):
+                    co_keys = sorted(co_breakdown.keys())
+                    # Clear out outdated dynamic sub-records first safely
+                    ModelExamCOMark.objects.filter(model_exam_mark=mark_parent).delete()
+                    for c_k in co_keys:
+                        c_num_str = c_k.replace('co', '')
+                        try:
+                            c_num = int(c_num_str)
+                            c_data = co_breakdown[c_k]
+                            c_val = _coerce_decimal_or_none(c_data.get('mark'))
+                            c_pct = _coerce_decimal_or_none(c_data.get('percentage'))
+                            
+                            ModelExamCOMark.objects.create(
+                                model_exam_mark=mark_parent,
+                                co_num=c_num,
+                                mark=c_val,
+                                percentage=c_pct
+                            )
+                        except (ValueError, TypeError, KeyError):
+                            pass
 
     try:
         _touch_lock_after_publish(

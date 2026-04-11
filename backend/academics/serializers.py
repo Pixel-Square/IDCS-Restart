@@ -352,13 +352,14 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     curriculum_row_details = serializers.SerializerMethodField(read_only=True)
     elective_subject_details = serializers.SerializerMethodField(read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
+    question_paper_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.CharField(source='section.name', read_only=True)
     custom_subject = serializers.CharField(allow_null=True, required=False)
 
     class Meta:
         model = TeachingAssignment
 
-        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments', 'elective_subject_details')
+        fields = ('id', 'staff_id', 'section_id', 'academic_year', 'subject', 'curriculum_row_id', 'elective_subject_id', 'custom_subject', 'is_active', 'staff_details', 'section_details', 'curriculum_row_details', 'section_name', 'enabled_assessments', 'elective_subject_details', 'question_paper_type')
         enabled_assessments = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
 
     def get_subject(self, obj):
@@ -592,6 +593,34 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
 
         return super().create(validated_data)
 
+    def get_question_paper_type(self, obj):
+        """Return question_paper_type from the curriculum/elective row.
+
+        Mirrors the logic from TeachingAssignmentInfoSerializer so that
+        the main TA list endpoint also exposes QP type information.
+        """
+        try:
+            # Elective assignments store question_paper_type on ElectiveSubject
+            if getattr(obj, 'elective_subject', None):
+                qpt = getattr(obj.elective_subject, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+
+            row = getattr(obj, 'curriculum_row', None)
+            if row:
+                # Prefer CurriculumDepartment.question_paper_type (current),
+                # fall back to CurriculumMaster.qp_type (legacy)
+                qpt = getattr(row, 'question_paper_type', None)
+                if qpt:
+                    return qpt
+                master = getattr(row, 'master', None)
+                if master:
+                    return getattr(master, 'qp_type', None)
+        except Exception:
+            return None
+
+        return None
+
     def get_elective_subject_details(self, obj):
         try:
             es = getattr(obj, 'elective_subject', None)
@@ -603,6 +632,8 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 'id': getattr(es, 'id', None),
                 'course_code': getattr(es, 'course_code', None),
                 'course_name': getattr(es, 'course_name', None),
+                'class_type': getattr(es, 'class_type', None),
+                'question_paper_type': getattr(es, 'question_paper_type', None),
                 'department_id': getattr(dept, 'id', None),
                 'department_display': str(dept) if dept else None,
                 'parent_id': getattr(parent, 'id', None),
@@ -990,6 +1021,40 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
             pass
         return None
 
+    def _resolve_students_from_ids(self, student_ids):
+        normalized_ids = []
+        for raw_id in (student_ids or []):
+            try:
+                parsed = int(raw_id)
+            except Exception:
+                continue
+            if parsed > 0:
+                normalized_ids.append(parsed)
+
+        if not normalized_ids:
+            return StudentProfile.objects.none()
+
+        unique_ids = list(dict.fromkeys(normalized_ids))
+        students_qs = StudentProfile.objects.filter(pk__in=unique_ids)
+        found_ids = set(students_qs.values_list('id', flat=True))
+        missing_ids = [sid for sid in unique_ids if sid not in found_ids]
+
+        if missing_ids:
+            try:
+                from curriculum.models import ElectiveChoice
+                mapped_student_ids = list(
+                    ElectiveChoice.objects.filter(pk__in=missing_ids)
+                    .exclude(student_id__isnull=True)
+                    .values_list('student_id', flat=True)
+                )
+                if mapped_student_ids:
+                    combined_ids = list(found_ids.union({int(sid) for sid in mapped_student_ids if sid}))
+                    students_qs = StudentProfile.objects.filter(pk__in=combined_ids)
+            except Exception:
+                pass
+
+        return students_qs
+
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
@@ -1023,7 +1088,13 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
 
         batch = super().create(validated_data)
         if student_ids:
-            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            sts = self._resolve_students_from_ids(student_ids)
+            if not sts.exists():
+                try:
+                    batch.delete()
+                except Exception:
+                    pass
+                raise serializers.ValidationError('No valid students found for the selected student IDs')
             # If section explicitly provided, ensure all selected students belong to it.
             try:
                 if section_obj is not None:
@@ -1073,7 +1144,9 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 pass
         inst = super().update(instance, validated_data)
         if student_ids is not None:
-            sts = StudentProfile.objects.filter(pk__in=student_ids)
+            sts = self._resolve_students_from_ids(student_ids)
+            if student_ids and not sts.exists():
+                raise serializers.ValidationError('No valid students found for the selected student IDs')
             try:
                 # enforce section consistency when section is set
                 sec = getattr(inst, 'section', None)
@@ -1468,13 +1541,13 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'user_id',
-            'ext_uid',
+            'external_id',
             'username',
             'email',
             'full_name',
             'salutation',
             'designation',
-            'organisation',
+            'college_name',
             'teaching',
             'faculty_id',
             'department',
@@ -1497,7 +1570,7 @@ class ExtStaffProfileSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'ext_uid', 'username', 'email', 'full_name', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'external_id', 'username', 'email', 'full_name', 'created_at', 'updated_at']
 
     def get_username(self, obj):
         try:

@@ -6,6 +6,7 @@ type Props = {
   teachingAssignmentId?: number;
   classType?: string | null;
   questionPaperType?: string | null;
+  customQuestions?: Array<{ key: string; label: string; max: number; co: any; btl: number }> | null;
 };
 
 export default function Cia2Entry(props: Props) {

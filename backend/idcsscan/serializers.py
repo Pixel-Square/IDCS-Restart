@@ -1,9 +1,13 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework import serializers
+
+import base64
 
 from academics.models import StaffProfile
 from accounts.models import Role
+from idcsscan.models import FingerprintEnrollment
 
 
 class SecurityStaffProfileSerializer(serializers.ModelSerializer):
@@ -121,3 +125,142 @@ class SecurityStaffProfileSerializer(serializers.ModelSerializer):
             instance.save()
 
         return instance
+
+
+# ───────────────────────────────────── Fingerprint ─────────────────────────────
+
+
+class FingerprintEnrollmentReadSerializer(serializers.ModelSerializer):
+    """Read-only representation of an enrollment (no raw template bytes)."""
+
+    finger_display = serializers.CharField(source="get_finger_display", read_only=True)
+    format_display = serializers.CharField(source="get_template_format_display", read_only=True)
+    user_identifier = serializers.SerializerMethodField()
+
+    class Meta:
+        model = FingerprintEnrollment
+        fields = [
+            "id",
+            "user",
+            "user_identifier",
+            "finger",
+            "finger_display",
+            "template_format",
+            "format_display",
+            "quality_score",
+            "enrolled_at",
+            "enrolled_by",
+            "device_type",
+            "is_active",
+            "deactivated_at",
+        ]
+        read_only_fields = fields
+
+    def get_user_identifier(self, obj) -> str:
+        user = obj.user
+        # Student → reg_no, Staff → staff_id, else username
+        if hasattr(user, "student_profile"):
+            return user.student_profile.reg_no
+        if hasattr(user, "staff_profile"):
+            return user.staff_profile.staff_id
+        return user.username
+
+
+class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
+    """
+    Accepts base64-encoded template data for enrollment.
+
+    Expected payload:
+      {
+        "user_id": 42,                    # or "reg_no" / "staff_id"
+        "reg_no": "811722104001",          # alternative to user_id
+        "staff_id": "100123",              # alternative to user_id
+        "finger": "R_INDEX",
+        "template_b64": "<base64 string>",
+        "template_format": "ISO_19794_2",  # optional, default ISO
+        "quality_score": 82,               # optional
+        "device_type": "SecuGen-Hamster",  # optional
+      }
+    """
+
+    user_id = serializers.IntegerField(required=False)
+    reg_no = serializers.CharField(required=False, allow_blank=True)
+    staff_id = serializers.CharField(required=False, allow_blank=True)
+    finger = serializers.ChoiceField(choices=FingerprintEnrollment.Finger.choices)
+    template_b64 = serializers.CharField(
+        help_text="Base64-encoded fingerprint template bytes."
+    )
+    template_format = serializers.ChoiceField(
+        choices=FingerprintEnrollment.TemplateFormat.choices,
+        default=FingerprintEnrollment.TemplateFormat.ISO_19794_2,
+    )
+    quality_score = serializers.IntegerField(required=False, min_value=0, max_value=100)
+    device_type = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_template_b64(self, value: str) -> bytes:
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except Exception:
+            raise serializers.ValidationError("Invalid base64 data for template.")
+        if len(raw) < 16:
+            raise serializers.ValidationError("Template too small — probably invalid.")
+        if len(raw) > 10_000:
+            raise serializers.ValidationError("Template exceeds 10 KB limit.")
+        return raw
+
+    def validate(self, attrs):
+        User = get_user_model()
+        user_id = attrs.get("user_id")
+        reg_no = (attrs.get("reg_no") or "").strip()
+        staff_id_val = (attrs.get("staff_id") or "").strip()
+
+        user = None
+        if user_id:
+            try:
+                user = User.objects.get(pk=user_id)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"user_id": "User not found."})
+        elif reg_no:
+            from academics.models import StudentProfile
+            try:
+                user = StudentProfile.objects.select_related("user").get(reg_no=reg_no).user
+            except StudentProfile.DoesNotExist:
+                raise serializers.ValidationError({"reg_no": "Student not found."})
+        elif staff_id_val:
+            try:
+                user = StaffProfile.objects.select_related("user").get(staff_id=staff_id_val).user
+            except StaffProfile.DoesNotExist:
+                raise serializers.ValidationError({"staff_id": "Staff not found."})
+        else:
+            raise serializers.ValidationError("Provide one of: user_id, reg_no, or staff_id.")
+
+        attrs["resolved_user"] = user
+        return attrs
+
+    def create(self, validated_data):
+        user = validated_data["resolved_user"]
+        finger = validated_data["finger"]
+        template_bytes = validated_data["template_b64"]  # already decoded in validate
+        fmt = validated_data.get("template_format", FingerprintEnrollment.TemplateFormat.ISO_19794_2)
+        quality = validated_data.get("quality_score")
+        device = validated_data.get("device_type", "")
+        enrolled_by = self.context.get("request", None)
+        enrolled_by_user = enrolled_by.user if enrolled_by and hasattr(enrolled_by, "user") else None
+
+        # Upsert: deactivate old enrollment for same finger, create new one
+        with transaction.atomic():
+            FingerprintEnrollment.objects.filter(
+                user=user, finger=finger, is_active=True,
+            ).update(is_active=False, deactivated_at=timezone.now())
+
+            enrollment = FingerprintEnrollment.objects.create(
+                user=user,
+                finger=finger,
+                template=template_bytes,
+                template_format=fmt,
+                quality_score=quality,
+                enrolled_by=enrolled_by_user,
+                device_type=device,
+                is_active=True,
+            )
+        return enrollment

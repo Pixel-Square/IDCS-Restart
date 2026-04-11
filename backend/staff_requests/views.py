@@ -1000,12 +1000,26 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return None
 
     def _get_user_in_time_limit(self, user):
-        """Resolve in-time limit using department-specific settings first, then global."""
+        """Resolve in-time limit with staff override, department, then global fallback."""
         from datetime import time
-        from staff_attendance.models import AttendanceSettings, DepartmentAttendanceSettings
+        from staff_attendance.models import (
+            AttendanceSettings,
+            DepartmentAttendanceSettings,
+            StaffAttendanceTimeLimitOverride,
+        )
 
         # Default fallback
         default_limit = time(hour=8, minute=45)
+
+        try:
+            staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+                user=user,
+                enabled=True,
+            ).first()
+            if staff_override and staff_override.attendance_in_time_limit:
+                return staff_override.attendance_in_time_limit
+        except Exception:
+            pass
 
         try:
             dept = None
@@ -1090,6 +1104,65 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         return default_limit
 
+    def _get_user_mid_time_split(self, user, target_date=None):
+        """Resolve FN/AN split(noon) time with staff override, special date, dept, then global fallback."""
+        from datetime import time
+        from django.db.models import Q
+        from staff_attendance.models import (
+            AttendanceSettings,
+            DepartmentAttendanceSettings,
+            StaffAttendanceTimeLimitOverride,
+            SpecialDepartmentDateAttendanceLimit,
+        )
+
+        default_limit = time(hour=13, minute=0)
+        target_date = target_date or timezone.localdate()
+
+        try:
+            staff_override = StaffAttendanceTimeLimitOverride.objects.filter(
+                user=user,
+                enabled=True,
+            ).first()
+            if staff_override and staff_override.mid_time_split:
+                return staff_override.mid_time_split
+        except Exception:
+            pass
+
+        try:
+            dept = None
+            if hasattr(user, 'staff_profile'):
+                if hasattr(user.staff_profile, 'get_current_department'):
+                    dept = user.staff_profile.get_current_department()
+                if not dept:
+                    dept = user.staff_profile.department
+
+            if dept:
+                special = SpecialDepartmentDateAttendanceLimit.objects.filter(
+                    enabled=True,
+                    departments=dept,
+                    from_date__lte=target_date,
+                ).filter(
+                    Q(to_date__isnull=True, from_date=target_date)
+                    | Q(to_date__isnull=False, to_date__gte=target_date)
+                ).order_by('-from_date', '-id').first()
+                if special and special.mid_time_split:
+                    return special.mid_time_split
+
+                dept_cfg = DepartmentAttendanceSettings.objects.filter(
+                    departments=dept,
+                    enabled=True,
+                ).first()
+                if dept_cfg and dept_cfg.mid_time_split:
+                    return dept_cfg.mid_time_split
+        except Exception:
+            pass
+
+        global_cfg = AttendanceSettings.objects.first()
+        if global_cfg and global_cfg.mid_time_split:
+            return global_cfg.mid_time_split
+
+        return default_limit
+
     def _is_gatepass_auto_template(self, template):
         name = (getattr(template, 'name', '') or '').strip().lower()
         if name.startswith('casual leave'):
@@ -1134,11 +1207,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             .first()
         )
 
-    def _build_gatepass_payload(self, gatepass_fields, request_date, out_time, in_time, reason_text):
+    def _build_gatepass_payload(self, gatepass_fields, request_date, out_time, in_time, reason_text, include_in_time=True):
         payload = {}
         date_str = request_date.isoformat()
         out_str = out_time.strftime('%H:%M')
-        in_str = in_time.strftime('%H:%M')
+        in_str = in_time.strftime('%H:%M') if in_time else None
 
         for fld in gatepass_fields:
             key = fld.field_key
@@ -1146,21 +1219,31 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             meta = fld.meta or {}
 
             if ftype == 'DATE OUT IN':
-                payload[key] = {
+                row = {
                     'date': date_str,
                     'out_time': out_str,
-                    'in_time': in_str,
                 }
+                if include_in_time and in_str:
+                    row['in_time'] = in_str
+                payload[key] = row
             elif ftype == 'DATE IN OUT':
-                payload[key] = {
+                row = {
                     'date': date_str,
-                    'in_time': in_str,
                     'out_time': out_str,
                 }
+                if include_in_time and in_str:
+                    row['in_time'] = in_str
+                payload[key] = row
             elif ftype == 'DATE':
                 payload[key] = date_str
             elif ftype == 'TIME':
-                payload[key] = out_str
+                key_text = f"{str(key or '').lower()} {str(getattr(fld, 'label', '') or '').lower()}"
+                if include_in_time and in_str and ('in' in key_text and 'out' not in key_text):
+                    payload[key] = in_str
+                elif not include_in_time and ('in' in key_text and 'out' not in key_text):
+                    payload[key] = ''
+                else:
+                    payload[key] = out_str
             elif ftype == 'TEXT':
                 payload[key] = reason_text
             elif ftype == 'NUMBER':
@@ -1185,7 +1268,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return payload
 
     def _auto_create_gatepass_for_request(self, staff_request, acted_by=None):
-        """Create and auto-approve a gatepass application for eligible AN approvals."""
+        """Create a gatepass application for eligible AN approvals with only the final step pending."""
         import logging
         from datetime import datetime, timedelta
 
@@ -1209,7 +1292,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             logger.warning('Gatepass auto-create skipped: no effective date on request %s', staff_request.id)
             return None
 
-        out_limit = self._get_user_out_time_limit(staff_request.applicant, request_date)
+        out_limit = self._get_user_mid_time_split(staff_request.applicant, request_date)
         out_dt = datetime.combine(request_date, out_limit)
 
         name = (getattr(staff_request.template, 'name', '') or '').strip().lower()
@@ -1234,6 +1317,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             out_time=out_dt.time(),
             in_time=in_dt.time(),
             reason_text=reason_text,
+            include_in_time=False,
         )
 
         applicant = staff_request.applicant
@@ -1267,25 +1351,35 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         try:
             application_state.submit_application(application, applicant)
-            application_state.approve_application(application)
-
             final_step = None
+            pre_final_steps = []
             try:
                 flow = approval_engine._get_flow_for_application(application)
                 if flow is not None:
+                    ordered_steps = list(flow.steps.order_by('order'))
                     final_step = flow.steps.filter(is_final=True).order_by('order').first()
                     if final_step is None:
-                        final_step = flow.steps.order_by('order').first()
+                        final_step = ordered_steps[-1] if ordered_steps else None
+                    if final_step is not None:
+                        pre_final_steps = [step for step in ordered_steps if step.order < final_step.order]
             except Exception:
                 final_step = None
+                pre_final_steps = []
 
-            app_models.ApprovalAction.objects.create(
-                application=application,
-                step=final_step,
-                acted_by=acted_by,
-                action=app_models.ApprovalAction.Action.APPROVED,
-                remarks=reason_text,
-            )
+            for step in pre_final_steps:
+                app_models.ApprovalAction.objects.create(
+                    application=application,
+                    step=step,
+                    acted_by=acted_by,
+                    action=app_models.ApprovalAction.Action.APPROVED,
+                    remarks=f'{reason_text} (auto-approved pre-final step)',
+                )
+
+            if final_step is not None:
+                application_state.move_to_in_review(application, final_step)
+            else:
+                application_state.approve_application(application)
+
         except Exception as exc:
             logger.warning(
                 'Gatepass submit/approve flow unavailable for request %s; forcing APPROVED state. Error: %s',

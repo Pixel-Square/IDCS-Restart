@@ -7,15 +7,18 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import fetchWithAuth from '../services/fetchAuth';
-import { fetchPublishedLabSheet } from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
+import { createEditRequest, fetchPublishedLabSheet, formatApiErrorMessage, formatEditRequestSentMessage } from '../services/obe';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import { useCqiEditRequestsEnabled } from '../utils/requestControl';
+import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 
 // ──────────────────────────────────────────────────────────────────────
 //  Constants
 // ──────────────────────────────────────────────────────────────────────
+const CQI_INPUT_MAX          = 10;
 const PURE_LAB_CIA_WEIGHT    = 7.5;
 const PURE_LAB_EXP_WEIGHT    = 17.5;
 const PURE_LAB_CYCLE_MAX     = 25;
@@ -128,12 +131,36 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
 
   // ── Lock / publish state ─────────────────────────────────────────────
   const { data: lockData, refresh: refreshLock } = useMarkTableLock({
-    assessment: 'cqi_model',
+    assessment: 'cqi_pure_lab_cqi',
     subjectCode: String(subjectId || ''),
     teachingAssignmentId,
   });
-  const publishedEditLocked = Boolean(lockData?.is_published && lockData?.published_blocked);
-  const isPublished         = Boolean(lockData?.is_published);
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({
+    assessment: 'cqi_pure_lab_cqi',
+    subjectCode: String(subjectId || ''),
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+    options: { poll: true },
+  });
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryApprovalUntil: string | null;
+  }>(null);
+  const isPublished         = Boolean(lockData?.exists && lockData?.is_published);
+  const markEntryApprovalUntil =
+    lockData?.mark_entry_unblocked_until
+      ? String(lockData.mark_entry_unblocked_until)
+      : markEntryEditWindow?.approval_until
+        ? String(markEntryEditWindow.approval_until)
+        : null;
+  const markEntryApprovedFresh =
+    Boolean(markEntryApprovalUntil) &&
+    (publishConsumedApprovals == null || markEntryApprovalUntil !== (publishConsumedApprovals.markEntryApprovalUntil ?? null));
+  const entryOpen =
+    !isPublished ||
+    (!editRequestsEnabled) ||
+    (Boolean(lockData?.entry_open) && markEntryApprovedFresh) ||
+    (Boolean(markEntryEditWindow?.allowed_by_approval) && markEntryApprovedFresh);
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const publishButtonIsRequestEdit = publishedEditLocked && editRequestsEnabled;
   const editRequestsBlocked = publishedEditLocked && !editRequestsEnabled;
 
@@ -143,7 +170,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
     refresh: refreshEditReq,
   } = useEditRequestPending({
     enabled: Boolean(editRequestsEnabled) && Boolean(subjectId),
-    assessment: 'cqi_model',
+    assessment: 'cqi_pure_lab_cqi',
     subjectCode: subjectId ? String(subjectId) : null,
     scope: 'MARK_ENTRY',
     teachingAssignmentId,
@@ -169,6 +196,11 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
   const [editReasonOpen, setEditReasonOpen]   = useState(false);
   const [editReason, setEditReason]           = useState('');
   const [editReasonBusy, setEditReasonBusy]   = useState(false);
+  const [editReasonError, setEditReasonError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId, teachingAssignmentId]);
 
   // ── Fetch published sheets + draft ───────────────────────────────────
   useEffect(() => {
@@ -186,12 +218,12 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
       fetchTeachingAssignmentRoster(taId).catch(() => null),
       // Load CQI draft
       fetchWithAuth(
-        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${taId}&assessment_type=model&page_key=pure_lab_cqi&co_numbers=1`,
+        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${taId}&assessment_type=model&page_key=pure_lab_cqi&co_numbers=1`,
         { method: 'GET' },
       ).catch(() => null),
       // Load CQI published
       fetchWithAuth(
-        `/api/obe/cqi-published/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${taId}&assessment_type=model&page_key=pure_lab_cqi&co_numbers=1`,
+        `/api/obe/cqi-published/${encodeURIComponent(subjectId)}?teaching_assignment_id=${taId}&assessment_type=model&page_key=pure_lab_cqi&co_numbers=1`,
         { method: 'GET' },
       ).catch(() => null),
     ]).then(([c1Res, c2Res, c3Res, rosterRes, draftHttpRes, pubHttpRes]) => {
@@ -295,7 +327,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
         entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
-        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${teachingAssignmentId}`,
+        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
         {
           method: 'PUT',
           body: JSON.stringify({
@@ -330,7 +362,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
         entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
-        `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}/`,
+        `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -345,8 +377,12 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
       if (!res.ok) throw new Error(`Publish failed (${res.status})`);
       const json = await res.json();
       setPublishedAt(json?.published_at ?? new Date().toISOString());
+      setPublishConsumedApprovals({
+        markEntryApprovalUntil,
+      });
       setStatusMsg('CQI Published successfully.');
       refreshLock();
+      refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
       setStatusMsg(`Error: ${e?.message || 'Publish failed'}`);
     } finally {
@@ -356,36 +392,68 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
 
   // ── Request edit ──────────────────────────────────────────────────────
   async function submitEditRequest() {
-    if (!subjectId || teachingAssignmentId == null || !editReason.trim()) return;
+    if (!subjectId || teachingAssignmentId == null) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
+    if (editRequestPending) {
+      setEditReasonError('Edit request is pending. Please wait for approval.');
+      return;
+    }
+
+    const reason = String(editReason || '').trim();
+    if (!reason) {
+      setEditReasonError('Reason is required.');
+      return;
+    }
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      const msg = 'Please verify your mobile number in Profile before requesting edits.';
+      setEditReasonError(msg);
+      alert(msg);
+      window.location.href = '/profile';
+      return;
+    }
+
     setEditReasonBusy(true);
     setStatusMsg(null);
+    setEditReasonError(null);
     try {
-      const res = await fetchWithAuth(
-        `/api/obe/edit-request/`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            subject_code: subjectId,
-            teaching_assignment_id: teachingAssignmentId,
-            assessment: 'cqi_model',
-            reason: editReason.trim(),
-          }),
-        },
-      );
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const created = await createEditRequest({
+        assessment: 'cqi_pure_lab_cqi',
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      const successMsg = formatEditRequestSentMessage(created);
+      alert(successMsg);
       setEditReasonOpen(false);
       setEditReason('');
-      setStatusMsg('Edit request submitted. Awaiting IQAC approval.');
-      refreshEditReq();
+      setEditReasonError(null);
+      setStatusMsg(successMsg.replace(/\n/g, ' • '));
+      setEditReqPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshEditReq({ silent: true });
+      } catch {
+        // ignore
+      }
+      refreshLock();
+      refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
-      setStatusMsg(`Error: ${e?.message || 'Request failed'}`);
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setEditReasonError(msg);
+      setStatusMsg(`Error: ${msg}`);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditReasonBusy(false);
     }
   }
 
   // ── Render ────────────────────────────────────────────────────────────
-  const isViewOnly  = editRequestsBlocked || (isPublished && !editRequestPending);
+  const isViewOnly  = Boolean(isPublished && !entryOpen);
   const threshold   = (PURE_LAB_THRESHOLD_PCT / 100) * PURE_LAB_TOTAL_MAX;
   const flaggedCount = rows.filter((r) => r.needsCqi).length;
 
@@ -464,7 +532,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
           </span>
           {publishButtonIsRequestEdit && (
             <button
-              onClick={() => { setEditReasonOpen(true); }}
+              onClick={() => { setEditReasonOpen(true); setEditReasonError(null); }}
               disabled={editRequestPending}
               style={{
                 padding: '6px 14px', borderRadius: 6, border: 'none', cursor: 'pointer',
@@ -561,7 +629,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
                       <input
                         type="number"
                         min={0}
-                        max={PURE_LAB_TOTAL_MAX}
+                        max={CQI_INPUT_MAX}
                         value={cqiEntries[sid] ?? ''}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -569,7 +637,17 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
                             setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
                           } else {
                             const n = parseFloat(val);
-                            setCqiEntries((prev) => ({ ...prev, [sid]: Number.isFinite(n) ? clamp(n, 0, PURE_LAB_TOTAL_MAX) : '' }));
+                            if (!Number.isFinite(n)) {
+                              setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
+                              return;
+                            }
+                            if (n < 0 || n > CQI_INPUT_MAX) {
+                              window.alert(`Entered value should be less than or equal to ${CQI_INPUT_MAX}.`);
+                              e.target.value = '';
+                              setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
+                              return;
+                            }
+                            setCqiEntries((prev) => ({ ...prev, [sid]: n }));
                           }
                         }}
                         style={{
@@ -661,7 +739,10 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
             </div>
             <textarea
               value={editReason}
-              onChange={(e) => setEditReason(e.target.value)}
+              onChange={(e) => {
+                setEditReason(e.target.value);
+                if (editReasonError) setEditReasonError(null);
+              }}
               rows={3}
               placeholder="Reason for edit request…"
               style={{
@@ -669,9 +750,14 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
                 border: '1px solid #cbd5e1', fontSize: 13, resize: 'vertical',
               }}
             />
+            {editReasonError && (
+              <div style={{ marginTop: 10, color: '#dc2626', fontSize: 12, fontWeight: 600 }}>
+                {editReasonError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
               <button
-                onClick={() => { setEditReasonOpen(false); setEditReason(''); }}
+                onClick={() => { setEditReasonOpen(false); setEditReason(''); setEditReasonError(null); }}
                 style={{
                   padding: '7px 16px', borderRadius: 6, border: '1px solid #cbd5e1',
                   background: '#f8fafc', fontWeight: 600, fontSize: 13, cursor: 'pointer',

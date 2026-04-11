@@ -94,6 +94,7 @@ import IDCSScanTestPage from './pages/IDCSScan/TestPage';
 import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
+import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
 import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
@@ -108,6 +109,8 @@ import MyProposalsPage from './pages/events/MyProposalsPage';
 import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import LmsPage from './pages/lms/LmsPage';
+import FilePreviewPage from './pages/lms/FilePreviewPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -336,6 +339,14 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
                 />
                 <Route
+                  path="/lms"
+                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<LmsPage user={user} />} />}
+                />
+                <Route
+                  path="/lms/preview/file/:materialId"
+                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<FilePreviewPage />} />}
+                />
+                <Route
                   path="/ps/staff-attendance/upload"
                   element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
                 />
@@ -507,6 +518,10 @@ export default function App() {
                 <Route
                   path="/idscan/gatescan"
                   element={<ProtectedRoute user={user} requiredRoles={['SECURITY']} element={<RFReaderGateScanPage />} />}
+                />
+                <Route
+                  path="/idscan/fingerprint"
+                  element={<ProtectedRoute user={user} requiredRoles={['LIBRARY', 'SECURITY', 'IQAC', 'ADMIN']} element={<FingerprintEnrollPage />} />}
                 />
                 <Route
                   path="/iqac/rf-reader"

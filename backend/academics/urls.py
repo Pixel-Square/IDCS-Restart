@@ -46,6 +46,7 @@ from .views import (
     BatchListView,
     IqacInternalMarksBulkExportView,
     IqacInternalMarksCourseExportView,
+    StudentProfileUpdateView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
 from .views import UnifiedUnlockRequestsView, DepartmentStudentsView, AllStudentsView, MentorMyMenteesView
@@ -77,6 +78,8 @@ urlpatterns = [
     # Explicit teaching-assignment enabled assessments endpoint (faculty override)
     path('teaching-assignments/<int:pk>/enabled_assessments/', TeachingAssignmentViewSet.as_view({'get': 'enabled_assessments', 'post': 'enabled_assessments'})),
     path('teaching-assignments/<int:pk>/enabled_assessments/request-edit/', TeachingAssignmentViewSet.as_view({'post': 'enabled_assessments_request_edit'})),
+    path('teaching-assignments/<int:pk>/special-qp-pattern/', TeachingAssignmentViewSet.as_view({'get': 'special_qp_pattern', 'post': 'special_qp_pattern'})),
+    path('teaching-assignments/<int:pk>/special-co-weights/', TeachingAssignmentViewSet.as_view({'get': 'special_co_weights', 'post': 'special_co_weights'})),
 
     # Teaching assignment helpers
     path('my-teaching-assignments/', MyTeachingAssignmentsView.as_view()),
@@ -131,6 +134,7 @@ urlpatterns = [
     path('remove-secondary-section/', RemoveSecondarySectionView.as_view()),
     path('students/import/', StudentBulkImportView.as_view()),
     path('students/import/template/', StudentImportTemplateDownloadView.as_view()),
+    path('students/<int:student_id>/', StudentProfileUpdateView.as_view()),
     path('staff/periods/', StaffPeriodsView.as_view()),
     path('student/attendance/', StudentAttendanceView.as_view()),
     path('student/marks/', StudentMarksView.as_view()),

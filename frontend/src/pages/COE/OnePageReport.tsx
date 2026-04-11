@@ -4,14 +4,29 @@ import autoTable from 'jspdf-autotable';
 import JsBarcode from 'jsbarcode';
 import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
 import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
-import { listFinalizedBundleConfigs } from '../../utils/coeBundleFinalizeStore';
+import { listFinalizedBundleConfigs, hydrateBundleFinalizeStore } from '../../utils/coeBundleFinalizeStore';
 import krLogoSrc from '../../assets/krlogo.png';
 import newBannerSrc from '../../assets/new_banner.png';
 import { readShuffledLists, hydrateShuffledListStore, PersistedShuffledByDummy } from './shuffledListStore';
 import { readStudentTotalMarks, hydrateMarksStore } from './marksStore';
+import { kvHydrate } from '../../utils/coeKvStore';
 
 const SEMESTERS = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'] as const;
 const SHUFFLED_LIST_KEY = 'coe-students-shuffled-list-v1';
+const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
+
+type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
+type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
+
+function readCourseBundleDummyStore(): CourseBundleDummyStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(COURSE_BUNDLE_DUMMY_STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
@@ -149,6 +164,7 @@ function numberToWords(value: number): string {
 export default function OnePageReport() {
   const [bundleCode, setBundleCode] = useState('');
   const [searching, setSearching] = useState(false);
+  const [hydrating, setHydrating] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [foundBundle, setFoundBundle] = useState<FinalizedBundle | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -159,9 +175,13 @@ export default function OnePageReport() {
   useEffect(() => {
     // Hydrate KV stores from DB on mount
     Promise.all([
+      hydrateBundleFinalizeStore(),
       hydrateShuffledListStore(),
       hydrateMarksStore(),
-    ]).catch(() => {});
+      kvHydrate(COURSE_BUNDLE_DUMMY_STORE_KEY),
+    ])
+      .catch(() => {})
+      .finally(() => setHydrating(false));
   }, []);
 
   useEffect(() => {
@@ -196,6 +216,7 @@ export default function OnePageReport() {
 
       let globalSequence = 0;
       let foundNotFinalized = false;
+      const bundleStore = readCourseBundleDummyStore();
 
       for (const deptBlock of response.departments) {
         const deptCode = DEPARTMENT_DUMMY_DIGITS[deptBlock.department] || '9';
@@ -210,7 +231,8 @@ export default function OnePageReport() {
           const selection = selectionMap[courseKey];
           if (selection?.eseType !== 'ESE') continue;
 
-          const students: BundleStudent[] = course.students.map((student: CoeCourseStudent) => {
+          // Generate sequential dummies as baseline
+          const seqStudents: BundleStudent[] = course.students.map((student: CoeCourseStudent) => {
             globalSequence += 1;
             const dummy = `KR00${deptCode}${semesterDigit}${String(globalSequence).padStart(5, '0')}`;
             const saved = savedByDummy.get(dummy);
@@ -229,12 +251,90 @@ export default function OnePageReport() {
             };
           });
 
-          const isCourseShuffled = students.some((student, idx) => {
-            const original = course.students[idx];
-            if (!original) return false;
-            return student.reg_no !== original.reg_no || student.name !== original.name;
-          });
-          if (!isCourseShuffled) continue;
+          // Check bundle store for authoritative dummy assignments (courseDummies / bundles)
+          const deptFilterKey = `${deptBlock.department}::${semester}`;
+          const courseBundleMap = bundleStore[deptFilterKey] || bundleStore[filterKey] || {};
+          const normalizedCourseCode = String(course.course_code || '').trim();
+          const normalizedCourseName = String(course.course_name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+          let matchingKeys: string[] = [];
+          if (normalizedCourseCode) {
+            const prefix = `${deptBlock.department}::${semester}::${normalizedCourseCode}::`;
+            const candidates = Object.keys(courseBundleMap).filter((k) => k.startsWith(prefix));
+            if (candidates.length <= 1) {
+              matchingKeys = candidates;
+            } else {
+              const exactByName = candidates.filter((k) => String((k.split('::')[3] || '')).trim().toLowerCase().replace(/\s+/g, ' ') === normalizedCourseName);
+              matchingKeys = exactByName.length > 0 ? exactByName : candidates;
+            }
+          }
+          const authKey = matchingKeys.length > 0 ? matchingKeys[0] : null;
+          const authCourse = authKey ? courseBundleMap[authKey] : null;
+
+          // If the store has a direct bundles mapping with the searched bundle name, use it
+          if (authCourse?.bundles) {
+            for (const [storeBundleName, storeDummies] of Object.entries(authCourse.bundles)) {
+              if (storeBundleName.toUpperCase() !== normalizedCode) continue;
+
+              const bundleStudents: BundleStudent[] = (storeDummies || []).map((dummy) => {
+                const saved = savedByDummy.get(dummy);
+                const persisted = persistedByDummy[dummy];
+                const marksData = readStudentTotalMarks(dummy);
+                return {
+                  dummy,
+                  reg_no: saved?.reg_no || persisted?.reg_no || '',
+                  name: saved?.name || persisted?.name || '-',
+                  hasSavedMarks: marksData.hasSavedMarks,
+                  totalMarks: marksData.totalMarks,
+                };
+              });
+
+              if (bundleStudents.length === 0) continue;
+
+              const isFinalized = bundleStudents.every((s) => s.hasSavedMarks);
+              if (!isFinalized) {
+                foundNotFinalized = true;
+                continue;
+              }
+
+              return {
+                status: 'ready',
+                bundle: {
+                  bundleName: storeBundleName,
+                  semester,
+                  bundleSize,
+                  department: deptBlock.department,
+                  course_code: course.course_code || 'NO_CODE',
+                  course_name: course.course_name || 'Unnamed Course',
+                  students: bundleStudents,
+                },
+              };
+            }
+          }
+
+          // Use courseDummies from store if available, otherwise use sequential dummies
+          const authDummies = Array.isArray(authCourse?.courseDummies)
+            ? authCourse!.courseDummies.map((d: string) => String(d || '').trim()).filter(Boolean)
+            : [];
+
+          let students: BundleStudent[];
+          if (authDummies.length > 0) {
+            const studentsByDummy = new Map(seqStudents.map((s) => [String(s.dummy || '').trim(), s]));
+            students = authDummies.map((dummy) => {
+              const current = studentsByDummy.get(dummy);
+              const saved = savedByDummy.get(dummy);
+              const persisted = persistedByDummy[dummy];
+              const marksData = readStudentTotalMarks(dummy);
+              return {
+                dummy,
+                reg_no: saved?.reg_no || persisted?.reg_no || current?.reg_no || '',
+                name: saved?.name || persisted?.name || current?.name || '-',
+                hasSavedMarks: marksData.hasSavedMarks,
+                totalMarks: marksData.totalMarks,
+              };
+            });
+          } else {
+            students = seqStudents;
+          }
 
           const deptShort =
             DEPARTMENT_SHORT[deptBlock.department] ||
@@ -273,6 +373,65 @@ export default function OnePageReport() {
 
       if (foundNotFinalized) {
         return { status: 'not_finalized' };
+      }
+    }
+
+    // Search additional bundles from AdditionalPage store
+    const bundleStore = readCourseBundleDummyStore();
+    const shuffledLists = readShuffledLists();
+
+    for (const [storeKey, courseBundleMap] of Object.entries(bundleStore)) {
+      const [storedDept, storedSem] = storeKey.split('::');
+      if (!storedDept || !storedSem) continue;
+
+      const shuffledForFilter = shuffledLists[storeKey] || {};
+
+      for (const [courseKey, courseData] of Object.entries(courseBundleMap)) {
+        const parts = courseKey.split('::');
+        const courseDept = parts[0] || storedDept;
+        const courseCode = parts[2] || '';
+        const courseName = parts[3] || '';
+
+        for (const [bundleName, dummies] of Object.entries(courseData.bundles || {})) {
+          if (bundleName.toUpperCase() !== normalizedCode) continue;
+
+          const students: BundleStudent[] = (dummies || []).map((dummy) => {
+            const info = shuffledForFilter[dummy] || { reg_no: '', name: '-' };
+            const marksData = readStudentTotalMarks(dummy);
+            return {
+              dummy,
+              reg_no: info.reg_no || '',
+              name: info.name || '-',
+              totalMarks: marksData.totalMarks,
+              hasSavedMarks: marksData.hasSavedMarks,
+            };
+          });
+
+          if (students.length === 0) continue;
+
+          const isFinalized = students.every((s) => s.hasSavedMarks);
+          if (!isFinalized) return { status: 'not_finalized' as const };
+
+          // Find bundleSize from finalized config for this dept/sem
+          const cfgMatch = finalizedConfigs.find(
+            (c) => c.department === storedDept && c.semester === storedSem
+          ) || finalizedConfigs.find(
+            (c) => c.department === courseDept && c.semester === storedSem
+          );
+
+          return {
+            status: 'ready' as const,
+            bundle: {
+              bundleName,
+              semester: storedSem,
+              bundleSize: cfgMatch?.bundleSize || students.length,
+              department: courseDept,
+              course_code: courseCode || 'NO_CODE',
+              course_name: courseName || 'Unnamed Course',
+              students,
+            },
+          };
+        }
       }
     }
 
@@ -579,15 +738,16 @@ export default function OnePageReport() {
           <button
             type="button"
             onClick={() => void handleSearch()}
-            disabled={searching}
+            disabled={searching || hydrating}
             className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {searching ? 'Searching...' : 'Find Bundle'}
+            {hydrating ? 'Loading...' : searching ? 'Searching...' : 'Find Bundle'}
           </button>
         </div>
       </div>
 
-      {searching ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Searching finalized bundle...</div> : null}
+      {hydrating ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Loading bundle data from server...</div> : null}
+      {!hydrating && searching ? <div className="rounded-xl border border-gray-200 bg-white p-6 text-gray-600">Searching finalized bundle...</div> : null}
       {error ? <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-700">{error}</div> : null}
 
       {!searching && !error && foundBundle ? (

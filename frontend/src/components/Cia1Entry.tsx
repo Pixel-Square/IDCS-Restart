@@ -29,7 +29,7 @@ import { ModalPortal } from './ModalPortal';
 import { normalizeObeClassType } from '../constants/classTypes';
 import * as XLSX from 'xlsx';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { getApiBase } from '../services/apiBase';
@@ -51,6 +51,7 @@ type Props = {
   assessmentKey?: AssessmentKey;
   classType?: string | null;
   questionPaperType?: string | null;
+  customQuestions?: Array<{ key: string; label: string; max: number; co: any; btl: number }> | null;
 };
 
 type CoValue = 1 | 2 | 3 | 4 | 5 | '1&2' | '3&4' | 'both';
@@ -280,7 +281,7 @@ function downloadCsv(filename: string, rows: Array<Record<string, string | numbe
   URL.revokeObjectURL(url);
 }
 
-export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, classType, questionPaperType }: Props) {
+export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentKey: assessmentKeyProp, classType, questionPaperType, customQuestions: customQuestionsProp }: Props) {
   const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
   const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
   const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
@@ -368,6 +369,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   }, [classTypeKey, qpTypeKey, assessmentKey]);
 
   const questions = useMemo<QuestionDef[]>(() => {
+    // SPECIAL courses: use custom questions from popup if provided
+    if (Array.isArray(customQuestionsProp) && customQuestionsProp.length) {
+      return customQuestionsProp.map((q, i) => ({
+        key: q.key || `q${i + 1}`,
+        label: q.label || `Q${i + 1}`,
+        max: Number(q.max) || 0,
+        co: parseCo(q.co) as CoValue,
+        btl: Math.min(6, Math.max(1, Number(q.btl || 1))) as 1 | 2 | 3 | 4 | 5 | 6,
+      }));
+    }
+
     const qs = (masterCfg as any)?.assessments?.[assessmentKey]?.questions ?? (masterCfg as any)?.assessments?.cia1?.questions;
     const baseFromMaster: QuestionDef[] = Array.isArray(qs) && qs.length
       ? qs
@@ -404,7 +416,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
 
     return qpTypeKey === 'QP2' ? normalizeQuestionsForQp2(baseFromMaster) : baseFromMaster;
-  }, [masterCfg, assessmentKey, iqacPattern, coPair.a, qpTypeKey]);
+  }, [masterCfg, assessmentKey, iqacPattern, coPair.a, qpTypeKey, customQuestionsProp]);
 
   // Derive the actual display CO pair from the loaded pattern questions.
   // e.g. QP1 FINAL YEAR CIA2 may assign CO2 & CO3 instead of the default CO3 & CO4.
@@ -546,6 +558,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     markManagerApprovalUntil !== (publishConsumedApprovals?.markManagerApprovalUntil ?? null);
 
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
   const entryOpen = !isPublished ? Boolean(editAllowed) : !editRequestsEnabled || Boolean(markLock?.entry_open) || markEntryApprovedFresh || markManagerApprovedFresh;
   const publishedEditLocked = Boolean(isPublished && editRequestsEnabled && !entryOpen);
   const tableBlocked = Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : (!markManagerLocked && !autoUnlockMarkManager)));
@@ -587,7 +600,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
-    if (!editRequestsEnabled) {
+    if (!markManagerEditRequestsEnabled) {
       alert('Edit requests are disabled by IQAC.');
       return;
     }

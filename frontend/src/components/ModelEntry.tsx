@@ -21,6 +21,7 @@ type Props = {
   teachingAssignmentId?: number;
   classType?: string | null;
   questionPaperType?: string | null;
+  customQuestions?: Array<{ key: string; label: string; max: number }> | null;
 };
 
 type BtlValue = '' | 1 | 2 | 3 | 4 | 5 | 6;
@@ -99,7 +100,7 @@ function normalizeHeaderCell(v: any): string {
     .replace(/\s+/g, ' ');
 }
 
-export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType }: Props) {
+export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType, customQuestions: customQuestionsProp }: Props) {
   const visibleBtls = useMemo(() => [1, 2, 3, 4, 5, 6] as const, []);
 
   const normalizeAbsenceKind = (value: unknown): AbsenceKind => {
@@ -343,6 +344,15 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   }, [normalizedClassType, normalizedQpType]);
 
   const questions = useMemo<QuestionDef[]>(() => {
+    // SPECIAL courses: use custom questions from popup if provided
+    if (Array.isArray(customQuestionsProp) && customQuestionsProp.length) {
+      return customQuestionsProp.map((q, i) => ({
+        key: q.key || `q${i + 1}`,
+        label: q.label || `Q${i + 1}`,
+        max: Number(q.max) || 0,
+      }));
+    }
+
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
     if (Array.isArray(marks) && marks.length) {
       return marks.map((max, idx) => ({
@@ -352,7 +362,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       }));
     }
     return DEFAULT_MODEL_QUESTIONS;
-  }, [iqacPattern]);
+  }, [iqacPattern, customQuestionsProp]);
 
   const colSpan = 4 + questions.length + 1 + 4 + visibleBtls.length * 2;
 

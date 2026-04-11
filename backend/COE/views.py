@@ -42,7 +42,7 @@ def _normalize_department_label(raw_values: list[str]) -> str | None:
             return 'EEE'
         if any(p in ('IT', 'INFORMATION TECHNOLOGY') for p in parts) or 'INFORMATION TECHNOLOGY' in joined:
             return 'IT'
-        if any(p in ('MECH', 'ME') for p in parts) or 'MECHANICAL' in joined:
+        if any(p in ('MECH', 'ME', 'RE') for p in parts) or 'MECHANICAL' in joined or 'RESEARCH' in joined:
             return 'MECH'
         return None
 
@@ -726,13 +726,70 @@ class CoeStudentsCourseMapView(APIView):
             for c in courses_raw:
                 students = list(c['students_map'].values())
                 students.sort(key=lambda s: (1 if s.get('is_arrear') else 0, s.get('reg_no') or '', s.get('name') or ''))
+
+                # Defensive de-duplication by register number per course.
+                seen_reg = set()
+                unique_students = []
+                for row in students:
+                    reg_no = str(row.get('reg_no') or '').strip().upper()
+                    if reg_no and reg_no in seen_reg:
+                        continue
+                    if reg_no:
+                        seen_reg.add(reg_no)
+                    unique_students.append(row)
+
                 courses_out.append(
                     {
                         'course_code': c['course_code'],
                         'course_name': c['course_name'],
-                        'students': students,
+                        'students': unique_students,
                     }
                 )
+
+            # Targeted correction for known ECE SEM8 NPTEL mapping issue.
+            if dept_name == 'ECE' and sem_number == 8:
+                for course in courses_out:
+                    code = str(course.get('course_code') or '').strip().upper()
+                    students = list(course.get('students') or [])
+
+                    if code == '20GE7811':
+                        # PRIYADHARSHINI.A must not appear in Business Ethics.
+                        students = [s for s in students if str(s.get('reg_no') or '').strip() != '811722104114']
+
+                    if code == '20GE7812':
+                        # SHAM LICE W must appear only once in Healthcare.
+                        seen_sham = False
+                        normalized = []
+                        for s in students:
+                            reg_no = str(s.get('reg_no') or '').strip()
+                            if reg_no == '811722243047':
+                                if seen_sham:
+                                    continue
+                                seen_sham = True
+                            normalized.append(s)
+
+                        # Ensure PRIYADHARSHINI.A appears in Healthcare.
+                        if not any(str(s.get('reg_no') or '').strip() == '811722104114' for s in normalized):
+                            priya = StudentProfile.objects.filter(reg_no='811722104114').select_related('user').first()
+                            if priya:
+                                user_obj = getattr(priya, 'user', None)
+                                first_name = str(getattr(user_obj, 'first_name', '') or '').strip() if user_obj else ''
+                                last_name = str(getattr(user_obj, 'last_name', '') or '').strip() if user_obj else ''
+                                full_name = f"{first_name} {last_name}".strip() or str(getattr(user_obj, 'username', '') or '') if user_obj else 'PRIYADHARSHINI.A'
+                                normalized.append(
+                                    {
+                                        'id': int(getattr(priya, 'id', 0) or 0),
+                                        'reg_no': '811722104114',
+                                        'name': full_name,
+                                        'is_arrear': False,
+                                    }
+                                )
+
+                        normalized.sort(key=lambda s: (1 if s.get('is_arrear') else 0, s.get('reg_no') or '', s.get('name') or ''))
+                        students = normalized
+
+                    course['students'] = students
+
             courses_out.sort(key=lambda c: ((c.get('course_code') or ''), (c.get('course_name') or '')))
             departments_out.append({'department': dept_name, 'courses': courses_out})
 

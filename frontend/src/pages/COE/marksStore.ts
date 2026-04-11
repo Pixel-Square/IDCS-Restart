@@ -1,12 +1,11 @@
 /**
- * Centralised marks store — replaces per-dummy localStorage keys
- * (`marks_${dummy}`, `marks_type_${dummy}`) with a single consolidated
- * blob backed by the COE Key-Value API.
+ * Centralised marks store — uses row-based API for marks storage.
+ * Each dummy number is stored as an individual row in the database.
  */
 
-import { kvHydrate, kvSave } from '../../utils/coeKvStore';
+import fetchWithAuth from '../../services/fetchAuth';
 
-const MARKS_STORE_KEY = 'coe-marks-store-v1';
+const LOCAL_CACHE_KEY = 'coe-marks-store-v2';
 
 type MarksEntry = {
   marks: Record<string, any>;
@@ -15,26 +14,60 @@ type MarksEntry = {
 
 type MarksMap = Record<string, MarksEntry>;
 
-function readMap(): MarksMap {
+function readLocalCache(): MarksMap {
   try {
-    const raw = window.localStorage.getItem(MARKS_STORE_KEY);
+    const raw = window.localStorage.getItem(LOCAL_CACHE_KEY);
     return raw ? JSON.parse(raw) || {} : {};
   } catch {
     return {};
   }
 }
 
-/** Call once on page mount to pull marks from the DB into localStorage. */
-export async function hydrateMarksStore(): Promise<void> {
-  await kvHydrate(MARKS_STORE_KEY);
+function writeLocalCache(map: MarksMap): void {
+  window.localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(map));
 }
 
-/** Read marks + qp_type for a given dummy (falls back to legacy individual keys). */
+/** Call once on page mount to pull marks from the DB into the local cache. */
+export async function hydrateMarksStore(): Promise<void> {
+  try {
+    const res = await fetchWithAuth('/api/coe/student-marks/');
+    if (!res.ok) return;
+    const json = await res.json();
+    
+    // Convert array of entries to map
+    const map: MarksMap = {};
+    for (const entry of json.entries || []) {
+      map[entry.dummy_number] = {
+        marks: entry.marks || {},
+        qp_type: entry.qp_type || 'QP1',
+      };
+    }
+    writeLocalCache(map);
+  } catch {
+    // Ignore errors, use local cache
+  }
+}
+
+/** Read marks + qp_type for a given dummy. */
 export function getMarksForDummy(dummy: string): MarksEntry | null {
-  const map = readMap();
+  const map = readLocalCache();
   if (map[dummy]) return map[dummy];
 
-  // Legacy fallback: individual localStorage keys (pre-migration data)
+  // Legacy fallback: check old KV store format
+  try {
+    const oldKey = 'coe-marks-store-v1';
+    const oldRaw = window.localStorage.getItem(oldKey);
+    if (oldRaw) {
+      const oldMap = JSON.parse(oldRaw) || {};
+      if (oldMap[dummy]) {
+        return oldMap[dummy];
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Older legacy fallback: individual localStorage keys
   try {
     const rawMarks = window.localStorage.getItem(`marks_${dummy}`);
     const rawQp = window.localStorage.getItem(`marks_type_${dummy}`);
@@ -53,15 +86,23 @@ export function getMarksQpType(dummy: string): string | null {
   return entry?.qp_type ?? null;
 }
 
-/** Save marks + qp_type for a dummy into the consolidated store. */
+/** Save marks + qp_type for a dummy into the row-based store. */
 export function saveMarksForDummy(
   dummy: string,
   marks: Record<string, any>,
   qp_type: string,
 ): void {
-  const map = readMap();
+  // Update local cache
+  const map = readLocalCache();
   map[dummy] = { marks, qp_type };
-  kvSave(MARKS_STORE_KEY, map);
+  writeLocalCache(map);
+
+  // Save to DB (fire-and-forget)
+  fetchWithAuth('/api/coe/student-marks/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dummy_number: dummy, marks, qp_type }),
+  }).catch(() => {});
 }
 
 /** Read total marks for a dummy (used by OnePageReport). */

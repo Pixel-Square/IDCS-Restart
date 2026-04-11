@@ -90,6 +90,17 @@ def submit_application(application: app_models.Application, user):
     if active_fv is None:
         # Create snapshot from current ApplicationField definitions
         active_fv = _snapshot_schema_for_application_type(application.application_type)
+    else:
+        # Re-snapshot if live fields have drifted from the stored form version
+        # (e.g. admin added/removed/renamed fields since last snapshot).
+        live_keys = set(
+            app_models.ApplicationField.objects
+            .filter(application_type=application.application_type)
+            .values_list('field_key', flat=True)
+        )
+        fv_keys = {f['field_key'] for f in (active_fv.schema or {}).get('fields', [])}
+        if live_keys != fv_keys:
+            active_fv = _snapshot_schema_for_application_type(application.application_type)
 
     # Bind form_version + mark submission time
     application.form_version = active_fv

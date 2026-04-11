@@ -1,0 +1,19 @@
+[Unit]
+Description=Fingerprint Scanner Bridge (HTTP API for R307/R305 UART modules)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=iqac
+WorkingDirectory=/home/iqac/IDCS-Restart/backend
+Environment=PATH=/home/iqac/IDCS-Restart/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/iqac/IDCS-Restart/backend/.venv/bin/python scripts/fingerprint_bridge.py --port 8889
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fingerprint-bridge
+
+[Install]
+WantedBy=multi-user.target

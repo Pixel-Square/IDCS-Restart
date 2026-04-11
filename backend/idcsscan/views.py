@@ -2030,6 +2030,31 @@ class GatepassCheckView(APIView):
             gate_window = _extract_gate_window(in_pending)
             gate_end = gate_window.get('end') if isinstance(gate_window, dict) else None
             late_return = bool(gate_end and now > gate_end)
+            cooldown_until = None
+            cooldown_remaining_seconds = 0
+            if in_pending.gatepass_scanned_at:
+                cooldown_until = in_pending.gatepass_scanned_at + timedelta(minutes=5)
+                if now < cooldown_until:
+                    cooldown_remaining_seconds = int((cooldown_until - now).total_seconds())
+                    return Response(
+                        {
+                            "allowed": False,
+                            "reason": "in_scan_cooldown",
+                            "message": "IN scan can be recorded only after 5 minutes from OUT scan.",
+                            "cooldown": True,
+                            "cooldown_until": cooldown_until.isoformat(),
+                            "cooldown_remaining_seconds": max(cooldown_remaining_seconds, 0),
+                            "application_id": in_pending.id,
+                            "application_type": in_pending.application_type.name,
+                            "profile_type": profile_type,
+                            "profile": profile_data,
+                            "student": student_data,
+                            "staff": staff_data,
+                            "approval_timeline": [],
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+
             with transaction.atomic():
                 locked = app_models.Application.objects.select_for_update().get(pk=in_pending.pk)
                 # Double-check still pending IN scan.
@@ -2598,3 +2623,366 @@ class BulkEntryPeopleView(APIView):
                 })
 
         return Response({"results": data}, status=status.HTTP_200_OK)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Fingerprint Enrollment API Views
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from idcsscan.models import FingerprintEnrollment
+from idcsscan.serializers import (
+    FingerprintEnrollmentReadSerializer,
+    FingerprintEnrollmentWriteSerializer,
+)
+
+
+class FingerprintEnrollView(APIView):
+    """
+    POST /api/idscan/fingerprint/enroll/
+
+    Enroll (or re-enroll) a fingerprint for a user.
+
+    Body (JSON):
+      {
+        "user_id": 42,                   // OR "reg_no" OR "staff_id"
+        "reg_no": "811722104001",
+        "staff_id": "100123",
+        "finger": "R_INDEX",
+        "template_b64": "<base64>",
+        "template_format": "ISO_19794_2",
+        "quality_score": 82,
+        "device_type": "SecuGen-Hamster"
+      }
+
+    Requires SECURITY / IQAC / ADMIN role.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not _has_card_management_permission(request.user):
+            return Response(
+                {"detail": "You do not have permission to enroll fingerprints."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = FingerprintEnrollmentWriteSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        enrollment = serializer.save()
+
+        return Response(
+            {
+                "detail": "Fingerprint enrolled successfully.",
+                "enrollment": FingerprintEnrollmentReadSerializer(enrollment).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class FingerprintListView(APIView):
+    """
+    GET /api/idscan/fingerprint/list/
+
+    Query params (one required):
+      ?user_id=42  OR  ?reg_no=811722104001  OR  ?staff_id=100123
+      ?active_only=true  (default: true)
+
+    Returns all enrolled fingerprints for the user.
+    Requires SECURITY / IQAC / ADMIN role.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not _has_card_management_permission(request.user):
+            return Response(
+                {"detail": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        User = get_user_model()
+        user_id = request.query_params.get("user_id")
+        reg_no = (request.query_params.get("reg_no") or "").strip()
+        staff_id = (request.query_params.get("staff_id") or "").strip()
+        active_only = request.query_params.get("active_only", "true").lower() in ("true", "1", "yes")
+
+        user = None
+        if user_id:
+            user = User.objects.filter(pk=user_id).first()
+        elif reg_no:
+            sp = StudentProfile.objects.select_related("user").filter(reg_no=reg_no).first()
+            user = sp.user if sp else None
+        elif staff_id:
+            sp = StaffProfile.objects.select_related("user").filter(staff_id=staff_id).first()
+            user = sp.user if sp else None
+
+        if not user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        qs = FingerprintEnrollment.objects.filter(user=user)
+        if active_only:
+            qs = qs.filter(is_active=True)
+        qs = qs.order_by("finger", "-enrolled_at")
+
+        return Response(
+            {"results": FingerprintEnrollmentReadSerializer(qs, many=True).data},
+            status=status.HTTP_200_OK,
+        )
+
+
+class FingerprintDeactivateView(APIView):
+    """
+    POST /api/idscan/fingerprint/deactivate/
+
+    Body: { "enrollment_id": 5 }  OR  { "user_id": 42, "finger": "R_INDEX" }
+
+    Deactivates a fingerprint enrollment.
+    Requires SECURITY / IQAC / ADMIN role.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not _has_card_management_permission(request.user):
+            return Response(
+                {"detail": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        enrollment_id = request.data.get("enrollment_id")
+        user_id = request.data.get("user_id")
+        finger = (request.data.get("finger") or "").strip()
+
+        qs = FingerprintEnrollment.objects.filter(is_active=True)
+        if enrollment_id:
+            qs = qs.filter(pk=enrollment_id)
+        elif user_id and finger:
+            qs = qs.filter(user_id=user_id, finger=finger)
+        else:
+            return Response(
+                {"detail": "Provide enrollment_id, or both user_id and finger."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated = qs.update(is_active=False, deactivated_at=timezone.now())
+        if updated == 0:
+            return Response(
+                {"detail": "No active enrollment found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            {"detail": f"{updated} enrollment(s) deactivated."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class FingerprintStatusView(APIView):
+    """
+    GET /api/idscan/fingerprint/status/
+
+    Quick check: does this user have any active fingerprints enrolled?
+
+    Query params: ?user_id=42 OR ?reg_no=... OR ?staff_id=...
+
+    Returns: { "enrolled": true, "count": 2, "fingers": ["R_INDEX", "R_THUMB"] }
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        User = get_user_model()
+        user_id = request.query_params.get("user_id")
+        reg_no = (request.query_params.get("reg_no") or "").strip()
+        staff_id = (request.query_params.get("staff_id") or "").strip()
+
+        user = None
+        if user_id:
+            user = User.objects.filter(pk=user_id).first()
+        elif reg_no:
+            sp = StudentProfile.objects.select_related("user").filter(reg_no=reg_no).first()
+            user = sp.user if sp else None
+        elif staff_id:
+            sp = StaffProfile.objects.select_related("user").filter(staff_id=staff_id).first()
+            user = sp.user if sp else None
+
+        if not user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        active = FingerprintEnrollment.objects.filter(user=user, is_active=True)
+        fingers = list(active.values_list("finger", flat=True).distinct())
+
+        # Build user details
+        user_name = user.get_full_name() or user.username
+        user_type = "unknown"
+        identifier = ""
+        department = ""
+        profile_image = ""
+        if hasattr(user, "student_profile"):
+            sp = user.student_profile
+            user_type = "student"
+            identifier = getattr(sp, "reg_no", "")
+            department = getattr(sp, "department", "") or ""
+            if getattr(sp, "profile_image", None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    pass
+        elif hasattr(user, "staff_profile"):
+            sp = user.staff_profile
+            user_type = "staff"
+            identifier = getattr(sp, "staff_id", "")
+            department = getattr(sp, "department", "") or ""
+            if getattr(sp, "profile_image", None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    pass
+
+        return Response(
+            {
+                "enrolled": len(fingers) > 0,
+                "count": len(fingers),
+                "fingers": fingers,
+                "user_id": user.id,
+                "user_name": user_name,
+                "user_type": user_type,
+                "identifier": identifier,
+                "department": department,
+                "profile_image": profile_image,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class FingerprintResetAllView(APIView):
+    """
+    POST /api/idscan/fingerprint/reset-all/
+
+    Deactivate ALL active fingerprint enrollments for a user.
+    Body: { "reg_no": "..." } or { "staff_id": "..." } or { "user_id": 42 }
+
+    Requires SECURITY / IQAC / ADMIN role.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not _has_card_management_permission(request.user):
+            return Response(
+                {"detail": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        User = get_user_model()
+        user_id = request.data.get("user_id")
+        reg_no = (request.data.get("reg_no") or "").strip()
+        staff_id = (request.data.get("staff_id") or "").strip()
+
+        user = None
+        if user_id:
+            user = User.objects.filter(pk=user_id).first()
+        elif reg_no:
+            sp = StudentProfile.objects.select_related("user").filter(reg_no=reg_no).first()
+            user = sp.user if sp else None
+        elif staff_id:
+            sp = StaffProfile.objects.select_related("user").filter(staff_id=staff_id).first()
+            user = sp.user if sp else None
+
+        if not user:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        updated = FingerprintEnrollment.objects.filter(
+            user=user, is_active=True,
+        ).update(is_active=False, deactivated_at=timezone.now())
+
+        if updated == 0:
+            return Response(
+                {"detail": "No active enrollments to reset."},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response(
+            {"detail": f"{updated} fingerprint(s) deactivated.", "count": updated},
+            status=status.HTTP_200_OK,
+        )
+
+
+class FingerprintIdentifyView(APIView):
+    """
+    POST /api/idscan/fingerprint/identify/
+
+    Body: { "template_b64": "<base64>" }
+
+    NOTE: This performs an exact-byte equality lookup against stored
+    `FingerprintEnrollment.template` values. This is a best-effort / simple
+    server-side matcher — for robust biometric matching a proper matcher/SDK
+    should be integrated.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data or {}
+        b64 = (data.get("template_b64") or "").strip()
+        if not b64:
+            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import base64
+
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception:
+            return Response({"detail": "Invalid base64 data."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(raw) < 8:
+            return Response({"detail": "Template too small."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Exact-match search (limited but useful for deterministic templates)
+        enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
+        if not enrollment:
+            return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Build a compact user payload similar to FingerprintStatusView
+        user = enrollment.user
+        user_name = user.get_full_name() or user.username
+        identifier = ""
+        user_type = "unknown"
+        department = ""
+        profile_image = ""
+        if hasattr(user, 'student_profile'):
+            sp = user.student_profile
+            user_type = 'student'
+            identifier = getattr(sp, 'reg_no', '')
+            department = getattr(sp, 'department', '') or ''
+            if getattr(sp, 'profile_image', None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    profile_image = ''
+        elif hasattr(user, 'staff_profile'):
+            sp = user.staff_profile
+            user_type = 'staff'
+            identifier = getattr(sp, 'staff_id', '')
+            department = getattr(sp, 'department', '') or ''
+            if getattr(sp, 'profile_image', None):
+                try:
+                    profile_image = sp.profile_image.url
+                except Exception:
+                    profile_image = ''
+
+        return Response(
+            {
+                "user_id": user.id,
+                "user_name": user_name,
+                "user_type": user_type,
+                "identifier": identifier,
+                "department": department,
+                "profile_image": profile_image,
+                "enrollment_id": enrollment.id,
+                "finger": enrollment.finger,
+            },
+            status=status.HTTP_200_OK,
+        )

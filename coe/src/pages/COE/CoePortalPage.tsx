@@ -85,20 +85,6 @@ export default function CoePortalPage({ user }: Props) {
             <p className="text-sm font-semibold text-[#4f1a2c]">Arrear List</p>
             <p className="mt-1 text-xs text-[#755348]">Add arrear students manually or by Excel upload for each sem/course.</p>
           </Link>
-          <Link
-            to="/coe/additional"
-            className="rounded-xl border border-[#a7d891] bg-[#f8fff5] p-4 transition-colors hover:bg-[#f2fbe8]"
-          >
-            <p className="text-sm font-semibold text-[#2c4f1a]">Additional Entry</p>
-            <p className="mt-1 text-xs text-[#537548]">Add missed students after shuffling with new dummies and separate bundles.</p>
-          </Link>
-          <Link
-            to="/coe/external-management"
-            className="rounded-xl border border-[#c7c3ef] bg-[#f4f3ff] p-4 transition-colors hover:bg-[#eceaff]"
-          >
-            <p className="text-sm font-semibold text-[#2b2a67]">External Management</p>
-            <p className="mt-1 text-xs text-[#4d4c86]">View external faculty list and manage ESV login code assignment.</p>
-          </Link>
         </div>
       </div>
 

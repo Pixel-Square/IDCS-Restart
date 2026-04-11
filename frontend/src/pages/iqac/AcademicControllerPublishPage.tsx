@@ -12,6 +12,7 @@ export default function AcademicControllerPublishPage(): JSX.Element {
   // false -> Unlimited publish (no locks, no edit requests)
   const [regularBasic, setRegularBasic] = useState<boolean>(true);
   const [cqiRegularBasic, setCqiRegularBasic] = useState<boolean>(true);
+  const [markManagerRegularBasic, setMarkManagerRegularBasic] = useState<boolean>(true);
   const [loadedConfig, setLoadedConfig] = useState<any>({});
 
   const statusText = useMemo(() => {
@@ -22,8 +23,11 @@ export default function AcademicControllerPublishPage(): JSX.Element {
       cqi: cqiRegularBasic
         ? 'Regular / Basic publish is ON — published CQI pages will use the CQI request-edit workflow.'
         : 'Unlimited publish is ON — CQI pages will not require the CQI request-edit workflow after publish.',
+      markManager: markManagerRegularBasic
+        ? 'Regular / Basic publish is ON — Mark Manager is locked for all exam assignments and staff must use "Request Edit" before changing mark-manager settings.'
+        : 'Unlimited publish is ON — Mark Manager in all exam assignments remains editable without an edit request.',
     };
-  }, [cqiRegularBasic, regularBasic]);
+  }, [cqiRegularBasic, markManagerRegularBasic, regularBasic]);
 
   function resolveEnabled(cfg: any, key: string, fallback?: boolean) {
     const value = cfg?.[key];
@@ -39,8 +43,10 @@ export default function AcademicControllerPublishPage(): JSX.Element {
       setLoadedConfig(cfg || {});
       const generalEnabled = resolveEnabled(cfg, 'edit_requests_enabled', true);
       const cqiEnabled = resolveEnabled(cfg, 'cqi_edit_requests_enabled', generalEnabled);
+      const markManagerEnabled = resolveEnabled(cfg, 'mark_manager_edit_requests_enabled', generalEnabled);
       setRegularBasic(generalEnabled);
       setCqiRegularBasic(cqiEnabled);
+      setMarkManagerRegularBasic(markManagerEnabled);
       primeEditRequestControlConfig(cfg || {});
     } catch (e: any) {
       setError(e?.message || 'Failed to load publish settings.');
@@ -61,8 +67,10 @@ export default function AcademicControllerPublishPage(): JSX.Element {
       const saved = await saveAssessmentMasterConfig(nextCfg);
       const finalCfg = saved || nextCfg;
       setLoadedConfig(finalCfg);
-      setRegularBasic(resolveEnabled(finalCfg, 'edit_requests_enabled', true));
-      setCqiRegularBasic(resolveEnabled(finalCfg, 'cqi_edit_requests_enabled', resolveEnabled(finalCfg, 'edit_requests_enabled', true)));
+      const savedGeneral = resolveEnabled(finalCfg, 'edit_requests_enabled', true);
+      setRegularBasic(savedGeneral);
+      setCqiRegularBasic(resolveEnabled(finalCfg, 'cqi_edit_requests_enabled', savedGeneral));
+      setMarkManagerRegularBasic(resolveEnabled(finalCfg, 'mark_manager_edit_requests_enabled', savedGeneral));
       primeEditRequestControlConfig(finalCfg);
     } catch (e: any) {
       setError(e?.message || 'Failed to save publish settings.');
@@ -181,6 +189,25 @@ export default function AcademicControllerPublishPage(): JSX.Element {
                 {
                   title: 'OFF (Unlimited):',
                   body: 'CQI pages stay outside the CQI request-edit workflow after publish.',
+                },
+              ],
+            })}
+            {renderToggleCard({
+              title: 'Mark Manager',
+              description: 'Controls whether Mark Manager requires request-edit approval across all exam assignments.',
+              enabled: markManagerRegularBasic,
+              onToggle: () => save({ mark_manager_edit_requests_enabled: !markManagerRegularBasic }),
+              status: statusText.markManager,
+              onLabel: 'ON: Regular / Basic',
+              offLabel: 'OFF: Unlimited',
+              details: [
+                {
+                  title: 'ON (Regular/Basic):',
+                  body: 'Mark Manager is locked for all exam assignments after confirmation. Staff must request IQAC approval before changing mark-manager settings.',
+                },
+                {
+                  title: 'OFF (Unlimited):',
+                  body: 'Mark Manager in all exam assignments remains editable without requiring an edit request from IQAC.',
                 },
               ],
             })}

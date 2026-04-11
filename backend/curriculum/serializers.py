@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
-from academics.models import Department, Semester, Batch, BatchYear
+from academics.models import Department, Semester, Batch, BatchYear, AcademicYear
 
 
 class BatchSmallSerializer(serializers.ModelSerializer):
@@ -232,3 +232,91 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         validated_data['created_by'] = user
         return super().create(validated_data)
+
+
+class ElectiveChoiceSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    student_id = serializers.IntegerField(allow_null=True, required=False)
+    student_reg_no = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    student_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    student_username = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    section_id = serializers.IntegerField(allow_null=True, required=False)
+    section_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    elective_subject_id = serializers.IntegerField(allow_null=True, required=False)
+    elective_subject_code = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    elective_subject_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    parent_id = serializers.IntegerField(allow_null=True, required=False)
+    parent_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    department_id = serializers.IntegerField(allow_null=True, required=False)
+    department_code = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    department_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    regulation = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    semester = serializers.IntegerField(allow_null=True, required=False)
+    academic_year_id = serializers.IntegerField(allow_null=True, required=False)
+    academic_year_name = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    is_active = serializers.BooleanField(required=False)
+    created_at = serializers.DateTimeField(required=False)
+    updated_at = serializers.DateTimeField(required=False)
+
+    def to_representation(self, obj):
+        student = getattr(obj, 'student', None)
+        user = getattr(student, 'user', None)
+        elective_subject = getattr(obj, 'elective_subject', None)
+        parent = getattr(elective_subject, 'parent', None)
+        department = getattr(elective_subject, 'department', None)
+        academic_year = getattr(obj, 'academic_year', None)
+
+        student_name = ''
+        if student:
+            student_name = (
+                getattr(student, 'name', None)
+                or getattr(user, 'get_full_name', lambda: '')()
+                or getattr(user, 'username', None)
+                or getattr(student, 'reg_no', None)
+                or ''
+            )
+
+        section = getattr(student, 'section', None)
+        section_name = ''
+        if section:
+            section_name = getattr(section, 'name', None) or str(section)
+
+        elective_code = getattr(elective_subject, 'course_code', None) or ''
+        elective_name = getattr(elective_subject, 'course_name', None) or ''
+
+        parent_name = None
+        if parent:
+            parent_name = getattr(parent, 'course_name', None) or getattr(parent, 'course_code', None) or f'Elective {getattr(parent, "id", "")}'
+
+        department_name = None
+        if department:
+            department_name = getattr(department, 'short_name', None) or getattr(department, 'name', None)
+
+        return {
+            'id': getattr(obj, 'id', None),
+            'student_id': getattr(student, 'id', None),
+            'student_reg_no': getattr(student, 'reg_no', None),
+            'student_name': student_name,
+            'student_username': getattr(user, 'username', None),
+            'section_id': getattr(student, 'section_id', None),
+            'section_name': section_name,
+            'elective_subject_id': getattr(elective_subject, 'id', None),
+            'elective_subject_code': elective_code,
+            'elective_subject_name': elective_name,
+            'parent_id': getattr(parent, 'id', None),
+            'parent_name': parent_name,
+            'department_id': getattr(department, 'id', None),
+            'department_code': getattr(department, 'code', None),
+            'department_name': department_name,
+            'regulation': getattr(elective_subject, 'regulation', None),
+            'semester': getattr(getattr(elective_subject, 'semester', None), 'number', None),
+            'academic_year_id': getattr(academic_year, 'id', None),
+            'academic_year_name': getattr(academic_year, 'name', None),
+            'is_active': getattr(obj, 'is_active', False),
+            'created_at': getattr(obj, 'created_at', None),
+            'updated_at': getattr(obj, 'updated_at', None),
+            # Backward-compatible keys used by the attendance pages.
+            'reg_no': getattr(student, 'reg_no', None),
+            'username': getattr(user, 'username', None),
+            'academic_year': getattr(academic_year, 'name', None),
+        }

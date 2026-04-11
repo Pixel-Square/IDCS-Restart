@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'template_api',
     'reporting',
     'announcements.apps.AnnouncementsConfig',
+    'lms.apps.LmsConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
@@ -397,7 +398,10 @@ CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
 DATA_ENCRYPTION_KEY = os.getenv('DATA_ENCRYPTION_KEY', '')
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', '0' if DEBUG else '1') == '1'
+# Disabled: Cloudflare Tunnel already enforces HTTPS at the edge;
+# enabling this causes infinite redirect loops when the tunnel delivers
+# requests as HTTP to the origin server.
+SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = os.getenv('SESSION_COOKIE_SECURE', '0' if DEBUG else '1') == '1'
 CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', '0' if DEBUG else '1') == '1'
 

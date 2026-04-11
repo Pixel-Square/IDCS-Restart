@@ -48,7 +48,7 @@ class AttendanceRecord(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.date} - {self.status}"
     
-    def update_status(self):
+    def update_status(self, defer_an_until_out: bool = False):
         """Auto-determine status based on morning_in, evening_out, and time limits.
         Preserves leave statuses (CL, OD, ML, COL, etc.) - only updates biometric statuses.
         
@@ -75,7 +75,7 @@ class AttendanceRecord(models.Model):
             return session_status in BIOMETRIC_STATUSES or (session_status is None and has_biometric)
         
         try:
-            # Get time limits: try department-specific first, then global
+            # Get time limits with fallback order: staff override -> special date -> department -> global
             in_limit = '08:45:00'
             out_limit = '17:00:00'
             mid_split = '13:00:00'
@@ -194,7 +194,12 @@ class AttendanceRecord(models.Model):
                     elif self.morning_in:
                         # Has morning_in but no evening_out - probably partial day
                         if self.morning_in <= mid_split:
-                            self.an_status = 'absent'  # Has FN but no AN
+                            # Realtime biometric flow can defer AN decision until
+                            # a valid OUT punch is captured.
+                            if defer_an_until_out:
+                                self.an_status = None
+                            else:
+                                self.an_status = 'absent'  # Has FN but no AN
                         else:
                             # Came after mid_split - no proper attendance
                             self.an_status = 'absent'
@@ -401,6 +406,20 @@ class AttendanceSettings(models.Model):
         default='13:00:00',
         help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
     )
+    lunch_from = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break start time"
+    )
+    lunch_to = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break end time"
+    )
+    essl_skip_minutes = models.PositiveIntegerField(
+        default=30,
+        help_text="Minimum minutes after first biometric punch before mapping a second punch as OUT"
+    )
     apply_time_based_absence = models.BooleanField(
         default=True,
         help_text="Enable time-based absence marking"
@@ -445,6 +464,16 @@ class DepartmentAttendanceSettings(models.Model):
     mid_time_split = models.TimeField(
         default='13:00:00',
         help_text="Time that splits FN (Forenoon) and AN (Afternoon) sessions"
+    )
+    lunch_from = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break start time"
+    )
+    lunch_to = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Optional lunch break end time"
     )
     apply_time_based_absence = models.BooleanField(
         default=True,
@@ -504,6 +533,8 @@ class StaffAttendanceTimeLimitOverride(models.Model):
     attendance_in_time_limit = models.TimeField(default='08:45:00')
     attendance_out_time_limit = models.TimeField(default='17:00:00')
     mid_time_split = models.TimeField(default='13:00:00')
+    lunch_from = models.TimeField(null=True, blank=True)
+    lunch_to = models.TimeField(null=True, blank=True)
     apply_time_based_absence = models.BooleanField(default=True)
     enabled = models.BooleanField(default=True)
 
@@ -541,6 +572,8 @@ class SpecialDepartmentDateAttendanceLimit(models.Model):
     attendance_in_time_limit = models.TimeField(default='08:45:00')
     attendance_out_time_limit = models.TimeField(default='17:00:00')
     mid_time_split = models.TimeField(default='13:00:00')
+    lunch_from = models.TimeField(null=True, blank=True)
+    lunch_to = models.TimeField(null=True, blank=True)
     apply_time_based_absence = models.BooleanField(default=True)
     departments = models.ManyToManyField(
         'academics.Department',

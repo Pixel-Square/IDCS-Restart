@@ -76,6 +76,8 @@ interface StaffTimeLimitOverride {
   attendance_in_time_limit: string;
   attendance_out_time_limit: string;
   mid_time_split: string;
+  lunch_from: string | null;
+  lunch_to: string | null;
   apply_time_based_absence: boolean;
   enabled: boolean;
 }
@@ -121,6 +123,9 @@ const StaffAttendanceUpload: React.FC = () => {
   // Attendance settings states
   const [inTimeLimit, setInTimeLimit] = useState('08:45');
   const [outTimeLimit, setOutTimeLimit] = useState('17:45');
+  const [lunchFromLimit, setLunchFromLimit] = useState('');
+  const [lunchToLimit, setLunchToLimit] = useState('');
+  const [esslSkippingTime, setEsslSkippingTime] = useState(30);
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(false);
 
@@ -134,6 +139,8 @@ const StaffAttendanceUpload: React.FC = () => {
   const [deptSettingInTime, setDeptSettingInTime] = useState('08:45');
   const [deptSettingOutTime, setDeptSettingOutTime] = useState('17:00');
   const [deptSettingMidTime, setDeptSettingMidTime] = useState('13:00');
+  const [deptSettingLunchFrom, setDeptSettingLunchFrom] = useState('');
+  const [deptSettingLunchTo, setDeptSettingLunchTo] = useState('');
   const [deptSettingEnabled, setDeptSettingEnabled] = useState(true);
   const [deptSettingSelectedDepts, setDeptSettingSelectedDepts] = useState<number[]>([]);
   const [savingDeptSetting, setSavingDeptSetting] = useState(false);
@@ -148,6 +155,8 @@ const StaffAttendanceUpload: React.FC = () => {
   const [staffOverrideInTime, setStaffOverrideInTime] = useState('08:45');
   const [staffOverrideOutTime, setStaffOverrideOutTime] = useState('17:00');
   const [staffOverrideMidTime, setStaffOverrideMidTime] = useState('13:00');
+  const [staffOverrideLunchFrom, setStaffOverrideLunchFrom] = useState('');
+  const [staffOverrideLunchTo, setStaffOverrideLunchTo] = useState('');
   const [staffOverrideApplyAbsence, setStaffOverrideApplyAbsence] = useState(true);
   const [staffOverrideEnabled, setStaffOverrideEnabled] = useState(true);
   const [savingStaffOverride, setSavingStaffOverride] = useState(false);
@@ -178,6 +187,8 @@ const StaffAttendanceUpload: React.FC = () => {
       setStaffOverrideInTime(existing.attendance_in_time_limit.substring(0, 5));
       setStaffOverrideOutTime(existing.attendance_out_time_limit.substring(0, 5));
       setStaffOverrideMidTime(existing.mid_time_split.substring(0, 5));
+      setStaffOverrideLunchFrom(existing.lunch_from ? existing.lunch_from.substring(0, 5) : '');
+      setStaffOverrideLunchTo(existing.lunch_to ? existing.lunch_to.substring(0, 5) : '');
       setStaffOverrideApplyAbsence(existing.apply_time_based_absence);
       setStaffOverrideEnabled(existing.enabled);
     } else {
@@ -185,10 +196,12 @@ const StaffAttendanceUpload: React.FC = () => {
       setStaffOverrideInTime(inTimeLimit);
       setStaffOverrideOutTime(outTimeLimit);
       setStaffOverrideMidTime('13:00');
+      setStaffOverrideLunchFrom(lunchFromLimit);
+      setStaffOverrideLunchTo(lunchToLimit);
       setStaffOverrideApplyAbsence(true);
       setStaffOverrideEnabled(true);
     }
-  }, [selectedStaffUserId, staffOverrides, inTimeLimit, outTimeLimit]);
+  }, [selectedStaffUserId, staffOverrides, inTimeLimit, outTimeLimit, lunchFromLimit, lunchToLimit]);
 
   const fetchDepartments = async () => {
     try {
@@ -245,6 +258,8 @@ const StaffAttendanceUpload: React.FC = () => {
         attendance_in_time_limit: `${staffOverrideInTime}:00`,
         attendance_out_time_limit: `${staffOverrideOutTime}:00`,
         mid_time_split: `${staffOverrideMidTime}:00`,
+        lunch_from: staffOverrideLunchFrom ? `${staffOverrideLunchFrom}:00` : null,
+        lunch_to: staffOverrideLunchTo ? `${staffOverrideLunchTo}:00` : null,
         apply_time_based_absence: staffOverrideApplyAbsence,
         enabled: staffOverrideEnabled,
       });
@@ -377,6 +392,10 @@ const StaffAttendanceUpload: React.FC = () => {
       // Convert time format from "HH:MM:SS" to "HH:MM"
       setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
       setOutTimeLimit(settings.attendance_out_time_limit.substring(0, 5));
+      setLunchFromLimit(settings.lunch_from ? settings.lunch_from.substring(0, 5) : '');
+      setLunchToLimit(settings.lunch_to ? settings.lunch_to.substring(0, 5) : '');
+      const skipMinutes = parseInt(String(settings.essl_skip_minutes ?? 30), 10);
+      setEsslSkippingTime(Number.isNaN(skipMinutes) ? 30 : skipMinutes);
       setApplyTimeLimits(settings.apply_time_based_absence);
     } catch (err: any) {
       console.error('Failed to fetch attendance settings:', err);
@@ -409,6 +428,8 @@ const StaffAttendanceUpload: React.FC = () => {
         attendance_in_time_limit: `${deptSettingInTime}:00`,
         attendance_out_time_limit: `${deptSettingOutTime}:00`,
         mid_time_split: `${deptSettingMidTime}:00`,
+        lunch_from: deptSettingLunchFrom ? `${deptSettingLunchFrom}:00` : null,
+        lunch_to: deptSettingLunchTo ? `${deptSettingLunchTo}:00` : null,
         apply_time_based_absence: deptSettingEnabled,
         departments: deptSettingSelectedDepts,
         enabled: deptSettingEnabled
@@ -449,6 +470,8 @@ const StaffAttendanceUpload: React.FC = () => {
     setDeptSettingInTime(setting.attendance_in_time_limit.substring(0, 5));
     setDeptSettingOutTime(setting.attendance_out_time_limit.substring(0, 5));
     setDeptSettingMidTime(setting.mid_time_split.substring(0, 5));
+    setDeptSettingLunchFrom(setting.lunch_from ? setting.lunch_from.substring(0, 5) : '');
+    setDeptSettingLunchTo(setting.lunch_to ? setting.lunch_to.substring(0, 5) : '');
     setDeptSettingEnabled(setting.enabled);
     setDeptSettingSelectedDepts(setting.departments || []);
     setShowDeptSettingsForm(true);
@@ -475,6 +498,8 @@ const StaffAttendanceUpload: React.FC = () => {
     setDeptSettingInTime('08:45');
     setDeptSettingOutTime('17:00');
     setDeptSettingMidTime('13:00');
+    setDeptSettingLunchFrom('');
+    setDeptSettingLunchTo('');
     setDeptSettingEnabled(true);
     setDeptSettingSelectedDepts([]);
   };
@@ -485,6 +510,9 @@ const StaffAttendanceUpload: React.FC = () => {
       await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/1/`, {
         attendance_in_time_limit: `${inTimeLimit}:00`,
         attendance_out_time_limit: `${outTimeLimit}:00`,
+        lunch_from: lunchFromLimit ? `${lunchFromLimit}:00` : null,
+        lunch_to: lunchToLimit ? `${lunchToLimit}:00` : null,
+        essl_skip_minutes: esslSkippingTime,
         apply_time_based_absence: applyTimeLimits
       });
       
@@ -1078,7 +1106,7 @@ const StaffAttendanceUpload: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     In Time Limit
@@ -1111,6 +1139,30 @@ const StaffAttendanceUpload: React.FC = () => {
                     type="time"
                     value={deptSettingMidTime}
                     onChange={(e) => setDeptSettingMidTime(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lunch From
+                  </label>
+                  <input
+                    type="time"
+                    value={deptSettingLunchFrom}
+                    onChange={(e) => setDeptSettingLunchFrom(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lunch To
+                  </label>
+                  <input
+                    type="time"
+                    value={deptSettingLunchTo}
+                    onChange={(e) => setDeptSettingLunchTo(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
                 </div>
@@ -1239,6 +1291,8 @@ const StaffAttendanceUpload: React.FC = () => {
                     <div><span className="font-medium">In:</span> {setting.attendance_in_time_limit.substring(0, 5)}</div>
                     <div><span className="font-medium">Out:</span> {setting.attendance_out_time_limit.substring(0, 5)}</div>
                     <div><span className="font-medium">Noon:</span> {setting.mid_time_split.substring(0, 5)}</div>
+                    <div><span className="font-medium">Lunch From:</span> {setting.lunch_from ? setting.lunch_from.substring(0, 5) : '-'}</div>
+                    <div><span className="font-medium">Lunch To:</span> {setting.lunch_to ? setting.lunch_to.substring(0, 5) : '-'}</div>
                   </div>
 
                   {setting.departments_info && setting.departments_info.length > 0 ? (
@@ -1340,7 +1394,7 @@ const StaffAttendanceUpload: React.FC = () => {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">In Time Limit</label>
               <input
@@ -1365,6 +1419,24 @@ const StaffAttendanceUpload: React.FC = () => {
                 type="time"
                 value={staffOverrideMidTime}
                 onChange={(e) => setStaffOverrideMidTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Lunch From</label>
+              <input
+                type="time"
+                value={staffOverrideLunchFrom}
+                onChange={(e) => setStaffOverrideLunchFrom(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Lunch To</label>
+              <input
+                type="time"
+                value={staffOverrideLunchTo}
+                onChange={(e) => setStaffOverrideLunchTo(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -1430,6 +1502,8 @@ const StaffAttendanceUpload: React.FC = () => {
                         <div><span className="font-medium">In:</span> {o.attendance_in_time_limit.substring(0, 5)}</div>
                         <div><span className="font-medium">Out:</span> {o.attendance_out_time_limit.substring(0, 5)}</div>
                         <div><span className="font-medium">Noon:</span> {o.mid_time_split.substring(0, 5)}</div>
+                        <div><span className="font-medium">Lunch From:</span> {o.lunch_from ? o.lunch_from.substring(0, 5) : '-'}</div>
+                        <div><span className="font-medium">Lunch To:</span> {o.lunch_to ? o.lunch_to.substring(0, 5) : '-'}</div>
                       </div>
                     </div>
 
@@ -1502,6 +1576,47 @@ const StaffAttendanceUpload: React.FC = () => {
               />
               <p className="text-xs text-gray-500 mt-1">
                 If staff leaves before this time, mark as absent
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Lunch From
+              </label>
+              <input
+                type="time"
+                value={lunchFromLimit}
+                onChange={(e) => setLunchFromLimit(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Lunch To
+              </label>
+              <input
+                type="time"
+                value={lunchToLimit}
+                onChange={(e) => setLunchToLimit(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                eSSL skipping time (minutes)
+              </label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={esslSkippingTime}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  setEsslSkippingTime(Number.isNaN(parsed) ? 0 : parsed);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Realtime punches within this many minutes after first IN punch are skipped for OUT mapping
               </p>
             </div>
           </div>

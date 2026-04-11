@@ -2074,8 +2074,9 @@ export default function CQIEntry({
 
     const numValue = parsed as number;
     if (numValue < 0 || numValue > 10) {
+      window.alert('Entered value should be less than or equal to 10.');
       setCqiErrors(prev => ({ ...prev, [`${studentId}_${coKey}`]: 'Value must be between 0 and 10' }));
-      setCqiEntries(prev => ({ ...prev, [studentId]: { ...prev[studentId], [coKey]: numValue } }));
+      setCqiEntries(prev => ({ ...prev, [studentId]: { ...prev[studentId], [coKey]: null } }));
       return;
     }
 
@@ -2252,14 +2253,7 @@ export default function CQIEntry({
             Students below {THRESHOLD_PERCENT}% threshold require CQI intervention
           </div>
         </div>
-        <button 
-          onClick={handleSave}
-          className="obe-btn obe-btn-primary"
-          style={{ minWidth: 100 }}
-          disabled={tableBlocked}
-        >
-          Save CQI
-        </button>
+        
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button
                       type="button"
@@ -2277,46 +2271,9 @@ export default function CQIEntry({
           >
             {debugMode ? 'DEBUG ON' : 'DEBUG'}
           </button>
-          <button
-            type="button"
-            onClick={() => setHeaderMaxVisible((s) => !s)}
-            className="obe-btn"
-            style={{ minWidth: 120 }}
-          >
-            {headerMaxVisible ? 'Hide Header Max' : 'Show Header Max'}
-          </button>
+          
 
-          <button
-            type="button"
-            onClick={async () => {
-              // Save draft to server
-              if (!subjectId || !teachingAssignmentId) return alert('Missing subject/teaching assignment');
-              if (tableBlocked) return;
-              try {
-                const payload = buildCqiPayload(cqiEntries);
-                const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${cqiQuery}`, {
-                  method: 'PUT',
-                  body: JSON.stringify(payload),
-                }).catch(() => null);
-                if (res && res.ok) {
-                  const j = await res.json().catch(() => null);
-                  setDraftLog(j || { updated_at: new Date().toISOString(), updated_by: null });
-                  setDirty(false);
-                  alert('Draft saved to server');
-                } else {
-                  const txt = res ? await res.text().catch(() => '') : '';
-                  alert(txt || 'Failed to save draft');
-                }
-              } catch (e: any) {
-                alert('Failed to save draft: ' + String(e?.message || e));
-              }
-            }}
-            className="obe-btn"
-            style={{ minWidth: 110 }}
-            disabled={tableBlocked}
-          >
-            Save Draft
-          </button>
+          
 
           {!publishedEditLocked ? (
             <button
@@ -2605,19 +2562,19 @@ export default function CQIEntry({
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 BEFORE CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Total / Max
+                  
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 100 }}>
                 AFTER CQI
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Total / Max
+                
                 </div>
               </th>
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 TOTAL
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                  Sum of selected COs
+              
                 </div>
               </th>
                   {coNumbers.map(coNum => (
@@ -2639,11 +2596,7 @@ export default function CQIEntry({
                         </div>
                       )}
                       <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-                        {headerMaxVisible ? (
-                          <>Max: {headerMaxes[coNum] != null ? round2(headerMaxes[coNum] as number) : '—'}</>
-                        ) : (
-                          <>&nbsp;</>
-                        )}
+                        
                       </div>
                 </th>
               ))}
@@ -2671,23 +2624,16 @@ export default function CQIEntry({
               
               const beforePercentage = beforeCqiMax ? (beforeCqiValue / beforeCqiMax) * 100 : 0;
 
-              // Per-student CQI eligibility: at least one non-prior CO is below 58% OR overall total is below 58%
-              const isStudentCqiEligible = coNumbers.some(coNum => {
-                if (priorPublishedCos.has(coNum)) return false;
-                const cd = studentTotals[`co${coNum}`];
-                if (!cd || !cd.max) return false;
-                return (cd.value / cd.max) * 100 < THRESHOLD_PERCENT;
-              }) || (totalMax > 0 && totalPct < THRESHOLD_PERCENT);
-
               // Calculate AFTER CQI using per-CO rules:
-              // - CO% < 58: CQI (0–10) × 0.6 added; CO mark capped at THRESHOLD_PERCENT% of CO max
-              // - CO% >= 58: CQI (0–10) × 0.15 added; no cap
-              // The same rule is applied individually for each CO to ensure consistency
-              // between CO-wise and overall internal mark calculations.
+              // - CO% < 58 and Overall < 58%: CQI (0–10) converted to a 60% scale (i.e. * 0.6) and capped at 58% of CO max
+              // - CO% < 58 and Overall >= 58%: CQI (0–10) converted to 15% scale and added directly without cap
+              // - CO% >= 58: No CQI field, no mark added
               // For already-attained COs (prior pages), use their published values.
               const afterCqiMax = beforeCqiMax; // max stays the same
               let afterCqiValue = beforeCqiValue;
               let delta = 0;
+
+              const isOverallBelowThreshold = totalMax > 0 && totalPct < THRESHOLD_PERCENT;
 
               coNumbers.forEach((coNum) => {
                 const coKey = `co${coNum}`;
@@ -2709,13 +2655,18 @@ export default function CQIEntry({
 
                 let add: number;
                 if (isCoBelow) {
-                  // 0.6 conversion: cap so this CO does not exceed THRESHOLD_PERCENT% of its max
-                  const rawAdd = Number(input) * 0.6;
-                  const allowance = Math.max(0, (THRESHOLD_PERCENT / 100) * coMax - coVal);
-                  add = Math.min(rawAdd, allowance);
+                  if (isOverallBelowThreshold) {
+                    // Convert CQI mark (out of 10) to 60 percentage scale
+                    const rawAdd = (Number(input) / 10) * ((60 / 10) * 1); // equivalent to * 0.6
+                    const allowance = Math.max(0, (THRESHOLD_PERCENT / 100) * coMax - coVal);
+                    add = Math.min(rawAdd, allowance);
+                  } else {
+                    // Convert CQI mark (out of 10) to 15 percentage and add directly without cap
+                    add = Number(input) * (15 / 100);
+                  }
                 } else {
-                  // 0.15 conversion, no cap per CO
-                  add = Number(input) * 0.15;
+                  // CO is attained, no CQI input
+                  add = 0;
                 }
 
                 if (Number.isFinite(add) && add > 0) {
@@ -2842,7 +2793,7 @@ export default function CQIEntry({
                         style={{ 
                           padding: '10px 8px', 
                           textAlign: 'center',
-                          backgroundColor: isAlreadyAttained ? '#eff6ff' : (isStudentCqiEligible ? (isBelowThreshold ? '#fef2f2' : '#f0f9ff') : '#f0fdf4'),
+                          backgroundColor: isAlreadyAttained ? '#eff6ff' : (isBelowThreshold ? (isOverallBelowThreshold ? '#fef2f2' : '#f0f9ff') : '#f0fdf4'),
                         }}
                       >
                         <div style={{ 
@@ -2900,15 +2851,15 @@ export default function CQIEntry({
                               Published — read-only
                             </div>
                           </div>
-                        ) : isStudentCqiEligible ? (
+                        ) : isBelowThreshold ? (
                           <div>
                             <div style={{ 
                               fontSize: 11, 
-                              color: isBelowThreshold ? '#dc2626' : '#0369a1', 
+                              color: isOverallBelowThreshold ? '#dc2626' : '#0369a1', 
                               fontWeight: 600,
                               marginBottom: 4,
                             }}>
-                              {isBelowThreshold ? 'BELOW 58% — ×0.6 (cap 58%)' : 'ABOVE 58% — ×0.15'}
+                              {isOverallBelowThreshold ? 'CO Not Attained (Converted to 60%)' : 'CO Not Attained (Special Improvement - 15% Add)'}
                             </div>
                             <input
                               type="number"

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -55,9 +55,11 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   applications_inbox: ClipboardList,
   applications_home: Layout,
   external_management: Users,
+  lms: BookOpen,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   idscan_gatescan: Shield,
+  idscan_fingerprint: Fingerprint,
   rf_reader: Grid,
   feedback: MessageCircle,
   announcements: Bell,
@@ -406,6 +408,23 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'coe_one_page_report', label: 'One Page Report', to: '/coe/one-page-report' });
   }
 
+  // LMS page visibility via lms.page.* permissions
+  if (
+    permsLower.includes('lms.page.student') ||
+    permsLower.includes('lms.page.staff') ||
+    permsLower.includes('lms.page.hod') ||
+    permsLower.includes('lms.page.ahod') ||
+    permsLower.includes('lms.page.iqac') ||
+    rolesUpper.includes('STUDENT') ||
+    rolesUpper.includes('STAFF') ||
+    rolesUpper.includes('FACULTY') ||
+    rolesUpper.includes('HOD') ||
+    rolesUpper.includes('AHOD') ||
+    rolesUpper.includes('IQAC')
+  ) {
+    items.push({ key: 'lms', label: 'LMS', to: '/lms' });
+  }
+
   // Advisor pages: require ADVISOR role or explicit permission
   // Mentor assignment: advisors with assign permission
   if (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor')) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
@@ -508,6 +527,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_assign_cards', label: 'Assign Cards', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_bulk_entry', label: 'Bulk RFID Entry', to: '/idscan/bulk-entry' });
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
+    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
   } else if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
     items.push({ key: 'idscan_test',     label: 'RFID Scanner Test', to: '/idscan/test' });
     items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
@@ -515,6 +535,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
     items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
+    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
   }
   if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
     items.push({ key: 'applications_home', label: 'My Applications', to: '/applications' });

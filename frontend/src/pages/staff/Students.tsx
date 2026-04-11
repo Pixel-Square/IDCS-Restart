@@ -82,6 +82,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null)
   const [editFormData, setEditFormData] = useState<Student | null>(null)
+  const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [debouncedSearch, setDebouncedSearch] = useState<string>('')
 
@@ -622,6 +623,13 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     currentSectionList.map(section => [section.section_id, section])
   )
 
+  const editSectionOptions: SectionMeta[] = Array.from(
+    [...myStudentsSections, ...myMenteesSections, ...deptSections, ...allSections].reduce((map, section) => {
+      map.set(section.section_id, section)
+      return map
+    }, new Map<number, SectionMeta>()).values()
+  ).sort((a, b) => (a.label || '').localeCompare(b.label || ''))
+
   const getRegNoLastThreeNumber = (regNo?: string): number => {
     if (!regNo) return Number.MAX_SAFE_INTEGER
     const digitsOnly = regNo.replace(/\D/g, '')
@@ -757,27 +765,67 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     }
   }
 
-  const handleSaveEdit = () => {
-    if (!editFormData || !selectedStudent) return
+  const handleSaveEdit = async () => {
+    if (!editFormData || !selectedStudent || isSavingEdit) return
 
-    // Update in lazyStudents
-    setLazyStudents(prev => 
-      prev.map(s => s.id === editFormData.id ? editFormData : s)
-    )
+    setIsSavingEdit(true)
+    try {
+      const payload = {
+        username: editFormData.username,
+        email: editFormData.email || '',
+        status: (editFormData.status || 'active').toUpperCase(),
+        section_id: editFormData.section_id ?? null,
+      }
 
-    // Update in studentsCache (for my-students and my-mentees modes)
-    if (selectedSection && (viewMode === 'my-students' || viewMode === 'my-mentees')) {
-      setStudentsCache(prev => ({
-        ...prev,
-        [selectedSection]: prev[selectedSection]?.map(s => 
-          s.id === editFormData.id ? editFormData : s
-        ) || []
-      }))
+      const res = await fetchWithAuth(`/api/academics/students/${editFormData.id}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      const data = await res.json().catch(() => ({} as any))
+      if (!res.ok) {
+        alert(data?.error || data?.detail || 'Failed to update student')
+        return
+      }
+
+      const updatedStudent: Student = {
+        ...editFormData,
+        ...data,
+      }
+
+      setLazyStudents(prev => {
+        const replaced = prev.map(s => (s.id === updatedStudent.id ? { ...s, ...updatedStudent } : s))
+        if (selectedSection && updatedStudent.section_id && selectedSection !== updatedStudent.section_id) {
+          return replaced.filter(s => s.id !== updatedStudent.id)
+        }
+        return replaced
+      })
+
+      setStudentsCache(prev => {
+        const next: Record<number, Student[]> = { ...prev }
+        Object.keys(next).forEach((key) => {
+          const sid = Number(key)
+          const list = next[sid] || []
+          const without = list.filter(s => s.id !== updatedStudent.id)
+          if (updatedStudent.section_id && sid === updatedStudent.section_id) {
+            next[sid] = [...without, { ...updatedStudent }]
+          } else {
+            next[sid] = without
+          }
+        })
+        return next
+      })
+
+      setIsEditOpen(false)
+      setSelectedStudent(null)
+      setEditFormData(null)
+    } catch (error) {
+      console.error('Failed to update student', error)
+      alert('Failed to update student')
+    } finally {
+      setIsSavingEdit(false)
     }
-
-    setIsEditOpen(false)
-    setSelectedStudent(null)
-    setEditFormData(null)
   }
 
   const handleCloseEdit = () => {
@@ -1031,7 +1079,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by Register Number or Student Name..."
+                placeholder="Search by Register Number or Username..."
                 className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
               />
             </div>
@@ -1117,7 +1165,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by Register Number or Student Name..."
+                    placeholder="Search by Register Number or Username..."
                     className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                 </div>
@@ -1198,7 +1246,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by Register Number or Student Name..."
+                    placeholder="Search by Register Number or Username..."
                     className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
                   />
                 </div>
@@ -1227,7 +1275,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 <tr className="bg-gradient-to-r from-slate-50 to-indigo-50 border-b-2 border-slate-200">
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">S.No</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Registration No</th>
-                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Student Name</th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Username</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Department</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Email</th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-indigo-900">Status</th>
@@ -1250,7 +1298,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                       <div className="flex items-center gap-2">
                         <UserCircle2 className="w-5 h-5 text-slate-400" />
                         <span className="text-sm font-medium text-slate-900">
-                          {student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim() || student.username}
+                          {student.username || student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim()}
                         </span>
                       </div>
                     </td>
@@ -1386,9 +1434,9 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   />
                 </div>
 
-                {/* Student Name */}
+                {/* Username */}
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Student Name</label>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Username</label>
                   <input
                     type="text"
                     value={editFormData.username || ''}
@@ -1398,7 +1446,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 </div>
               </div>
 
-              {/* Department */}
+              {/* Department + Section */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">Department</label>
@@ -1410,7 +1458,25 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   />
                 </div>
 
-                {/* Email */}
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Section</label>
+                  <select
+                    value={editFormData.section_id || ''}
+                    onChange={(e) => handleEditChange('section_id', e.target.value ? Number(e.target.value) : undefined)}
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
+                  >
+                    <option value="">Select section</option>
+                    {editSectionOptions.map((section) => (
+                      <option key={section.section_id} value={section.section_id}>
+                        {section.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Email */}
+              <div>
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">Email</label>
                   <input
@@ -1432,7 +1498,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                     className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 bg-white"
                   >
                     <option value="active">Active</option>
-                    <option value="resigned">Resigned</option>
+                    <option value="alumni">Alumni</option>
                     <option value="debar">Debar</option>
                     <option value="inactive">Inactive</option>
                   </select>
@@ -1457,9 +1523,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               </button>
               <button
                 onClick={handleSaveEdit}
+                disabled={isSavingEdit}
                 className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 rounded-lg font-medium transition-colors flex items-center gap-2"
               >
-                <span>Save Changes</span>
+                {isSavingEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                <span>{isSavingEdit ? 'Saving...' : 'Save Changes'}</span>
               </button>
             </div>
           </div>

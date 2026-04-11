@@ -23,6 +23,9 @@ import ExternalManagementPage from './pages/COE/ExternalManagementPage';
 import AdditionalPage from './pages/COE/AdditionalPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import DataViewPage from './pages/DataViewPage';
+import FinalResult from './pages/COE/FinalResult';
+import Download from './pages/COE/Download';
+import ResultCheck from './pages/COE/ResultCheck';
 import { logout } from './services/auth';
 import StudentsList from './pages/COE/StudentsList';
 
@@ -78,6 +81,9 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/external-management', label: 'External Management' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
+    { to: '/coe/final-result', label: 'Final Result' },
+    { to: '/coe/result-check', label: 'Result Check' },
+    { to: '/coe/download', label: 'Download' },
     { to: '/coe/external-users', label: 'External Users' },
     { to: '/coe/registration-settings', label: 'Registration' },
   ];
@@ -308,6 +314,9 @@ export default function App() {
         <Route path="/coe/bar-scan/entry" element={<RequireAuth><BarScanMarkEntry /></RequireAuth>} />
         <Route path="/coe/retrival" element={<RequireAuth><RetrivalPage /></RequireAuth>} />
         <Route path="/coe/one-page-report" element={<RequireAuth><OnePageReport /></RequireAuth>} />
+        <Route path="/coe/final-result" element={<RequireAuth><FinalResult /></RequireAuth>} />
+        <Route path="/coe/result-check" element={<RequireAuth><ResultCheck /></RequireAuth>} />
+        <Route path="/coe/download" element={<RequireAuth><Download /></RequireAuth>} />
         <Route path="/coe/external-users" element={<RequireAuth><ExternalManagement /></RequireAuth>} />
         <Route path="/coe/external-management" element={<Navigate to="/coe/external-users" replace />} />
         <Route path="/coe/registration-settings" element={<RequireAuth><RegistrationSettings /></RequireAuth>} />

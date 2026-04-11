@@ -81,6 +81,43 @@ export default function AssignedSubjectsPage() {
  
   useEffect(() => { load(); loadStaff(); loadCurrentUser() }, [])
 
+  function getStudentProfileId(record: any): number | null {
+    const value = record?.student_id ?? record?.id
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  }
+
+  function getRelevantBatchesForAssignment(item: any, allBatches: any[]): any[] {
+    const list = Array.isArray(allBatches) ? allBatches : []
+    const targetCrId = item?.curriculum_row_id || item?.curriculum_row?.id || null
+
+    const explicitBatchIds = new Set<number>(
+      ((item?.subject_batches || []) as any[])
+        .map((b: any) => Number(b?.id))
+        .filter((id: number) => Number.isFinite(id) && id > 0)
+    )
+
+    const targetCode = String(item?.subject_code || '').trim().toLowerCase()
+    const targetName = String(item?.subject_name || '').trim().toLowerCase()
+
+    return list.filter((b: any) => {
+      const batchId = Number(b?.id)
+      if (Number.isFinite(batchId) && explicitBatchIds.has(batchId)) return true
+
+      const bCrId = b?.curriculum_row?.id ?? null
+      if (targetCrId) return bCrId === targetCrId
+
+      if (bCrId !== null) return false
+
+      const bCode = String(b?.subject_info?.course_code || '').trim().toLowerCase()
+      const bName = String(b?.subject_info?.course_name || '').trim().toLowerCase()
+      if (targetCode && bCode && targetCode === bCode) return true
+      if (targetName && bName && targetName === bName) return true
+
+      return false
+    })
+  }
+
   async function load() {
     setLoading(true)
     setError(null)
@@ -220,23 +257,27 @@ export default function AssignedSubjectsPage() {
         throw new Error('No student mapping available for this assignment')
       }
       const studsAll = (sdata.results || sdata)
-      // exclude students already present in existing batches for this curriculum_row
-      // For elective subjects (no curriculum_row), match batches that also have no curriculum_row
+      // exclude students already present in relevant existing batches for this subject
       const crId = item.curriculum_row_id || item.curriculum_row?.id
+      const relevantBatches = getRelevantBatchesForAssignment(item, batches)
       const excluded = new Set<number>()
-      for (const b of batches) {
+      for (const b of relevantBatches) {
         const bCrId = b.curriculum_row?.id ?? null
         if (crId ? (bCrId === crId) : (bCrId === null)) {
           for (const s of (b.students || [])) excluded.add(s.id)
         }
       }
-      const studIds = studsAll.map((s:any)=>s.id).filter((id:number)=> !excluded.has(id))
+      const studIds = studsAll
+        .map((s: any) => getStudentProfileId(s))
+        .filter((id: number | null): id is number => id !== null && !excluded.has(id))
       const payload: any = { name, student_ids: studIds }
       if (item.curriculum_row_id) payload.curriculum_row_id = item.curriculum_row_id
       if (item.section_id) payload.section_id = item.section_id
       await createSubjectBatch(payload)
       const bs = await fetchSubjectBatches()
       setBatches(bs)
+      const updatedItems = await fetchAssignedSubjects()
+      setItems(updatedItems)
       setBatchNamesById(prev => ({ ...prev, [item.id]: '' }))
       alert('Batch created for subject')
     }catch(e:any){
@@ -283,14 +324,23 @@ export default function AssignedSubjectsPage() {
       console.log('Raw students array length:', raw.length)
       console.log('Has pagination count?', sdata.count)
       
-      const studs = raw.map((s:any) => ({
-        id: Number(s.id),
-        reg_no: String(s.reg_no ?? s.regno ?? ''),
-        username: String(s.username ?? s.name ?? s.full_name ?? ''),
-        full_name: String(s.username ?? s.name ?? s.full_name ?? ''),
-        section: s.section_name ?? s.section ?? null,
-        section_id: s.section_id ?? null,
-      }))
+      const studs = raw
+        .map((s:any) => {
+          const normalizedId = getStudentProfileId(s)
+          if (!normalizedId) return null
+          const resolvedName = String(
+            s.student_username ?? s.student_name ?? s.username ?? s.name ?? s.full_name ?? ''
+          )
+          return {
+            id: normalizedId,
+            reg_no: String(s.student_reg_no ?? s.reg_no ?? s.regno ?? ''),
+            username: resolvedName,
+            full_name: resolvedName,
+            section: s.section_name ?? s.section ?? null,
+            section_id: s.section_id ?? null,
+          }
+        })
+        .filter((s: any) => s !== null)
       
       console.log('Mapped students count:', studs.length)
       console.log('Student IDs:', studs.map(s => s.id))
@@ -298,9 +348,10 @@ export default function AssignedSubjectsPage() {
       // Exclude students already in existing batches for this curriculum_row / subject
       // For elective subjects (no curriculum_row), match batches that also have no curriculum_row
       const crId = item.curriculum_row_id || item.curriculum_row?.id
+      const relevantBatches = getRelevantBatchesForAssignment(item, batches)
       const assignedBatchesByStudentId: Record<number, string[]> = {}
       const excluded = new Set<number>()
-      for (const b of batches) {
+      for (const b of relevantBatches) {
         const bCrId = b.curriculum_row?.id ?? null
         if (crId ? (bCrId === crId) : (bCrId === null)) {
           const batchName = String(b.name || '').trim() || 'Existing batch'
@@ -515,6 +566,8 @@ export default function AssignedSubjectsPage() {
       await createSubjectBatch(payload)
       const bs = await fetchSubjectBatches()
       setBatches(bs)
+      const updatedItems = await fetchAssignedSubjects()
+      setItems(updatedItems)
       setPickerOpen(false)
       setPickerAllStudents([])
       setPickerStudents([])
@@ -571,14 +624,23 @@ export default function AssignedSubjectsPage() {
           
           if (sdata) {
             const raw = (sdata.results || sdata) || []
-            const allStudents = raw.map((s:any) => ({
-              id: Number(s.id),
-              reg_no: String(s.reg_no ?? s.regno ?? ''),
-              username: String(s.username ?? s.name ?? s.full_name ?? ''),
-              full_name: String(s.username ?? s.name ?? s.full_name ?? ''),
-              section: s.section_name ?? s.section ?? null,
-              section_id: s.section_id ?? null,
-            }))
+            const allStudents = raw
+              .map((s:any) => {
+                const normalizedId = getStudentProfileId(s)
+                if (!normalizedId) return null
+                const resolvedName = String(
+                  s.student_username ?? s.student_name ?? s.username ?? s.name ?? s.full_name ?? ''
+                )
+                return {
+                  id: normalizedId,
+                  reg_no: String(s.student_reg_no ?? s.reg_no ?? s.regno ?? ''),
+                  username: resolvedName,
+                  full_name: resolvedName,
+                  section: s.section_name ?? s.section ?? null,
+                  section_id: s.section_id ?? null,
+                }
+              })
+              .filter((s: any) => s !== null)
             setEditingBatchStudents(allStudents)
           } else {
             setEditingBatchStudents(b.students || [])

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import CLASS_TYPES from '../../constants/classTypes';
 import { normalizeClassType } from '../../constants/classTypes';
 import { lsGet, lsSet } from '../../utils/localStorage';
+import { fetchSpecialCoursesList, saveSpecialCourseCoWeights, SpecialCourseItem } from '../../services/obe';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
 
@@ -336,6 +337,9 @@ function applyAny(src: any): Record<string, WeightsRow> {
 }
 
 export default function AcademicControllerWeightsPage() {
+  // --- sidebar state ---
+  const [activeSection, setActiveSection] = useState<'standard' | 'special'>('standard');
+
   const [weights, setWeights] = useState<Record<string, WeightsRow>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -485,8 +489,42 @@ export default function AcademicControllerWeightsPage() {
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24 }}>
-      <h2>Class Type Weights</h2>
-      <p>Set the weights for each class type. These weights are IQAC-controlled and are not editable by staff.</p>
+      <h2 style={{ margin: '0 0 4px 0' }}>Class Type Weights</h2>
+      <p style={{ margin: '0 0 18px 0', color: '#6b7280', fontSize: 14 }}>
+        Set the weights for each class type. These weights are IQAC-controlled and are not editable by staff.
+      </p>
+
+      {/* Sidebar layout */}
+      <div style={{ display: 'flex', gap: 0, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+        {/* Sidebar */}
+        <div style={{ width: 180, flexShrink: 0, borderRight: '1px solid #e5e7eb', background: '#f8fafc', padding: '12px 0' }}>
+          {(['standard', 'special'] as const).map((key) => (
+            <button
+              key={key}
+              onClick={() => setActiveSection(key)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '10px 18px',
+                fontWeight: activeSection === key ? 800 : 500,
+                fontSize: 14,
+                background: activeSection === key ? '#ecfdf5' : 'transparent',
+                color: activeSection === key ? '#059669' : '#374151',
+                border: 'none',
+                borderLeft: activeSection === key ? '3px solid #10b981' : '3px solid transparent',
+                cursor: 'pointer',
+              }}
+            >
+              {key === 'standard' ? 'Standard' : 'Special Courses'}
+            </button>
+          ))}
+        </div>
+
+        {/* Content panel */}
+        <div style={{ flex: 1, padding: 24, minWidth: 0, overflowX: 'auto' }}>
+          {activeSection === 'standard' && (
+            <>
       {loading ? (
         <div>Loading...</div>
       ) : (
@@ -615,6 +653,181 @@ export default function AcademicControllerWeightsPage() {
           {success && <div style={{ color: 'green', marginTop: 12 }}>{success}</div>}
         </form>
       )}
+            </>
+          )}
+
+          {activeSection === 'special' && (
+            <SpecialCoWeightsPanel />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Special Courses CO Weights Panel
+// ---------------------------------------------------------------------------
+
+const CO_KEYS = ['co1', 'co2', 'co3', 'co4', 'co5'] as const;
+
+function SpecialCoWeightsPanel() {
+  const [courses, setCourses] = useState<SpecialCourseItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // local edits: taId -> co weights
+  const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [saveMsg, setSaveMsg] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    fetchSpecialCoursesList()
+      .then((list) => {
+        setCourses(list);
+        // Seed edits from existing weights
+        const initial: Record<number, Record<string, string>> = {};
+        for (const c of list) {
+          const row: Record<string, string> = {};
+          for (const k of CO_KEYS) {
+            row[k] = c.co_weights?.[k] != null ? String(c.co_weights[k]) : '';
+          }
+          initial[c.id] = row;
+        }
+        setEdits(initial);
+      })
+      .catch((e: any) => setError(e?.message || 'Failed to load special courses'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleChange = (taId: number, co: string, value: string) => {
+    setEdits((prev) => ({
+      ...prev,
+      [taId]: { ...(prev[taId] || {}), [co]: value },
+    }));
+  };
+
+  const handleSave = async (taId: number) => {
+    setSavingId(taId);
+    setSaveMsg((p) => ({ ...p, [taId]: '' }));
+    try {
+      const row = edits[taId] || {};
+      const weights: Record<string, number> = {};
+      for (const k of CO_KEYS) {
+        const v = Number(row[k]);
+        if (Number.isFinite(v)) weights[k] = v;
+      }
+      await saveSpecialCourseCoWeights(taId, weights);
+      setSaveMsg((p) => ({ ...p, [taId]: 'Saved' }));
+      // Update local courses list
+      setCourses((prev) => prev.map((c) => c.id === taId ? { ...c, co_weights: weights } : c));
+    } catch (e: any) {
+      setSaveMsg((p) => ({ ...p, [taId]: `Error: ${e?.message || 'Failed'}` }));
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  if (loading) return <div style={{ padding: 20, color: '#6b7280' }}>Loading special courses…</div>;
+  if (error) return <div style={{ padding: 12, color: '#b91c1c', background: '#fef2f2', borderRadius: 8 }}>{error}</div>;
+  if (!courses.length) return (
+    <div style={{ padding: 20, color: '#6b7280', textAlign: 'center' }}>
+      No active SPECIAL class-type courses found.
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 15 }}>Special Courses — CO Weights</div>
+      <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 18 }}>
+        Set CO attainment weights for each SPECIAL course. These define how much each CO contributes to the internal mark calculation.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#f1f5f9' }}>
+              <th style={thStyle}>Course</th>
+              <th style={thStyle}>Section</th>
+              <th style={thStyle}>Department</th>
+              <th style={thStyle}>Staff</th>
+              <th style={thStyle}>Year</th>
+              {CO_KEYS.map((k) => (
+                <th key={k} style={{ ...thStyle, textAlign: 'center', minWidth: 72 }}>
+                  {k.toUpperCase()}
+                </th>
+              ))}
+              <th style={thStyle}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {courses.map((course) => {
+              const row = edits[course.id] || {};
+              const isSaving = savingId === course.id;
+              const msg = saveMsg[course.id] || '';
+              return (
+                <tr key={course.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={tdStyle}>
+                    <div style={{ fontWeight: 700 }}>{course.subject_code}</div>
+                    {course.subject_name && (
+                      <div style={{ fontSize: 11, color: '#64748b' }}>{course.subject_name}</div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>{course.section_name || '—'}</td>
+                  <td style={tdStyle}>{course.department || '—'}</td>
+                  <td style={tdStyle}>{course.staff_name || '—'}</td>
+                  <td style={tdStyle}>{course.academic_year || '—'}</td>
+                  {CO_KEYS.map((k) => (
+                    <td key={k} style={{ ...tdStyle, textAlign: 'center' }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        value={row[k] ?? ''}
+                        onChange={(e) => handleChange(course.id, k, e.target.value)}
+                        className="obe-input"
+                        style={{ width: 64, textAlign: 'center' }}
+                      />
+                    </td>
+                  ))}
+                  <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button
+                      className="obe-btn obe-btn-success"
+                      style={{ padding: '5px 14px', fontSize: 13 }}
+                      disabled={isSaving}
+                      onClick={() => handleSave(course.id)}
+                    >
+                      {isSaving ? 'Saving…' : 'Save'}
+                    </button>
+                    {msg && (
+                      <span style={{ marginLeft: 8, fontSize: 12, color: msg.startsWith('Error') ? '#b91c1c' : '#059669' }}>
+                        {msg}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const thStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  textAlign: 'left',
+  fontWeight: 700,
+  color: '#475569',
+  fontSize: 12,
+  whiteSpace: 'nowrap',
+  borderBottom: '2px solid #e2e8f0',
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  verticalAlign: 'middle',
+  borderBottom: '1px solid #f1f5f9',
+};
+

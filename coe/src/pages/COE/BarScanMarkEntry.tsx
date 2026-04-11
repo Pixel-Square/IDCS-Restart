@@ -123,8 +123,11 @@ export default function BarScanMarkEntry({
   const queryDummy = embeddedDummy || searchParams.get('dummy_number');
   const queryDept = embeddedDept || searchParams.get('dept');
   const querySem = embeddedSem || searchParams.get('sem');
+  
+  // Priority: embeddedQpType (from parent) > URL param > stored qp_type (fallback only)
+  const explicitQpType = embeddedQpType || searchParams.get('qp_type');
   const storedQpType = queryDummy ? readStoredMarkQpType(queryDummy) : null;
-  const queryQpType = storedQpType || embeddedQpType || searchParams.get('qp_type');
+  const queryQpType = explicitQpType || storedQpType;
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -198,22 +201,27 @@ export default function BarScanMarkEntry({
 
     // Use query params immediately if we have enough info to render the form.
     // This avoids "Unable to load student details" for unsaved dummies.
-    if (queryRegNo && queryName && queryQpType) {
+     if (queryRegNo && queryName && queryQpType) {
        const qpTypeRaw = String(queryQpType).toUpperCase();
-      const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'TCPL' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
+      let qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'TCPL' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
+      const initialDummy = String(queryDummy || code || '').trim();
+      // Special-case: force OE format for known dummy prefix
+      if (initialDummy.toUpperCase().startsWith('E2560400050')) {
+        qpType = 'OE';
+      }
        setStudent({
-          id: 0, // Mock ID
-          reg_no: queryRegNo,
-          name: queryName,
-          department: queryDept || '-',
-          batch: '-',
-          section: '-',
-          status: 'Active',
-          dummy_number: queryDummy || code,
-          qp_type: qpType,
-          semester: querySem || '-',
+         id: 0, // Mock ID
+         reg_no: queryRegNo,
+         name: queryName,
+         department: queryDept || '-',
+         batch: '-',
+         section: '-',
+         status: 'Active',
+         dummy_number: initialDummy || null,
+         qp_type: qpType,
+         semester: querySem || '-',
        });
-       loadSavedMarks(queryDummy || code);
+       loadSavedMarks(initialDummy || code);
        // Optional: We can still fetch details in background to fill department/batch/etc
        // but we don't throw an error if it fails since we have enough to show the form.
     }
@@ -261,7 +269,26 @@ export default function BarScanMarkEntry({
 
         const qpType: QpType = (qpTypeRaw === 'QP2' || qpTypeRaw === 'TCPR' || qpTypeRaw === 'TCPL' || qpTypeRaw === 'OE') ? qpTypeRaw as QpType : 'QP1';
 
-        const finalDummy = queryDummy || data.dummy_number || code;
+        const finalDummy = String(queryDummy || data.dummy_number || code || '').trim();
+        // If final dummy matches known prefix, force OE qp type
+        if (finalDummy.toUpperCase().startsWith('E2560400050')) {
+          // override qpType to OE
+          ((): void => {
+            const qpType: QpType = 'OE';
+            setStudent({
+              id: data.id,
+              reg_no: data.reg_no,
+              name: data.name,
+              department: queryDept || data.department,
+              batch: data.batch,
+              section: data.section,
+              status: data.status,
+              dummy_number: finalDummy,
+              qp_type: qpType,
+              semester: querySem || '-',
+            });
+          })();
+        } else {
         setStudent({
           id: data.id,
           reg_no: data.reg_no,
@@ -275,6 +302,7 @@ export default function BarScanMarkEntry({
           semester: querySem || '-',
         });
         loadSavedMarks(finalDummy);
+        }
       } catch {
         if (!active) return;
         if (!queryRegNo) {
@@ -305,6 +333,19 @@ export default function BarScanMarkEntry({
     };
   }, [code, queryRegNo, queryName, queryQpType, queryDummy]);
 
+  // Ensure special dummy prefixes always use OE format
+  useEffect(() => {
+    if (!student || !student.dummy_number) return;
+    try {
+      const d = String(student.dummy_number).trim().toUpperCase();
+      if (d.startsWith('E2560400050') && student.qp_type !== 'OE') {
+        setStudent({ ...student, qp_type: 'OE' });
+      }
+    } catch {
+      // ignore
+    }
+  }, [student]);
+
   const handleSaveMarks = async () => {
     if (!student) return;
 
@@ -320,20 +361,6 @@ export default function BarScanMarkEntry({
       
       saveMarksForDummy(student.dummy_number || student.reg_no, marks, student.qp_type);
       
-      // Interconnectivity: Dispatch event for both portals
-      window.dispatchEvent(new CustomEvent('esv-marks-updated'));
-      window.dispatchEvent(new CustomEvent('coe-marks-updated'));
-      
-      // Broadcast to other tabs
-      const bc = new BroadcastChannel('idcs-marks-sync');
-      bc.postMessage({ 
-        type: 'UPDATE', 
-        dummy: student.dummy_number || student.reg_no, 
-        marks, 
-        qpType: student.qp_type 
-      });
-      bc.close();
-
       setSaved(true);
       setIsLocked(true);
       
@@ -495,7 +522,7 @@ export default function BarScanMarkEntry({
       {!loading && !error && student ? (
         <>
           <div className="rounded-xl border border-gray-200 bg-white p-6 mb-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-sm">
+            <div className="grid grid-cols-2 gap-6 text-sm">
               <div>
                 <span className="block text-gray-500 mb-1">Dummy Number</span>
                 <span className="font-mono text-lg font-bold text-blue-700">{student.dummy_number || '-'}</span>
@@ -503,14 +530,6 @@ export default function BarScanMarkEntry({
               <div>
                 <span className="block text-gray-500 mb-1">QP Type</span>
                 <span className="font-semibold text-gray-900">{student.qp_type}</span>
-              </div>
-              <div>
-                <span className="block text-gray-500 mb-1">Department</span>
-                <span className="font-semibold text-gray-900">{student.department}</span>
-              </div>
-              <div>
-                <span className="block text-gray-500 mb-1">Semester</span>
-                <span className="font-semibold text-gray-900">{student.semester || '-'}</span>
               </div>
             </div>
           </div>

@@ -13,9 +13,18 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import fetchWithAuth from '../services/fetchAuth';
-import { fetchPublishedReview1, fetchPublishedReview2 } from '../services/obe';
+import { ensureMobileVerified } from '../services/auth';
+import {
+  createEditRequest,
+  fetchPublishedLabSheet,
+  fetchPublishedReview1,
+  fetchPublishedReview2,
+  formatApiErrorMessage,
+  formatEditRequestSentMessage,
+} from '../services/obe';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import { useCqiEditRequestsEnabled } from '../utils/requestControl';
+import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
 
@@ -64,17 +73,55 @@ function extractReviewMark(reviewRes: any, studentId: number | string): number |
       const componentMarks = (row as any)?.reviewComponentMarks && typeof (row as any).reviewComponentMarks === 'object'
         ? Object.values((row as any).reviewComponentMarks)
         : [];
+      let hasNumeric = false;
       const sum = componentMarks.reduce<number>((acc, raw) => {
         const n = toNumOrNull(raw);
+        if (n != null) hasNumeric = true;
         return acc + (n == null ? 0 : n);
       }, 0);
-      if (sum > 0) return clamp(sum, 0, REVIEW_MAX);
+      if (hasNumeric) return clamp(sum, 0, REVIEW_MAX);
     }
   }
 
   // Published marks
   const total = toNumOrNull(reviewRes?.marks?.[sid]);
   return total == null ? null : clamp(Number(total), 0, REVIEW_MAX);
+}
+
+/**
+ * Project review pages are published through lab-published-sheet endpoints.
+ * Read per-student total directly from sheet rows when marks endpoint is empty.
+ */
+function extractReviewMarkFromLabSheet(sheetRes: any, studentId: number | string): number | null {
+  const sid = String(studentId);
+  const rowsByStudentId =
+    (sheetRes?.data?.sheet?.rowsByStudentId && typeof sheetRes.data.sheet.rowsByStudentId === 'object')
+      ? sheetRes.data.sheet.rowsByStudentId
+      : (sheetRes?.data?.rowsByStudentId && typeof sheetRes.data.rowsByStudentId === 'object')
+        ? sheetRes.data.rowsByStudentId
+        : null;
+
+  if (!rowsByStudentId) return null;
+  const row = rowsByStudentId[sid];
+  if (!row || typeof row !== 'object') return null;
+
+  const ciaExamTotal = toNumOrNull((row as any)?.ciaExam);
+  if (ciaExamTotal != null) return clamp(ciaExamTotal, 0, REVIEW_MAX);
+
+  const componentMarks =
+    (row as any)?.reviewComponentMarks && typeof (row as any).reviewComponentMarks === 'object'
+      ? Object.values((row as any).reviewComponentMarks)
+      : [];
+
+  let hasNumeric = false;
+  const sum = componentMarks.reduce<number>((acc, raw) => {
+    const n = toNumOrNull(raw);
+    if (n != null) hasNumeric = true;
+    return acc + (n == null ? 0 : n);
+  }, 0);
+  if (hasNumeric) return clamp(sum, 0, REVIEW_MAX);
+
+  return null;
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -104,21 +151,46 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
   // Lock / publish state
   const { data: lockData, refresh: refreshLock } = useMarkTableLock({
-    assessment: 'cqi_project_combined',
+    assessment: 'cqi_project_combined_cqi',
     subjectCode: String(subjectId || ''),
     teachingAssignmentId,
   });
-  const publishedEditLocked = Boolean(lockData?.is_published && lockData?.published_blocked);
-  const isPublished         = Boolean(lockData?.is_published);
+  const { data: markEntryEditWindow, refresh: refreshMarkEntryEditWindow } = useEditWindow({
+    assessment: 'cqi_project_combined_cqi',
+    subjectCode: String(subjectId || ''),
+    scope: 'MARK_ENTRY',
+    teachingAssignmentId,
+    options: { poll: true },
+  });
+  const isPublished         = Boolean(lockData?.exists && lockData?.is_published);
+  const [publishConsumedApprovals, setPublishConsumedApprovals] = useState<null | {
+    markEntryApprovalUntil: string | null;
+  }>(null);
+  const markEntryApprovalUntil =
+    lockData?.mark_entry_unblocked_until
+      ? String(lockData.mark_entry_unblocked_until)
+      : markEntryEditWindow?.approval_until
+        ? String(markEntryEditWindow.approval_until)
+        : null;
+  const markEntryApprovedFresh =
+    Boolean(markEntryApprovalUntil) &&
+    (publishConsumedApprovals == null || markEntryApprovalUntil !== (publishConsumedApprovals.markEntryApprovalUntil ?? null));
+  const entryOpen =
+    !isPublished ||
+    (!editRequestsEnabled) ||
+    (Boolean(lockData?.entry_open) && markEntryApprovedFresh) ||
+    (Boolean(markEntryEditWindow?.allowed_by_approval) && markEntryApprovedFresh);
+  const publishedEditLocked = Boolean(isPublished && !entryOpen);
   const publishButtonIsRequestEdit = publishedEditLocked && editRequestsEnabled;
   const editRequestsBlocked = publishedEditLocked && !editRequestsEnabled;
 
   const {
     pending: editRequestPending,
     refresh: refreshEditReq,
+    setPendingUntilMs: setEditRequestPendingUntilMs,
   } = useEditRequestPending({
     enabled: Boolean(editRequestsEnabled) && Boolean(subjectId),
-    assessment: 'cqi_project_combined',
+    assessment: 'cqi_project_combined_cqi',
     subjectCode: subjectId ? String(subjectId) : null,
     scope: 'MARK_ENTRY',
     teachingAssignmentId,
@@ -128,6 +200,8 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
   const [roster, setRoster]       = useState<Student[]>([]);
   const [review1Res, setReview1Res] = useState<any>(null);
   const [review2Res, setReview2Res] = useState<any>(null);
+  const [review1SheetRes, setReview1SheetRes] = useState<any>(null);
+  const [review2SheetRes, setReview2SheetRes] = useState<any>(null);
   const [loading, setLoading]     = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -143,6 +217,11 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
   const [editReasonOpen, setEditReasonOpen] = useState(false);
   const [editReason, setEditReason]         = useState('');
   const [editReasonBusy, setEditReasonBusy] = useState(false);
+  const [editReasonError, setEditReasonError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPublishConsumedApprovals(null);
+  }, [subjectId, teachingAssignmentId]);
 
   // ── Fetch published reviews + CQI draft/published ───────────────────
   useEffect(() => {
@@ -156,22 +235,26 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
     Promise.all([
       fetchPublishedReview1(subjectId, taId).catch(() => ({ marks: {} })),
       fetchPublishedReview2(subjectId, taId).catch(() => ({ marks: {} })),
+      fetchPublishedLabSheet('review1', subjectId, taId).catch(() => ({ data: null })),
+      fetchPublishedLabSheet('review2', subjectId, taId).catch(() => ({ data: null })),
       fetchTeachingAssignmentRoster(taId).catch(() => null),
       // CQI draft
       fetchWithAuth(
-        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${taId}&assessment_type=project_combined&page_key=project_combined_cqi&co_numbers=1`,
+        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${taId}&assessment_type=project_combined&page_key=project_combined_cqi&co_numbers=1`,
         { method: 'GET' },
       ).catch(() => null),
       // CQI published
       fetchWithAuth(
-        `/api/obe/cqi-published/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${taId}&assessment_type=project_combined&page_key=project_combined_cqi&co_numbers=1`,
+        `/api/obe/cqi-published/${encodeURIComponent(subjectId)}?teaching_assignment_id=${taId}&assessment_type=project_combined&page_key=project_combined_cqi&co_numbers=1`,
         { method: 'GET' },
       ).catch(() => null),
-    ]).then(([r1Res, r2Res, rosterRes, draftHttpRes, pubHttpRes]) => {
+    ]).then(([r1Res, r2Res, r1Sheet, r2Sheet, rosterRes, draftHttpRes, pubHttpRes]) => {
       if (!mounted) return;
 
       setReview1Res(r1Res);
       setReview2Res(r2Res);
+      setReview1SheetRes(r1Sheet);
+      setReview2SheetRes(r2Sheet);
 
       const students: Student[] = Array.isArray((rosterRes as any)?.students)
         ? (rosterRes as any).students
@@ -228,8 +311,8 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
     return roster.map((s) => {
       const sid = String(s.id);
-      const review1 = extractReviewMark(review1Res, sid);
-      const review2 = extractReviewMark(review2Res, sid);
+      const review1 = extractReviewMark(review1Res, sid) ?? extractReviewMarkFromLabSheet(review1SheetRes, sid);
+      const review2 = extractReviewMark(review2Res, sid) ?? extractReviewMarkFromLabSheet(review2SheetRes, sid);
 
       const hasSome = review1 != null || review2 != null;
       const combined = hasSome ? round2((review1 ?? 0) + (review2 ?? 0)) : null;
@@ -253,7 +336,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
       return { student: s, review1, review2, combined, needsCqi, afterCqi };
     });
-  }, [roster, review1Res, review2Res, cqiEntries]);
+  }, [roster, review1Res, review2Res, review1SheetRes, review2SheetRes, cqiEntries]);
 
   // ── Save draft ────────────────────────────────────────────────────────
   async function saveDraft() {
@@ -266,7 +349,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
         entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
-        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}/?teaching_assignment_id=${teachingAssignmentId}`,
+        `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
         {
           method: 'PUT',
           body: JSON.stringify({
@@ -301,7 +384,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
         entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
-        `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}/`,
+        `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -316,8 +399,12 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
       if (!res.ok) throw new Error(`Publish failed (${res.status})`);
       const json = await res.json();
       setPublishedAt(json?.published_at ?? new Date().toISOString());
+      setPublishConsumedApprovals({
+        markEntryApprovalUntil,
+      });
       setStatusMsg('CQI Published successfully.');
       refreshLock();
+      refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
       setStatusMsg(`Error: ${e?.message || 'Publish failed'}`);
     } finally {
@@ -327,29 +414,61 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
 
   // ── Request edit ──────────────────────────────────────────────────────
   async function submitEditRequest() {
-    if (!subjectId || teachingAssignmentId == null || !editReason.trim()) return;
+    if (!subjectId || teachingAssignmentId == null) return;
+    if (!editRequestsEnabled) {
+      alert('Edit requests are disabled by IQAC.');
+      return;
+    }
+    if (editRequestPending) {
+      setEditReasonError('Edit request is pending. Please wait for approval.');
+      return;
+    }
+
+    const reason = String(editReason || '').trim();
+    if (!reason) {
+      setEditReasonError('Reason is required.');
+      return;
+    }
+
+    const mobileOk = await ensureMobileVerified();
+    if (!mobileOk) {
+      const msg = 'Please verify your mobile number in Profile before requesting edits.';
+      setEditReasonError(msg);
+      alert(msg);
+      window.location.href = '/profile';
+      return;
+    }
+
     setEditReasonBusy(true);
     setStatusMsg(null);
+    setEditReasonError(null);
     try {
-      const res = await fetchWithAuth(
-        `/api/obe/edit-request/`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            subject_code: subjectId,
-            teaching_assignment_id: teachingAssignmentId,
-            assessment: 'cqi_project_combined',
-            reason: editReason.trim(),
-          }),
-        },
-      );
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const created = await createEditRequest({
+        assessment: 'cqi_project_combined_cqi',
+        subject_code: String(subjectId),
+        scope: 'MARK_ENTRY',
+        reason,
+        teaching_assignment_id: teachingAssignmentId,
+      });
+      const successMsg = formatEditRequestSentMessage(created);
+      alert(successMsg);
       setEditReasonOpen(false);
       setEditReason('');
-      setStatusMsg('Edit request submitted. Awaiting IQAC approval.');
-      refreshEditReq();
+      setEditReasonError(null);
+      setStatusMsg(successMsg.replace(/\n/g, ' • '));
+      setEditRequestPendingUntilMs(Date.now() + 24 * 60 * 60 * 1000);
+      try {
+        refreshEditReq({ silent: true });
+      } catch {
+        // ignore
+      }
+      refreshLock();
+      refreshMarkEntryEditWindow({ silent: true });
     } catch (e: any) {
-      setStatusMsg(`Error: ${e?.message || 'Request failed'}`);
+      const msg = formatApiErrorMessage(e, 'Request failed');
+      setEditReasonError(msg);
+      setStatusMsg(`Error: ${msg}`);
+      alert(`Edit request failed: ${msg}`);
     } finally {
       setEditReasonBusy(false);
     }
@@ -376,7 +495,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
   }, [rows, regNoFilter]);
 
   // ── Render ────────────────────────────────────────────────────────────
-  const isViewOnly   = editRequestsBlocked || (isPublished && !editRequestPending);
+  const isViewOnly   = Boolean(isPublished && !entryOpen);
   const flaggedCount = rows.filter((r) => r.needsCqi).length;
 
   const cellStyle: React.CSSProperties = {
@@ -452,7 +571,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
           </span>
           {publishButtonIsRequestEdit && (
             <button
-              onClick={() => { setEditReasonOpen(true); }}
+              onClick={() => { setEditReasonOpen(true); setEditReasonError(null); }}
               disabled={editRequestPending}
               style={{
                 padding: '6px 14px', borderRadius: 6, border: 'none', cursor: 'pointer',
@@ -587,9 +706,19 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
                               setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
                             } else {
                               const n = parseFloat(val);
+                              if (!Number.isFinite(n)) {
+                                setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
+                                return;
+                              }
+                              if (n < 0 || n > CQI_INPUT_MAX) {
+                                window.alert(`Entered value should be less than or equal to ${CQI_INPUT_MAX}.`);
+                                e.target.value = '';
+                                setCqiEntries((prev) => ({ ...prev, [sid]: '' }));
+                                return;
+                              }
                               setCqiEntries((prev) => ({
                                 ...prev,
-                                [sid]: Number.isFinite(n) ? clamp(n, 0, CQI_INPUT_MAX) : '',
+                                [sid]: n,
                               }));
                             }
                           }}
@@ -704,7 +833,10 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
             </div>
             <textarea
               value={editReason}
-              onChange={(e) => setEditReason(e.target.value)}
+              onChange={(e) => {
+                setEditReason(e.target.value);
+                if (editReasonError) setEditReasonError(null);
+              }}
               rows={3}
               placeholder="Reason for edit request…"
               style={{
@@ -712,9 +844,14 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
                 border: '1px solid #cbd5e1', fontSize: 13, resize: 'vertical',
               }}
             />
+            {editReasonError && (
+              <div style={{ marginTop: 10, color: '#dc2626', fontSize: 12, fontWeight: 600 }}>
+                {editReasonError}
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
               <button
-                onClick={() => { setEditReasonOpen(false); setEditReason(''); }}
+                onClick={() => { setEditReasonOpen(false); setEditReason(''); setEditReasonError(null); }}
                 style={{
                   padding: '7px 16px', borderRadius: 6, border: '1px solid #cbd5e1',
                   background: '#f8fafc', fontWeight: 600, fontSize: 13, cursor: 'pointer',

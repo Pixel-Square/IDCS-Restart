@@ -26,7 +26,7 @@ import PublishLockOverlay from './PublishLockOverlay';
 import AssessmentContainer from './containers/AssessmentContainer';
 import { ModalPortal } from './ModalPortal';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
-import { useMarkEntryEditRequestsEnabled } from '../utils/requestControl';
+import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
 
 
@@ -498,6 +498,7 @@ export default function LabEntry({
   // (the snapshot endpoint can return empty objects even when not published).
   const isPublished = Boolean(publishedAt) || Boolean(markLock?.exists && markLock?.is_published);
   const editRequestsEnabled = useMarkEntryEditRequestsEnabled();
+  const markManagerEditRequestsEnabled = useMarkManagerEditRequestsEnabled();
   // Authoritative: backend computes `entry_open` from mark_entry_blocked + mark_manager_locked/unlock windows.
   // If we don't have a lock row yet, treat entry as open (table is hidden until Mark Manager is confirmed anyway).
   // When IQAC disables edit requests, bypass the published lock flow entirely.
@@ -867,7 +868,9 @@ export default function LabEntry({
 
     // Source of truth: if a DB lock row exists, mirror its state.
     // This ensures "Save & Lock" persists immediately and across reloads.
-    if (markLock?.exists) {
+    // Exception: when mark manager edit requests are disabled (Unlimited mode),
+    // allow the user to unlock locally without waiting for DB sync.
+    if (markLock?.exists && markManagerEditRequestsEnabled) {
       const nextLocked = Boolean(markLock?.mark_manager_locked);
       if (Boolean(draft.sheet.markManagerLocked) !== nextLocked) {
         setDraft((p) => ({
@@ -896,6 +899,7 @@ export default function LabEntry({
     subjectId,
     markLock?.exists,
     markLock?.mark_manager_locked,
+    markManagerEditRequestsEnabled,
     markManagerEditWindow?.allowed_by_approval,
     markManagerEditWindow?.approval_until,
     draft.sheet.markManagerLocked,
@@ -1593,7 +1597,7 @@ export default function LabEntry({
 
   async function requestMarkManagerEdit() {
     if (!subjectId) return;
-    if (!editRequestsEnabled) {
+    if (!markManagerEditRequestsEnabled) {
       alert('Edit requests are disabled by IQAC.');
       return;
     }
@@ -2258,16 +2262,21 @@ export default function LabEntry({
                   setProjectReviewValidationError('Title cannot be empty.');
                   return;
                 }
+                if (markManagerLocked && !markManagerEditRequestsEnabled) {
+                  // Unlimited mode: directly unlock so the user can re-edit settings inline
+                  setDraft((p) => ({ ...p, sheet: { ...p.sheet, markManagerLocked: false } }));
+                  return;
+                }
                 if (markManagerLocked && !editRequestsEnabled) {
                   return;
                 }
                 setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
               }}
               className="obe-btn obe-btn-success"
-              disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
+              disabled={!subjectId || markManagerBusy || (markManagerLocked && markManagerEditRequestsEnabled && !editRequestsEnabled)}
               style={{ minWidth: 100 }}
             >
-              {markManagerBusy ? 'Saving...' : markManagerLocked ? 'Request Edit' : 'Save & Lock'}
+              {markManagerBusy ? 'Saving...' : markManagerLocked ? (markManagerEditRequestsEnabled ? 'Request Edit' : 'Edit') : 'Save & Lock'}
             </button>
           </div>
 
@@ -3214,11 +3223,17 @@ export default function LabEntry({
                     
                     // Update local draft state after successful confirmation
                     setDraft(nextDraft);
-                    setMarkManagerModal(null);
                     
-                    // Success feedback
-                    alert('✅ Mark Manager saved and locked successfully! You can now proceed with mark entry.');
+                    // Success feedback and automatically open Request Edit modal
+                    alert('✅ Mark Manager saved and locked successfully! You can now proceed with mark entry.\n\nIf you need to make changes later, use the Request Edit option.');
                     setTimeout(() => setMarkManagerAnimating(false), 1500);
+                    
+                    // Open Request Edit modal so user can immediately request changes if needed
+                    if (editRequestsEnabled) {
+                      setMarkManagerModal({ mode: 'request' });
+                    } else {
+                      setMarkManagerModal(null);
+                    }
                   } catch (e: any) {
                     setMarkManagerError(e?.message || 'Save failed');
                     setMarkManagerAnimating(false);

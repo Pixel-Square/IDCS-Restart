@@ -67,6 +67,8 @@ interface SpecialLimitItem {
   attendance_in_time_limit: string;
   attendance_out_time_limit: string;
   mid_time_split: string;
+  lunch_from: string | null;
+  lunch_to: string | null;
   apply_time_based_absence: boolean;
   enabled: boolean;
   departments: number[];
@@ -104,6 +106,8 @@ export default function OrganizationStaffAttendanceAnalytics() {
   const [specialInTime, setSpecialInTime] = useState('08:45');
   const [specialOutTime, setSpecialOutTime] = useState('17:00');
   const [specialNoonTime, setSpecialNoonTime] = useState('13:00');
+  const [specialLunchFrom, setSpecialLunchFrom] = useState('');
+  const [specialLunchTo, setSpecialLunchTo] = useState('');
   const [specialDeptIds, setSpecialDeptIds] = useState<number[]>([]);
 
   // Load departments on mount
@@ -152,6 +156,8 @@ export default function OrganizationStaffAttendanceAnalytics() {
     setSpecialInTime('08:45');
     setSpecialOutTime('17:00');
     setSpecialNoonTime('13:00');
+    setSpecialLunchFrom('');
+    setSpecialLunchTo('');
     setSpecialDeptIds([]);
   };
 
@@ -195,6 +201,8 @@ export default function OrganizationStaffAttendanceAnalytics() {
             attendance_in_time_limit: `${specialInTime}:00`,
             attendance_out_time_limit: `${specialOutTime}:00`,
             mid_time_split: `${specialNoonTime}:00`,
+            lunch_from: specialLunchFrom ? `${specialLunchFrom}:00` : null,
+            lunch_to: specialLunchTo ? `${specialLunchTo}:00` : null,
             apply_time_based_absence: true,
             enabled: true,
             departments: specialDeptIds,
@@ -548,7 +556,7 @@ export default function OrganizationStaffAttendanceAnalytics() {
 
           {showSpecialForm && (
             <div className="border border-slate-200 rounded-lg p-4 mb-4 bg-slate-50">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>
                   <input
@@ -614,6 +622,24 @@ export default function OrganizationStaffAttendanceAnalytics() {
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Lunch From</label>
+                  <input
+                    type="time"
+                    value={specialLunchFrom}
+                    onChange={(e) => setSpecialLunchFrom(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Lunch To</label>
+                  <input
+                    type="time"
+                    value={specialLunchTo}
+                    onChange={(e) => setSpecialLunchTo(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+                  />
+                </div>
               </div>
 
               <div className="mt-3">
@@ -663,17 +689,19 @@ export default function OrganizationStaffAttendanceAnalytics() {
                   <th className="px-3 py-2 text-left">In</th>
                   <th className="px-3 py-2 text-left">Out</th>
                   <th className="px-3 py-2 text-left">Noon</th>
+                  <th className="px-3 py-2 text-left">Lunch From</th>
+                  <th className="px-3 py-2 text-left">Lunch To</th>
                   <th className="px-3 py-2 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loadingSpecialLimits ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-4 text-center text-slate-500">Loading special limits...</td>
+                    <td colSpan={9} className="px-3 py-4 text-center text-slate-500">Loading special limits...</td>
                   </tr>
                 ) : specialLimits.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-4 text-center text-slate-500">No special limits configured</td>
+                    <td colSpan={9} className="px-3 py-4 text-center text-slate-500">No special limits configured</td>
                   </tr>
                 ) : (
                   specialLimits.map((item) => (
@@ -689,6 +717,8 @@ export default function OrganizationStaffAttendanceAnalytics() {
                       <td className="px-3 py-2 text-slate-700">{item.attendance_in_time_limit?.substring(0, 5)}</td>
                       <td className="px-3 py-2 text-slate-700">{item.attendance_out_time_limit?.substring(0, 5)}</td>
                       <td className="px-3 py-2 text-slate-700">{item.mid_time_split?.substring(0, 5)}</td>
+                      <td className="px-3 py-2 text-slate-700">{item.lunch_from ? item.lunch_from.substring(0, 5) : '-'}</td>
+                      <td className="px-3 py-2 text-slate-700">{item.lunch_to ? item.lunch_to.substring(0, 5) : '-'}</td>
                       <td className="px-3 py-2 text-center">
                         <button
                           onClick={() => handleReapplySpecialLimit(item.id)}

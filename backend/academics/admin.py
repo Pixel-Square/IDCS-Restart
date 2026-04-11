@@ -25,6 +25,7 @@ from .models import (
     RoleAssignment,
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
+    ExtStaffProfile,
 )
 from .models import TeachingAssignment
 from .models import StudentMentorMap, SectionAdvisor, DepartmentRole
@@ -1643,6 +1644,26 @@ class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
             return None
 
     course_code.short_description = 'Course Code'
+
+
+@admin.register(ExtStaffProfile)
+class ExtStaffProfileAdmin(admin.ModelAdmin):
+    list_display = ('external_id', 'get_username', 'get_full_name', 'designation', 'department', 'mobile', 'is_active')
+    search_fields = ('external_id', 'user__username', 'user__email', 'user__first_name', 'user__last_name', 'designation', 'department', 'mobile')
+    list_filter = ('is_active', 'department')
+    readonly_fields = ('external_id', 'created_at', 'updated_at')
+
+    def get_username(self, obj):
+        return obj.user.username if obj.user else '-'
+    get_username.short_description = 'Username'
+    get_username.admin_order_field = 'user__username'
+
+    def get_full_name(self, obj):
+        if obj.user:
+            return f"{obj.user.first_name} {obj.user.last_name}".strip() or obj.user.username
+        return '-'
+    get_full_name.short_description = 'Full Name'
+    get_full_name.admin_order_field = 'user__first_name'
 
 
 # Register any remaining academics models without explicit admin classes above.

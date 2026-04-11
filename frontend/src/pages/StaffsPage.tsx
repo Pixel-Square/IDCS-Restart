@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload } from 'lucide-react'
+import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload, Download } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
 import StaffImportModal from '../components/StaffImportModal'
@@ -47,6 +47,23 @@ type Department = {
   short_name: string | null
   staffs: StaffMember[]
 }
+
+type ExportField = {
+  key: 'department' | 'staff_id' | 'internal_id' | 'name' | 'username' | 'email' | 'designation' | 'roles' | 'status'
+  label: string
+}
+
+const EXPORT_FIELDS: ExportField[] = [
+  { key: 'department', label: 'Department' },
+  { key: 'staff_id', label: 'Staff ID' },
+  { key: 'internal_id', label: 'Internal ID' },
+  { key: 'name', label: 'Name' },
+  { key: 'username', label: 'Username' },
+  { key: 'email', label: 'Email' },
+  { key: 'designation', label: 'Designation' },
+  { key: 'roles', label: 'Roles' },
+  { key: 'status', label: 'Status' },
+]
 
 const getStaffDisplayName = (staff: StaffMember): string => {
   if (!staff.user) return staff.staff_id
@@ -101,6 +118,19 @@ export default function StaffsPage() {
   const [shufflePassword, setShufflePassword] = useState('')
   const [shuffleSubmitting, setShuffleSubmitting] = useState(false)
   const [shuffleError, setShuffleError] = useState<string | null>(null)
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false)
+  const [selectedExportDepartments, setSelectedExportDepartments] = useState<Record<number, boolean>>({})
+  const [selectedExportFields, setSelectedExportFields] = useState<Record<ExportField['key'], boolean>>({
+    department: true,
+    staff_id: true,
+    internal_id: true,
+    name: true,
+    username: true,
+    email: true,
+    designation: true,
+    roles: true,
+    status: true,
+  })
 
   // Auto-dismiss notification after 5 seconds
   useEffect(() => {
@@ -357,6 +387,95 @@ export default function StaffsPage() {
 
   const isOverallView = currentDeptId === 'all'
 
+  const getDepartmentDisplayName = (dept: Department) => dept.short_name || dept.code || dept.name || `Dept ${dept.id}`
+
+  const openDownloadModal = () => {
+    const defaults: Record<number, boolean> = {}
+    departments.forEach((dept) => {
+      if (isOverallView || currentDeptId === null) {
+        defaults[dept.id] = true
+      } else {
+        defaults[dept.id] = dept.id === currentDeptId
+      }
+    })
+    setSelectedExportDepartments(defaults)
+    setDownloadModalOpen(true)
+  }
+
+  const toggleExportDepartment = (deptId: number) => {
+    setSelectedExportDepartments((prev) => ({ ...prev, [deptId]: !prev[deptId] }))
+  }
+
+  const toggleExportField = (field: ExportField['key']) => {
+    setSelectedExportFields((prev) => ({ ...prev, [field]: !prev[field] }))
+  }
+
+  const handleDownloadStaffList = async () => {
+    const selectedDeptIds = departments.filter((dept) => selectedExportDepartments[dept.id]).map((dept) => dept.id)
+    const activeFields = EXPORT_FIELDS.filter((field) => selectedExportFields[field.key])
+
+    if (selectedDeptIds.length === 0) {
+      setNotificationMessage('Please select at least one department to download.')
+      setNotificationType('error')
+      setNotificationOpen(true)
+      return
+    }
+
+    if (activeFields.length === 0) {
+      setNotificationMessage('Please select at least one field to include in Excel.')
+      setNotificationType('error')
+      setNotificationOpen(true)
+      return
+    }
+
+    const exportRows = departments
+      .filter((dept) => selectedDeptIds.includes(dept.id))
+      .flatMap((dept) => {
+        const deptName = getDepartmentDisplayName(dept)
+        const deptStaff = getFilteredStaffs(dept.staffs || [])
+        return deptStaff.map((staff) => ({
+          department: deptName,
+          staff_id: staff.staff_id || '',
+          internal_id: staff.internal_id || '',
+          name: getStaffDisplayName(staff),
+          username: staff.user?.username || '',
+          email: staff.user?.email || '',
+          designation: staff.designation || '',
+          roles: [
+            ...(staff.user_roles || []),
+            ...((staff.department_role_mappings || []).map((item) => `${item.role} - ${item.department.short_name || item.department.code || item.department.name}`)),
+          ].join(', '),
+          status: staff.status || '',
+        }))
+      })
+
+    try {
+      const XLSX = await import('xlsx')
+      const sheetData = exportRows.map((row) => {
+        const out: Record<string, string> = {}
+        activeFields.forEach((field) => {
+          out[field.label] = row[field.key] ?? ''
+        })
+        return out
+      })
+
+      const ws = XLSX.utils.json_to_sheet(sheetData)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Staff List')
+      XLSX.writeFile(wb, `staff_list_${Date.now()}.xlsx`)
+
+      setDownloadModalOpen(false)
+      setNotificationMessage('Staff list downloaded successfully.')
+      setNotificationType('success')
+      setNotificationOpen(true)
+    } catch (err) {
+      console.error('Error downloading staff list:', err)
+      setNotificationMessage('Failed to download staff list.')
+      setNotificationType('error')
+      setNotificationOpen(true)
+    }
+  }
+
   const handleAssignStaffToDept = async (staffId: number) => {
     if (currentDeptId === 'all' || currentDeptId === null) {
       setNotificationMessage('Please select a specific department first.')
@@ -605,6 +724,14 @@ export default function StaffsPage() {
                   Include Non-Teaching (mapping only)
                 </label>
               )}
+              <button
+                onClick={openDownloadModal}
+                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+                title="Download staff list"
+              >
+                <Download className="h-4 w-4" />
+                <span>Download</span>
+              </button>
             </div>
           </div>
           <div>
@@ -1484,6 +1611,101 @@ export default function StaffsPage() {
                 <svg className="h-5 w-5" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
                   <path d="M6 18L18 6M6 6l12 12"></path>
                 </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Download Staff Excel Modal */}
+      {downloadModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">Download Staff List</h3>
+              <p className="text-sm text-gray-600 mt-1">Choose departments and fields to include in the Excel file.</p>
+            </div>
+
+            <div className="px-6 py-4 overflow-y-auto space-y-6">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold text-gray-800">Departments</h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next: Record<number, boolean> = {}
+                      departments.forEach((dept) => {
+                        next[dept.id] = true
+                      })
+                      setSelectedExportDepartments(next)
+                    }}
+                    className="text-xs text-indigo-600 hover:text-indigo-800"
+                  >
+                    Select All
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {departments.map((dept) => (
+                    <label key={dept.id} className="flex items-center gap-2 text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedExportDepartments[dept.id])}
+                        onChange={() => toggleExportDepartment(dept.id)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>{getDepartmentDisplayName(dept)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold text-gray-800">Fields</h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = {} as Record<ExportField['key'], boolean>
+                      EXPORT_FIELDS.forEach((field) => {
+                        next[field.key] = true
+                      })
+                      setSelectedExportFields(next)
+                    }}
+                    className="text-xs text-indigo-600 hover:text-indigo-800"
+                  >
+                    Select All
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {EXPORT_FIELDS.map((field) => (
+                    <label key={field.key} className="flex items-center gap-2 text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selectedExportFields[field.key])}
+                        onChange={() => toggleExportField(field.key)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span>{field.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDownloadModalOpen(false)}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadStaffList}
+                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+              >
+                Download Excel
               </button>
             </div>
           </div>
