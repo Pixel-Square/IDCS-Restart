@@ -537,6 +537,7 @@ class ElectiveChoicesView(APIView):
             regulation = request.query_params.get('regulation')
             semester = request.query_params.get('semester')
             section_id = request.query_params.get('section_id')
+            student_reg_no = request.query_params.get('student_reg_no')
             search = request.query_params.get('search') or request.query_params.get('q')
             academic_year = request.query_params.get('academic_year')
             is_active = request.query_params.get('is_active')
@@ -574,6 +575,8 @@ class ElectiveChoicesView(APIView):
                     qs = qs.filter(student__section_id=int(section_id))
                 except Exception:
                     return Response({'results': []})
+            if student_reg_no:
+                qs = qs.filter(student__reg_no__iexact=str(student_reg_no).strip())
             if academic_year:
                 qs = qs.filter(academic_year__name__icontains=academic_year)
             if not include_inactive and (is_active is None or str(is_active).strip() == ''):
@@ -667,6 +670,140 @@ class ElectiveChoicesView(APIView):
         choice.created_by = choice.created_by or request.user
         choice.save()
         return Response(ElectiveChoiceSerializer(choice).data)
+
+    def post(self, request):
+        if not self._can_manage(request.user):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        student_reg_no = str(request.data.get('student_reg_no', '')).strip()
+        elective_subject_id = request.data.get('elective_subject_id')
+        if not student_reg_no:
+            return Response({'detail': 'student_reg_no is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not elective_subject_id:
+            return Response({'detail': 'elective_subject_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from .models import ElectiveChoice, ElectiveSubject
+            from academics.models import StudentProfile, AcademicYear
+
+            student = StudentProfile.objects.select_related('user').get(reg_no=student_reg_no)
+            elective_subject = ElectiveSubject.objects.select_related('parent', 'semester').get(pk=int(elective_subject_id))
+        except StudentProfile.DoesNotExist:
+            return Response({'detail': f'Student with reg_no "{student_reg_no}" not found'}, status=status.HTTP_404_NOT_FOUND)
+        except (ValueError, TypeError, ElectiveSubject.DoesNotExist):
+            return Response({'detail': 'Invalid elective_subject_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Normalize parent group names so validation works with variants like
+        # "Open Elective II", "OE-II", "oe 2", etc.
+        def _parent_bucket(parent_name):
+            raw = str(parent_name or '').strip().upper()
+            compact = re.sub(r'[^A-Z0-9]', '', raw)
+
+            is_oe = compact.startswith('OE') or 'OPENELECTIVE' in compact
+            is_pe = compact.startswith('PE') or 'PROFESSIONALELECTIVE' in compact
+            is_ee = compact.startswith('EE') or 'EMERGINGELECTIVE' in compact
+
+            if is_oe and ('II' in compact or '2' in compact):
+                return 'OE-II'
+            if is_pe and ('II' in compact or '2' in compact):
+                return 'PE-II'
+            if is_ee and ('III' in compact or '3' in compact):
+                return 'EE-III'
+            if is_ee and ('II' in compact or '2' in compact):
+                return 'EE-II'
+            if is_ee and ('I' in compact or '1' in compact):
+                return 'EE-I'
+
+            return compact or 'UNKNOWN'
+
+        reg_digits = ''.join(ch for ch in student_reg_no if ch.isdigit())
+        target_parent_name = getattr(getattr(elective_subject, 'parent', None), 'course_name', '')
+        target_bucket = _parent_bucket(target_parent_name)
+
+        # Batch-wise allowed groups based on reg no prefix.
+        allowed_buckets = None
+        if reg_digits.startswith('2303'):
+            allowed_buckets = {'OE-II', 'PE-II', 'EE-III'}
+        elif reg_digits.startswith('2403'):
+            allowed_buckets = {'EE-I'}
+
+        if allowed_buckets is not None and target_bucket not in allowed_buckets:
+            allowed_text = ', '.join(sorted(allowed_buckets))
+            return Response(
+                {'detail': f'This student can be mapped only to: {allowed_text}.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Enforce one elective choice per parent bucket for active mappings.
+        existing_active = ElectiveChoice.objects.select_related('elective_subject__parent').filter(
+            student=student,
+            is_active=True,
+        )
+
+        existing_same_bucket = []
+        for ch in existing_active:
+            ch_parent_name = getattr(getattr(getattr(ch, 'elective_subject', None), 'parent', None), 'course_name', '')
+            if _parent_bucket(ch_parent_name) == target_bucket:
+                existing_same_bucket.append(ch)
+
+        if any(ch.elective_subject_id == elective_subject.id for ch in existing_same_bucket):
+            return Response(
+                {'detail': 'This student is already mapped to this elective subject.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if existing_same_bucket:
+            return Response(
+                {'detail': f'This student already has one elective in {target_bucket}. Only one is allowed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Pick active academic year by semester parity if possible.
+        sem_number = getattr(getattr(elective_subject, 'semester', None), 'number', None)
+        academic_year = None
+        if sem_number:
+            parity = 'ODD' if int(sem_number) % 2 == 1 else 'EVEN'
+            academic_year = AcademicYear.objects.filter(is_active=True, parity=parity).first()
+        if not academic_year:
+            academic_year = AcademicYear.objects.filter(is_active=True).first()
+
+        duplicate = ElectiveChoice.objects.filter(
+            student=student,
+            elective_subject=elective_subject,
+            academic_year=academic_year,
+        ).first()
+        if duplicate:
+            if not duplicate.is_active:
+                duplicate.is_active = True
+                duplicate.created_by = duplicate.created_by or request.user
+                duplicate.save(update_fields=['is_active', 'created_by', 'updated_at'])
+            return Response(ElectiveChoiceSerializer(duplicate).data, status=status.HTTP_200_OK)
+
+        choice = ElectiveChoice.objects.create(
+            student=student,
+            elective_subject=elective_subject,
+            academic_year=academic_year,
+            is_active=True,
+            created_by=request.user,
+        )
+        return Response(ElectiveChoiceSerializer(choice).data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        if not self._can_manage(request.user):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        choice_id = request.data.get('choice_id') or request.data.get('id') or request.query_params.get('choice_id')
+        if not choice_id:
+            return Response({'detail': 'choice_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from .models import ElectiveChoice
+            choice = ElectiveChoice.objects.get(pk=int(choice_id))
+        except (ValueError, TypeError, ElectiveChoice.DoesNotExist):
+            return Response({'detail': 'Elective choice not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        choice.delete()
+        return Response({'message': 'Elective choice deleted successfully'}, status=status.HTTP_200_OK)
 
 
 class DepartmentGroupViewSet(viewsets.ReadOnlyModelViewSet):

@@ -3,12 +3,13 @@ import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Edit, Check, X, Save, RefreshCw, Copy } from 'lucide-react';
+import { Edit, Check, X, Save, RefreshCw, Copy, Trash2 } from 'lucide-react';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
 
 export default function DeptList() {
+  const [pageNotice, setPageNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [rows, setRows] = useState<any[]>([]);
   const [editAll, setEditAll] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
@@ -29,6 +30,21 @@ export default function DeptList() {
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
   const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
+
+  const showPageNotice = (type: 'success' | 'error' | 'info', message: string) => {
+    setPageNotice({ type, message });
+  };
+
+  const asErrorMessage = (e: unknown) => {
+    if (e instanceof Error) return e.message;
+    return String(e);
+  };
+
+  useEffect(() => {
+    if (!pageNotice) return;
+    const timer = window.setTimeout(() => setPageNotice(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [pageNotice]);
 
   useEffect(() => {
     // update selectedReg when rows change
@@ -93,9 +109,9 @@ export default function DeptList() {
     try {
       const updated = await updateDeptRow(row.id, row);
       setRows(rs => rs.map(r => r.id === updated.id ? updated : r));
-      alert('Saved');
+      showPageNotice('success', 'Saved');
     } catch (e: any) {
-      alert(String(e));
+      showPageNotice('error', asErrorMessage(e));
     }
   }
 
@@ -104,9 +120,9 @@ export default function DeptList() {
       const updated = await updateDeptRow(row.id, row);
       setRows(rs => rs.map(r => r.id === updated.id ? updated : r));
       setEditingRow(null);
-      alert('Row updated successfully');
+      showPageNotice('success', 'Row updated successfully');
     } catch (e: any) {
-      alert(String(e));
+      showPageNotice('error', asErrorMessage(e));
     }
   }
 
@@ -141,8 +157,8 @@ export default function DeptList() {
       // refresh all rows
       const fresh = await fetchDeptRows();
       setRows(fresh);
-      alert('OK');
-    }catch(e:any){ alert(String(e)); }
+      showPageNotice('success', 'Updated successfully');
+    }catch(e:any){ showPageNotice('error', asErrorMessage(e)); }
   }
 
   const [currentDept, setCurrentDept] = useState<number | null>(null);
@@ -223,15 +239,17 @@ export default function DeptList() {
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
       setAddModalOpen(false);
-      alert('Elective subject added');
+      showPageNotice('success', 'Elective subject added');
     } catch (e: any) {
-      alert(String(e));
+      showPageNotice('error', asErrorMessage(e));
     }
   }
 
   // Edit elective UI state
   const [editElectiveOpen, setEditElectiveOpen] = useState(false);
   const [editElectiveForm, setEditElectiveForm] = useState<any>(null);
+  const [confirmDeleteElectiveId, setConfirmDeleteElectiveId] = useState<number | null>(null);
+  const [deletingElectiveId, setDeletingElectiveId] = useState<number | null>(null);
 
   function openEditElective(o: any) {
     setEditElectiveForm({ ...o });
@@ -252,9 +270,30 @@ export default function DeptList() {
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
       setEditElectiveOpen(false);
-      alert('Elective updated');
+      showPageNotice('success', 'Elective updated');
     } catch (e: any) {
-      alert(String(e));
+      showPageNotice('error', asErrorMessage(e));
+    }
+  }
+
+  async function deleteElectiveSubject(electiveId: number) {
+    setDeletingElectiveId(electiveId);
+    try {
+      const res = await fetchWithAuth(`/api/curriculum/elective/${electiveId}/`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      const fresh = await fetchDeptRows();
+      setRows(fresh);
+      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
+      setElectiveSubjects(es);
+      setConfirmDeleteElectiveId(null);
+      showPageNotice('success', 'Elective subject deleted');
+    } catch (e: any) {
+      showPageNotice('error', asErrorMessage(e));
+    } finally {
+      setDeletingElectiveId(null);
     }
   }
 
@@ -288,15 +327,15 @@ export default function DeptList() {
         allErrors.push(...res.errors);
       }
       if (allErrors.length) {
-        alert(`${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`);
+        showPageNotice('error', `${totalSuccess} created, ${allErrors.length} failed: ${allErrors.slice(0, 2).join(' | ')}`);
       } else {
-        alert(`Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
+        showPageNotice('success', `Section propagated - ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
       }
       await handleRefresh();
       setPropagateSection(false);
       setPropagateSecTargets([]);
     } catch (e: any) {
-      alert('Propagation failed: ' + String(e));
+      showPageNotice('error', 'Propagation failed: ' + asErrorMessage(e));
     } finally {
       setPropagatingSec(false);
     }
@@ -308,15 +347,15 @@ export default function DeptList() {
     try {
       const result = await propagateDeptRow(propagateRow, propagateTargets);
       if (result.errors.length) {
-        alert(`${result.success.length} succeeded, ${result.errors.length} failed:\n${result.errors.join('\n')}`);
+        showPageNotice('error', `${result.success.length} succeeded, ${result.errors.length} failed: ${result.errors.slice(0, 2).join(' | ')}`);
       } else {
-        alert(`Successfully propagated to ${result.success.length} batch(es).`);
+        showPageNotice('success', `Successfully propagated to ${result.success.length} batch(es).`);
       }
       await handleRefresh();
       setPropagateRow(null);
       setPropagateTargets([]);
     } catch (e: any) {
-      alert('Propagation failed: ' + String(e));
+      showPageNotice('error', 'Propagation failed: ' + asErrorMessage(e));
     } finally {
       setPropagating(false);
     }
@@ -324,7 +363,10 @@ export default function DeptList() {
 
   async function saveAllVisible() {
     const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && r.editable);
-    if (visible.length === 0) return alert('No editable rows to save');
+    if (visible.length === 0) {
+      showPageNotice('info', 'No editable rows to save');
+      return;
+    }
     if (!confirm(`Save ${visible.length} editable rows?`)) return;
     try {
       setSavingAll(true);
@@ -336,14 +378,14 @@ export default function DeptList() {
       setRows(rs => rs.map(r => updatedMap[r.id] ? updatedMap[r.id] : r));
       const errors = results.filter(r => r && r.__error);
       if (errors.length) {
-        alert(`${errors.length} rows failed to save. Check console for details.`);
+        showPageNotice('error', `${errors.length} rows failed to save. Check console for details.`);
         console.error('SaveAll errors', errors);
       } else {
-        alert('All editable rows saved');
+        showPageNotice('success', 'All editable rows saved');
         setEditAll(false);
       }
     } catch (e:any) {
-      alert(String(e));
+      showPageNotice('error', asErrorMessage(e));
     } finally { setSavingAll(false); }
   }
 
@@ -376,6 +418,29 @@ export default function DeptList() {
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
+        {pageNotice && (
+          <div
+            className={`mb-4 rounded-lg border px-4 py-3 text-sm font-medium ${
+              pageNotice.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : pageNotice.type === 'error'
+                  ? 'border-rose-200 bg-rose-50 text-rose-900'
+                  : 'border-blue-200 bg-blue-50 text-blue-900'
+            }`}
+            role="alert"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span>{pageNotice.message}</span>
+              <button
+                type="button"
+                onClick={() => setPageNotice(null)}
+                className="rounded px-2 py-1 text-xs font-semibold opacity-80 transition hover:bg-black/5"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -653,7 +718,7 @@ export default function DeptList() {
                             try {
                               await updateDeptRow(r.id, { question_paper_type: val });
                             } catch (err: any) {
-                              alert('Failed to save QP Type: ' + String(err));
+                              showPageNotice('error', 'Failed to save QP Type: ' + asErrorMessage(err));
                             }
                           }}
                           className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -823,13 +888,45 @@ export default function DeptList() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm">{o.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</span>
                                   {!o.is_cross_department && (
-                                    <button
-                                      onClick={() => openEditElective(o)}
-                                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title="Edit"
-                                    >
-                                      <Edit className="w-4 h-4" />
-                                    </button>
+                                    <>
+                                      <button
+                                        onClick={() => openEditElective(o)}
+                                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                        title="Edit"
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+
+                                      {confirmDeleteElectiveId === o.id ? (
+                                        <>
+                                          <button
+                                            onClick={() => void deleteElectiveSubject(o.id)}
+                                            disabled={deletingElectiveId === o.id}
+                                            className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${
+                                              deletingElectiveId === o.id
+                                                ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                                : 'bg-rose-600 text-white hover:bg-rose-700'
+                                            }`}
+                                          >
+                                            {deletingElectiveId === o.id ? 'Deleting...' : 'Confirm'}
+                                          </button>
+                                          <button
+                                            onClick={() => setConfirmDeleteElectiveId(null)}
+                                            className="px-2 py-1 rounded text-xs font-semibold border border-slate-300 text-slate-700 hover:bg-slate-50"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => setConfirmDeleteElectiveId(o.id)}
+                                          className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                          title="Delete"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                               </td>

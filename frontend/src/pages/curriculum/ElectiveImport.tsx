@@ -7,12 +7,15 @@ import {
   RefreshCw,
   Save,
   PencilLine,
+  Trash2,
   X,
   Search,
   Upload,
   Users,
 } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
+import ElectiveRowWithAdd from './ElectiveRowWithAdd';
+import AddStudentModal from './AddStudentModal';
 import {
   fetchElectives,
   fetchElectiveChoices,
@@ -93,6 +96,7 @@ export default function ElectiveImport() {
   const [loadingElectives, setLoadingElectives] = useState(false);
   const [loadingChoices, setLoadingChoices] = useState(false);
   const [savingChoiceId, setSavingChoiceId] = useState<number | null>(null);
+  const [deletingChoiceId, setDeletingChoiceId] = useState<number | null>(null);
   const [pageNotification, setPageNotification] = useState<PageNotification | null>(null);
 
   const [importFilters, setImportFilters] = useState<ImportFilters>(defaultImportFilters);
@@ -108,6 +112,10 @@ export default function ElectiveImport() {
   const [importPage, setImportPage] = useState(1);
   const importPageSize = 10;
   const [editingChoiceId, setEditingChoiceId] = useState<number | null>(null);
+  const [addStudentModal, setAddStudentModal] = useState<{ open: boolean; elective: Elective | null }>({
+    open: false,
+    elective: null,
+  });
   const choicesRequestIdRef = useRef(0);
 
   const deferredImportSearch = useDeferredValue(importFilters.search);
@@ -475,6 +483,35 @@ export default function ElectiveImport() {
     setEditingChoiceId(null);
   };
 
+  const deleteChoice = async (choice: ElectiveChoiceItem) => {
+    const confirmed = window.confirm(`Delete elective mapping for ${choice.student_reg_no || choice.student_username || 'this student'}?`);
+    if (!confirmed) return;
+
+    setDeletingChoiceId(choice.id);
+    try {
+      const response = await fetchWithAuth('/api/curriculum/elective-choices/', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ choice_id: choice.id }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.detail || data?.error || 'Failed to delete elective choice');
+      }
+
+      setChoices((prev) => prev.filter((item) => item.id !== choice.id));
+      setStudentTotalCount((prev) => Math.max(0, prev - 1));
+      showPageNotification('success', 'Elective choice deleted successfully');
+      void loadChoicesData(debouncedStudentFilters, studentPage);
+    } catch (error) {
+      console.error('Failed to delete elective choice:', error);
+      showPageNotification('error', error instanceof Error ? error.message : 'Failed to delete elective choice');
+    } finally {
+      setDeletingChoiceId(null);
+    }
+  };
+
   const resetImportFilters = () => setImportFilters(defaultImportFilters);
   const resetStudentFilters = () => setStudentFilters(defaultStudentFilters);
 
@@ -788,22 +825,31 @@ export default function ElectiveImport() {
                       <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Semester</th>
                       <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">Department</th>
                       <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500">Students</th>
+                      <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500">Add</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {filteredElectivesForPage.map((elective) => (
-                      <tr key={elective.id} className="transition-colors hover:bg-slate-50">
-                        <td className="px-4 py-3 text-sm font-semibold text-slate-900">{elective.course_code}</td>
-                        <td className="px-4 py-3 text-sm text-slate-700">{elective.course_name}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600">{elective.parent_name || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600">{elective.regulation || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600">{elective.semester || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-slate-600">{elective.department?.code ? `${elective.department.code} - ${elective.department.short_name || elective.department.name}` : '-'}</td>
-                        <td className="px-4 py-3 text-center text-sm font-semibold text-indigo-700">{elective.student_count ?? 0}</td>
-                      </tr>
+                      <ElectiveRowWithAdd
+                        key={elective.id}
+                        elective={elective}
+                        onAddClick={(el) => setAddStudentModal({ open: true, elective: el })}
+                      />
                     ))}
                   </tbody>
                 </table>
+                {/* Modal rendered outside table/tbody */}
+                <AddStudentModal
+                  open={addStudentModal.open}
+                  elective={addStudentModal.elective}
+                  onClose={() => setAddStudentModal({ open: false, elective: null })}
+                  onStudentAdded={async () => {
+                    await loadBaseData();
+                    if (choicesLoaded || activeSection === 'students') {
+                      await loadChoicesData(debouncedStudentFilters, studentPage);
+                    }
+                  }}
+                />
                 <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-3">
                   <span className="text-sm text-slate-600">Showing {Math.min((importPage - 1) * importPageSize + 1, filteredElectives.length)} to {Math.min(importPage * importPageSize, filteredElectives.length)} of {filteredElectives.length} electives</span>
                   <div className="flex items-center gap-2">
@@ -1097,6 +1143,27 @@ export default function ElectiveImport() {
                                       Cancel
                                     </button>
                                   )}
+                                  <button
+                                    onClick={() => deleteChoice(choice)}
+                                    disabled={!isEditing || deletingChoiceId === choice.id}
+                                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition-colors ${
+                                      !isEditing || deletingChoiceId === choice.id
+                                        ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                                        : 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                    }`}
+                                  >
+                                    {deletingChoiceId === choice.id ? (
+                                      <>
+                                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent" />
+                                        Deleting...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Trash2 className="h-4 w-4" />
+                                        Delete
+                                      </>
+                                    )}
+                                  </button>
                                 </div>
                               </td>
                             </tr>
