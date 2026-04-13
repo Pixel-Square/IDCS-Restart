@@ -1298,6 +1298,13 @@ class ClassTypeWeights(models.Model):
     """IQAC-controlled weights per class type.
 
     Used in CO attainment and Internal Mark calculations.
+    
+    exam_assignments stores per-exam config:
+    [
+      { "exam": "SSA1", "weight": 1.5, "allow_customize": true },
+      { "exam": "CIA1", "weight": 3.0, "allow_customize": false },
+      ...
+    ]
     """
 
     class_type = models.CharField(max_length=50, unique=True)
@@ -1305,6 +1312,7 @@ class ClassTypeWeights(models.Model):
     cia1 = models.DecimalField(max_digits=7, decimal_places=2, default=3)
     formative1 = models.DecimalField(max_digits=7, decimal_places=2, default=2.5)
     internal_mark_weights = models.JSONField(default=list, blank=True)
+    exam_assignments = models.JSONField(default=list, blank=True)
 
     updated_by = models.IntegerField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

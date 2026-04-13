@@ -94,3 +94,15 @@ body {
     scrollbar-color: #cbd5e1 #f1f5f9;
   }
 }
+
+/* Import success animations */
+@keyframes circleIn {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes checkIn {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}

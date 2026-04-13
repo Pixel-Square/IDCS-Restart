@@ -993,7 +993,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
                       </td>
                     </tr>
                   ))
-                )}}
+                )}
               </tbody>
             </table>
           )}

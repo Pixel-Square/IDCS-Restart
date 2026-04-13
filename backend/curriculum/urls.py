@@ -10,6 +10,7 @@ from .views import (
     CurriculumDepartmentsView,
     CurriculumPendingCountView,
     QuestionPaperTypeListView,
+    ClassTypeListView,
 )
 from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
@@ -32,5 +33,6 @@ urlpatterns = [
     path('departments/', CurriculumDepartmentsView.as_view(), name='curriculum-departments'),
     path('pending-count/', CurriculumPendingCountView.as_view(), name='curriculum-pending-count'),
     path('qp-types/', QuestionPaperTypeListView.as_view(), name='curriculum-qp-types'),
+    path('class-types/', ClassTypeListView.as_view(), name='curriculum-class-types'),
     path('', include(router.urls)),
 ]

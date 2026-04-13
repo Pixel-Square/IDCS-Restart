@@ -17,6 +17,25 @@ CLASS_TYPE_CHOICES = (
     ('SPECIAL', 'Special'),
 )
 
+def validate_class_type_code(value: str):
+    """Validate class_type against the DB-managed ClassType table.
+
+    Accepts any code that exists in the ClassType table, allowing new types
+    added via admin to work immediately without model changes.
+    """
+    code = (value or '').strip()
+    if not code:
+        return
+    try:
+        from django.db import connection
+        if 'curriculum_classtype' not in connection.introspection.table_names():
+            return
+    except Exception:
+        return
+    if not ClassType.objects.filter(code=code).exists():
+        raise ValidationError(f"Invalid Class Type: {code}")
+
+
 def validate_question_paper_type_code(value: str):
     """Validate the QP type code against the DB-managed QuestionPaperType table.
 
@@ -57,6 +76,26 @@ class QuestionPaperType(models.Model):
     def __str__(self):
         return self.label or self.code
 
+
+class ClassType(models.Model):
+    """DB-managed list of valid Class Types (e.g. THEORY, LAB, TCPL).
+
+    Can be extended through the admin.
+    """
+    code = models.CharField(max_length=32, unique=True)
+    label = models.CharField(max_length=64)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Class Type'
+        verbose_name_plural = 'Class Types'
+        ordering = ('sort_order', 'code')
+
+    def __str__(self):
+        return self.label or self.code
 
 
 class Regulation(models.Model):
@@ -176,7 +215,7 @@ class CurriculumMaster(models.Model):
     # are optional — departments may provide their own details.
     course_code = models.CharField(max_length=64, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
-    class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')
+    class_type = models.CharField(max_length=16, default='THEORY', validators=[validate_class_type_code])
     qp_type = models.CharField(max_length=16, default='QP1', blank=True, null=True, validators=[validate_question_paper_type_code])
     category = models.CharField(max_length=64, blank=True)
     is_elective = models.BooleanField(default=False)
@@ -278,7 +317,7 @@ class CurriculumDepartment(models.Model):
     course_code = models.CharField(max_length=64, blank=True, null=True)
     mnemonic = models.CharField(max_length=16, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
-    class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')
+    class_type = models.CharField(max_length=16, default='THEORY', validators=[validate_class_type_code])
     category = models.CharField(max_length=64, blank=True)
     is_elective = models.BooleanField(default=False)
 
@@ -406,7 +445,7 @@ class ElectiveSubject(models.Model):
 
     course_code = models.CharField(max_length=64, blank=True, null=True)
     course_name = models.CharField(max_length=255, blank=True, null=True)
-    class_type = models.CharField(max_length=16, choices=CLASS_TYPE_CHOICES, default='THEORY')
+    class_type = models.CharField(max_length=16, default='THEORY', validators=[validate_class_type_code])
     category = models.CharField(max_length=64, blank=True)
     is_elective = models.BooleanField(default=True)
 

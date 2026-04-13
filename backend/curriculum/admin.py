@@ -11,6 +11,7 @@ from .models import (
     DepartmentGroupMapping,
     SPECIAL_ASSESSMENT_CHOICES,
     QuestionPaperType,
+    ClassType,
 )
 from django.urls import path
 from django.template.response import TemplateResponse
@@ -407,6 +408,13 @@ class DepartmentGroupMappingAdmin(admin.ModelAdmin):
 
 @admin.register(QuestionPaperType)
 class QuestionPaperTypeAdmin(admin.ModelAdmin):
+    list_display = ('code', 'label', 'is_active', 'sort_order')
+    list_editable = ('label', 'is_active', 'sort_order')
+    ordering = ('sort_order', 'code')
+
+
+@admin.register(ClassType)
+class ClassTypeAdmin(admin.ModelAdmin):
     list_display = ('code', 'label', 'is_active', 'sort_order')
     list_editable = ('label', 'is_active', 'sort_order')
     ordering = ('sort_order', 'code')

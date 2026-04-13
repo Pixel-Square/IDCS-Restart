@@ -688,3 +688,17 @@ class QuestionPaperTypeListView(APIView):
         qs = QuestionPaperType.objects.filter(is_active=True).order_by('sort_order', 'code')
         data = [{'id': q.id, 'code': q.code, 'label': q.label} for q in qs]
         return Response(data)
+
+
+class ClassTypeListView(APIView):
+    """Return list of active Class Types.
+
+    GET /api/curriculum/class-types/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import ClassType
+        qs = ClassType.objects.filter(is_active=True).order_by('sort_order', 'code')
+        data = [{'id': ct.id, 'code': ct.code, 'label': ct.label} for ct in qs]
+        return Response(data)

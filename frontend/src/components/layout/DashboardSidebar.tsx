@@ -78,6 +78,9 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_bar_scan_entry: ScanLine,
   coe_retrival: FileText,
   coe_one_page_report: FileText,
+  // Academic 2.1
+  academic_v2: BookOpen,
+  academic_v2_admin: Layout,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -303,6 +306,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     }
   }, [loc.pathname]);
 
+  // auto-expand Academic 2.1 when on /academic-v2 routes
+  useEffect(() => {
+    if (loc.pathname.startsWith('/academic-v2')) {
+      setExpanded((p) => ({ ...p, academic_v2_admin: true }));
+    }
+  }, [loc.pathname]);
+
   if (loading) return (
     <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
       <div className="p-6 flex items-center justify-center h-full">
@@ -506,6 +516,16 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_staff && !items.some(item => item.key === 'academic')) {
     items.push({ key: 'academic', label: 'Academic', to: '/academic' });
   }
+
+  // Academic 2.1 for staff - shows assigned courses from DB
+  if (flags.is_staff && !items.some(item => item.key === 'academic_v2')) {
+    items.push({ key: 'academic_v2', label: 'Academic 2.1', to: '/academic-v2/courses' });
+  }
+
+  // Academic 2.1 Admin for IQAC - collapsible group
+  if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
+    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '#' });
+  }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
   }
@@ -648,7 +668,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
               const isHodGroup = i.key === 'hod_event_management';
               const isHaaGroup = i.key === 'haa_event_management';
               const isFacultyGroup = i.key === 'faculty_directory';
-              const isGroup = isHodGroup || isHaaGroup || isFacultyGroup;
+              const isAcademicV2AdminGroup = i.key === 'academic_v2_admin';
+              const isGroup = isHodGroup || isHaaGroup || isFacultyGroup || isAcademicV2AdminGroup;
               const groupActive =
                 (isHodGroup && (
                   loc.pathname.startsWith('/events/create-event') ||
@@ -665,14 +686,17 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                   loc.pathname.startsWith('/hod/advisors') ||
                   loc.pathname.startsWith('/advisor/teaching') ||
                   loc.pathname.startsWith('/hod/staff-attendance')
-                ));
+                )) ||
+                (isAcademicV2AdminGroup && loc.pathname.startsWith('/academic-v2'));
               const groupOpen = isHodGroup
                 ? Boolean(expanded.hod_event_management)
                 : isHaaGroup
                   ? Boolean(expanded.haa_event_management)
                   : isFacultyGroup
                     ? Boolean(expanded.faculty_directory)
-                    : false;
+                    : isAcademicV2AdminGroup
+                      ? Boolean(expanded.academic_v2_admin)
+                      : false;
               return (
                 <li key={i.key} className="relative">
                   <Link
@@ -692,6 +716,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       if (isFacultyGroup) {
                         e.preventDefault();
                         setExpanded((p) => ({ ...p, faculty_directory: !p.faculty_directory }));
+                        return;
+                      }
+                      if (isAcademicV2AdminGroup) {
+                        e.preventDefault();
+                        setExpanded((p) => ({ ...p, academic_v2_admin: !p.academic_v2_admin }));
                         return;
                       }
                       // preserve mobile toggle behaviour
@@ -904,6 +933,58 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                           onClick={() => { if (window.innerWidth < 1024) toggle(); }}
                         >
                           <Grid className="w-4 h-4" /> <span>Add Students RF</span>
+                        </Link>
+                      </li>
+                    </ul>
+                  ) : null}
+
+                  {/* Submenu for Academic 2.1 Admin (IQAC).
+                      Hidden when sidebar is collapsed. */}
+                  {i.key === 'academic_v2_admin' && groupOpen && !collapsed ? (
+                    <ul className="pl-8 mt-1 space-y-1">
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/publish-control"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/publish-control' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Settings className="w-4 h-4" /> <span>Publish Control</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/class-types"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/class-types' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Class Types</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/qp-patterns"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/qp-patterns' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <FileText className="w-4 h-4" /> <span>QP Patterns</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/approvals"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/approvals' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <ClipboardList className="w-4 h-4" /> <span>Approval Inbox</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/internal-marks"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/internal-marks' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <BarChart2 className="w-4 h-4" /> <span>Internal Marks</span>
                         </Link>
                       </li>
                     </ul>

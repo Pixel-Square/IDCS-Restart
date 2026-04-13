@@ -112,6 +112,17 @@ import RetrivalPage from './pages/COE/RetrivalPage';
 import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
 
+// Academic 2.1 - Lazy load pages for code splitting
+const AcV2PublishControlPage = React.lazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'));
+const AcV2ClassTypeEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'));
+const AcV2QpPatternEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'));
+const AcV2ExamAssignmentAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'));
+const AcV2ApprovalInboxPage = React.lazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'));
+const AcV2InternalMarkAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'));
+const AcV2CourseListPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'));
+const AcV2MarkEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'));
+const AcV2InternalMarkPage = React.lazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'));
+
 type RoleObj = { name: string };
 type Me = {
   id: number;
@@ -686,6 +697,147 @@ export default function App() {
                     />
                   }
                 />
+
+                {/* ── Academic 2.1 Routes ─────────────────────────────────── */}
+                {/* Admin Routes (IQAC only) */}
+                <Route
+                  path="/academic-v2/admin/publish-control"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2PublishControlPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/class-types"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2ClassTypeEditorPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/qp-patterns"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2QpPatternEditorPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/exam-assignments"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2ExamAssignmentAdminPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/approvals"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2ApprovalInboxPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/internal-marks"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2InternalMarkAdminPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                {/* Faculty Routes (Staff) */}
+                <Route
+                  path="/academic-v2/courses"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CourseListPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/course/:courseId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2InternalMarkPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/exam/:examId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2MarkEntryPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                {/* ────────────────────────────────────────────────────────────── */}
+
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />

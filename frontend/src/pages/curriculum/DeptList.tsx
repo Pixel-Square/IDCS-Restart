@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
+import { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
@@ -7,6 +7,7 @@ import { Edit, Check, X, Save, RefreshCw, Copy } from 'lucide-react';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
+type ClassTypeItem = { id: number; code: string; label: string };
 
 export default function DeptList() {
   const [rows, setRows] = useState<any[]>([]);
@@ -24,6 +25,9 @@ export default function DeptList() {
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
   const [propagatingSec, setPropagatingSec] = useState(false);
   const [qpTypes, setQpTypes] = useState<QPType[]>([]);
+  const [classTypes, setClassTypes] = useState<ClassTypeItem[]>([]);
+  const [adminClassTypes, setAdminClassTypes] = useState<ClassTypeItem[]>([]);
+  const [adminQpTypes, setAdminQpTypes] = useState<QPType[]>([]);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
@@ -49,6 +53,36 @@ export default function DeptList() {
       .then(res => res.ok ? res.json() : [])
       .then(data => setQpTypes(Array.isArray(data) ? data : []))
       .catch(() => setQpTypes([]));
+  }, []);
+
+  // Fetch class types from API
+  useEffect(() => {
+    fetchWithAuth('/api/curriculum/class-types/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => setClassTypes(Array.isArray(data) ? data : []))
+      .catch(() => setClassTypes([]));
+  }, []);
+
+  // Fetch admin-created class types from Academic v2
+  useEffect(() => {
+    fetchWithAuth('/api/academic-v2/class-types/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const items = (Array.isArray(data) ? data : data?.results || []);
+        setAdminClassTypes(items.map((ct: any) => ({ id: ct.id, code: ct.short_code || ct.name, label: ct.display_name || ct.name })));
+      })
+      .catch(() => setAdminClassTypes([]));
+  }, []);
+
+  // Fetch admin-created QP patterns from Academic v2
+  useEffect(() => {
+    fetchWithAuth('/api/academic-v2/qp-patterns/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const items = (Array.isArray(data) ? data : data?.results || []);
+        setAdminQpTypes(items.map((qp: any) => ({ id: qp.id, code: qp.qp_type || qp.name, label: qp.name })));
+      })
+      .catch(() => setAdminQpTypes([]));
   }, []);
 
   // Fetch departments based on curriculum permissions
@@ -88,6 +122,34 @@ export default function DeptList() {
       setRefreshing(false);
     }
   }
+
+  // Helper: render class type <option> elements - prioritize admin (Academic v2) class types
+  const renderClassTypeOptions = () => (
+    <>
+      {adminClassTypes.map(ct => (
+        <option key={`adm-${ct.code}`} value={ct.code}>{ct.label} ({ct.code})</option>
+      ))}
+      {adminClassTypes.length === 0 && classTypes.map(ct => (
+        <option key={ct.code} value={ct.code}>{ct.label}</option>
+      ))}
+    </>
+  );
+
+  // Helper: render QP type <option> elements with admin items in orange optgroup on top
+  const renderQpTypeOptions = () => (
+    <>
+      {adminQpTypes.length > 0 && (
+        <optgroup label="Admin (Academic v2)" style={{ backgroundColor: '#FFF7ED' }}>
+          {adminQpTypes.map(qt => (
+            <option key={`adm-${qt.code}`} value={qt.code} style={{ backgroundColor: '#FFF7ED', color: '#9A3412' }}>{qt.label}</option>
+          ))}
+        </optgroup>
+      )}
+      {qpTypes.map(qt => (
+        <option key={qt.code} value={qt.code}>{qt.label}</option>
+      ))}
+    </>
+  );
 
   async function onSave(row: any) {
     try {
@@ -573,9 +635,7 @@ export default function DeptList() {
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
-                        {CLASS_TYPES.map((ct) => (
-                          <option key={ct.value} value={ct.value}>{ct.label}</option>
-                        ))}
+                        {renderClassTypeOptions()}
                       </select>
                     </td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
@@ -598,9 +658,7 @@ export default function DeptList() {
                         style={{ minWidth: 90 }}
                       >
                         <option value="">— Select —</option>
-                        {qpTypes.map(qt => (
-                          <option key={qt.code} value={qt.code}>{qt.label}</option>
-                        ))}
+                        {renderQpTypeOptions()}
                       </select>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
@@ -644,7 +702,7 @@ export default function DeptList() {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      {qpTypes.length > 0 ? (
+                      {(adminQpTypes.length > 0 || qpTypes.length > 0) ? (
                         <select
                           value={r.question_paper_type || ''}
                           onChange={async (e) => {
@@ -660,9 +718,7 @@ export default function DeptList() {
                           style={{ minWidth: 80 }}
                         >
                           <option value="">—</option>
-                          {qpTypes.map(qt => (
-                            <option key={qt.code} value={qt.code}>{qt.label}</option>
-                          ))}
+                          {renderQpTypeOptions()}
                         </select>
                       ) : (
                         <span className="text-sm">{r.question_paper_type || '-'}</span>
@@ -1008,9 +1064,7 @@ export default function DeptList() {
                   onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {CLASS_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.label}</option>
-                  ))}
+                  {renderClassTypeOptions()}
                 </select>
               </div>
               <div>
@@ -1110,9 +1164,7 @@ export default function DeptList() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {qpTypes.map(qt => (
-                    <option key={qt.code} value={qt.code}>{qt.label}</option>
-                  ))}
+                  {renderQpTypeOptions()}
                 </select>
               </div>
               <div className="flex items-center gap-2">
@@ -1198,9 +1250,7 @@ export default function DeptList() {
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {CLASS_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.label}</option>
-                  ))}
+                  {renderClassTypeOptions()}
                 </select>
               </div>
               <div>
@@ -1300,9 +1350,7 @@ export default function DeptList() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {qpTypes.map(qt => (
-                    <option key={qt.code} value={qt.code}>{qt.label}</option>
-                  ))}
+                  {renderQpTypeOptions()}
                 </select>
               </div>
               <div className="flex items-center gap-2">

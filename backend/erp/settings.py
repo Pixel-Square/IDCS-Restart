@@ -77,6 +77,7 @@ INSTALLED_APPS = [
     'academic_calendar',
     'applications',
     'OBE',
+    'academic_v2.apps.AcademicV2Config',
     'COE',
     'question_bank',
     'template_api',
