@@ -425,3 +425,65 @@ class ApplicationAttachment(models.Model):
 
     def __str__(self):
         return f"Attachment {self.id} for {self.application}"
+
+
+class ApplicationNotificationSettings(models.Model):
+    """WhatsApp notification settings per application type.
+
+    Controls which notifications are sent and their message templates.
+    Three notification types:
+    1. on_submit: When applicant submits the application
+    2. on_status_change: When a stage is approved/rejected (to applicant)
+    3. on_forward: When application is forwarded to next approver
+    """
+
+    application_type = models.OneToOneField(
+        ApplicationType,
+        on_delete=models.CASCADE,
+        related_name='notification_settings',
+    )
+
+    # Notification 1: On application submission (to applicant)
+    notify_on_submit = models.BooleanField(default=True)
+    submit_template = models.TextField(
+        default='Hello {applicant_name},\nYour {application_type} application #{application_id} has been submitted successfully.\nStatus: Pending at {current_role}.\n{link}',
+        help_text='Template for submission notification to applicant.',
+    )
+
+    # Notification 2: On stage approved/rejected (to applicant)
+    notify_on_status_change = models.BooleanField(default=True)
+    approve_template = models.TextField(
+        default='Hello {applicant_name},\nGood news! Your {application_type} application #{application_id} has been approved by {actor_name} ({actor_role}).\n{remarks}\nNext stage: {next_role}.\n{link}',
+        help_text='Template for approval notification to applicant.',
+    )
+    reject_template = models.TextField(
+        default='Hello {applicant_name},\nYour {application_type} application #{application_id} has been rejected by {actor_name} ({actor_role}).\n{remarks}\n{link}',
+        help_text='Template for rejection notification to applicant.',
+    )
+
+    # Notification 3: On forward to next approver (to next approver + applicant)
+    notify_on_forward = models.BooleanField(default=True)
+    forward_approver_template = models.TextField(
+        default='Hello {approver_name},\nA {application_type} application #{application_id} is waiting for your approval.\nApplicant: {applicant_name}\nPending at: {current_role}\n{link}',
+        help_text='Template for forward notification to next approver.',
+    )
+    forward_applicant_template = models.TextField(
+        default='Hello {applicant_name},\nYour {application_type} application #{application_id} has been forwarded to {next_role} for review.\n{link}',
+        help_text='Template for forward notification to applicant.',
+    )
+
+    # Notification 4: On self-cancellation by applicant
+    notify_on_cancel = models.BooleanField(default=True)
+    cancel_template = models.TextField(
+        default='Hello {applicant_name},\nYour {application_type} application #{application_id} has been cancelled successfully.\n{link}',
+        help_text='Template for cancellation confirmation notification to applicant.',
+    )
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Application Notification Settings'
+        verbose_name_plural = 'Application Notification Settings'
+
+    def __str__(self):
+        return f"Notification Settings for {self.application_type.code}"

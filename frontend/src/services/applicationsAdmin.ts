@@ -280,3 +280,29 @@ export async function fetchDepartmentsAdmin(): Promise<DepartmentRow[]> {
   const json = await parseJson<{ results?: DepartmentRow[] }>(await fetchWithAuth('/api/academics/departments/'))
   return Array.isArray(json?.results) ? json.results : []
 }
+
+// ─── Notification Settings ─────────────────────────────────────────────────
+
+export type NotificationSettingsRow = {
+  id: number
+  application_type_id: number
+  notify_on_submit: boolean
+  submit_template: string
+  notify_on_status_change: boolean
+  approve_template: string
+  reject_template: string
+  notify_on_forward: boolean
+  forward_approver_template: string
+  forward_applicant_template: string
+  notify_on_cancel: boolean
+  cancel_template: string
+  updated_at: string
+}
+
+export async function fetchApplicationNotificationSettings(typeId: number): Promise<NotificationSettingsRow> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/notification-settings/`))
+}
+
+export async function updateApplicationNotificationSettings(typeId: number, payload: Partial<NotificationSettingsRow>): Promise<NotificationSettingsRow> {
+  return parseJson(await fetchWithAuth(`/api/applications/admin/types/${encodeURIComponent(String(typeId))}/notification-settings/`, { method: 'PUT', body: JSON.stringify(payload) }))
+}

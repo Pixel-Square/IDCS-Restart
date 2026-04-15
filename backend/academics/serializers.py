@@ -918,12 +918,14 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     students = StudentSimpleSerializer(many=True, read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
     curriculum_row_id = serializers.IntegerField(write_only=True, required=False)
+    elective_subject_id = serializers.IntegerField(write_only=True, required=False)
     curriculum_row = serializers.SerializerMethodField(read_only=True)
+    elective_subject = serializers.SerializerMethodField(read_only=True)
     subject_info = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = None  # set at import time to avoid circular import
-        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'curriculum_row', 'subject_info', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'section', 'section_id', 'staff', 'staff_id', 'created_by', 'academic_year', 'curriculum_row_id', 'elective_subject_id', 'curriculum_row', 'elective_subject', 'subject_info', 'student_ids', 'students', 'is_active', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at', 'created_by')
 
     def __init__(self, *args, **kwargs):
@@ -989,8 +991,26 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_elective_subject(self, obj):
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            if not es:
+                return None
+            return {'id': es.id, 'course_code': getattr(es, 'course_code', None), 'course_name': getattr(es, 'course_name', None)}
+        except Exception:
+            return None
+
     def get_subject_info(self, obj):
-        """Return subject code/name — using curriculum_row if available, else creator's elective TA."""
+        """Return subject code/name — prefer direct elective_subject, then curriculum_row."""
+        try:
+            es = getattr(obj, 'elective_subject', None)
+            if es:
+                return {
+                    'course_code': getattr(es, 'course_code', None),
+                    'course_name': getattr(es, 'course_name', None),
+                }
+        except Exception:
+            pass
         try:
             row = getattr(obj, 'curriculum_row', None)
             if row:
@@ -1000,7 +1020,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 }
         except Exception:
             pass
-        # Fallback: look up creator's elective teaching assignment
+        # Legacy fallback: look up creator's elective teaching assignment
         try:
             creator_id = getattr(obj, 'created_by_id', None)
             if not creator_id:
@@ -1058,6 +1078,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         student_ids = validated_data.pop('student_ids', []) or []
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        elective_subject_id = validated_data.pop('elective_subject_id', None) or self.initial_data.get('elective_subject_id')
         staff_id = validated_data.pop('staff_id', None)
         section_obj = validated_data.get('section')
         
@@ -1076,13 +1097,22 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 pass  # staff will be set in view to current user's staff_profile
         # Otherwise, staff will be set in view to current user's staff_profile when creating
         
-        # attach curriculum_row if provided
+        # Attach direct subject references exactly as provided.
         if curriculum_row_id:
             try:
                 from curriculum.models import CurriculumDepartment
                 row = CurriculumDepartment.objects.filter(pk=int(curriculum_row_id)).first()
                 if row:
                     validated_data['curriculum_row'] = row
+            except Exception:
+                pass
+
+        if elective_subject_id:
+            try:
+                from curriculum.models import ElectiveSubject
+                es = ElectiveSubject.objects.filter(pk=int(elective_subject_id)).first()
+                if es:
+                    validated_data['elective_subject'] = es
             except Exception:
                 pass
 
@@ -1125,6 +1155,7 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         student_ids = validated_data.pop('student_ids', None)
         curriculum_row_id = validated_data.pop('curriculum_row_id', None) or self.initial_data.get('curriculum_row_id')
+        elective_subject_id = validated_data.pop('elective_subject_id', None) or self.initial_data.get('elective_subject_id')
         staff_id = validated_data.pop('staff_id', None)
         
         # Handle staff assignment update
@@ -1140,6 +1171,14 @@ class StudentSubjectBatchSerializer(serializers.ModelSerializer):
                 from curriculum.models import CurriculumDepartment
                 row = CurriculumDepartment.objects.filter(pk=int(curriculum_row_id)).first()
                 validated_data['curriculum_row'] = row
+            except Exception:
+                pass
+
+        if elective_subject_id is not None:
+            try:
+                from curriculum.models import ElectiveSubject
+                es = ElectiveSubject.objects.filter(pk=int(elective_subject_id)).first()
+                validated_data['elective_subject'] = es
             except Exception:
                 pass
         inst = super().update(instance, validated_data)

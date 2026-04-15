@@ -1,6 +1,5 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.utils import timezone
 from rest_framework import serializers
 
 import base64
@@ -247,20 +246,38 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
         enrolled_by = self.context.get("request", None)
         enrolled_by_user = enrolled_by.user if enrolled_by and hasattr(enrolled_by, "user") else None
 
-        # Upsert: deactivate old enrollment for same finger, create new one
+        # True upsert for (user, finger). The model enforces unique(user, finger),
+        # so re-enrollment must update the existing row instead of creating a new one.
         with transaction.atomic():
-            FingerprintEnrollment.objects.filter(
-                user=user, finger=finger, is_active=True,
-            ).update(is_active=False, deactivated_at=timezone.now())
-
-            enrollment = FingerprintEnrollment.objects.create(
-                user=user,
-                finger=finger,
-                template=template_bytes,
-                template_format=fmt,
-                quality_score=quality,
-                enrolled_by=enrolled_by_user,
-                device_type=device,
-                is_active=True,
-            )
+            enrollment = FingerprintEnrollment.objects.filter(user=user, finger=finger).first()
+            if enrollment:
+                enrollment.template = template_bytes
+                enrollment.template_format = fmt
+                enrollment.quality_score = quality
+                enrollment.enrolled_by = enrolled_by_user
+                enrollment.device_type = device
+                enrollment.is_active = True
+                enrollment.deactivated_at = None
+                enrollment.save(
+                    update_fields=[
+                        "template",
+                        "template_format",
+                        "quality_score",
+                        "enrolled_by",
+                        "device_type",
+                        "is_active",
+                        "deactivated_at",
+                    ]
+                )
+            else:
+                enrollment = FingerprintEnrollment.objects.create(
+                    user=user,
+                    finger=finger,
+                    template=template_bytes,
+                    template_format=fmt,
+                    quality_score=quality,
+                    enrolled_by=enrolled_by_user,
+                    device_type=device,
+                    is_active=True,
+                )
         return enrollment

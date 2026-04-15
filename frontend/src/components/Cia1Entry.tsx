@@ -10,6 +10,8 @@ import {
   formatApiErrorMessage,
   formatEditRequestSentMessage,
   publishCiaSheet,
+  resetAssessmentMarks,
+  saveCiaMarks,
   saveDraft,
   fetchIqacQpPattern,
 } from '../services/obe';
@@ -459,6 +461,18 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
+
+  // Filter / sort popup state
+  const [filterPopupOpen, setFilterPopupOpen] = useState(false);
+  type SortMode = 'default' | 'nameAsc' | 'nameDesc' | 'regAsc' | 'regDesc' | 'regRange';
+  const [sortMode, setSortMode] = useState<SortMode>('default');
+  const [regRangeEnabled, setRegRangeEnabled] = useState(false);
+  const [regRangeFrom, setRegRangeFrom] = useState(1);
+  const [regRangeTo, setRegRangeTo] = useState(3);
+  const [regRangeValMin, setRegRangeValMin] = useState('');
+  const [regRangeValMax, setRegRangeValMax] = useState('');
+  const [showDeptColumn, setShowDeptColumn] = useState(false);
+  const [taDeptName, setTaDeptName] = useState<string>('');
 
   const {
     data: publishWindow,
@@ -920,6 +934,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             try {
               const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
               data = { students: taResp.students || [], marks: {} };
+              const d = taResp.teaching_assignment?.department;
+              if (d) setTaDeptName(d.short_name || d.code || d.name || '');
             } catch {
               console.warn('TA roster fallback failed');
             }
@@ -935,6 +951,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             try {
               const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
               data = { ...(data as any), students: taResp.students || [] };
+              const d = taResp.teaching_assignment?.department;
+              if (d) setTaDeptName(d.short_name || d.code || d.name || '');
             } catch (err) {
               console.warn('CIA marks roster was empty and TA roster fallback failed:', err);
             }
@@ -949,6 +967,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
         setStudents(roster);
         setSubjectPayload((data as any)?.subject || null);
+        // Extract department name from TA data if available
+        const taDept = (data as any)?.teaching_assignment?.department || (data as any)?.department;
+        if (taDept) {
+          setTaDeptName(taDept.short_name || taDept.code || taDept.name || '');
+        }
         const apiMarks = data.marks || {};
         const totals: Record<number, number | null> = {};
         for (const [k, v] of Object.entries(apiMarks)) {
@@ -1526,6 +1549,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const resetAllMarks = async () => {
     if (!subjectId) return;
+    if (typeof teachingAssignmentId !== 'number') {
+      setError('Teaching assignment is required to reset marks.');
+      return;
+    }
     // Only show this action while publish window is open (per requirement).
     if (!publishAllowed || globalLocked) return;
     if (tableBlocked || publishedEditLocked) return;
@@ -1557,19 +1584,47 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         batchLabel: String(subjectId),
         rowsByStudentId: clearedRows,
       };
-      setSheet(nextSheet);
 
-      const draft: Cia1DraftPayload = {
-        termLabel: nextSheet.termLabel,
-        batchLabel: String(subjectId),
-        questionBtl: nextSheet.questionBtl,
-        rowsByStudentId: nextSheet.rowsByStudentId,
-        markManagerLocked: nextSheet.markManagerLocked,
-        markManagerSnapshot: nextSheet.markManagerSnapshot,
-        markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
-      };
-      await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
+      let usedSoftFallback = false;
+      try {
+        await resetAssessmentMarks(assessmentKey, String(subjectId), teachingAssignmentId);
+      } catch (e: any) {
+        const status = Number((e as any)?.status || 0);
+        const msg = String(e?.message || '');
+        const routeMissing = status === 404 || /\b404\b|not\s*found/i.test(msg);
+        if (!routeMissing) throw e;
+
+        usedSoftFallback = true;
+        const emptyMarks: Record<number, number | null> = {};
+        for (const s of students) emptyMarks[s.id] = null;
+        await saveCiaMarks(assessmentKey, String(subjectId), emptyMarks, teachingAssignmentId);
+
+        const draft: Cia1DraftPayload = {
+          termLabel: nextSheet.termLabel,
+          batchLabel: String(subjectId),
+          questionBtl: nextSheet.questionBtl,
+          rowsByStudentId: nextSheet.rowsByStudentId,
+          markManagerLocked: nextSheet.markManagerLocked,
+          markManagerSnapshot: nextSheet.markManagerSnapshot,
+          markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
+        };
+        await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
+      }
+
+      setSheet(nextSheet);
+      setServerTotals((prev) => {
+        const next = { ...prev };
+        for (const s of students) next[s.id] = null;
+        return next;
+      });
+      setPublishedAt(null);
       setSavedAt(new Date().toLocaleString());
+      refreshPublishedSheet(true);
+      refreshMarkLock({ silent: true });
+
+      if (usedSoftFallback) {
+        setError('');
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to reset marks');
     } finally {
@@ -2087,13 +2142,64 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   );
 
   const hasAbsentees = students.some((s) => Boolean(sheet.rowsByStudentId[String(s.id)]?.absent));
-  const visibleStudents = showAbsenteesOnly
-    ? students.filter((s) => {
-        // When the user opens the absentees list, keep the list stable while they edit.
-        if (absenteesSnapshot && absenteesSnapshot.length) return absenteesSnapshot.includes(s.id);
-        return Boolean(sheet.rowsByStudentId[String(s.id)]?.absent);
-      })
-    : students;
+
+  // Extract a sub-string from reg_no using digit positions counted from the RIGHT (1-based, inclusive).
+  // e.g. from=1, to=3  → last 3 digits (slice(-3))
+  // e.g. from=5, to=8  → chars 5–8 from the end (slice(-8, -4))
+  const extractRegSlice = (reg: string, from: number, to: number): number => {
+    const s = String(reg || '');
+    const lo = Math.max(1, Math.min(from, to));
+    const hi = Math.max(from, to);
+    const sub = s.slice(Math.max(0, s.length - hi), s.length - lo + 1);
+    const v = parseInt(sub, 10);
+    return isNaN(v) ? 9999 : v;
+  };
+
+  const visibleStudents = (() => {
+    // Step 1: absentees filter
+    let arr = showAbsenteesOnly
+      ? students.filter((s) => {
+          if (absenteesSnapshot && absenteesSnapshot.length) return absenteesSnapshot.includes(s.id);
+          return Boolean(sheet.rowsByStudentId[String(s.id)]?.absent);
+        })
+      : [...students];
+
+    // Step 2: reg no range filter (numeric sub-range)
+    if (regRangeEnabled) {
+      const lo = Math.max(1, Math.min(regRangeFrom, regRangeTo));
+      const hi = Math.max(regRangeFrom, regRangeTo);
+      const minVal = regRangeValMin !== '' ? parseInt(regRangeValMin, 10) : null;
+      const maxVal = regRangeValMax !== '' ? parseInt(regRangeValMax, 10) : null;
+      if (minVal !== null || maxVal !== null) {
+        arr = arr.filter((s) => {
+          const v = extractRegSlice(String(s.reg_no || ''), lo, hi);
+          if (v === 9999) return true; // non-numeric → don't exclude
+          if (minVal !== null && v < minVal) return false;
+          if (maxVal !== null && v > maxVal) return false;
+          return true;
+        });
+      }
+    }
+
+    // Step 3: sort
+    arr = [...arr].sort((a, b) => {
+      if (sortMode === 'nameAsc') return (a.name || '').localeCompare(b.name || '');
+      if (sortMode === 'nameDesc') return (b.name || '').localeCompare(a.name || '');
+      if (sortMode === 'regAsc') return (a.reg_no || '').localeCompare(b.reg_no || '');
+      if (sortMode === 'regDesc') return (b.reg_no || '').localeCompare(a.reg_no || '');
+      if (sortMode === 'regRange') {
+        const lo = Math.max(1, Math.min(regRangeFrom, regRangeTo));
+        const hi = Math.max(regRangeFrom, regRangeTo);
+        return extractRegSlice(String(a.reg_no || ''), lo, hi) - extractRegSlice(String(b.reg_no || ''), lo, hi);
+      }
+      // default: last 3 digits
+      const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
+      const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
+      return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
+    });
+
+    return arr;
+  })();
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -2255,6 +2361,18 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export Excel
           </button>
+          <button
+            className="obe-btn obe-btn-secondary"
+            onClick={() => setFilterPopupOpen(true)}
+            style={
+              sortMode !== 'default' || regRangeEnabled || showDeptColumn
+                ? { background: 'linear-gradient(180deg, #1d4ed8, #3b82f6)', color: '#fff', borderColor: 'rgba(29,78,216,0.3)' }
+                : undefined
+            }
+            title="Sort &amp; filter the student table"
+          >
+            ⊟ Filter / Sort
+          </button>
           <button onClick={triggerFileUpload} className="obe-btn obe-btn-secondary" disabled={importing || students.length === 0 || tableBlocked || globalLocked}>
             {importing ? 'Importing…' : 'Import Excel'}
           </button>
@@ -2270,16 +2388,33 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               {saving ? 'Saving…' : 'Save Draft'}
             </button>
           ) : null}
-          {!isPublished && publishAllowed && !globalLocked ? (
-            <button
-              onClick={resetAllMarks}
-              className="obe-btn obe-btn-danger"
-              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
-              title="Clears the saved draft marks"
-            >
-              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
-            </button>
-          ) : null}
+          <button
+            onClick={resetAllMarks}
+            className="obe-btn obe-btn-danger"
+            disabled={
+              resettingMarks ||
+              students.length === 0 ||
+              tableBlocked ||
+              publishedEditLocked ||
+              globalLocked ||
+              !publishAllowed ||
+              !subjectId ||
+              typeof teachingAssignmentId !== 'number'
+            }
+            title={
+              globalLocked
+                ? 'Reset is blocked: publishing is locked by IQAC'
+                : !publishAllowed
+                  ? 'Reset is blocked: publish window is closed'
+                  : publishedEditLocked
+                    ? 'Reset is blocked: published table is locked; request edit first'
+                    : typeof teachingAssignmentId !== 'number'
+                      ? 'Reset is unavailable: teaching assignment is not selected'
+                      : 'Clears marks from draft and database for this teaching assignment'
+            }
+          >
+            {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+          </button>
           <button
             onClick={publish}
             disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked)}
@@ -2477,7 +2612,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto', borderCollapse: 'collapse' }}>
                   <thead>
               <tr>
-                <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>
+                <th style={cellTh} colSpan={(showDeptColumn ? 5 : 4) + questions.length + 1 + 4 + visibleBtls.length * 2}>
                   {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel}
                 </th>
               </tr>
@@ -2491,6 +2626,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                   Name of the Students
                 </th>
+                {showDeptColumn ? (
+                  <th style={{ ...cellTh, minWidth: 80, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
+                    Dept
+                  </th>
+                ) : null}
                 <th style={{ ...cellTh, minWidth: 88 }} rowSpan={3}>
                   AB
                 </th>
@@ -2548,6 +2688,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               <tbody>
               <tr>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3} />
+                {showDeptColumn ? <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} /> : null}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
                 {questions.map((q) => (
                   <td key={`btl-select-${q.key}`} style={{ ...cellTd, textAlign: 'center' }}>
@@ -2615,6 +2756,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
                   Name / Max Marks
                 </td>
+                {showDeptColumn ? <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} /> : null}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>-</td>
 
                 {questions.map((q) => (
@@ -2681,6 +2823,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     <td style={{ ...cellTd, textAlign: 'center', width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
                     <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no)}</td>
                     <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
+                    {showDeptColumn ? (
+                      <td style={{ ...cellTd, minWidth: 80, textAlign: 'center', fontSize: 11 }}>
+                        {taDeptName || '—'}
+                      </td>
+                    ) : null}
                     <td style={{ ...cellTd, textAlign: 'center', minWidth: 88 }}>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                         <input type="checkbox" checked={row.absent} disabled={lockedInputs} onChange={(e) => setAbsent(s.id, e.target.checked)} />
@@ -2766,6 +2913,191 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           </PublishLockOverlay>
         </div>
       )}
+
+      {filterPopupOpen ? (
+        <ModalPortal>
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15,23,42,0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+              zIndex: 9999,
+            }}
+            onClick={() => setFilterPopupOpen(false)}
+          >
+            <div
+              style={{
+                width: 'min(480px, 100%)',
+                background: '#fff',
+                borderRadius: 14,
+                border: '1px solid #e5e7eb',
+                boxShadow: '0 20px 60px rgba(2,6,23,0.22)',
+                padding: 20,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ fontWeight: 800, fontSize: 15, color: '#111827' }}>Filter &amp; Sort</div>
+                <button
+                  onClick={() => setFilterPopupOpen(false)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#6b7280', lineHeight: 1, padding: 2 }}
+                  aria-label="Close filter popup"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Sort Options */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, letterSpacing: 0.4 }}>SORT ORDER</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {(
+                    [
+                      ['default', 'Default (Reg No — last 3 digits)'],
+                      ['nameAsc', 'Name A → Z'],
+                      ['nameDesc', 'Name Z → A'],
+                      ['regAsc', 'Reg No A → Z'],
+                      ['regDesc', 'Reg No Z → A'],
+                      ['regRange', 'Reg No — custom digit range'],
+                    ] as Array<[SortMode, string]>
+                  ).map(([mode, label]) => (
+                    <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
+                      <input
+                        type="radio"
+                        name="cia-sort-mode"
+                        checked={sortMode === mode}
+                        onChange={() => setSortMode(mode)}
+                        style={{ accentColor: '#2563eb' }}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Reg No Range */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 10,
+                  padding: 12,
+                  marginBottom: 16,
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={regRangeEnabled}
+                    onChange={(e) => setRegRangeEnabled(e.target.checked)}
+                    style={{ accentColor: '#2563eb' }}
+                  />
+                  Filter by Reg No digit range
+                </label>
+                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10 }}>
+                  Specify which digit positions to extract (counting from the <strong>right</strong>, 1 = last digit).
+                  E.g. From 1 To 3 extracts the last 3 digits; From 5 To 8 extracts positions 5–8 from the end.
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10, opacity: regRangeEnabled ? 1 : 0.45 }}>
+                  <label style={{ fontSize: 12, color: '#374151' }}>
+                    From (right-position)
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={regRangeFrom}
+                      disabled={!regRangeEnabled}
+                      onChange={(e) => setRegRangeFrom(Math.max(1, Number(e.target.value) || 1))}
+                      style={{ display: 'block', marginTop: 4, width: 80, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                    />
+                  </label>
+                  <label style={{ fontSize: 12, color: '#374151' }}>
+                    To (right-position)
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={regRangeTo}
+                      disabled={!regRangeEnabled}
+                      onChange={(e) => setRegRangeTo(Math.max(1, Number(e.target.value) || 1))}
+                      style={{ display: 'block', marginTop: 4, width: 80, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                    />
+                  </label>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6, opacity: regRangeEnabled ? 1 : 0.45 }}>
+                  Value range filter (optional — leave blank to disable)
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', opacity: regRangeEnabled ? 1 : 0.45 }}>
+                  <label style={{ fontSize: 12, color: '#374151' }}>
+                    Min value
+                    <input
+                      type="number"
+                      value={regRangeValMin}
+                      disabled={!regRangeEnabled}
+                      placeholder="e.g. 1"
+                      onChange={(e) => setRegRangeValMin(e.target.value)}
+                      style={{ display: 'block', marginTop: 4, width: 90, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                    />
+                  </label>
+                  <label style={{ fontSize: 12, color: '#374151' }}>
+                    Max value
+                    <input
+                      type="number"
+                      value={regRangeValMax}
+                      disabled={!regRangeEnabled}
+                      placeholder="e.g. 050"
+                      onChange={(e) => setRegRangeValMax(e.target.value)}
+                      style={{ display: 'block', marginTop: 4, width: 90, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Show Department Column */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, letterSpacing: 0.4 }}>COLUMNS</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
+                  <input
+                    type="checkbox"
+                    checked={showDeptColumn}
+                    onChange={(e) => setShowDeptColumn(e.target.checked)}
+                    style={{ accentColor: '#2563eb' }}
+                  />
+                  Show Department column
+                  {taDeptName ? <span style={{ marginLeft: 4, fontSize: 11, color: '#6b7280' }}>({taDeptName})</span> : null}
+                </label>
+              </div>
+
+              {/* Actions */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                <button
+                  className="obe-btn obe-btn-secondary"
+                  onClick={() => {
+                    setSortMode('default');
+                    setRegRangeEnabled(false);
+                    setRegRangeFrom(1);
+                    setRegRangeTo(3);
+                    setRegRangeValMin('');
+                    setRegRangeValMax('');
+                    setShowDeptColumn(false);
+                  }}
+                >
+                  Reset
+                </button>
+                <button className="obe-btn obe-btn-primary" onClick={() => setFilterPopupOpen(false)}>
+                  Apply &amp; Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      ) : null}
 
       {markManagerModal ? (
         <ModalPortal>

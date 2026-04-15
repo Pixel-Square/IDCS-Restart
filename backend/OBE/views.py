@@ -2772,43 +2772,7 @@ def internal_mark_mapping_upsert(request, subject_id: str):
     })
 
 
-@api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def iqac_reset_assessment(request, assessment: str, subject_id: str):
-    """IQAC/OBE Master: reset a single assessment for a course.
-
-    Clears:
-    - Draft JSON (AssessmentDraft)
-    - Published data for that assessment (marks tables / published snapshots)
-    - Mark table lock row for the teaching assignment + assessment
-
-    Does NOT affect other assessments.
-
-    Query/body:
-    - teaching_assignment_id (required for deterministic lock reset)
-    """
-    auth = _require_obe_master_permission(request)
-    if auth:
-        return auth
-
-    assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
-        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    subject = _get_subject(subject_id, request)
-    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
-    if ta_id is None:
-        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        ta = TeachingAssignment.objects.select_related('section', 'academic_year').filter(id=int(ta_id), is_active=True).first()
-    except Exception:
-        ta = None
-
-    if ta is None:
-        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
-
+def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_notification: bool = False) -> dict:
     from .models import AssessmentDraft
     from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet
     from .models import Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark
@@ -2823,7 +2787,6 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
     student_ids = _get_teaching_assignment_student_ids(ta)
 
     with transaction.atomic():
-        # Draft
         try:
             deleted['draft'] = _delete_scoped_obe_json_rows(
                 AssessmentDraft,
@@ -2835,7 +2798,6 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         except Exception:
             deleted['draft'] = 0
 
-        # Published
         try:
             if assessment_key == 'ssa1':
                 deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
@@ -2908,7 +2870,6 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
                     assessment='cia2',
                 )
             elif assessment_key == 'model':
-                # Delete both theory MODEL published snapshot (ModelPublishedSheet) and any lab MODEL snapshots
                 try:
                     from .models import ModelPublishedSheet
                     deleted['published'] += _delete_scoped_obe_json_rows(
@@ -2929,22 +2890,128 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         except Exception:
             pass
 
-        # Lock row (per teaching assignment)
         try:
             deleted['lock'] = int(ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0)
         except Exception:
             deleted['lock'] = 0
 
-        # Create notification for staff
-        try:
-            from .models import IqacResetNotification
-            IqacResetNotification.objects.create(
-                teaching_assignment=ta,
-                assessment=assessment_key,
-                reset_by=request.user if hasattr(request, 'user') else None
-            )
-        except Exception:
-            pass
+        if create_notification:
+            try:
+                from .models import IqacResetNotification
+                IqacResetNotification.objects.create(
+                    teaching_assignment=ta,
+                    assessment=assessment_key,
+                    reset_by=request.user if hasattr(request, 'user') else None,
+                )
+            except Exception:
+                pass
+
+    return deleted
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_reset_assessment(request, assessment: str, subject_id: str):
+    """IQAC/OBE Master: reset a single assessment for a course.
+
+    Clears:
+    - Draft JSON (AssessmentDraft)
+    - Published data for that assessment (marks tables / published snapshots)
+    - Mark table lock row for the teaching assignment + assessment
+
+    Does NOT affect other assessments.
+
+    Query/body:
+    - teaching_assignment_id (required for deterministic lock reset)
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ta = TeachingAssignment.objects.select_related('section', 'academic_year').filter(id=int(ta_id), is_active=True).first()
+    except Exception:
+        ta = None
+
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    deleted = _reset_assessment_rows(
+        request=request,
+        assessment_key=assessment_key,
+        subject=subject,
+        ta=ta,
+        create_notification=True,
+    )
+
+    return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def faculty_reset_assessment(request, assessment: str, subject_id: str):
+    """Faculty reset for CIA marks in own scoped teaching assignment.
+
+    Supports only: cia1, cia2.
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    assessment_key = str(assessment or '').strip().lower()
+    if assessment_key not in {'cia1', 'cia2'}:
+        return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request, request.data if isinstance(request.data, dict) else None)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    gate = _enforce_assessment_enabled_for_course(
+        request,
+        subject_code=subject.code,
+        assessment=assessment_key,
+        teaching_assignment_id=ta_id,
+    )
+    if gate is not None:
+        return gate
+
+    gate = _enforce_publish_window(request, subject.code, assessment_key)
+    if gate is not None:
+        return gate
+
+    gate = _enforce_mark_entry_not_blocked(
+        request,
+        subject_code=subject.code,
+        subject_name=subject.name,
+        assessment=assessment_key,
+        teaching_assignment_id=ta_id,
+    )
+    if gate is not None:
+        return gate
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Teaching assignment not found for this course.'}, status=status.HTTP_403_FORBIDDEN)
+
+    deleted = _reset_assessment_rows(
+        request=request,
+        assessment_key=assessment_key,
+        subject=subject,
+        ta=ta,
+        create_notification=False,
+    )
 
     return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
 

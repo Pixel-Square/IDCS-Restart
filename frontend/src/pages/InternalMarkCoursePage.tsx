@@ -1389,7 +1389,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const THRESHOLD_PERCENT = 58;
   const CQI_BELOW_RATE = 0.6;
-  const CQI_ABOVE_RATE = 1.5;
+  const CQI_ABOVE_RATE = 0.15;
 
   const displayCols = useMemo(() => {
     const labels = Array.isArray((effMapping as any)?.labels) ? ((effMapping as any).labels as string[]) : [];
@@ -1487,8 +1487,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return round2(sum);
   };
 
-  const computeCqiAdd = (args: { coValue: number; coMax: number; input: number | null | undefined, overallPct: number }): number => {
-    const { coValue, coMax, input, overallPct } = args;
+  const computeCqiAdd = (args: { coValue: number; coMax: number; input: number | null | undefined }): number => {
+    const { coValue, coMax, input } = args;
     if (input == null) return 0;
     const inp = Number(input);
     if (!Number.isFinite(inp) || inp <= 0) return 0;
@@ -1496,21 +1496,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const pct = (Number(coValue) / Number(coMax)) * 100;
 
     if (Number.isFinite(pct) && pct < THRESHOLD_PERCENT) {
-      if (Number.isFinite(overallPct) && overallPct < THRESHOLD_PERCENT) {
-        // Below threshold (Overall): CQI mark (out of 10) × 0.6, cap the CO at threshold%
-        const rawAdd = (inp / 10) * ((CQI_BELOW_RATE / 0.1) * 1); // 0.6
-        const cap = (coMax * THRESHOLD_PERCENT) / 100;
-        const maxAllowed = Math.max(0, cap - Number(coValue));
-        const add = Math.min(rawAdd, maxAllowed);
-        return Number.isFinite(add) && add > 0 ? add : 0;
-      } else {
-        // At or above threshold (Overall): CQI mark (out of 10) converted to 15 percentage, no cap
-        const add = inp * (15 / 100);
-        return Number.isFinite(add) && add > 0 ? add : 0;
-      }
+      const rawAdd = inp * CQI_BELOW_RATE;
+      const cap = (coMax * THRESHOLD_PERCENT) / 100;
+      const maxAllowed = Math.max(0, cap - Number(coValue));
+      const add = Math.min(rawAdd, maxAllowed);
+      return Number.isFinite(add) && add > 0 ? add : 0;
     } else {
-      // CO is attained, no CQI input
-      return 0;
+      const add = inp * CQI_ABOVE_RATE;
+      return Number.isFinite(add) && add > 0 ? add : 0;
     }
   };
 
@@ -2667,7 +2660,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       let baseTotalRaw = 0;
       let hasBaseData = false;
 
-      // Pre-calculate base total to determine overallPct
       for (const col of displayCols) {
         if (col.isMerged ? col.co != null : true) {
           const base = getDisplayValue(r.cells, col);
@@ -2679,7 +2671,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
 
       const computedBaseTotal = hasBaseData ? round2(baseTotalRaw) : r.total;
-      const originalTotalPct = (computedBaseTotal != null && maxTotal > 0) ? (computedBaseTotal / maxTotal) * 100 : 0;
 
       if (activeTab === 'after-cqi') {
         for (const col of displayCols) {
@@ -2690,7 +2681,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
                 const coMax = Number(col.weight) || 0;
                 const input = studentEntry?.[`co${col.co}`];
                 if (coMax > 0) {
-                  const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input), overallPct: originalTotalPct });
+                  const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
                   if (add > 0) cqiAddedRaw += add;
                 }
               }
@@ -2708,14 +2699,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const coMax = Number(col.weight) || 0;
           const input = studentEntry?.[`co${col.co}`];
           if (base != null && Number.isFinite(base) && coMax > 0) {
-            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input), overallPct: originalTotalPct });
+            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
             if (add > 0) {
-              if (originalTotalPct >= THRESHOLD_PERCENT) {
-                // If overall is above 58%, add directly without cap (it can exceed coMax)
-                val = round2(Number(base) + add);
-              } else {
-                val = clamp(round2(Number(base) + add), 0, coMax);
-              }
+              val = clamp(round2(Number(base) + add), 0, coMax);
             }
           }
         }
@@ -2723,6 +2709,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       });
       let effTotal = computedBaseTotal != null && cqiAdded > 0 ? round2(computedBaseTotal + cqiAdded) : computedBaseTotal;
       // Cap total at 58% if original total was below 58%.
+      const originalTotalPct = (computedBaseTotal != null && maxTotal > 0) ? (computedBaseTotal / maxTotal) * 100 : 0;
       if (effTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
         const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
         effTotal = Math.min(effTotal, totalCap);

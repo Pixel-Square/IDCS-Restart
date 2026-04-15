@@ -92,6 +92,28 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+          {/* Application Conditions */}
+          <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 bg-fuchsia-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Settings className="w-5 h-5 text-fuchsia-600" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-gray-500 mb-1">Application Conditions</div>
+                <div className="text-gray-900 font-medium">Control application requirements across all types</div>
+                <p className="text-sm text-gray-600 mt-2">
+                  Enable or disable profile picture upload and mobile number verification requirements for applications.
+                </p>
+                <button
+                  onClick={() => navigate('/settings/conditions')}
+                  className="mt-4 inline-flex items-center gap-2 bg-fuchsia-600 text-white px-4 py-2 rounded-md text-sm hover:bg-fuchsia-700 transition-colors"
+                >
+                  Open
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </DashboardLayout>

@@ -20,10 +20,17 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.core.mail import get_connection
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from urllib.parse import urlparse
 import posixpath
 import os
 import uuid
+import secrets
+import time
 
 from .models import MobileOtp, NotificationTemplate, UserQuery, Role
 from .models import ProfileImageUpdateRequest
@@ -536,6 +543,323 @@ class ChangePasswordView(APIView):
         request.user.save()
 
         return Response({'ok': True, 'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
+
+
+def _password_reset_otp_minutes() -> int:
+    default_minutes = 10
+    try:
+        tpl = NotificationTemplate.objects.filter(code='password_reset').first()
+        if tpl and getattr(tpl, 'expiry_minutes', None):
+            minutes = int(tpl.expiry_minutes)
+            return max(3, min(minutes, 30))
+    except Exception:
+        pass
+    return default_minutes
+
+
+def _password_reset_message(username: str, otp: str, expiry_minutes: int) -> str:
+    template = 'Hello {username}, your password reset OTP is {otp}. Valid for {expiry} minutes. - IQAC'
+    try:
+        tpl = NotificationTemplate.objects.filter(code='password_reset', enabled=True).first()
+        if tpl and str(getattr(tpl, 'template', '') or '').strip():
+            template = str(tpl.template)
+    except Exception:
+        pass
+
+    text = str(template)
+    text = text.replace('{username}', str(username or '').strip() or 'User')
+    text = text.replace('{otp}', str(otp))
+    text = text.replace('{expiry}', str(expiry_minutes))
+    return text
+
+
+def _reset_otp_cache_key(method: str, target: str) -> str:
+    return f'accounts:pwd_reset:otp:{method}:{target}'
+
+
+def _reset_session_cache_key(token: str) -> str:
+    return f'accounts:pwd_reset:session:{token}'
+
+
+def _resolve_reset_user(method: str, target_value: str):
+    """Resolve user for forgot-password by email/mobile.
+
+    Returns:
+        tuple(user_or_none, normalized_target)
+    """
+    method = str(method or '').strip().lower()
+
+    if method == 'email':
+        email = str(target_value or '').strip().lower()
+        if not email or '@' not in email:
+            return None, ''
+        user = User.objects.filter(email__iexact=email).first()
+        return user, email
+
+    if method == 'mobile':
+        normalized_mobile = _normalize_mobile_number(target_value)
+        if not normalized_mobile:
+            return None, ''
+
+        # 1) Direct user.mobile_no
+        user = User.objects.filter(mobile_no=normalized_mobile).first()
+        if user:
+            return user, normalized_mobile
+
+        # 2) student/staff profile mobile numbers
+        try:
+            from academics.models import StudentProfile, StaffProfile
+        except Exception:
+            StudentProfile = None
+            StaffProfile = None
+
+        if StudentProfile is not None:
+            sp = StudentProfile.objects.filter(mobile_number=normalized_mobile).select_related('user').first()
+            if sp and getattr(sp, 'user', None):
+                return sp.user, normalized_mobile
+
+        if StaffProfile is not None:
+            st = StaffProfile.objects.filter(mobile_number=normalized_mobile).select_related('user').first()
+            if st and getattr(st, 'user', None):
+                return st.user, normalized_mobile
+
+        return None, normalized_mobile
+
+    return None, ''
+
+
+def _resolve_user_mobile_for_reset(user) -> str:
+    """Return normalized mobile number from user/profile for OTP fallback."""
+    if not user:
+        return ''
+
+    candidates = []
+    try:
+        candidates.append(str(getattr(user, 'mobile_no', '') or '').strip())
+    except Exception:
+        pass
+
+    try:
+        sp = getattr(user, 'student_profile', None)
+        if sp is not None:
+            candidates.append(str(getattr(sp, 'mobile_number', '') or '').strip())
+    except Exception:
+        pass
+
+    try:
+        st = getattr(user, 'staff_profile', None)
+        if st is not None:
+            candidates.append(str(getattr(st, 'mobile_number', '') or '').strip())
+    except Exception:
+        pass
+
+    for raw in candidates:
+        normalized = _normalize_mobile_number(raw)
+        if normalized:
+            return normalized
+
+    return ''
+
+
+class ForgotPasswordRequestOtpView(APIView):
+    """Request OTP via email or mobile for forgot-password flow."""
+    authentication_classes = []
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request):
+        payload = request.data or {}
+        method = str(payload.get('method') or '').strip().lower()
+        target_value = payload.get('email') if method == 'email' else payload.get('mobile_number')
+
+        if method not in {'email', 'mobile'}:
+            return Response({'detail': 'Method must be email or mobile.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user, normalized_target = _resolve_reset_user(method, str(target_value or '').strip())
+        if not normalized_target:
+            return Response({'detail': 'Invalid email/mobile number.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Do not reveal whether user exists
+        if not user:
+            return Response({'ok': True, 'detail': 'If the account exists, OTP has been sent.'}, status=status.HTTP_200_OK)
+
+        otp = f"{secrets.randbelow(900000) + 100000}"
+        expiry_minutes = _password_reset_otp_minutes()
+        expires_at = int(time.time()) + (expiry_minutes * 60)
+
+        cache.set(
+            _reset_otp_cache_key(method, normalized_target),
+            {
+                'uid': int(user.id),
+                'otp': otp,
+                'method': method,
+                'target': normalized_target,
+                'expires_at': expires_at,
+                'attempts': 0,
+            },
+            timeout=expiry_minutes * 60,
+        )
+
+        message = _password_reset_message(
+            username=str(getattr(user, 'username', '') or '').strip() or str(getattr(user, 'email', '') or '').strip(),
+            otp=otp,
+            expiry_minutes=expiry_minutes,
+        )
+
+        try:
+            if method == 'email':
+                email_timeout = int(getattr(settings, 'EMAIL_TIMEOUT', 10) or 10)
+                connection = get_connection(fail_silently=False, timeout=max(3, email_timeout))
+                send_mail(
+                    subject='Password Reset OTP',
+                    message=message,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+                    recipient_list=[normalized_target],
+                    fail_silently=False,
+                    connection=connection,
+                )
+            else:
+                sent = send_whatsapp(normalized_target, message)
+                if not sent.ok:
+                    sms_sent = send_sms(normalized_target, message)
+                    if not sms_sent.ok:
+                        return Response({'detail': sent.message or sms_sent.message or 'Failed to send OTP.'}, status=status.HTTP_502_BAD_GATEWAY)
+        except Exception as exc:
+            log.exception('Failed to send forgot-password OTP (%s)', method)
+            if method == 'email':
+                fallback_mobile = _resolve_user_mobile_for_reset(user)
+                if fallback_mobile:
+                    try:
+                        sent = send_whatsapp(fallback_mobile, message)
+                        if not sent.ok:
+                            sms_sent = send_sms(fallback_mobile, message)
+                            if not sms_sent.ok:
+                                raise Exception(sent.message or sms_sent.message or 'Mobile OTP fallback failed')
+
+                        return Response(
+                            {
+                                'ok': True,
+                                'detail': 'Email OTP is unavailable. OTP has been sent to your registered mobile number.',
+                                'expiry_minutes': expiry_minutes,
+                            },
+                            status=status.HTTP_200_OK,
+                        )
+                    except Exception:
+                        log.exception('Failed mobile fallback OTP after email failure')
+
+                return Response({'detail': f'Email OTP service unavailable. Please try mobile OTP. ({str(exc)[:140]})'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'detail': 'Failed to send OTP. Please try again.'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({'ok': True, 'detail': 'OTP sent successfully.', 'expiry_minutes': expiry_minutes}, status=status.HTTP_200_OK)
+
+
+class ForgotPasswordVerifyOtpView(APIView):
+    """Verify OTP and return one-time reset token."""
+    authentication_classes = []
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request):
+        payload = request.data or {}
+        method = str(payload.get('method') or '').strip().lower()
+        otp = str(payload.get('otp') or '').strip()
+        target_value = payload.get('email') if method == 'email' else payload.get('mobile_number')
+
+        if method not in {'email', 'mobile'}:
+            return Response({'detail': 'Method must be email or mobile.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not otp:
+            return Response({'detail': 'OTP is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        _, normalized_target = _resolve_reset_user(method, str(target_value or '').strip())
+        if not normalized_target:
+            return Response({'detail': 'Invalid email/mobile number.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        key = _reset_otp_cache_key(method, normalized_target)
+        row = cache.get(key)
+        if not isinstance(row, dict):
+            return Response({'detail': 'OTP expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now_ts = int(time.time())
+        if int(row.get('expires_at') or 0) <= now_ts:
+            cache.delete(key)
+            return Response({'detail': 'OTP expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        attempts = int(row.get('attempts') or 0)
+        if attempts >= 5:
+            cache.delete(key)
+            return Response({'detail': 'Too many invalid OTP attempts. Please request OTP again.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if str(row.get('otp') or '') != otp:
+            attempts += 1
+            row['attempts'] = attempts
+            cache.set(key, row, timeout=max(1, int(row.get('expires_at') or now_ts) - now_ts))
+            return Response({'detail': 'Invalid OTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uid = int(row.get('uid') or 0)
+        if uid <= 0:
+            cache.delete(key)
+            return Response({'detail': 'OTP expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reset_minutes = 15
+        reset_token = uuid.uuid4().hex
+        cache.set(
+            _reset_session_cache_key(reset_token),
+            {'uid': uid, 'verified_at': now_ts},
+            timeout=reset_minutes * 60,
+        )
+        cache.delete(key)
+
+        return Response(
+            {
+                'ok': True,
+                'reset_token': reset_token,
+                'detail': 'OTP verified. You can now change your password.',
+                'reset_token_expiry_minutes': reset_minutes,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ForgotPasswordResetView(APIView):
+    """Reset password using one-time token returned after OTP verification."""
+    authentication_classes = []
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request):
+        payload = request.data or {}
+        reset_token = str(payload.get('reset_token') or '').strip()
+        new_password = str(payload.get('new_password') or '').strip()
+        confirm_password = str(payload.get('confirm_password') or '').strip()
+
+        if not reset_token:
+            return Response({'detail': 'Reset token is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_password:
+            return Response({'detail': 'New password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not confirm_password:
+            return Response({'detail': 'Please confirm your new password.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_password != confirm_password:
+            return Response({'detail': 'New passwords do not match.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        session_key = _reset_session_cache_key(reset_token)
+        session = cache.get(session_key)
+        if not isinstance(session, dict):
+            return Response({'detail': 'Reset token expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uid = int(session.get('uid') or 0)
+        user = User.objects.filter(pk=uid).first() if uid else None
+        if not user:
+            cache.delete(session_key)
+            return Response({'detail': 'Reset token expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_password(new_password, user)
+        except ValidationError as exc:
+            messages = list(getattr(exc, 'messages', []) or [])
+            return Response({'detail': messages[0] if messages else 'Password does not meet policy requirements.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        cache.delete(session_key)
+
+        return Response({'ok': True, 'detail': 'Password reset successful. Please login.'}, status=status.HTTP_200_OK)
 
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser

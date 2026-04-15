@@ -99,6 +99,7 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
         is_active=True,
         academic_year__is_active=True,
         curriculum_row__isnull=False,
+        elective_subject__isnull=True,
     ).select_related('academic_year')
 
     created_or_updated = 0
@@ -131,6 +132,7 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
                     subject_batches__is_active=True,
                     subject_batches__academic_year_id=academic_year_id,
                     subject_batches__curriculum_row_id=curriculum_row_id,
+                    subject_batches__elective_subject__isnull=True,
                 ).exclude(section_id__isnull=True).values_list('section_id', flat=True).distinct()
             )
             section_id = section_ids[0] if len(section_ids) == 1 else None
@@ -165,14 +167,16 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
                 # Ignore races / integrity errors; this is best-effort.
                 continue
 
-    # ── Part 2: Elective batches (no curriculum_row) ──
-    # For batches where curriculum_row is NULL, resolve elective_subject
-    # from the batch creator's teaching assignments using student overlap.
+    # ── Part 2: Elective batches ──
+    # Prefer direct StudentSubjectBatch.elective_subject mapping.
+    # For legacy rows without it, resolve via creator TA + student overlap.
     elective_batches_qs = StudentSubjectBatch.objects.filter(
         staff=staff_profile,
         is_active=True,
         academic_year__is_active=True,
-        curriculum_row__isnull=True,
+    ).filter(
+        Q(elective_subject__isnull=False)
+        | Q(elective_subject__isnull=True, curriculum_row__isnull=True)
     ).select_related('academic_year', 'created_by')
 
     for sb in elective_batches_qs:
@@ -185,41 +189,39 @@ def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
             if not academic_year_id:
                 continue
 
-            # Find elective TAs of the creator
-            creator_etas = TeachingAssignment.objects.filter(
-                staff_id=creator_id,
-                elective_subject__isnull=False,
-                is_active=True,
-                academic_year_id=academic_year_id,
-            ).select_related('elective_subject')
+            matched_es_id = getattr(sb, 'elective_subject_id', None)
+            if not matched_es_id:
+                creator_etas = TeachingAssignment.objects.filter(
+                    staff_id=creator_id,
+                    elective_subject__isnull=False,
+                    is_active=True,
+                    academic_year_id=academic_year_id,
+                ).select_related('elective_subject')
 
-            if not creator_etas.exists():
-                continue
-
-            # Determine which elective subject by student overlap
-            batch_student_ids = set(sb.students.values_list('id', flat=True))
-            if not batch_student_ids:
-                continue
-
-            matched_es_id = None
-            from curriculum.models import ElectiveChoice
-            for eta in creator_etas:
-                es_id = eta.elective_subject_id
-                if not es_id:
+                if not creator_etas.exists():
                     continue
-                choice_student_ids = set(
-                    ElectiveChoice.objects.filter(
-                        elective_subject_id=es_id, is_active=True
-                    ).values_list('student_id', flat=True)
-                )
-                overlap = batch_student_ids & choice_student_ids
-                if len(overlap) > 0:
-                    matched_es_id = es_id
-                    break
 
-            # Fallback: if only one creator elective TA exists, use it
-            if not matched_es_id and creator_etas.count() == 1:
-                matched_es_id = creator_etas.first().elective_subject_id
+                batch_student_ids = set(sb.students.values_list('id', flat=True))
+                if not batch_student_ids:
+                    continue
+
+                from curriculum.models import ElectiveChoice
+                for eta in creator_etas:
+                    es_id = eta.elective_subject_id
+                    if not es_id:
+                        continue
+                    choice_student_ids = set(
+                        ElectiveChoice.objects.filter(
+                            elective_subject_id=es_id, is_active=True
+                        ).values_list('student_id', flat=True)
+                    )
+                    overlap = batch_student_ids & choice_student_ids
+                    if len(overlap) > 0:
+                        matched_es_id = es_id
+                        break
+
+                if not matched_es_id and creator_etas.count() == 1:
+                    matched_es_id = creator_etas.first().elective_subject_id
 
             if not matched_es_id:
                 continue
@@ -559,9 +561,11 @@ class TeachingAssignmentStudentsView(APIView):
             # For regular TAs, match by curriculum_row
             if getattr(ta, 'curriculum_row_id', None):
                 batch_filter_qs = batch_filter_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+            elif getattr(ta, 'elective_subject_id', None):
+                batch_filter_qs = batch_filter_qs.filter(elective_subject_id=ta.elective_subject_id)
             else:
-                # Elective: match batches without curriculum_row
-                batch_filter_qs = batch_filter_qs.filter(curriculum_row__isnull=True)
+                # Legacy elective fallback: no explicit subject link
+                batch_filter_qs = batch_filter_qs.filter(curriculum_row__isnull=True, elective_subject__isnull=True)
             user_batches = list(batch_filter_qs)
             if user_batches:
                 batch_student_ids = set()
@@ -4883,6 +4887,9 @@ class StaffAssignedSubjectsView(APIView):
                 'curriculum_row',
                 'curriculum_row__department',
                 'curriculum_row__semester',
+                'elective_subject',
+                'elective_subject__department',
+                'elective_subject__semester',
                 'section',
                 'academic_year',
                 'created_by',
@@ -4946,7 +4953,44 @@ class StaffAssignedSubjectsView(APIView):
             _creator_elective_ta_cache: dict = {}
 
             def _resolve_elective_subject_for_batch(sb_obj):
-                """Look up elective subject info for a batch by checking creator's TAs."""
+                """Resolve elective subject info for a batch.
+
+                Priority:
+                1) Direct StudentSubjectBatch.elective_subject mapping
+                2) Legacy fallback via creator's elective teaching assignments
+                """
+                try:
+                    es = getattr(sb_obj, 'elective_subject', None)
+                    if es:
+                        dept_obj = None
+                        try:
+                            dept = getattr(es, 'department', None)
+                            if dept:
+                                dept_obj = {
+                                    'id': getattr(dept, 'id', None),
+                                    'code': getattr(dept, 'code', None),
+                                    'name': getattr(dept, 'name', None),
+                                    'short_name': getattr(dept, 'short_name', None),
+                                }
+                        except Exception:
+                            dept_obj = None
+
+                        sem_num = None
+                        try:
+                            sem_num = getattr(getattr(es, 'semester', None), 'number', None)
+                        except Exception:
+                            sem_num = None
+
+                        return (
+                            getattr(es, 'course_code', None),
+                            getattr(es, 'course_name', None),
+                            getattr(es, 'pk', None),
+                            dept_obj,
+                            sem_num,
+                        )
+                except Exception:
+                    pass
+
                 creator_id = getattr(sb_obj, 'created_by_id', None)
                 if not creator_id:
                     return None, None, None, None, None  # code, name, elective_subject_id, dept_obj, sem_num
@@ -5010,7 +5054,7 @@ class StaffAssignedSubjectsView(APIView):
                     batch_info = {'id': sb.pk, 'name': getattr(sb, 'name', None)}
                     section_id, section_name = _infer_batch_section(sb)
 
-                    if cr:
+                    if cr and not getattr(sb, 'elective_subject_id', None):
                         # ── Curriculum-row based batch (non-elective) ──
                         key = (int(cr.pk), int(section_id) if section_id is not None else None)
                         existing_rows = by_key.get(key)
@@ -5230,7 +5274,7 @@ class SubjectBatchViewSet(viewsets.ModelViewSet):
             return []
         from .models import StudentSubjectBatch
         # staff sees only their own batches; superusers can see all
-        qs = StudentSubjectBatch.objects.select_related('staff', 'created_by', 'academic_year', 'section').prefetch_related('students')
+        qs = StudentSubjectBatch.objects.select_related('staff', 'created_by', 'academic_year', 'section', 'elective_subject').prefetch_related('students')
         # allow callers to request all batches (useful for timetable editors)
         include_all = str(self.request.query_params.get('include_all') or '').lower() in ('1', 'true', 'yes')
 

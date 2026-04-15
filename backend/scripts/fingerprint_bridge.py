@@ -154,9 +154,11 @@ class ESP32FingerprintSensor:
                     log.info("ESP32 already running on %s @ %d", p, b)
                     return True
 
-                self.ser.close()
-                self.ser = None
-                self.port_name = ""
+                # If port opened but device not fully responsive, still accept connection
+                # This allows debugging and fallback communication attempts
+                self._ready = True
+                log.info("Port %s @ %d opened (device not yet fully responsive)", p, b)
+                return True
             except serial.SerialException as e:
                 log.debug("Cannot open %s: %s", p, e)
             except Exception as e:
@@ -181,6 +183,19 @@ class ESP32FingerprintSensor:
                 pass
             self.ser = None
             self.port_name = ""
+
+    def recover_after_io_error(self) -> bool:
+        """Try to recover serial link after a hard I/O error."""
+        prev_port = self.port_name
+        prev_baud = self.baud
+        log.warning("Recovering sensor after serial I/O error (port=%s, baud=%s)", prev_port or "auto", prev_baud)
+        self.disconnect()
+        ok = self.connect(port=prev_port or "", baud=prev_baud or 0)
+        if ok:
+            log.info("Sensor recovered on %s @ %d", self.port_name, self.baud)
+        else:
+            log.error("Sensor recovery failed")
+        return ok
 
     def capture(self, user_id: str = "capture") -> dict:
         if not self.connected:
@@ -277,6 +292,13 @@ class ESP32FingerprintSensor:
 
             except Exception as e:
                 log.error("Capture error: %s", e)
+                msg = str(e)
+                if "Input/output error" in msg or "Errno 5" in msg:
+                    self._ready = False
+                    try:
+                        self.recover_after_io_error()
+                    except Exception as rec_err:
+                        log.error("Recovery attempt failed: %s", rec_err)
                 return {"error": f"Communication error: {str(e)}", "code": -4}
 
     def info(self) -> dict:
@@ -299,9 +321,16 @@ class BridgeHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
 
     def _json_response(self, data: dict, status: int = 200):
         body = json.dumps(data).encode()

@@ -2924,29 +2924,8 @@ class FingerprintIdentifyView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        data = request.data or {}
-        b64 = (data.get("template_b64") or "").strip()
-        if not b64:
-            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
-
-        import base64
-
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except Exception:
-            return Response({"detail": "Invalid base64 data."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if len(raw) < 8:
-            return Response({"detail": "Template too small."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Exact-match search (limited but useful for deterministic templates)
-        enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
-        if not enrollment:
-            return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Build a compact user payload similar to FingerprintStatusView
-        user = enrollment.user
+    @staticmethod
+    def _build_user_payload(user, enrollment=None):
         user_name = user.get_full_name() or user.username
         identifier = ""
         user_type = "unknown"
@@ -2973,16 +2952,138 @@ class FingerprintIdentifyView(APIView):
                 except Exception:
                     profile_image = ''
 
-        return Response(
-            {
-                "user_id": user.id,
-                "user_name": user_name,
-                "user_type": user_type,
-                "identifier": identifier,
-                "department": department,
-                "profile_image": profile_image,
-                "enrollment_id": enrollment.id,
-                "finger": enrollment.finger,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return {
+            "user_id": user.id,
+            "user_name": user_name,
+            "user_type": user_type,
+            "identifier": identifier,
+            "department": department,
+            "profile_image": profile_image,
+            "enrollment_id": getattr(enrollment, 'id', None),
+            "finger": getattr(enrollment, 'finger', None),
+        }
+
+    @staticmethod
+    def _normalize_esp32_output(text: str) -> str:
+        import re
+        s = str(text or '').strip().lower()
+        s = re.sub(r'\b\d{1,2}:\d{2}:\d{2}\b', '', s)  # remove hh:mm:ss clocks
+        s = re.sub(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b', '', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    @staticmethod
+    def _extract_identifier_candidates(payload: dict) -> list[str]:
+        import re
+        candidates = []
+        output = str((payload or {}).get('output') or '')
+        user_id = str((payload or {}).get('user_id') or '').strip()
+        if user_id:
+            candidates.append(user_id)
+
+        patterns = [
+            r'welcome\s+([A-Za-z0-9_-]{3,32})',
+            r'(?:matched|verified|found)\s*[:#-]?\s*([A-Za-z0-9_-]{3,32})',
+            r'(?:finger(?:print)?\s*id)\s*[:#-]?\s*([A-Za-z0-9_-]{1,32})',
+        ]
+        for pat in patterns:
+            for m in re.findall(pat, output, flags=re.IGNORECASE):
+                token = str(m or '').strip()
+                if token:
+                    candidates.append(token)
+
+        blocked = {'capture', 'verify', 'monitor', 'test', 'welcome'}
+        uniq = []
+        for c in candidates:
+            key = c.strip()
+            if not key:
+                continue
+            if key.lower() in blocked:
+                continue
+            if key not in uniq:
+                uniq.append(key)
+        return uniq
+
+    def post(self, request):
+        data = request.data or {}
+        b64 = (data.get("template_b64") or "").strip()
+        if not b64:
+            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import base64
+
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception:
+            return Response({"detail": "Invalid base64 data."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(raw) < 8:
+            return Response({"detail": "Template too small."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Exact-match search (works for deterministic scanner templates)
+        enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
+        if enrollment:
+            return Response(self._build_user_payload(enrollment.user, enrollment), status=status.HTTP_200_OK)
+
+        # ESP32 bridge fallback: payload is a JSON wrapper, not raw SDK template.
+        # Try to resolve user by identifier hints emitted in ESP32 output/user_id.
+        try:
+            decoded_text = raw.decode('utf-8', errors='ignore')
+            payload = json.loads(decoded_text)
+        except Exception:
+            payload = None
+
+        if isinstance(payload, dict) and str(payload.get('type', '')).startswith('esp32_'):
+            User = get_user_model()
+            candidates = self._extract_identifier_candidates(payload)
+
+            for key in candidates:
+                user = None
+                sp = StudentProfile.objects.select_related('user').filter(reg_no=key).first()
+                if sp:
+                    user = sp.user
+                if not user:
+                    st = StaffProfile.objects.select_related('user').filter(staff_id=key).first()
+                    if st:
+                        user = st.user
+                if not user:
+                    user = User.objects.filter(username__iexact=key).first()
+                if not user:
+                    continue
+
+                e = FingerprintEnrollment.objects.filter(user=user, is_active=True).order_by('-enrolled_at').first()
+                if e:
+                    data = self._build_user_payload(user, e)
+                    data['match_source'] = 'esp32_identifier'
+                    return Response(data, status=status.HTTP_200_OK)
+
+            # Last fallback: match normalized ESP32 textual output to previous enrollments.
+            target = self._normalize_esp32_output(payload.get('output') or '')
+            if target:
+                matches = []
+                for e in FingerprintEnrollment.objects.filter(is_active=True).select_related('user'):
+                    try:
+                        t = bytes(e.template).decode('utf-8', errors='ignore')
+                        p = json.loads(t)
+                    except Exception:
+                        continue
+                    if not (isinstance(p, dict) and str(p.get('type', '')).startswith('esp32_')):
+                        continue
+                    normalized = self._normalize_esp32_output(p.get('output') or '')
+                    if normalized and normalized == target:
+                        matches.append(e)
+
+                if len(matches) == 1:
+                    data = self._build_user_payload(matches[0].user, matches[0])
+                    data['match_source'] = 'esp32_output'
+                    return Response(data, status=status.HTTP_200_OK)
+                if len(matches) > 1:
+                    return Response(
+                        {
+                            "detail": "Ambiguous ESP32 match. Re-enroll fingerprints with unique user identifiers.",
+                            "count": len(matches),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+        return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)

@@ -64,6 +64,8 @@ export default function RFReaderCardsDataPage() {
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [photoFilter, setPhotoFilter] = useState('ALL');
+  const [semesterFilter, setSemesterFilter] = useState('ALL');
+  const [sectionFilter, setSectionFilter] = useState('ALL');
 
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -112,6 +114,16 @@ export default function RFReaderCardsDataPage() {
   const departments = useMemo(() => {
     const depts = new Set(data.map((d) => d.department).filter(Boolean));
     return Array.from(depts).sort();
+  }, [data]);
+
+  const semesters = useMemo(() => {
+    const sems = new Set(data.map((d) => d.semester).filter((s): s is number => s != null));
+    return Array.from(sems).sort((a, b) => a - b);
+  }, [data]);
+
+  const sections = useMemo(() => {
+    const secs = new Set(data.map((d) => d.section).filter((s): s is string => s != null && s.trim() !== ''));
+    return Array.from(secs).sort();
   }, [data]);
 
   const byRoleAndIdentifier = useMemo(() => {
@@ -256,6 +268,8 @@ export default function RFReaderCardsDataPage() {
       if (roleFilter !== 'ALL' && row.role !== roleFilter) return false;
       if (deptFilter !== 'ALL' && row.department !== deptFilter) return false;
       if (statusFilter !== 'ALL' && row.status !== statusFilter) return false;
+      if (semesterFilter !== 'ALL' && String(row.semester ?? '') !== semesterFilter) return false;
+      if (sectionFilter !== 'ALL' && (row.section ?? '') !== sectionFilter) return false;
       if (photoFilter !== 'ALL') {
         const hasPhoto = Boolean(row.profile_image_url);
         if (photoFilter === 'UPLOADED' && !hasPhoto) return false;
@@ -273,7 +287,7 @@ export default function RFReaderCardsDataPage() {
       }
       return true;
     });
-  }, [data, search, roleFilter, deptFilter, statusFilter, photoFilter]);
+  }, [data, search, roleFilter, deptFilter, statusFilter, semesterFilter, sectionFilter, photoFilter]);
 
   // Export PDF
   const downloadPdf = async () => {
@@ -617,6 +631,32 @@ export default function RFReaderCardsDataPage() {
             <option value="ALL">All Depts</option>
             {departments.map((d) => (
               <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+        </div>
+        <div className="w-full sm:w-48">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Semester</label>
+          <select
+            value={semesterFilter}
+            onChange={(e) => setSemesterFilter(e.target.value)}
+            className="block w-full py-2 px-3 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+          >
+            <option value="ALL">All Semesters</option>
+            {semesters.map((s) => (
+              <option key={s} value={String(s)}>Semester {s}</option>
+            ))}
+          </select>
+        </div>
+        <div className="w-full sm:w-48">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Section</label>
+          <select
+            value={sectionFilter}
+            onChange={(e) => setSectionFilter(e.target.value)}
+            className="block w-full py-2 px-3 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+          >
+            <option value="ALL">All Sections</option>
+            {sections.map((s) => (
+              <option key={s} value={s}>{s}</option>
             ))}
           </select>
         </div>

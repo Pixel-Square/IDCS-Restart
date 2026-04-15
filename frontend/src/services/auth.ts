@@ -395,3 +395,27 @@ export async function changePassword(current_password: string, new_password: str
   const res = await apiClient.post('change-password/', { current_password, new_password, confirm_password })
   return res.data
 }
+
+export async function requestForgotPasswordOtp(params: {
+  method: 'email' | 'mobile'
+  email?: string
+  mobile_number?: string
+}) {
+  const res = await publicClient.post('forgot-password/request-otp/', params)
+  return res.data
+}
+
+export async function verifyForgotPasswordOtp(params: {
+  method: 'email' | 'mobile'
+  otp: string
+  email?: string
+  mobile_number?: string
+}) {
+  const res = await publicClient.post('forgot-password/verify-otp/', params)
+  return res.data
+}
+
+export async function resetForgottenPassword(reset_token: string, new_password: string, confirm_password: string) {
+  const res = await publicClient.post('forgot-password/reset/', { reset_token, new_password, confirm_password })
+  return res.data
+}

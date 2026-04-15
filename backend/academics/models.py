@@ -533,8 +533,9 @@ class StudentProfile(models.Model):
             if old and old.reg_no != self.reg_no:
                 raise ValidationError('Student reg_no is immutable and cannot be changed.')
 
-        # run full clean to enforce validations
-        self.full_clean()
+        # run full clean to enforce validations (skip for partial updates)
+        if not kwargs.get('update_fields'):
+            self.full_clean()
         super().save(*args, **kwargs)
 
 
@@ -836,8 +837,10 @@ class StaffProfile(models.Model):
                 if StaffProfile.objects.filter(staff_id=self.staff_id).exclude(pk=self.pk).exists():
                     raise ValidationError({'staff_id': 'This staff ID is already in use.'})
 
-        # run full clean to enforce validations
-        self.full_clean()
+        # run full clean to enforce validations (skip for partial updates to avoid
+        # validating unrelated fields like staff_id regex when only rfid_uid changes)
+        if not kwargs.get('update_fields'):
+            self.full_clean()
         super().save(*args, **kwargs)
 
 
@@ -1271,6 +1274,14 @@ class StudentSubjectBatch(models.Model):
     # Link the batch to a specific curriculum row (subject) so batches are
     # subject-scoped. This is optional but recommended for subject-wise grouping.
     curriculum_row = models.ForeignKey('curriculum.CurriculumDepartment', on_delete=models.CASCADE, null=True, blank=True, related_name='subject_batches')
+    elective_subject = models.ForeignKey(
+        'curriculum.ElectiveSubject',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='subject_batches',
+        help_text='Direct elective subject mapping for elective batches.',
+    )
     students = models.ManyToManyField(StudentProfile, related_name='subject_batches')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

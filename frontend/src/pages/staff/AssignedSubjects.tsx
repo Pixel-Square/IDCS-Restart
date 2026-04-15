@@ -87,8 +87,56 @@ export default function AssignedSubjectsPage() {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
   }
 
+  function getBatchSubjectKey(batch: any): string {
+    const electiveId = Number(batch?.elective_subject?.id || batch?.elective_subject_id)
+    if (Number.isFinite(electiveId) && electiveId > 0) return `e_${electiveId}`
+    const curriculumId = Number(batch?.curriculum_row?.id || batch?.curriculum_row_id)
+    if (Number.isFinite(curriculumId) && curriculumId > 0) return `c_${curriculumId}`
+
+    const subjectCode = String(batch?.subject_info?.course_code || '').trim().toLowerCase()
+    if (subjectCode) return `x_code_${subjectCode}`
+    const subjectName = String(batch?.subject_info?.course_name || '').trim().toLowerCase()
+    if (subjectName) return `x_name_${subjectName}`
+
+    return 'no_subject'
+  }
+
+  function getItemSubjectKey(item: any): string {
+    const electiveId = Number(item?.elective_subject_id)
+    if (Number.isFinite(electiveId) && electiveId > 0) return `e_${electiveId}`
+    const curriculumId = Number(item?.curriculum_row_id || item?.curriculum_row?.id)
+    if (Number.isFinite(curriculumId) && curriculumId > 0) return `c_${curriculumId}`
+
+    const subjectCode = String(item?.subject_code || '').trim().toLowerCase()
+    if (subjectCode) return `x_code_${subjectCode}`
+    const subjectName = String(item?.subject_name || '').trim().toLowerCase()
+    if (subjectName) return `x_name_${subjectName}`
+
+    return 'no_subject'
+  }
+
+  function getGroupSubjectTitle(subjectKey: string, group: any[], allItems: any[], fallbackTitle: string): string {
+    const firstBatch = (group || [])[0]
+
+    const fromBatchInfo = firstBatch?.subject_info?.course_name || firstBatch?.subject_info?.course_code
+    if (fromBatchInfo) return fromBatchInfo
+
+    const fromBatchElective = firstBatch?.elective_subject?.course_name || firstBatch?.elective_subject?.course_code
+    if (fromBatchElective) return fromBatchElective
+
+    const fromBatchCurriculum = firstBatch?.curriculum_row?.course_name || firstBatch?.curriculum_row?.course_code
+    if (fromBatchCurriculum) return fromBatchCurriculum
+
+    const matchedItem = (allItems || []).find((it: any) => getItemSubjectKey(it) === subjectKey)
+    const fromItem = matchedItem?.subject_name || matchedItem?.subject_code
+    if (fromItem) return fromItem
+
+    return fallbackTitle
+  }
+
   function getRelevantBatchesForAssignment(item: any, allBatches: any[]): any[] {
     const list = Array.isArray(allBatches) ? allBatches : []
+    const targetElectiveId = Number(item?.elective_subject_id || 0)
     const targetCrId = item?.curriculum_row_id || item?.curriculum_row?.id || null
 
     const explicitBatchIds = new Set<number>(
@@ -103,6 +151,9 @@ export default function AssignedSubjectsPage() {
     return list.filter((b: any) => {
       const batchId = Number(b?.id)
       if (Number.isFinite(batchId) && explicitBatchIds.has(batchId)) return true
+
+      const bElectiveId = Number(b?.elective_subject?.id || 0)
+      if (targetElectiveId > 0) return bElectiveId === targetElectiveId
 
       const bCrId = b?.curriculum_row?.id ?? null
       if (targetCrId) return bCrId === targetCrId
@@ -272,6 +323,7 @@ export default function AssignedSubjectsPage() {
         .filter((id: number | null): id is number => id !== null && !excluded.has(id))
       const payload: any = { name, student_ids: studIds }
       if (item.curriculum_row_id) payload.curriculum_row_id = item.curriculum_row_id
+      if (item.elective_subject_id) payload.elective_subject_id = item.elective_subject_id
       if (item.section_id) payload.section_id = item.section_id
       await createSubjectBatch(payload)
       const bs = await fetchSubjectBatches()
@@ -560,6 +612,7 @@ export default function AssignedSubjectsPage() {
     const name = `Batch ${next}`
     const payload: any = { name, student_ids: pickerSelectedIds }
     if (pickerItem.curriculum_row_id) payload.curriculum_row_id = pickerItem.curriculum_row_id
+    if (pickerItem.elective_subject_id) payload.elective_subject_id = pickerItem.elective_subject_id
     if (pickerItem.section_id) payload.section_id = pickerItem.section_id
     if (pickerStaffId) payload.staff_id = pickerStaffId
     try{
@@ -600,12 +653,18 @@ export default function AssignedSubjectsPage() {
     setEditRangeEnd('')
     setEditSearchQuery('')
     
-    // Load all available students for the batch's curriculum_row
-    if (b.curriculum_row && b.curriculum_row.id) {
+    // Load all available students for the batch's linked subject
+    if ((b.curriculum_row && b.curriculum_row.id) || (b.elective_subject && b.elective_subject.id)) {
       try {
-        // Find the subject/item that corresponds to this curriculum_row
+        // Find the subject/item that corresponds to this batch mapping
         const batchSectionId = (b.section_id || b.section?.id) ?? null
-        const matchingItem = items.find(item => item.curriculum_row_id === b.curriculum_row.id && (!batchSectionId || item.section_id === batchSectionId))
+        const matchingItem = items.find(item => {
+          const byCurriculum = !!(b.curriculum_row?.id && item.curriculum_row_id === b.curriculum_row.id)
+          const byElective = !!(b.elective_subject?.id && item.elective_subject_id === b.elective_subject.id)
+          if (!(byCurriculum || byElective)) return false
+          if (!batchSectionId) return true
+          return item.section_id === batchSectionId
+        })
         if (matchingItem) {
           let sdata
           if (matchingItem.section_id) {
@@ -953,34 +1012,28 @@ export default function AssignedSubjectsPage() {
                 )
               }
               
-              // Group created batches by curriculum_row
+              // Group created batches by direct subject key (elective > curriculum)
               const groupedCreated: Record<string, any[]> = {}
               createdBatches.forEach(b => {
-                const crId = b.curriculum_row?.id ? String(b.curriculum_row.id) : 'no_subject'
-                if (!groupedCreated[crId]) groupedCreated[crId] = []
-                groupedCreated[crId].push(b)
+                const subjectKey = getBatchSubjectKey(b)
+                if (!groupedCreated[subjectKey]) groupedCreated[subjectKey] = []
+                groupedCreated[subjectKey].push(b)
               })
               
               return (
                 <div className="space-y-4">
                   {(() => {
-                    // De-dupe subject headers by curriculum_row_id.
-                    // Prevents duplicate rendering when `items` contains duplicate subject rows.
-                    const byCrId: Record<string, any> = {}
-                    for (const item of items) {
-                      const crId = item.curriculum_row_id ? String(item.curriculum_row_id) : null
-                      if (!crId) continue
-                      if (!byCrId[crId]) byCrId[crId] = item
-                    }
-                    const uniqueItems = Object.values(byCrId)
+                    const createdSubjectKeys = Object.keys(groupedCreated).filter((key) => key !== 'no_subject')
 
-                    return uniqueItems.map((item: any) => {
-                      const crId = item.curriculum_row_id ? String(item.curriculum_row_id) : null
-                      const group = crId ? (groupedCreated[crId] || []) : []
-                      if (!group || group.length === 0) return null
+                    return createdSubjectKeys.map((subjectKey: string) => {
+                      const group = groupedCreated[subjectKey] || []
+                      if (group.length === 0) return null
+
+                      const title = getGroupSubjectTitle(subjectKey, group, items, 'Unnamed Subject')
+
                       return (
-                        <div key={`created-subject-${crId}`} className="border-b border-gray-100 pb-4 last:border-b-0">
-                          <div className="font-bold text-gray-900 mb-3">{item.subject_name || item.subject_code || 'Unnamed Subject'}</div>
+                        <div key={`created-subject-${subjectKey}`} className="border-b border-gray-100 pb-4 last:border-b-0">
+                          <div className="font-bold text-gray-900 mb-3">{title}</div>
                           <div className="space-y-3">
                             {group.map((b:any) => (
                               <div key={b.id} className="bg-gray-50 rounded-lg p-4">
@@ -1032,17 +1085,7 @@ export default function AssignedSubjectsPage() {
                   {groupedCreated['no_subject'] && groupedCreated['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
                       <div className="font-bold text-gray-900 mb-3">
-                        {(() => {
-                          // Try to derive subject name from elective teaching assignments
-                          const electiveItem = items.find((it: any) => it.elective_subject_id && !it.curriculum_row_id)
-                          if (electiveItem?.subject_name || electiveItem?.subject_code) {
-                            return electiveItem.subject_name || electiveItem.subject_code
-                          }
-                          // Fallback: use subject_info from the first batch in this group
-                          const firstBatch = groupedCreated['no_subject']?.[0]
-                          if (firstBatch?.subject_info?.course_name) return firstBatch.subject_info.course_name
-                          return 'Other Batches'
-                        })()}
+                        {getGroupSubjectTitle('no_subject', groupedCreated['no_subject'], items, 'Other Batches')}
                       </div>
                       <div className="space-y-3">
                         {groupedCreated['no_subject'].map((b:any) => (
@@ -1116,33 +1159,28 @@ export default function AssignedSubjectsPage() {
                 )
               }
               
-              // Group assigned batches by curriculum_row
+              // Group assigned batches by direct subject key (elective > curriculum)
               const groupedAssigned: Record<string, any[]> = {}
               assignedBatches.forEach(b => {
-                const crId = b.curriculum_row?.id ? String(b.curriculum_row.id) : 'no_subject'
-                if (!groupedAssigned[crId]) groupedAssigned[crId] = []
-                groupedAssigned[crId].push(b)
+                const subjectKey = getBatchSubjectKey(b)
+                if (!groupedAssigned[subjectKey]) groupedAssigned[subjectKey] = []
+                groupedAssigned[subjectKey].push(b)
               })
               
               return (
                 <div className="space-y-4">
                   {(() => {
-                    // De-dupe subject headers by curriculum_row_id.
-                    const byCrId: Record<string, any> = {}
-                    for (const item of items) {
-                      const crId = item.curriculum_row_id ? String(item.curriculum_row_id) : null
-                      if (!crId) continue
-                      if (!byCrId[crId]) byCrId[crId] = item
-                    }
-                    const uniqueItems = Object.values(byCrId)
+                    const assignedSubjectKeys = Object.keys(groupedAssigned).filter((key) => key !== 'no_subject')
 
-                    return uniqueItems.map((item: any) => {
-                      const crId = item.curriculum_row_id ? String(item.curriculum_row_id) : null
-                      const group = crId ? (groupedAssigned[crId] || []) : []
-                      if (!group || group.length === 0) return null
+                    return assignedSubjectKeys.map((subjectKey: string) => {
+                      const group = groupedAssigned[subjectKey] || []
+                      if (group.length === 0) return null
+
+                      const title = getGroupSubjectTitle(subjectKey, group, items, 'Unnamed Subject')
+
                       return (
-                        <div key={`assigned-subject-${crId}`} className="border-b border-gray-100 pb-4 last:border-b-0">
-                          <div className="font-bold text-gray-900 mb-3">{item.subject_name || item.subject_code || 'Unnamed Subject'}</div>
+                        <div key={`assigned-subject-${subjectKey}`} className="border-b border-gray-100 pb-4 last:border-b-0">
+                          <div className="font-bold text-gray-900 mb-3">{title}</div>
                           <div className="space-y-3">
                             {group.map((b:any) => (
                               <div key={b.id} className="bg-blue-50 rounded-lg p-4 border border-blue-200">
@@ -1182,16 +1220,7 @@ export default function AssignedSubjectsPage() {
                   {groupedAssigned['no_subject'] && groupedAssigned['no_subject'].length > 0 && (
                     <div className="border-b border-gray-100 pb-4">
                       <div className="font-bold text-gray-900 mb-3">
-                        {(() => {
-                          const electiveItem = items.find((it: any) => it.elective_subject_id && !it.curriculum_row_id)
-                          if (electiveItem?.subject_name || electiveItem?.subject_code) {
-                            return electiveItem.subject_name || electiveItem.subject_code
-                          }
-                          // Fallback: use subject_info from the first batch in this group
-                          const firstBatch = groupedAssigned['no_subject']?.[0]
-                          if (firstBatch?.subject_info?.course_name) return firstBatch.subject_info.course_name
-                          return 'Other Assigned Batches'
-                        })()}
+                        {getGroupSubjectTitle('no_subject', groupedAssigned['no_subject'], items, 'Other Assigned Batches')}
                       </div>
                       <div className="space-y-3">
                         {groupedAssigned['no_subject'].map((b:any) => (

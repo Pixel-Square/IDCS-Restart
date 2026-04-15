@@ -47,7 +47,7 @@ function getDeviceName(port: any): string {
    Supports: SecuGen WebAPI · Mantra MFS100 · Demo (simulated)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-type ScannerType = 'auto' | 'secugen' | 'mantra' | 'demo';
+type ScannerType = 'auto' | 'secugen' | 'mantra' | 'esp32_bridge' | 'demo';
 type ResolvedScannerType = Exclude<ScannerType, 'auto'>;
 
 interface CaptureResult {
@@ -58,19 +58,29 @@ interface CaptureResult {
 const SCANNER_DEFAULTS: Record<ResolvedScannerType, string> = {
   secugen: 'https://localhost:8443',
   mantra: 'https://127.0.0.1:11100',
+  esp32_bridge: '/fingerprint-bridge',
   demo: '',
 };
+
+const ESP32_BRIDGE_CANDIDATES = [
+  '/fingerprint-bridge',
+  'http://localhost:8889',
+  'http://127.0.0.1:8889',
+  'http://0.0.0.0:8889',
+];
 
 const SCANNER_LABELS: Record<ScannerType, string> = {
   auto: 'Auto-detect',
   secugen: 'SecuGen WebAPI',
   mantra: 'Mantra MFS100',
+  esp32_bridge: 'ESP32 Fingerprint Bridge',
   demo: 'Demo (Simulated)',
 };
 
 async function captureFromScanner(
   type: ResolvedScannerType,
   url: string,
+  opts?: { userId?: string },
 ): Promise<CaptureResult> {
   /* ── Demo mode ─────────────────────────────────────────────── */
   if (type === 'demo') {
@@ -140,6 +150,36 @@ async function captureFromScanner(
     };
   }
 
+  /* ── ESP32 HTTP Bridge ───────────────────────────────────── */
+  if (type === 'esp32_bridge') {
+    const statusRes = await fetch(`${url}/status`, { method: 'GET' });
+    if (!statusRes.ok) {
+      throw new Error(`Bridge status failed (${statusRes.status}).`);
+    }
+    const statusData = await statusRes.json().catch(() => ({}));
+    if (!statusData?.connected) {
+      const reconnectRes = await fetch(`${url}/reconnect`, { method: 'POST' });
+      const reconnectData = await reconnectRes.json().catch(() => ({}));
+      if (!reconnectRes.ok || !reconnectData?.connected) {
+        throw new Error('Fingerprint bridge is running but no sensor is connected. Check USB cable/port and retry.');
+      }
+    }
+
+    const captureRes = await fetch(`${url}/capture`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: String(opts?.userId || 'capture') }),
+    });
+    const captureData = await captureRes.json().catch(() => ({}));
+    if (!captureRes.ok || !captureData?.template_b64) {
+      throw new Error(captureData?.error || `Bridge capture failed (${captureRes.status}).`);
+    }
+    return {
+      template_b64: String(captureData.template_b64),
+      quality_score: Number(captureData.quality_score ?? 0),
+    };
+  }
+
   throw new Error('Unknown scanner type');
 }
 
@@ -148,6 +188,22 @@ async function probeScannerAvailable(
   url: string,
 ): Promise<boolean> {
   if (type === 'demo') return true;
+  if (type === 'esp32_bridge') {
+    try {
+      const statusRes = await fetch(`${url}/status`, { method: 'GET' });
+      if (statusRes.ok) {
+        const statusData = await statusRes.json().catch(() => ({}));
+        return typeof statusData?.connected === 'boolean' ? true : Boolean(statusData);
+      }
+
+      const reconnectRes = await fetch(`${url}/reconnect`, { method: 'POST' });
+      if (!reconnectRes.ok) return false;
+      const reconnectData = await reconnectRes.json().catch(() => ({}));
+      return Boolean(reconnectData?.connected) || reconnectRes.ok;
+    } catch {
+      return false;
+    }
+  }
   try {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 3000);
@@ -167,12 +223,13 @@ async function detectScannerConnection(
     return { available: true, resolvedType: 'demo', resolvedUrl: '' };
   }
 
-  if (type === 'secugen' || type === 'mantra') {
+  if (type === 'secugen' || type === 'mantra' || type === 'esp32_bridge') {
     const available = await probeScannerAvailable(type, url);
     return { available, resolvedType: available ? type : null, resolvedUrl: available ? url : '' };
   }
 
   const candidates: Array<{ type: ResolvedScannerType; url: string }> = [
+    ...ESP32_BRIDGE_CANDIDATES.map((u) => ({ type: 'esp32_bridge' as const, url: u })),
     { type: 'secugen', url: SCANNER_DEFAULTS.secugen },
     { type: 'mantra', url: SCANNER_DEFAULTS.mantra },
   ];
@@ -223,6 +280,41 @@ interface UserInfo {
   fingers: string[];
 }
 
+interface IdentifiedUser {
+  user_id: number;
+  user_name: string;
+  user_type: string;
+  identifier: string;
+  department: string;
+  profile_image: string;
+  finger?: string;
+}
+
+interface MonitorEvent {
+  at: string;
+  status: 'matched' | 'unmatched' | 'error';
+  text: string;
+}
+
+async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await res.json();
+    if (typeof payload?.detail === 'string' && payload.detail.trim()) return payload.detail;
+    if (Array.isArray(payload?.detail) && payload.detail.length) return String(payload.detail[0]);
+    if (payload?.detail && typeof payload.detail === 'object') return JSON.stringify(payload.detail);
+    if (typeof payload?.error === 'string' && payload.error.trim()) return payload.error;
+    if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message;
+  } catch {}
+
+  try {
+    const raw = await res.text();
+    if (!raw) return fallback;
+    return raw.length > 220 ? `${raw.slice(0, 220)}…` : raw;
+  } catch {
+    return fallback;
+  }
+}
+
 const emptySlots = (): FingerSlot[] =>
   FINGERS.map((f) => ({
     finger: f.key,
@@ -269,8 +361,58 @@ export default function FingerprintEnrollPage() {
     text: string;
   } | null>(null);
 
+  /* ── Live monitoring state ──────────────────────────────── */
+  const [monitoring, setMonitoring] = useState(false);
+  const [monitorBusy, setMonitorBusy] = useState(false);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
+  const [lastIdentified, setLastIdentified] = useState<IdentifiedUser | null>(null);
+  const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([]);
+  const monitorActiveRef = useRef(false);
+  const monitorConsecutiveErrorsRef = useRef(0);
+
   const apiBase = getApiBase();
   const token = () => localStorage.getItem('access') || '';
+
+  const resolveScannerForCapture = useCallback((): { type: ResolvedScannerType; url: string } | null => {
+    const resolvedType: ResolvedScannerType | null =
+      scannerType === 'auto' ? scannerDetectedType : scannerType;
+    if (!resolvedType) return null;
+    const resolvedUrl =
+      resolvedType === 'demo'
+        ? ''
+        : scannerType === 'auto'
+          ? SCANNER_DEFAULTS[resolvedType]
+          : scannerUrl;
+    return { type: resolvedType, url: resolvedUrl };
+  }, [scannerDetectedType, scannerType, scannerUrl]);
+
+  const runScannerDetection = useCallback(
+    async (preferredType: ScannerType = 'auto', preferredUrl = '') => {
+      setScannerOnline(null);
+      setScannerDetectedType(null);
+      setDeviceConnecting(true);
+      try {
+        const result = await detectScannerConnection(preferredType, preferredUrl);
+        setScannerOnline(result.available);
+        setScannerDetectedType(result.resolvedType);
+        if (result.resolvedType) {
+          setScannerType(result.resolvedType);
+        }
+        if (result.resolvedUrl) {
+          setScannerUrl(result.resolvedUrl);
+        }
+        if (!result.available && window.location.protocol === 'https:') {
+          setUsbError('Browser blocked local scanner access from HTTPS page. Allow Local network access for this site in browser Site settings, then retry detection.');
+        } else if (result.available) {
+          setUsbError(null);
+        }
+        return result.available;
+      } finally {
+        setDeviceConnecting(false);
+      }
+    },
+    [],
+  );
 
   /* ── Select USB Port via Web Serial API ──────────────────── */
   const handleSelectPort = useCallback(async () => {
@@ -286,33 +428,173 @@ export default function FingerprintEnrollPage() {
       }
       setUsbPort(p);
       setUsbDeviceName(getDeviceName(p));
-
       // Auto-detect scanner type after port is selected
-      setScannerOnline(null);
-      setScannerDetectedType(null);
-      setDeviceConnecting(true);
-      try {
-        const result = await detectScannerConnection('auto', '');
-        setScannerType(result.resolvedType ? (result.resolvedType as ScannerType) : 'auto');
-        setScannerOnline(result.available);
-        setScannerDetectedType(result.resolvedType);
-        if (result.resolvedUrl) setScannerUrl(result.resolvedUrl);
-      } finally {
-        setDeviceConnecting(false);
-      }
+      await runScannerDetection('auto', '');
     } catch (e: any) {
       if (e?.name !== 'NotAllowedError')
         setUsbError('Could not select port: ' + (e?.message ?? String(e)));
     }
-  }, []);
+  }, [runScannerDetection]);
+
+  useEffect(() => {
+    if (!usbPort) return;
+    if (scannerOnline !== false) return;
+    if (deviceConnecting) return;
+
+    const id = window.setInterval(() => {
+      if (deviceConnecting) return;
+      runScannerDetection('auto', '').catch(() => {});
+    }, 4000);
+
+    return () => window.clearInterval(id);
+  }, [usbPort, scannerOnline, deviceConnecting, runScannerDetection]);
 
   /* ── Cleanup USB port on unmount ─────────────────────────── */
   useEffect(() => {
     return () => {
+      monitorActiveRef.current = false;
       try { readerRef.current?.cancel(); } catch {}
       try { usbPort?.close(); } catch {}
     };
   }, [usbPort]);
+
+  const runMonitorOnce = useCallback(async () => {
+    const resolved = resolveScannerForCapture();
+    if (!resolved) {
+      setMonitorError('No scanner detected. Connect scanner and retry monitoring.');
+      return;
+    }
+
+    setMonitorBusy(true);
+    try {
+      const capture = await captureFromScanner(resolved.type, resolved.url, {
+        userId: resolved.type === 'esp32_bridge' ? 'verify' : undefined,
+      });
+      if (!monitorActiveRef.current) return;
+
+      const res = await fetch(`${apiBase}/api/idscan/fingerprint/identify/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token()}`,
+        },
+        body: JSON.stringify({ template_b64: capture.template_b64 }),
+      });
+
+      if (!monitorActiveRef.current) return;
+
+      if (res.ok) {
+        const data = await res.json();
+        const identified: IdentifiedUser = {
+          user_id: Number(data.user_id),
+          user_name: String(data.user_name || ''),
+          user_type: String(data.user_type || ''),
+          identifier: String(data.identifier || ''),
+          department: String(data.department || ''),
+          profile_image: String(data.profile_image || ''),
+          finger: String(data.finger || ''),
+        };
+        setLastIdentified(identified);
+        setMonitorError(null);
+        monitorConsecutiveErrorsRef.current = 0;
+        setMonitorEvents((prev) => [
+          { at: new Date().toLocaleTimeString(), status: 'matched' as const, text: `${identified.user_name} (${identified.identifier})` },
+          ...prev,
+        ].slice(0, 8));
+        return;
+      }
+
+      if (res.status === 404) {
+        monitorConsecutiveErrorsRef.current = 0;
+        setMonitorEvents((prev) => [
+          { at: new Date().toLocaleTimeString(), status: 'unmatched' as const, text: 'Finger detected but no enrolled match found' },
+          ...prev,
+        ].slice(0, 8));
+        return;
+      }
+
+      const err = await res.json().catch(() => ({}));
+      const msg = String(err?.detail || `Identify failed (${res.status})`);
+      setMonitorError(msg);
+      monitorConsecutiveErrorsRef.current += 1;
+      setMonitorEvents((prev) => [
+        { at: new Date().toLocaleTimeString(), status: 'error' as const, text: msg },
+        ...prev,
+      ].slice(0, 8));
+
+      if (monitorConsecutiveErrorsRef.current >= 5) {
+        setMonitoring(false);
+        setMonitorError('Monitoring auto-stopped after repeated errors. Please reconnect scanner and start monitoring again.');
+      }
+    } catch (e: any) {
+      if (!monitorActiveRef.current) return;
+      const msg = e?.message || 'Monitoring capture failed';
+      setMonitorError(msg);
+      monitorConsecutiveErrorsRef.current += 1;
+      setMonitorEvents((prev) => [
+        { at: new Date().toLocaleTimeString(), status: 'error' as const, text: msg },
+        ...prev,
+      ].slice(0, 8));
+
+      if (monitorConsecutiveErrorsRef.current >= 5) {
+        setMonitoring(false);
+        setMonitorError('Monitoring auto-stopped after repeated errors. Please reconnect scanner and start monitoring again.');
+      }
+    } finally {
+      if (monitorActiveRef.current) setMonitorBusy(false);
+    }
+  }, [apiBase, resolveScannerForCapture]);
+
+  const refreshMonitoringSection = useCallback(() => {
+    monitorActiveRef.current = false;
+    monitorConsecutiveErrorsRef.current = 0;
+    setMonitoring(false);
+    setMonitorBusy(false);
+    setMonitorError(null);
+    setLastIdentified(null);
+    setMonitorEvents([]);
+  }, []);
+
+  const refreshCaptureSection = useCallback(() => {
+    setMessage(null);
+    setSlots((prev) => {
+      if (!userInfo) return prev;
+      return prev.map((slot) => ({
+        ...slot,
+        status: userInfo.fingers.includes(slot.finger) ? 'enrolled' : 'empty',
+        template_b64: null,
+        quality_score: null,
+        errorMsg: null,
+      }));
+    });
+  }, [userInfo]);
+
+  useEffect(() => {
+    if (!monitoring) {
+      monitorActiveRef.current = false;
+      setMonitorBusy(false);
+      return;
+    }
+
+    monitorActiveRef.current = true;
+    let cancelled = false;
+
+    const loop = async () => {
+      while (monitorActiveRef.current && !cancelled) {
+        await runMonitorOnce();
+        if (!monitorActiveRef.current || cancelled) break;
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    };
+
+    loop();
+
+    return () => {
+      cancelled = true;
+      monitorActiveRef.current = false;
+      setMonitorBusy(false);
+    };
+  }, [monitoring, runMonitorOnce]);
 
   /* ── User lookup ─────────────────────────────────────────── */
   const lookupUser = useCallback(async () => {
@@ -359,7 +641,7 @@ export default function FingerprintEnrollPage() {
       if (!resolvedType) {
         setMessage({
           type: 'error',
-          text: 'No local fingerprint scanner bridge was detected. Install the vendor SDK/driver and refresh detection.',
+          text: 'No local fingerprint scanner bridge was detected. If you are using the ESP32 bridge, start the local bridge service and refresh detection. For SecuGen/Mantra devices, install the vendor SDK/driver first.',
         });
         return;
       }
@@ -380,7 +662,11 @@ export default function FingerprintEnrollPage() {
       );
       setMessage(null);
       try {
-        const result = await captureFromScanner(resolvedType, resolvedUrl);
+        const esp32CaptureUserId =
+          resolvedType === 'esp32_bridge'
+            ? String(userInfo?.identifier || idValue.trim() || fingerKey || 'capture').trim()
+            : undefined;
+        const result = await captureFromScanner(resolvedType, resolvedUrl, { userId: esp32CaptureUserId });
         setSlots((prev) =>
           prev.map((s) =>
             s.finger === fingerKey
@@ -408,7 +694,7 @@ export default function FingerprintEnrollPage() {
         );
       }
     },
-    [scannerType, scannerUrl],
+    [idValue, scannerDetectedType, scannerType, scannerUrl, userInfo],
   );
 
   /* ── Save all newly captured fingers ─────────────────────── */
@@ -450,8 +736,8 @@ export default function FingerprintEnrollPage() {
           },
         );
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `Save failed (${res.status})`);
+          const errorText = await readApiErrorMessage(res, `Save failed (${res.status})`);
+          throw new Error(errorText);
         }
         setSlots((prev) =>
           prev.map((s) =>
@@ -617,7 +903,21 @@ export default function FingerprintEnrollPage() {
 
           {usbPort && scannerOnline === false && (
             <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
-              USB port connected but no fingerprint scanner bridge was detected. Ensure the vendor SDK service (SecuGen / Mantra) is running on this machine.
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <span>
+                  USB port connected but no fingerprint scanner service was detected. Start local bridge on port 8889 (or SecuGen/Mantra SDK service), then retry detection.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    runScannerDetection('auto', '').catch(() => {});
+                  }}
+                  disabled={deviceConnecting}
+                  className="px-2.5 py-1.5 rounded-md border border-amber-300 bg-white text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  {deviceConnecting ? 'Retrying…' : 'Retry detection'}
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -676,6 +976,95 @@ export default function FingerprintEnrollPage() {
             )}
             Search
           </button>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════
+         Step 3 – Live Monitoring
+         ══════════════════════════════════════════════════════════ */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-bold">3</span>
+          Live Monitoring
+          <button
+            type="button"
+            onClick={refreshMonitoringSection}
+            className="ml-auto text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+          >
+            Refresh section
+          </button>
+        </h2>
+
+        <div className="flex items-center gap-3 flex-wrap mb-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (monitoring) {
+                refreshMonitoringSection();
+              } else {
+                setMonitorError(null);
+                setMonitoring(true);
+              }
+            }}
+            disabled={deviceConnecting || scannerOnline === false}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {monitorBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Fingerprint className="w-4 h-4" />}
+            {monitoring ? 'Stop Monitoring' : 'Start Monitoring'}
+          </button>
+
+          <div className="text-xs text-gray-600">
+            Status:{' '}
+            <span className={`font-semibold ${monitoring ? 'text-green-700' : 'text-gray-500'}`}>
+              {monitoring ? (monitorBusy ? 'Monitoring (waiting for finger...)' : 'Monitoring') : 'Stopped'}
+            </span>
+          </div>
+        </div>
+
+        {monitorError ? (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 mb-3">
+            {monitorError}
+          </div>
+        ) : null}
+
+        {lastIdentified ? (
+          <div className="rounded-xl border border-green-200 bg-green-50 p-3 mb-3">
+            <div className="flex items-center gap-3">
+              {lastIdentified.profile_image ? (
+                <img src={lastIdentified.profile_image} alt="" className="w-12 h-12 rounded-full object-cover border border-green-200" />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-green-100 text-green-700 font-bold flex items-center justify-center">
+                  {(lastIdentified.user_name || '?').slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">{lastIdentified.user_name}</div>
+                <div className="text-xs text-gray-700">
+                  {lastIdentified.identifier} • {lastIdentified.user_type}
+                  {lastIdentified.department ? ` • ${lastIdentified.department}` : ''}
+                  {lastIdentified.finger ? ` • ${lastIdentified.finger}` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <div className="text-xs font-semibold text-gray-700 mb-2">Recent punch events</div>
+          {monitorEvents.length === 0 ? (
+            <div className="text-xs text-gray-500">No punch events yet.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {monitorEvents.map((ev, idx) => (
+                <div key={`${ev.at}-${idx}`} className="text-xs text-gray-700 flex items-center justify-between gap-3">
+                  <span className={ev.status === 'matched' ? 'text-green-700' : ev.status === 'unmatched' ? 'text-amber-700' : 'text-red-700'}>
+                    {ev.text}
+                  </span>
+                  <span className="text-gray-500 shrink-0">{ev.at}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -747,7 +1136,7 @@ export default function FingerprintEnrollPage() {
       )}
 
       {/* ══════════════════════════════════════════════════════════
-         Step 2 – Capture fingerprints
+        Step 4 – Capture fingerprints
          ══════════════════════════════════════════════════════════ */}
       {userInfo && (
         <>
@@ -755,6 +1144,13 @@ export default function FingerprintEnrollPage() {
             <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
               <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-bold">3</span>
               Capture Fingerprints
+              <button
+                type="button"
+                onClick={refreshCaptureSection}
+                className="ml-auto text-xs px-2.5 py-1 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+              >
+                Refresh section
+              </button>
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {slots.map((slot) => (

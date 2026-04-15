@@ -96,6 +96,45 @@ export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjec
   return res.data;
 }
 
+export async function resetAssessmentMarks(assessment: 'cia1' | 'cia2', subjectId: string, teachingAssignmentId: number): Promise<any> {
+  const primaryUrl = `${apiBase()}/api/obe/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
+  const body = JSON.stringify({ teaching_assignment_id: teachingAssignmentId });
+
+  const primary = await fetchWithAuth(primaryUrl, {
+    method: 'POST',
+    body,
+  });
+  if (primary.ok) return primary.json();
+
+  // Backward-compatible fallback for deployments that only expose the older IQAC reset route.
+  if (primary.status === 404) {
+    const legacyUrl = `${apiBase()}/api/obe/iqac/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
+    const legacy = await fetchWithAuth(legacyUrl, {
+      method: 'POST',
+      body,
+    });
+    if (legacy.ok) return legacy.json();
+  }
+
+  await parseError(primary, 'Reset marks failed');
+}
+
+export async function saveCiaMarks(
+  assessment: 'cia1' | 'cia2',
+  subjectId: string,
+  marks: Record<number, number | null>,
+  teachingAssignmentId?: number,
+): Promise<Cia1MarksResponse> {
+  const qp = teachingAssignmentId ? `?teaching_assignment_id=${encodeURIComponent(String(teachingAssignmentId))}` : '';
+  const url = `${apiBase()}/api/obe/${encodeURIComponent(assessment)}-marks/${encodeURIComponent(subjectId)}${qp}`;
+  const res = await fetchWithAuth(url, {
+    method: 'PUT',
+    body: JSON.stringify({ marks }),
+  });
+  if (!res.ok) await parseError(res, `${assessment.toUpperCase()} save failed`);
+  return res.json();
+}
+
 export type ResetNotification = {
   id: number;
   teaching_assignment_id: number;
@@ -1223,31 +1262,37 @@ export async function rejectPublishRequest(reqId: number): Promise<any> {
 
 async function parseError(res: Response, fallback: string) {
   const text = await res.text();
+  const raw = String(text ?? '').replace(/^\uFEFF/, '').trim();
+
+  let parsed: any = null;
   try {
-    const trimmed = String(text ?? '').replace(/^\uFEFF/, '').trim();
-    const j = JSON.parse(trimmed);
-    const detail = j?.detail || fallback;
-    const how = Array.isArray(j?.how_to_fix) ? `\nHow to fix:\n- ${j.how_to_fix.join('\n- ')}` : '';
-    const errors = Array.isArray(j?.errors) ? `\nErrors:\n- ${j.errors.join('\n- ')}` : '';
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    const detail = parsed?.detail || fallback;
+    const how = Array.isArray(parsed?.how_to_fix) ? `\nHow to fix:\n- ${parsed.how_to_fix.join('\n- ')}` : '';
+    const errors = Array.isArray(parsed?.errors) ? `\nErrors:\n- ${parsed.errors.join('\n- ')}` : '';
 
     const err: any = new Error(`${detail}${how}${errors}`);
     err.status = res.status;
-    err.body = j;
-    throw err;
-  } catch {
-    const raw = String(text ?? '').replace(/^\uFEFF/, '').trim();
-    const cleaned = raw
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const snippet = cleaned ? cleaned.slice(0, 600) : '';
-    const err: any = new Error(snippet ? `${fallback}: ${res.status} ${snippet}` : `${fallback}: ${res.status}`);
-    err.status = res.status;
-    err.bodyText = text;
+    err.body = parsed;
     throw err;
   }
+
+  const cleaned = raw
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const snippet = cleaned ? cleaned.slice(0, 600) : '';
+  const err: any = new Error(snippet ? `${fallback}: ${res.status} ${snippet}` : `${fallback}: ${res.status}`);
+  err.status = res.status;
+  err.bodyText = text;
+  throw err;
 }
 
 export async function fetchDraft<T>(assessment: DraftAssessmentKey, subjectId: string, teachingAssignmentId?: number): Promise<DraftResponse<T>> {

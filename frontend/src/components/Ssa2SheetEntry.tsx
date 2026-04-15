@@ -784,23 +784,35 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
             if (publishedCo4 == null) publishedCo4 = Number(publishedTotal) / 2;
           }
 
+          const resolvedCo3 = hasLocalMarks
+            ? (typeof (prevRow as any)?.co3 === 'number'
+                ? clamp(Number((prevRow as any).co3), 0, CO_MAX.co3)
+                : '')
+            : (publishedCo3 != null ? clamp(Number(publishedCo3), 0, CO_MAX.co3) : '');
+
+          const resolvedCo4 = hasLocalMarks
+            ? (typeof (prevRow as any)?.co4 === 'number'
+                ? clamp(Number((prevRow as any).co4), 0, CO_MAX.co4)
+                : '')
+            : (publishedCo4 != null ? clamp(Number(publishedCo4), 0, CO_MAX.co4) : '');
+
+          let resolvedReviewCoMarks = (prevRow as any)?.reviewCoMarks;
+          if (isReview && !resolvedReviewCoMarks) {
+            if (resolvedCo3 !== '' || resolvedCo4 !== '') {
+              resolvedReviewCoMarks = {
+                co3: resolvedCo3 !== '' ? [resolvedCo3] : [],
+                co4: resolvedCo4 !== '' ? [resolvedCo4] : [],
+              };
+            }
+          }
+
           return {
             studentId: s.id,
             section: String(s.section || ''),
             registerNo: String(s.reg_no || ''),
             name: String(s.name || ''),
-            co3:
-              hasLocalMarks
-                ? (typeof (prevRow as any)?.co3 === 'number'
-                    ? clamp(Number((prevRow as any).co3), 0, CO_MAX.co3)
-                    : '')
-                : (publishedCo3 != null ? clamp(Number(publishedCo3), 0, CO_MAX.co3) : ''),
-            co4:
-              hasLocalMarks
-                ? (typeof (prevRow as any)?.co4 === 'number'
-                    ? clamp(Number((prevRow as any).co4), 0, CO_MAX.co4)
-                    : '')
-                : (publishedCo4 != null ? clamp(Number(publishedCo4), 0, CO_MAX.co4) : ''),
+            co3: resolvedCo3,
+            co4: resolvedCo4,
             total:
               hasLocalMarks
                 ? (typeof (prevRow as any)?.total === 'number'
@@ -809,7 +821,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
                       ? ''
                       : '')
                 : (publishedTotal != null ? clamp(Number(publishedTotal), 0, MAX_ASMT2) : ''),
-            reviewCoMarks: (prevRow as any)?.reviewCoMarks,
+            reviewCoMarks: resolvedReviewCoMarks,
           };
         });
 
@@ -842,10 +854,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
           // direct TA roster returned
         } catch (err) {
           console.warn('[SSA2] Direct TA roster fetch failed:', err);
-        }
-        if (roster.length) {
-          mergeRosterIntoRows(roster);
-          return;
         }
       }
 
@@ -1372,8 +1380,32 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
     const q1Max = Number.isFinite(Number(CO_MAX.co3)) ? Number(CO_MAX.co3) : 0;
     const q2Max = Number.isFinite(Number(CO_MAX.co4)) ? Number(CO_MAX.co4) : 0;
 
+    const sumSplit = (arr: Array<number | ''> | undefined): number | null => {
+      if (!Array.isArray(arr) || !arr.length) return null;
+      const total = arr.reduce((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
+      return total;
+    };
+
+    const co3ForExport = (row: Ssa2Row): number | '' => {
+      if (!isReview) {
+        return typeof row.co3 === 'number' ? round1(clamp(row.co3, 0, q1Max)) : '';
+      }
+      const split = sumSplit(row.reviewCoMarks?.co3);
+      if (split != null) return round1(clamp(split, 0, q1Max));
+      return typeof row.co3 === 'number' ? round1(clamp(row.co3, 0, q1Max)) : '';
+    };
+
+    const co4ForExport = (row: Ssa2Row): number | '' => {
+      if (!isReview) {
+        return typeof row.co4 === 'number' ? round1(clamp(row.co4, 0, q2Max)) : '';
+      }
+      const split = sumSplit(row.reviewCoMarks?.co4);
+      if (split != null) return round1(clamp(split, 0, q2Max));
+      return typeof row.co4 === 'number' ? round1(clamp(row.co4, 0, q2Max)) : '';
+    };
+
     const header = ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
-    const data = sheet.rows.map((r) => [r.registerNo, r.name, '', '', 'present']);
+    const data = sheet.rows.map((r) => [r.registerNo, r.name, co3ForExport(r), co4ForExport(r), 'present']);
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
     ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;

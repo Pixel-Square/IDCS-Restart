@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import App from "./App";
 import { SidebarProvider } from './components/layout/SidebarContext';
 import Login from "./pages/auth/Login";
+import ForgotPassword from "./pages/auth/ForgotPassword";
 import "./index.css";
 import "./styles/obe-theme.css";
 
@@ -13,6 +14,7 @@ createRoot(document.getElementById("root")!).render(
       <SidebarProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/*" element={<App />} />
         </Routes>
       </SidebarProvider>

@@ -1037,3 +1037,75 @@ class ApplicationsAdminSubmissionListView(IQACOnlyAPIView):
                 'created_at': app.created_at,
             })
         return Response(rows)
+
+
+def _notification_settings_payload(settings: app_models.ApplicationNotificationSettings) -> dict[str, Any]:
+    return {
+        'id': settings.id,
+        'application_type_id': settings.application_type_id,
+        'notify_on_submit': settings.notify_on_submit,
+        'submit_template': settings.submit_template,
+        'notify_on_status_change': settings.notify_on_status_change,
+        'approve_template': settings.approve_template,
+        'reject_template': settings.reject_template,
+        'notify_on_forward': settings.notify_on_forward,
+        'forward_approver_template': settings.forward_approver_template,
+        'forward_applicant_template': settings.forward_applicant_template,
+        'notify_on_cancel': settings.notify_on_cancel,
+        'cancel_template': settings.cancel_template,
+        'updated_at': settings.updated_at,
+    }
+
+
+class ApplicationsAdminNotificationSettingsView(IQACOnlyAPIView):
+    """Manage WhatsApp notification settings per application type.
+
+    GET: Retrieve notification settings for an application type.
+    PUT: Update notification settings for an application type.
+    """
+
+    def get(self, request, type_id: int, *args, **kwargs):
+        app_type = get_object_or_404(app_models.ApplicationType, pk=type_id)
+        try:
+            settings = app_type.notification_settings
+        except app_models.ApplicationNotificationSettings.DoesNotExist:
+            # Create default settings if not exist
+            settings = app_models.ApplicationNotificationSettings.objects.create(
+                application_type=app_type
+            )
+        return Response(_notification_settings_payload(settings))
+
+    def put(self, request, type_id: int, *args, **kwargs):
+        app_type = get_object_or_404(app_models.ApplicationType, pk=type_id)
+        settings, _ = app_models.ApplicationNotificationSettings.objects.get_or_create(
+            application_type=app_type
+        )
+
+        data = request.data or {}
+
+        # Update toggle fields
+        if 'notify_on_submit' in data:
+            settings.notify_on_submit = bool(data['notify_on_submit'])
+        if 'notify_on_status_change' in data:
+            settings.notify_on_status_change = bool(data['notify_on_status_change'])
+        if 'notify_on_forward' in data:
+            settings.notify_on_forward = bool(data['notify_on_forward'])
+        if 'notify_on_cancel' in data:
+            settings.notify_on_cancel = bool(data['notify_on_cancel'])
+
+        # Update template fields
+        if 'submit_template' in data:
+            settings.submit_template = str(data['submit_template'] or '').strip()
+        if 'approve_template' in data:
+            settings.approve_template = str(data['approve_template'] or '').strip()
+        if 'reject_template' in data:
+            settings.reject_template = str(data['reject_template'] or '').strip()
+        if 'forward_approver_template' in data:
+            settings.forward_approver_template = str(data['forward_approver_template'] or '').strip()
+        if 'forward_applicant_template' in data:
+            settings.forward_applicant_template = str(data['forward_applicant_template'] or '').strip()
+        if 'cancel_template' in data:
+            settings.cancel_template = str(data['cancel_template'] or '').strip()
+
+        settings.save()
+        return Response(_notification_settings_payload(settings))

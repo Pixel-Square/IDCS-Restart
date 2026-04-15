@@ -23,6 +23,7 @@ import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
 import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
+import ConditionsPage from './pages/settings/ConditionsPage';
 import UCGate from './components/UCGate';
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
@@ -267,6 +268,14 @@ export default function App() {
                 <Route
                   path="/settings/under-construction"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<UnderConstructionManagerPage />} />}
+                />
+                <Route
+                  path="/settings/notification-templates"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<NotificationsPage />} />}
+                />
+                <Route
+                  path="/settings/conditions"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ConditionsPage />} />}
                 />
                 <Route
                   path="/iqac/applications-admin"

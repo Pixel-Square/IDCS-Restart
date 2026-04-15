@@ -196,4 +196,9 @@ def cancel_application(application: app_models.Application, cancelled_by):
 
     now = timezone.now()
     _save_state(application, app_models.Application.ApplicationState.CANCELLED, current_step=None, final_at=now)
+    try:
+        from applications.services import notification_service
+        notification_service.notify_whatsapp_application_cancelled(application, cancelled_by=cancelled_by)
+    except Exception:
+        pass
     return application

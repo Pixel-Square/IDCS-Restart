@@ -115,6 +115,7 @@ urlpatterns = [
     path('edit-requests/<int:req_id>/reject', views.edit_request_reject),
 
     # IQAC tools
+    path('reset/<str:assessment>/<str:subject_id>', views.faculty_reset_assessment),
     path('iqac/reset/<str:assessment>/<str:subject_id>', views.iqac_reset_assessment),
     path('iqac/reset-notifications', views.get_reset_notifications),
     path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),

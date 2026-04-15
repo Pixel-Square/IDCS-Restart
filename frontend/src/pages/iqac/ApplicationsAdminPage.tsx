@@ -18,6 +18,7 @@ import {
   fetchApplicationsAdminOverview,
   fetchApplicationFieldsAdmin,
   fetchApplicationFlowsAdmin,
+  fetchApplicationNotificationSettings,
   fetchApplicationRoleHierarchyStagesAdmin,
   fetchApplicationRolePermissionsAdmin,
   fetchApplicationStepsAdmin,
@@ -28,6 +29,7 @@ import {
   fetchDepartmentsAdmin,
   FlowRow,
   FlowStepRow,
+  NotificationSettingsRow,
   searchApplicationsAdminUsers,
   reorderApplicationFieldsAdmin,
   RoleHierarchyStageRow,
@@ -38,11 +40,12 @@ import {
   SubmissionRow,
   updateApplicationFieldAdmin,
   updateApplicationFlowAdmin,
+  updateApplicationNotificationSettings,
   updateApplicationStepAdmin,
   updateApplicationTypeAdmin,
 } from '../../services/applicationsAdmin'
 
-type TabKey = 'overview' | 'types' | 'fields' | 'versions' | 'starter-final' | 'flows' | 'hierarchy' | 'permissions' | 'submissions'
+type TabKey = 'overview' | 'types' | 'fields' | 'versions' | 'starter-final' | 'flows' | 'hierarchy' | 'permissions' | 'submissions' | 'notifications'
 
 type FieldDraft = {
   id: number | null
@@ -217,7 +220,8 @@ export default function ApplicationsAdminPage(): JSX.Element {
   const [roleHierarchyStages, setRoleHierarchyStages] = useState<RoleHierarchyStageRow[]>([])
   const [rolePermissions, setRolePermissions] = useState<RolePermissionRow[]>([])
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
-
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsRow | null>(null)
+  const [editingTemplate, setEditingTemplate] = useState<{ key: string; label: string; value: string } | null>(null)
   const [selectedTypeId, setSelectedTypeId] = useState<number | null>(null)
   const [loadingBase, setLoadingBase] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -321,13 +325,14 @@ export default function ApplicationsAdminPage(): JSX.Element {
     ;(async () => {
       setLoadingDetail(true)
       try {
-        const [fieldsRes, versionsRes, flowsRes, stagesRes, permissionsRes, submissionsRes] = await Promise.all([
+        const [fieldsRes, versionsRes, flowsRes, stagesRes, permissionsRes, submissionsRes, notifSettingsRes] = await Promise.all([
           fetchApplicationFieldsAdmin(selectedTypeId),
           fetchApplicationVersionsAdmin(selectedTypeId),
           fetchApplicationFlowsAdmin(selectedTypeId),
           fetchApplicationRoleHierarchyStagesAdmin(selectedTypeId),
           fetchApplicationRolePermissionsAdmin(selectedTypeId),
           fetchApplicationSubmissionsAdmin(selectedTypeId),
+          fetchApplicationNotificationSettings(selectedTypeId).catch(() => null),
         ])
         if (!mounted) return
         setFields(fieldsRes)
@@ -336,6 +341,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
         setRoleHierarchyStages(stagesRes)
         setRolePermissions(permissionsRes)
         setSubmissions(submissionsRes)
+        setNotificationSettings(notifSettingsRes)
         setFieldDraft(emptyFieldDraft((fieldsRes[fieldsRes.length - 1]?.order || 0) + 1))
         setFlowDrafts(Object.fromEntries(flowsRes.map((flow) => [flow.id, { is_active: flow.is_active, override_role_ids: flow.override_roles.map((r) => r.id), sla_hours: flow.sla_hours == null ? '' : String(flow.sla_hours) }])))
         setStepDrafts(buildStepDraftsFromFlows(flowsRes))
@@ -842,6 +848,35 @@ export default function ApplicationsAdminPage(): JSX.Element {
     }
   }
 
+  async function toggleNotificationSetting(key: keyof NotificationSettingsRow, value: boolean) {
+    if (!selectedTypeId || !notificationSettings) return
+    try {
+      setBusy(`notif-${key}`)
+      const updated = await updateApplicationNotificationSettings(selectedTypeId, { [key]: value })
+      setNotificationSettings(updated)
+      flash('Notification setting updated.')
+    } catch (e: any) {
+      setError(e?.message || 'Failed to update notification setting.')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function saveNotificationTemplate(key: string, value: string) {
+    if (!selectedTypeId) return
+    try {
+      setBusy('notif-template')
+      const updated = await updateApplicationNotificationSettings(selectedTypeId, { [key]: value })
+      setNotificationSettings(updated)
+      setEditingTemplate(null)
+      flash('Message template saved.')
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save message template.')
+    } finally {
+      setBusy('')
+    }
+  }
+
   const orderedStagesForStarter = useMemo(() => {
     const stages = [...(roleHierarchyStages || [])].sort((a, b) => (a.order || 0) - (b.order || 0))
     return stages.map((s) => ({
@@ -893,6 +928,7 @@ export default function ApplicationsAdminPage(): JSX.Element {
     { key: 'flows', label: 'Approval Flows' },
     { key: 'hierarchy', label: 'Role Hierarchy' },
     { key: 'permissions', label: 'Role Permissions' },
+    { key: 'notifications', label: 'WhatsApp Notifications' },
     { key: 'submissions', label: 'Submissions' },
   ]
 
@@ -1996,6 +2032,181 @@ export default function ApplicationsAdminPage(): JSX.Element {
               </SectionCard>
             )}
 
+            {tab === 'notifications' && (
+              <SectionCard title="WhatsApp Notifications" subtitle="Configure when WhatsApp notifications are sent and customize the message templates for each notification type.">
+                {!selectedType ? (
+                  <div className="text-sm text-gray-500">Select an application type first.</div>
+                ) : loadingDetail ? (
+                  <div className="text-sm text-gray-500">Loading notification settings…</div>
+                ) : !notificationSettings ? (
+                  <div className="text-sm text-gray-500">No notification settings found. Save will create default settings.</div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Placeholder variables info */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                      <div className="text-sm font-semibold text-blue-900 mb-2">Available Placeholders</div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {[
+                          { key: '{applicant_name}', desc: 'Applicant name' },
+                          { key: '{application_type}', desc: 'Application type name' },
+                          { key: '{application_id}', desc: 'Application ID' },
+                          { key: '{current_role}', desc: 'Current step role' },
+                          { key: '{next_role}', desc: 'Next step role' },
+                          { key: '{actor_name}', desc: 'Approver name' },
+                          { key: '{actor_role}', desc: 'Approver role' },
+                          { key: '{remarks}', desc: 'Approval remarks' },
+                          { key: '{link}', desc: 'Application link' },
+                          { key: '{approver_name}', desc: 'Next approver name' },
+                        ].map((p) => (
+                          <span key={p.key} className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-1 rounded font-mono">
+                            {p.key}
+                            <span className="text-blue-600 font-normal">({p.desc})</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Notification Cards Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {/* Card 1: On Submit */}
+                      <div className={`rounded-xl border-2 p-5 transition-colors ${notificationSettings.notify_on_submit ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${notificationSettings.notify_on_submit ? 'bg-emerald-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                            </div>
+                            <div className="font-semibold text-gray-900">On Submit</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleNotificationSetting('notify_on_submit', !notificationSettings.notify_on_submit)}
+                            disabled={busy.startsWith('notif-')}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${notificationSettings.notify_on_submit ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${notificationSettings.notify_on_submit ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">Send WhatsApp message to applicant when their application is submitted.</p>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTemplate({ key: 'submit_template', label: 'Submission Notification', value: notificationSettings.submit_template })}
+                          className="w-full text-sm text-indigo-600 hover:text-indigo-700 font-medium border border-indigo-200 rounded-lg px-3 py-2 hover:bg-indigo-50 transition-colors"
+                        >
+                          Edit Template
+                        </button>
+                      </div>
+
+                      {/* Card 2: On Status Change */}
+                      <div className={`rounded-xl border-2 p-5 transition-colors ${notificationSettings.notify_on_status_change ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${notificationSettings.notify_on_status_change ? 'bg-emerald-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            </div>
+                            <div className="font-semibold text-gray-900">On Approve/Reject</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleNotificationSetting('notify_on_status_change', !notificationSettings.notify_on_status_change)}
+                            disabled={busy.startsWith('notif-')}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${notificationSettings.notify_on_status_change ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${notificationSettings.notify_on_status_change ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">Send WhatsApp message to applicant when a stage is approved or rejected.</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTemplate({ key: 'approve_template', label: 'Approval Message', value: notificationSettings.approve_template })}
+                            className="flex-1 text-sm text-emerald-600 hover:text-emerald-700 font-medium border border-emerald-200 rounded-lg px-3 py-2 hover:bg-emerald-50 transition-colors"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTemplate({ key: 'reject_template', label: 'Rejection Message', value: notificationSettings.reject_template })}
+                            className="flex-1 text-sm text-red-600 hover:text-red-700 font-medium border border-red-200 rounded-lg px-3 py-2 hover:bg-red-50 transition-colors"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Card 3: On Forward */}
+                      <div className={`rounded-xl border-2 p-5 transition-colors ${notificationSettings.notify_on_forward ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${notificationSettings.notify_on_forward ? 'bg-emerald-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+                            </div>
+                            <div className="font-semibold text-gray-900">On Forward</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleNotificationSetting('notify_on_forward', !notificationSettings.notify_on_forward)}
+                            disabled={busy.startsWith('notif-')}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${notificationSettings.notify_on_forward ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${notificationSettings.notify_on_forward ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">Send WhatsApp message to next approver and update applicant when application is forwarded.</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTemplate({ key: 'forward_approver_template', label: 'To Next Approver', value: notificationSettings.forward_approver_template })}
+                            className="flex-1 text-sm text-indigo-600 hover:text-indigo-700 font-medium border border-indigo-200 rounded-lg px-3 py-2 hover:bg-indigo-50 transition-colors"
+                          >
+                            Approver
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingTemplate({ key: 'forward_applicant_template', label: 'To Applicant', value: notificationSettings.forward_applicant_template })}
+                            className="flex-1 text-sm text-blue-600 hover:text-blue-700 font-medium border border-blue-200 rounded-lg px-3 py-2 hover:bg-blue-50 transition-colors"
+                          >
+                            Applicant
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Card 4: On Self Cancellation */}
+                      <div className={`rounded-xl border-2 p-5 transition-colors ${notificationSettings.notify_on_cancel ? 'border-rose-300 bg-rose-50' : 'border-gray-200 bg-gray-50'}`}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${notificationSettings.notify_on_cancel ? 'bg-rose-500 text-white' : 'bg-gray-300 text-gray-600'}`}>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </div>
+                            <div className="font-semibold text-gray-900">On Self Cancel</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => toggleNotificationSetting('notify_on_cancel', !notificationSettings.notify_on_cancel)}
+                            disabled={busy.startsWith('notif-')}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${notificationSettings.notify_on_cancel ? 'bg-rose-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${notificationSettings.notify_on_cancel ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">Send WhatsApp confirmation to applicant when they cancel their own application.</p>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTemplate({ key: 'cancel_template', label: 'Cancellation Confirmation', value: notificationSettings.cancel_template })}
+                          className="w-full text-sm text-rose-600 hover:text-rose-700 font-medium border border-rose-200 rounded-lg px-3 py-2 hover:bg-rose-50 transition-colors"
+                        >
+                          Edit Template
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-gray-500 bg-gray-100 rounded-lg p-3">
+                      <strong>Note:</strong> WhatsApp notifications require the WhatsApp gateway to be configured and connected. Check <strong>Settings → WhatsApp Sender Number</strong> to verify the connection status.
+                    </div>
+                  </div>
+                )}
+              </SectionCard>
+            )}
+
             {tab === 'submissions' && (
               <SectionCard title="Recent Submissions" subtitle="Attachments and approval history are layered on top of application submissions. This tab gives IQAC an operational view of what the configuration is driving.">
                 <div className="overflow-x-auto">
@@ -2126,6 +2337,76 @@ export default function ApplicationsAdminPage(): JSX.Element {
                 className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white rounded-lg px-4 py-2 text-sm font-medium"
               >
                 Create Group
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Template Editing Modal */}
+      {editingTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-bold text-gray-900">Edit Message Template</h3>
+              <p className="text-sm text-gray-500 mt-1">{editingTemplate.label}</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="text-xs font-semibold text-blue-900 mb-1">Available Placeholders</div>
+                <div className="flex flex-wrap gap-1 text-xs">
+                  {['{applicant_name}', '{application_type}', '{application_id}', '{current_role}', '{next_role}', '{actor_name}', '{actor_role}', '{remarks}', '{link}', '{approver_name}'].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setEditingTemplate((v) => v ? { ...v, value: v.value + ' ' + p } : v)}
+                      className="bg-blue-100 text-blue-800 px-2 py-1 rounded font-mono hover:bg-blue-200 transition-colors"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <textarea
+                value={editingTemplate.value}
+                onChange={(e) => setEditingTemplate((v) => v ? { ...v, value: e.target.value } : v)}
+                rows={8}
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                placeholder="Enter message template..."
+              />
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <div className="text-xs font-semibold text-gray-700 mb-2">Preview</div>
+                <div className="text-sm text-gray-600 whitespace-pre-wrap">
+                  {editingTemplate.value
+                    .replace('{applicant_name}', 'John Doe')
+                    .replace('{application_type}', selectedType?.name || 'Application')
+                    .replace('{application_id}', '123')
+                    .replace('{current_role}', 'HOD')
+                    .replace('{next_role}', 'Principal')
+                    .replace('{actor_name}', 'Jane Smith')
+                    .replace('{actor_role}', 'HOD')
+                    .replace('{remarks}', 'Approved for processing')
+                    .replace('{link}', 'https://iqac.example.com/applications/123')
+                    .replace('{approver_name}', 'Principal Admin')
+                  }
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setEditingTemplate(null)}
+                className="border border-gray-200 rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => saveNotificationTemplate(editingTemplate.key, editingTemplate.value)}
+                disabled={busy === 'notif-template'}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg px-4 py-2 text-sm font-medium"
+              >
+                {busy === 'notif-template' ? 'Saving…' : 'Save Template'}
               </button>
             </div>
           </div>

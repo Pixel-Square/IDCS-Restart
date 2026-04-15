@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 
 from applications import models as app_models
 from django.conf import settings
@@ -15,6 +15,46 @@ _APPLICATION_WA_FOOTER = 'Thanks, IDCS Gate KRCT'
 
 def _whatsapp_enabled() -> bool:
     return bool(getattr(settings, 'APPLICATION_WHATSAPP_NOTIFICATIONS_ENABLED', False))
+
+
+def _get_notification_settings(application: app_models.Application) -> Optional[app_models.ApplicationNotificationSettings]:
+    """Get notification settings for an application's type, or None if not configured."""
+    try:
+        return application.application_type.notification_settings
+    except app_models.ApplicationNotificationSettings.DoesNotExist:
+        return None
+    except Exception:
+        return None
+
+
+def _render_template(template: str, context: dict) -> str:
+    """Replace placeholders in the template with context values.
+
+    Supported placeholders:
+    - {applicant_name}: Name of the applicant
+    - {application_type}: Name of the application type
+    - {application_id}: Application ID
+    - {current_role}: Current step role name
+    - {next_role}: Next step role name
+    - {actor_name}: Name of the person who took action
+    - {actor_role}: Role of the person who took action
+    - {remarks}: Approval/rejection remarks
+    - {link}: Link to the application
+    - {approver_name}: Name of the approver (for forward notifications)
+    """
+    if not template:
+        return ''
+
+    result = template
+    for key, value in context.items():
+        placeholder = '{' + key + '}'
+        result = result.replace(placeholder, str(value or ''))
+
+    # Clean up empty placeholders and extra newlines
+    import re
+    result = re.sub(r'\{[^}]+\}', '', result)  # Remove unused placeholders
+    result = re.sub(r'\n{3,}', '\n\n', result)  # Max 2 consecutive newlines
+    return result.strip()
 
 
 def _frontend_application_link(application_id: int) -> str:
@@ -118,47 +158,77 @@ def notify_whatsapp_application_submitted(application: app_models.Application, f
     except Exception:
         pass
 
+    # Check notification settings
+    notification_settings = _get_notification_settings(application)
+
     app_id = getattr(application, 'pk', None) or getattr(application, 'id', None) or 0
     link = _frontend_application_link(int(app_id) if app_id else 0)
     header = _format_application_header(application)
     applicant_name = _display_name(getattr(application, 'applicant_user', None))
+    app_type_name = getattr(getattr(application, 'application_type', None), 'name', '') or ''
 
     step = first_step or getattr(application, 'current_step', None)
     step_role = ''
     try:
         step_role = getattr(getattr(step, 'role', None), 'name', '') or ''
+        if not step_role and getattr(step, 'stage_id', None):
+            step_role = getattr(step.stage, 'name', '') or ''
     except Exception:
         step_role = ''
 
-    # Applicant confirmation
+    # Template context for placeholder replacement
+    context = {
+        'applicant_name': applicant_name,
+        'application_type': app_type_name,
+        'application_id': app_id,
+        'current_role': step_role,
+        'link': link,
+    }
+
+    # Applicant confirmation - only if enabled in settings
+    notify_applicant = True
+    if notification_settings is not None:
+        notify_applicant = notification_settings.notify_on_submit
+
     to_applicant = _resolve_whatsapp_number_for_application_user(application)
-    if to_applicant:
-        msg = (
-            f'Hello {applicant_name},\n'
-            f'Your application has been submitted successfully.\n'
-            f'{header}\n'
-            f'Status: Pending{(" at " + step_role) if step_role else ""}.\n'
-            f'{("Track: " + link) if link else ""}'
-        ).strip()
+    if to_applicant and notify_applicant:
+        if notification_settings and notification_settings.submit_template:
+            msg = _render_template(notification_settings.submit_template, context)
+        else:
+            msg = (
+                f'Hello {applicant_name},\n'
+                f'Your application has been submitted successfully.\n'
+                f'{header}\n'
+                f'Status: Pending{(" at " + step_role) if step_role else ""}.\n'
+                f'{("Track: " + link) if link else ""}'
+            ).strip()
         _send_whatsapp_safe(to_applicant, msg, tag='application_submitted_applicant')
 
-    # Approver notification
+    # Approver notification - only if forward notifications enabled
+    notify_approver = True
+    if notification_settings is not None:
+        notify_approver = notification_settings.notify_on_forward
+
     target_user_ids = _target_user_ids_for_step(application, step)
-    if target_user_ids:
+    if target_user_ids and notify_approver:
         User = get_user_model()
         users = list(User.objects.filter(id__in=target_user_ids))
         for u in users:
             to = _resolve_whatsapp_number_for_user(u)
             if not to:
                 continue
-            msg = (
-                f'Hello {_display_name(u)},\n'
-                f'New application received for approval.\n'
-                f'{header}\n'
-                f'Applicant: {applicant_name}\n'
-                f'Pending at: {step_role or "Your role"}\n'
-                f'{("Open: " + link) if link else ""}'
-            ).strip()
+            approver_context = {**context, 'approver_name': _display_name(u)}
+            if notification_settings and notification_settings.forward_approver_template:
+                msg = _render_template(notification_settings.forward_approver_template, approver_context)
+            else:
+                msg = (
+                    f'Hello {_display_name(u)},\n'
+                    f'New application received for approval.\n'
+                    f'{header}\n'
+                    f'Applicant: {applicant_name}\n'
+                    f'Pending at: {step_role or "Your role"}\n'
+                    f'{("Open: " + link) if link else ""}'
+                ).strip()
             _send_whatsapp_safe(to, msg, tag='application_submitted_approver')
 
 
@@ -192,59 +262,138 @@ def notify_whatsapp_step_action(
     except Exception:
         pass
 
+    # Check notification settings
+    notification_settings = _get_notification_settings(application)
+
     app_id = getattr(application, 'pk', None) or getattr(application, 'id', None) or 0
     header = _format_application_header(application)
     link = _frontend_application_link(int(app_id) if app_id else 0)
     applicant_name = _display_name(getattr(application, 'applicant_user', None))
     actor_name = _display_name(actor)
+    app_type_name = getattr(getattr(application, 'application_type', None), 'name', '') or ''
 
     step_role = ''
     try:
         step_role = getattr(getattr(approved_step, 'role', None), 'name', '') or ''
+        if not step_role and getattr(approved_step, 'stage_id', None):
+            step_role = getattr(approved_step.stage, 'name', '') or ''
     except Exception:
         step_role = ''
 
+    # Resolve next step role + actual approver user name ("Name - Role" format)
+    next_role_name = ''
     next_role = ''
     try:
-        next_role = getattr(getattr(next_step, 'role', None), 'name', '') or ''
+        next_role_name = getattr(getattr(next_step, 'role', None), 'name', '') or ''
+        if not next_role_name and getattr(next_step, 'stage_id', None):
+            next_role_name = getattr(next_step.stage, 'name', '') or ''
     except Exception:
-        next_role = ''
+        next_role_name = ''
+
+    # Resolve the actual user for next step to show "Name - Role"
+    if next_step is not None and next_role_name:
+        try:
+            next_approver_ids = _target_user_ids_for_step(application, next_step)
+            if next_approver_ids:
+                User = get_user_model()
+                next_user = User.objects.filter(id__in=next_approver_ids).first()
+                if next_user:
+                    next_role = f'{_display_name(next_user)} - {next_role_name}'
+                else:
+                    next_role = next_role_name
+            else:
+                next_role = next_role_name
+        except Exception:
+            next_role = next_role_name
+    else:
+        next_role = next_role_name
 
     override_line = f'\nMode: Override (by {actor_name})' if is_override else ''
     remarks_block = _format_remarks(remarks)
+    remarks_text = str(remarks or '').strip()
+    if remarks_text:
+        remarks_text = f'Remarks: {remarks_text}'
 
-    # Applicant update
+    # Template context for placeholder replacement
+    context = {
+        'applicant_name': applicant_name,
+        'application_type': app_type_name,
+        'application_id': app_id,
+        'current_role': step_role,
+        'next_role': next_role,
+        'actor_name': actor_name,
+        'actor_role': step_role,
+        'remarks': remarks_text,
+        'link': link,
+    }
+
+    # Skip applicant status-change notification if the actor IS the applicant
+    # (self-submit / starter step — submission notification already sent separately)
+    applicant_user = getattr(application, 'applicant_user', None)
+    actor_is_applicant = (
+        applicant_user is not None
+        and getattr(actor, 'id', None) is not None
+        and getattr(actor, 'id', None) == getattr(applicant_user, 'id', None)
+    )
+
+    # Check if status change notifications are enabled
+    notify_status = True
+    if notification_settings is not None:
+        notify_status = notification_settings.notify_on_status_change
+    if actor_is_applicant:
+        notify_status = False  # already covered by submission notification
+
+    # Check if forward notifications are enabled
+    notify_forward = True
+    if notification_settings is not None:
+        notify_forward = notification_settings.notify_on_forward
+
+    # Applicant update - only if status change notifications are enabled
     to_applicant = _resolve_whatsapp_number_for_application_user(application)
-    if to_applicant:
+    if to_applicant and notify_status:
         if action_norm == 'REJECT':
-            msg = (
-                f'Hello {applicant_name},\n'
-                f'Update on your application:\n'
-                f'{header}\n'
-                f'Status: Rejected{(" at " + step_role) if step_role else ""}.\n'
-                f'By: {actor_name}'
-                f'{override_line}'
-                f'{remarks_block}\n'
-                f'{("View: " + link) if link else ""}'
-            ).strip()
+            if notification_settings and notification_settings.reject_template:
+                msg = _render_template(notification_settings.reject_template, context)
+            else:
+                msg = (
+                    f'Hello {applicant_name},\n'
+                    f'Update on your application:\n'
+                    f'{header}\n'
+                    f'Status: Rejected{(" at " + step_role) if step_role else ""}.\n'
+                    f'By: {actor_name}'
+                    f'{override_line}'
+                    f'{remarks_block}\n'
+                    f'{("View: " + link) if link else ""}'
+                ).strip()
         else:
-            next_line = f'\nNext stage: {next_role}' if next_role else '\nNext stage: Final approval (completed)'
-            msg = (
-                f'Hello {applicant_name},\n'
-                f'Update on your application:\n'
-                f'{header}\n'
-                f'Stage approved{(" (" + step_role + ")") if step_role else ""}.\n'
-                f'By: {actor_name}'
-                f'{override_line}'
-                f'{remarks_block}'
-                f'{next_line}\n'
-                f'{("Track: " + link) if link else ""}'
-            ).strip()
+            if notification_settings and notification_settings.approve_template:
+                msg = _render_template(notification_settings.approve_template, context)
+            else:
+                next_line = f'\nNext stage: {next_role}' if next_role else '\nNext stage: Final approval (completed)'
+                msg = (
+                    f'Hello {applicant_name},\n'
+                    f'Update on your application:\n'
+                    f'{header}\n'
+                    f'Stage approved{(" (" + step_role + ")") if step_role else ""}.\n'
+                    f'By: {actor_name}'
+                    f'{override_line}'
+                    f'{remarks_block}'
+                    f'{next_line}\n'
+                    f'{("Track: " + link) if link else ""}'
+                ).strip()
 
         _send_whatsapp_safe(to_applicant, msg, tag=f'application_{action_norm.lower()}_applicant')
 
-    # Next approver heads-up (only on approve when a next step exists)
-    if action_norm == 'APPROVE' and next_step is not None:
+    # Also notify applicant about forward (if enabled separately)
+    if action_norm == 'APPROVE' and next_step is not None and to_applicant and notify_forward:
+        if notification_settings and notification_settings.forward_applicant_template:
+            forward_msg = _render_template(notification_settings.forward_applicant_template, context)
+            # Only send if it's different from approval message (to avoid duplicate)
+            if not (notify_status and notification_settings.approve_template):
+                _send_whatsapp_safe(to_applicant, forward_msg, tag='application_forward_applicant')
+
+    # Next approver heads-up (only on approve when a next step exists and forward notifications enabled)
+    if action_norm == 'APPROVE' and next_step is not None and notify_forward:
         target_user_ids = _target_user_ids_for_step(application, next_step)
         if target_user_ids:
             User = get_user_model()
@@ -253,14 +402,18 @@ def notify_whatsapp_step_action(
                 to = _resolve_whatsapp_number_for_user(u)
                 if not to:
                     continue
-                msg = (
-                    f'Hello {_display_name(u)},\n'
-                    f'Application is waiting for your approval.\n'
-                    f'{header}\n'
-                    f'Applicant: {applicant_name}\n'
-                    f'Pending at: {next_role or "Your role"}\n'
-                    f'{("Open: " + link) if link else ""}'
-                ).strip()
+                approver_context = {**context, 'approver_name': _display_name(u)}
+                if notification_settings and notification_settings.forward_approver_template:
+                    msg = _render_template(notification_settings.forward_approver_template, approver_context)
+                else:
+                    msg = (
+                        f'Hello {_display_name(u)},\n'
+                        f'Application is waiting for your approval.\n'
+                        f'{header}\n'
+                        f'Applicant: {applicant_name}\n'
+                        f'Pending at: {next_role or "Your role"}\n'
+                        f'{("Open: " + link) if link else ""}'
+                    ).strip()
                 _send_whatsapp_safe(to, msg, tag='application_next_approver')
 
 
@@ -292,6 +445,56 @@ def _log(event: str, application: app_models.Application, target_user_ids: List[
         'reason': reason,
     }
     logger.info('%s', payload)
+
+
+def notify_whatsapp_application_cancelled(application: app_models.Application, cancelled_by=None):
+    """Send WhatsApp confirmation when applicant cancels their own application."""
+    if not _whatsapp_enabled():
+        return
+
+    try:
+        application = (
+            app_models.Application.objects
+            .select_related('application_type', 'applicant_user', 'student_profile', 'staff_profile')
+            .get(pk=application.pk)
+        )
+    except Exception:
+        pass
+
+    notification_settings = _get_notification_settings(application)
+
+    notify_cancel = True
+    if notification_settings is not None:
+        notify_cancel = notification_settings.notify_on_cancel
+
+    if not notify_cancel:
+        return
+
+    app_id = getattr(application, 'pk', None) or getattr(application, 'id', None) or 0
+    link = _frontend_application_link(int(app_id) if app_id else 0)
+    applicant_name = _display_name(getattr(application, 'applicant_user', None))
+    app_type_name = getattr(getattr(application, 'application_type', None), 'name', '') or ''
+
+    context = {
+        'applicant_name': applicant_name,
+        'application_type': app_type_name,
+        'application_id': app_id,
+        'link': link,
+    }
+
+    to_applicant = _resolve_whatsapp_number_for_application_user(application)
+    if to_applicant:
+        if notification_settings and notification_settings.cancel_template:
+            msg = _render_template(notification_settings.cancel_template, context)
+        else:
+            header = _format_application_header(application)
+            msg = (
+                f'Hello {applicant_name},\n'
+                f'Your application has been cancelled.\n'
+                f'{header}\n'
+                f'{("View: " + link) if link else ""}'
+            ).strip()
+        _send_whatsapp_safe(to_applicant, msg, tag='application_cancelled_applicant')
 
 
 def notify_application_submitted(application: app_models.Application):
