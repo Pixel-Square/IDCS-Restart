@@ -1510,15 +1510,39 @@ def _extract_gate_window(app: app_models.Application) -> Optional[dict]:
         if not day:
             continue
 
-        if ftype == "DATE IN OUT":
-            start_key, end_key = "in_time", "out_time"
-        else:
-            start_key, end_key = "out_time", "in_time"
+        out_t = _parse_clock_time(payload.get("out_time"))
+        in_t = _parse_clock_time(payload.get("in_time"))
 
-        start_t = _parse_clock_time(payload.get(start_key))
-        end_t = _parse_clock_time(payload.get(end_key))
-        if not start_t or not end_t:
+        # Build candidate interpretations and choose the most plausible duration
+        # (shorter gatepass window). This protects against swapped field-key mappings.
+        candidates: list[tuple[time, time]] = []
+        if out_t and in_t:
+            candidates.append((out_t, in_t))
+            candidates.append((in_t, out_t))
+
+        # Backward-compatible fallback for legacy payload variants.
+        if ftype == "DATE IN OUT":
+            legacy_start_key, legacy_end_key = "in_time", "out_time"
+        else:
+            legacy_start_key, legacy_end_key = "out_time", "in_time"
+
+        legacy_start_t = _parse_clock_time(payload.get(legacy_start_key))
+        legacy_end_t = _parse_clock_time(payload.get(legacy_end_key))
+        if legacy_start_t and legacy_end_t:
+            candidates.append((legacy_start_t, legacy_end_t))
+
+        if not candidates:
             continue
+
+        def _duration_seconds(start_time: time, end_time: time) -> int:
+            start_seconds = start_time.hour * 3600 + start_time.minute * 60 + start_time.second
+            end_seconds = end_time.hour * 3600 + end_time.minute * 60 + end_time.second
+            if end_seconds <= start_seconds:
+                end_seconds += 24 * 3600
+            return end_seconds - start_seconds
+
+        # Prefer the shortest practical window to avoid accidental 22h reversal.
+        start_t, end_t = min(candidates, key=lambda pair: _duration_seconds(pair[0], pair[1]))
 
         tz = timezone.get_current_timezone()
         start_dt = timezone.make_aware(datetime.combine(day, start_t), tz)
@@ -1576,9 +1600,21 @@ def _extract_gate_window(app: app_models.Application) -> Optional[dict]:
                 in_t = min(times_only)
                 out_t = max(times_only)
 
+            def _duration_seconds(start_time: time, end_time: time) -> int:
+                start_seconds = start_time.hour * 3600 + start_time.minute * 60 + start_time.second
+                end_seconds = end_time.hour * 3600 + end_time.minute * 60 + end_time.second
+                if end_seconds <= start_seconds:
+                    end_seconds += 24 * 3600
+                return end_seconds - start_seconds
+
+            # If inferred roles are swapped in config, pick the plausible shorter window.
+            cand_a = (out_t, in_t)
+            cand_b = (in_t, out_t)
+            start_t, end_t = min((cand_a, cand_b), key=lambda pair: _duration_seconds(pair[0], pair[1]))
+
             tz = timezone.get_current_timezone()
-            start_dt = timezone.make_aware(datetime.combine(date_day, in_t), tz)
-            end_dt = timezone.make_aware(datetime.combine(date_day, out_t), tz)
+            start_dt = timezone.make_aware(datetime.combine(date_day, start_t), tz)
+            end_dt = timezone.make_aware(datetime.combine(date_day, end_t), tz)
             if end_dt <= start_dt:
                 end_dt = end_dt + timedelta(days=1)
 
@@ -1590,6 +1626,24 @@ def _extract_gate_window(app: app_models.Application) -> Optional[dict]:
             }
 
     return None
+
+
+def _gatepass_hard_expiry(app: app_models.Application, window: Optional[dict] = None) -> Optional[datetime]:
+    """Gatepass validity hard-stop at next midnight of the selected gate date."""
+    base_day = _extract_gate_date(app)
+    if base_day is None and isinstance(window, dict):
+        start = window.get("start")
+        if start is not None:
+            try:
+                base_day = timezone.localtime(start).date()
+            except Exception:
+                base_day = start.date()
+
+    if base_day is None:
+        return None
+
+    tz = timezone.get_current_timezone()
+    return timezone.make_aware(datetime.combine(base_day + timedelta(days=1), time.min), tz)
 
 
 def _extract_gate_date(app: app_models.Application) -> Optional[date]:
@@ -1649,6 +1703,11 @@ def _is_security_gatepass_application(app: app_models.Application) -> bool:
 def _validate_scan_time_window(app: app_models.Application, now: Optional[datetime] = None) -> tuple[bool, Optional[str], Optional[dict]]:
     window = _extract_gate_window(app)
     current = now or timezone.now()
+
+    hard_expiry = _gatepass_hard_expiry(app, window)
+    if hard_expiry and current >= hard_expiry:
+        msg = "Gatepass expired because the selected date is over (expired at 12:00 AM next day)."
+        return False, msg, window
 
     if not window:
         # Out-only gatepass still expires at day-end of the selected date.
@@ -2113,6 +2172,24 @@ class GatepassCheckView(APIView):
             has_in_time = _has_gatepass_in_time(in_pending)
             gate_window = _extract_gate_window(in_pending)
             gate_end = gate_window.get('end') if isinstance(gate_window, dict) else None
+            hard_expiry = _gatepass_hard_expiry(in_pending, gate_window)
+
+            if hard_expiry and now >= hard_expiry:
+                return Response(
+                    {
+                        "allowed": False,
+                        "reason": "not_approved",
+                        "message": "Gatepass expired because selected date ended at 12:00 AM. Apply a new gatepass.",
+                        "gatepass_window_start": gate_window['start'].isoformat() if gate_window else None,
+                        "gatepass_window_end": gate_window['end'].isoformat() if gate_window else None,
+                        "profile_type": profile_type,
+                        "profile": profile_data,
+                        "student": student_data,
+                        "staff": staff_data,
+                        "approval_timeline": [],
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             # For out-only gatepasses (no IN time), allow IN scan after cooldown.
             # Mark as late only when scan happens after the selected gatepass date.
