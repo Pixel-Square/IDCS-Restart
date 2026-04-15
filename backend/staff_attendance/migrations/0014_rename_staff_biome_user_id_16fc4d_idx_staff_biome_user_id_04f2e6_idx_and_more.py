@@ -1,6 +1,30 @@
 from django.db import migrations
 
 
+def rename_indexes_forward(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+
+    schema_editor.execute(
+        'ALTER INDEX IF EXISTS staff_biome_user_id_16fc4d_idx RENAME TO staff_biome_user_id_04f2e6_idx;'
+    )
+    schema_editor.execute(
+        'ALTER INDEX IF EXISTS staff_biome_source_9bbd35_idx RENAME TO staff_biome_source_2bf6a8_idx;'
+    )
+
+
+def rename_indexes_backward(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
+        return
+
+    schema_editor.execute(
+        'ALTER INDEX IF EXISTS staff_biome_user_id_04f2e6_idx RENAME TO staff_biome_user_id_16fc4d_idx;'
+    )
+    schema_editor.execute(
+        'ALTER INDEX IF EXISTS staff_biome_source_2bf6a8_idx RENAME TO staff_biome_source_9bbd35_idx;'
+    )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -8,14 +32,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RenameIndex(
-            model_name='staffbiometricpunchlog',
-            new_name='staff_biome_user_id_04f2e6_idx',
-            old_name='staff_biome_user_id_16fc4d_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='staffbiometricpunchlog',
-            new_name='staff_biome_source_2bf6a8_idx',
-            old_name='staff_biome_source_9bbd35_idx',
-        ),
+        migrations.RunPython(rename_indexes_forward, rename_indexes_backward),
     ]

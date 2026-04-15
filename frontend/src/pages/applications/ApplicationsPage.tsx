@@ -36,6 +36,13 @@ function statusLabel(state: string): string {
   }
 }
 
+function formatScanDateTime(value?: string | null): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString()
+}
+
 function useCountdown(deadline: string | null): string | null {
   const [display, setDisplay] = useState<string | null>(null)
 
@@ -311,11 +318,29 @@ export function MyApplicationsContent(): JSX.Element {
                                   )
                                 }
 
+                                if (app.gatepass_in_scanned_at) {
+                                  return (
+                                    <div className="flex flex-col gap-1">
+                                      <span className="inline-flex w-fit px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                        IN ACCEPTED
+                                      </span>
+                                      <span className="text-[11px] text-gray-500">
+                                        IN: {formatScanDateTime(app.gatepass_in_scanned_at)}
+                                      </span>
+                                    </div>
+                                  )
+                                }
+
                                 if (app.gatepass_scanned_at) {
                                   return (
-                                    <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                                      Exited
-                                    </span>
+                                    <div className="flex flex-col gap-1">
+                                      <span className="inline-flex w-fit px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                        OUT ACCEPTED
+                                      </span>
+                                      <span className="text-[11px] text-gray-500">
+                                        OUT: {formatScanDateTime(app.gatepass_scanned_at)}
+                                      </span>
+                                    </div>
                                   )
                                 }
 
@@ -406,7 +431,9 @@ export default function ApplicationsPage(): JSX.Element {
     fetchApplicationsNav().then(setNav).catch(() => {});
   }, []);
 
-  const hasInboxRole = Boolean(nav?.show_applications) && ((nav?.staff_roles?.length || 0) > 0 || (nav?.override_roles?.length || 0) > 0);
+  const nonStudentStaffRoles = (nav?.staff_roles || []).filter((r) => String(r?.code || '').toUpperCase() !== 'STUDENT')
+  const nonStudentOverrideRoles = (nav?.override_roles || []).filter((r) => String(r || '').toUpperCase() !== 'STUDENT')
+  const hasInboxRole = Boolean(nav?.show_applications) && (nonStudentStaffRoles.length > 0 || nonStudentOverrideRoles.length > 0)
 
   return (
     <main className="min-h-screen bg-gray-50 flex flex-col p-4 md:p-6 lg:p-8">

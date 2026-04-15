@@ -289,6 +289,7 @@ class MeSerializer(serializers.Serializer):
         if st is not None:
             return {
                 'staff_id': st.staff_id,
+                'date_of_join': st.date_of_join.isoformat() if getattr(st, 'date_of_join', None) else None,
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(st, 'rfid_uid', ''),

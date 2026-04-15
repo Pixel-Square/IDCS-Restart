@@ -7,7 +7,107 @@ from django.db import IntegrityError
 from django.utils import timezone
 
 from academics.models import StaffProfile
-from .models import AttendanceRecord, AttendanceSettings, StaffBiometricPunchLog
+from .models import AttendanceRecord, AttendanceSettings, Holiday, StaffBiometricPunchLog
+
+
+def _resolve_user_department_id(user) -> Optional[int]:
+    try:
+        profile = getattr(user, 'staff_profile', None)
+        if not profile:
+            return None
+
+        # Prefer current-department resolver.
+        if hasattr(profile, 'get_current_department'):
+            try:
+                dept = profile.get_current_department()
+                if dept:
+                    return dept.id
+            except Exception:
+                pass
+
+        dept = getattr(profile, 'department', None)
+        return getattr(dept, 'id', None)
+    except Exception:
+        return None
+
+
+def _is_holiday_for_user(target_date, user) -> bool:
+    # Sunday is always treated as holiday.
+    try:
+        if target_date.weekday() == 6:
+            return True
+    except Exception:
+        pass
+
+    holidays = Holiday.objects.filter(date=target_date).prefetch_related('departments')
+    if not holidays.exists():
+        return False
+
+    user_dept_id = _resolve_user_department_id(user)
+    for holiday in holidays:
+        dept_ids = list(holiday.departments.values_list('id', flat=True))
+        if not dept_ids:
+            return True
+        if user_dept_id is not None and user_dept_id in dept_ids:
+            return True
+
+    return False
+
+
+def _backfill_absent_gaps_for_realtime(*, user, current_date, source: str) -> int:
+    """Create absent rows for missing working days before `current_date`.
+
+    Policy:
+    - Only fills dates that have no AttendanceRecord row yet.
+    - Skips Sundays + department-aware holidays.
+    - Limits the fill window to avoid creating huge ranges on first-ever punch.
+    """
+    MAX_BACKFILL_DAYS = 31
+
+    last_date = (
+        AttendanceRecord.objects.filter(user=user, date__lt=current_date)
+        .order_by('-date')
+        .values_list('date', flat=True)
+        .first()
+    )
+    if not last_date:
+        return 0
+
+    if last_date >= current_date:
+        return 0
+
+    start_date = last_date + timedelta(days=1)
+    min_start = current_date - timedelta(days=MAX_BACKFILL_DAYS)
+    if start_date < min_start:
+        start_date = min_start
+
+    if start_date >= current_date:
+        return 0
+
+    existing_dates = set(
+        AttendanceRecord.objects.filter(user=user, date__gte=start_date, date__lt=current_date)
+        .values_list('date', flat=True)
+    )
+
+    created = 0
+    cursor = start_date
+    while cursor < current_date:
+        if cursor not in existing_dates and not _is_holiday_for_user(cursor, user):
+            AttendanceRecord.objects.create(
+                user=user,
+                date=cursor,
+                morning_in=None,
+                evening_out=None,
+                fn_status='absent',
+                an_status='absent',
+                status='absent',
+                source_file=source,
+                notes=f'Auto-marked absent (no biometric data; inferred from next punch on {current_date})',
+            )
+            created += 1
+        cursor += timedelta(days=1)
+
+    return created
 
 
 def normalize_uid(raw_uid: str) -> str:
@@ -86,6 +186,20 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
     local_dt = timezone.localtime(punch_dt)
     target_date = local_dt.date()
     punch_time = local_dt.time().replace(microsecond=0)
+
+    # If the staff has scans on a later date, any missing *working* dates between
+    # last saved attendance and this punch date should be created as absent.
+    # (Holidays + Sundays are excluded.)
+    gap_created = _backfill_absent_gaps_for_realtime(user=user, current_date=target_date, source=source)
+    if gap_created > 0:
+        # Keep LOP in sync when realtime creates inferred absences.
+        # Best-effort: do not fail ingestion if balance sync fails.
+        try:
+            from django.core.management import call_command
+
+            call_command('sync_absent_to_lop', user=getattr(user, 'username', ''))
+        except Exception:
+            pass
 
     record, created = AttendanceRecord.objects.get_or_create(
         user=user,

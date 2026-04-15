@@ -83,15 +83,37 @@ def _extract_time_window(app: app_models.Application):
         if not day:
             continue
 
-        if ftype == "DATE IN OUT":
-            start_key, end_key = "in_time", "out_time"
-        else:
-            start_key, end_key = "out_time", "in_time"
+        out_t = _parse_clock_time(payload.get("out_time"))
+        in_t = _parse_clock_time(payload.get("in_time"))
 
-        start_t = _parse_clock_time(payload.get(start_key))
-        end_t = _parse_clock_time(payload.get(end_key))
-        if not start_t or not end_t:
+        candidates = []
+        if out_t and in_t:
+            candidates.append((out_t, in_t))
+            candidates.append((in_t, out_t))
+
+        # Backward-compatible fallback for older payload variants.
+        if ftype == "DATE IN OUT":
+            legacy_start_key, legacy_end_key = "in_time", "out_time"
+        else:
+            legacy_start_key, legacy_end_key = "out_time", "in_time"
+
+        legacy_start_t = _parse_clock_time(payload.get(legacy_start_key))
+        legacy_end_t = _parse_clock_time(payload.get(legacy_end_key))
+        if legacy_start_t and legacy_end_t:
+            candidates.append((legacy_start_t, legacy_end_t))
+
+        if not candidates:
             continue
+
+        def _duration_seconds(start_time, end_time):
+            start_seconds = start_time.hour * 3600 + start_time.minute * 60 + start_time.second
+            end_seconds = end_time.hour * 3600 + end_time.minute * 60 + end_time.second
+            if end_seconds <= start_seconds:
+                end_seconds += 24 * 3600
+            return end_seconds - start_seconds
+
+        # Choose the shortest plausible window to avoid swapped IN/OUT mappings.
+        start_t, end_t = min(candidates, key=lambda pair: _duration_seconds(pair[0], pair[1]))
 
         tz = timezone.get_current_timezone()
         start_dt = timezone.make_aware(datetime.combine(day, start_t), tz)

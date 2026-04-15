@@ -4732,10 +4732,84 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         processed_users = 0
         updated_users = 0
+        attendance_rows_updated = 0
+
+        def _overall_status_from_sessions(fn_status, an_status):
+            if fn_status is None and an_status is None:
+                return 'absent'
+            if fn_status is None:
+                return an_status
+            if an_status is None:
+                return fn_status
+            if fn_status == an_status:
+                return fn_status
+            if fn_status != 'absent' or an_status != 'absent':
+                return 'half_day'
+            return 'absent'
 
         for user in users:
             processed_users += 1
 
+            # 1) First, fix biometric FN/AN for this staff while preserving any
+            #    sessions that were intentionally changed by approved forms
+            #    (Late Entry Permission, CL/OD/etc attendance_status sync, etc.).
+            protected_by_date = {}
+            approved_requests_for_attendance = StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+            ).select_related('template')
+
+            for req in approved_requests_for_attendance:
+                template = getattr(req, 'template', None)
+                if not template:
+                    continue
+
+                leave_policy = getattr(template, 'leave_policy', None) or {}
+                attendance_action = getattr(template, 'attendance_action', None) or {}
+
+                impacts_attendance = bool((leave_policy or {}).get('attendance_status')) or bool(attendance_action.get('change_status'))
+                if not impacts_attendance:
+                    continue
+
+                try:
+                    targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
+                except Exception:
+                    targets = []
+
+                for target_date, target_shift in targets:
+                    if not target_date:
+                        continue
+                    shift_token = str(target_shift or '').strip().upper() or 'FULL'
+                    protected_by_date.setdefault(target_date, set()).add(shift_token)
+
+            for record in AttendanceRecord.objects.filter(user=user).iterator(chunk_size=500):
+                protected_shifts = protected_by_date.get(record.date, set())
+                protect_fn = 'FULL' in protected_shifts or 'FN' in protected_shifts
+                protect_an = 'FULL' in protected_shifts or 'AN' in protected_shifts
+
+                original_fn = record.fn_status
+                original_an = record.an_status
+                original_status = record.status
+
+                protected_fn_value = original_fn if protect_fn else None
+                protected_an_value = original_an if protect_an else None
+
+                # Recompute biometric statuses (respects time limits + staff noon split).
+                record.update_status(defer_an_until_out=False)
+
+                # Restore sessions that were explicitly controlled by forms.
+                if protect_fn:
+                    record.fn_status = protected_fn_value
+                if protect_an:
+                    record.an_status = protected_an_value
+
+                record.status = _overall_status_from_sessions(record.fn_status, record.an_status)
+
+                if record.fn_status != original_fn or record.an_status != original_an or record.status != original_status:
+                    record.save(update_fields=['fn_status', 'an_status', 'status'])
+                    attendance_rows_updated += 1
+
+            # 2) Now compute LOP based on corrected attendance
             attendance_records = AttendanceRecord.objects.filter(user=user)
             absent_units_by_date = {}
             for record in attendance_records:
@@ -4790,6 +4864,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'message': 'LOP recalculation completed successfully',
             'processed_users': processed_users,
             'updated_users': updated_users,
+            'attendance_rows_updated': attendance_rows_updated,
         })
 
     @action(detail=False, methods=['get'])

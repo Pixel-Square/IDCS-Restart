@@ -316,6 +316,31 @@ def _user_has_override(user, application) -> bool:
     return False
 
 
+def _is_gatepass_application_strict(application: app_models.Application) -> bool:
+    """Gatepass heuristic used for approval restrictions.
+
+    Treat an application as gatepass only when:
+    - final approval step role is SECURITY, and
+    - form contains a composite DATE IN/OUT field.
+    """
+    flow = _get_flow_for_application(application)
+    if not flow:
+        return False
+
+    try:
+        final_step = flow.steps.filter(is_final=True).select_related('role').order_by('order').first()
+    except Exception:
+        final_step = None
+
+    if not (final_step and final_step.role and str(getattr(final_step.role, 'name', '') or '').upper() == 'SECURITY'):
+        return False
+
+    try:
+        return application.data.filter(field__field_type__in=['DATE IN OUT', 'DATE OUT IN']).exists()
+    except Exception:
+        return False
+
+
 def user_can_act(application: app_models.Application, user) -> bool:
     """Return True if `user` is authorized to act (approve/reject) on `application`.
 
@@ -328,8 +353,9 @@ def user_can_act(application: app_models.Application, user) -> bool:
         return False
 
     current_step = get_current_approval_step(application)
+    is_gatepass = _is_gatepass_application_strict(application)
     # If user has override rights for this application -> can act
-    if _user_has_override(user, application):
+    if (not is_gatepass) and _user_has_override(user, application):
         return True
 
     if current_step is None:
@@ -453,7 +479,8 @@ def process_approval(application: app_models.Application, user, action: str, rem
 
         current_step = get_current_approval_step(application)
 
-        user_is_override = _user_has_override(user, application)
+        is_gatepass = _is_gatepass_application_strict(application)
+        user_is_override = (not is_gatepass) and _user_has_override(user, application)
 
         # If there's no current step but flow exists, set first step
         if current_step is None:

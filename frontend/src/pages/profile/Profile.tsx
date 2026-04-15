@@ -81,6 +81,41 @@ function getDisplayName(me: Me | null | undefined): string {
   return String(`${first} ${last}`).trim();
 }
 
+function formatDateOfJoin(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '—';
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return '—';
+  return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function getExperienceText(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '—';
+  const doj = new Date(raw);
+  if (Number.isNaN(doj.getTime())) return '—';
+
+  const now = new Date();
+  if (doj > now) return '0 months';
+
+  let years = now.getFullYear() - doj.getFullYear();
+  let months = now.getMonth() - doj.getMonth();
+
+  if (now.getDate() < doj.getDate()) {
+    months -= 1;
+  }
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+
+  if (years <= 0) {
+    return `${Math.max(months, 0)} month${months === 1 ? '' : 's'}`;
+  }
+
+  return `${years} year${years === 1 ? '' : 's'} ${months} month${months === 1 ? '' : 's'}`;
+}
+
 export default function ProfilePage({ user: initialUser }: { user?: Me | null }) {
   const [user, setUser] = useState<Me | null | undefined>(initialUser === undefined ? null : initialUser);
   const [loading, setLoading] = useState(initialUser ? false : true);
@@ -1222,6 +1257,36 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   <div className="text-sm font-semibold text-gray-500 mb-1">Designation</div>
                   <div className="text-gray-900 font-medium truncate">
                     {(user.profile && user.profile.designation) || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Date Of Join Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-cyan-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <CreditCard className="w-5 h-5 text-cyan-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Date of Join</div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {user.profile_type === 'STAFF' ? formatDateOfJoin(user.profile?.date_of_join) : '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Experience Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Briefcase className="w-5 h-5 text-green-700" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">Experience</div>
+                  <div className="text-gray-900 font-medium truncate">
+                    {user.profile_type === 'STAFF' ? getExperienceText(user.profile?.date_of_join) : '—'}
                   </div>
                 </div>
               </div>
