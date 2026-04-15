@@ -31,15 +31,16 @@ export default function StaffImportModal({ isOpen, onClose, onSuccess }: StaffIm
   const handleDownloadTemplate = () => {
     import('xlsx').then((XLSX) => {
       const templateRows = [
-        ['Staff ID', 'Username', 'Password', 'First Name', 'Last Name', 'Email', 'Designation', 'Department', 'Status'],
-        ['3121004', 'Oorkalan A', 'password123', 'Oorkalan', 'A', 'oorkalana.civil@krct.ac.in', 'HOD', '103 - CE', 'ACTIVE'],
+        ['Staff ID', 'Username', 'Password', 'First Name', 'Last Name', 'Email', 'Designation', 'Department', 'Date of Join', 'Status'],
+        ['312104', 'Oorkalan A', 'password123', 'Oorkalan', 'A', 'oorkalana.civil@krct.ac.in', 'HOD', '103 - CE', '2024-06-12', 'ACTIVE'],
+        ['312105', '', '', '', '', '', '', '', '2025-01-03', ''],
       ]
       const ws = XLSX.utils.aoa_to_sheet(templateRows)
 
       // Set column widths
       ws['!cols'] = [
         { wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 14 },
-        { wch: 14 }, { wch: 32 }, { wch: 22 }, { wch: 16 }, { wch: 10 },
+        { wch: 14 }, { wch: 32 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 10 },
       ]
 
       const wb = XLSX.utils.book_new()
@@ -131,8 +132,8 @@ export default function StaffImportModal({ isOpen, onClose, onSuccess }: StaffIm
             <div>
               <p className="text-sm font-medium text-indigo-900">Step 1 — Download the template</p>
               <p className="text-xs text-indigo-700 mt-0.5 mb-3">
-                Fill in the template with staff details. Required columns: <strong>Staff ID</strong>,{' '}
-                <strong>Username</strong>, <strong>Email</strong>, <strong>Department</strong>, <strong>Status</strong>.
+                Fill rows using <strong>Staff ID</strong> to match staff. You can update only the columns you provide
+                (for example only <strong>Date of Join</strong>) and leave other columns empty.
               </p>
               <button
                 onClick={handleDownloadTemplate}

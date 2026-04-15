@@ -161,12 +161,24 @@ class AttendanceRecord(models.Model):
                         self.fn_status = None
                     else:
                         if self.morning_in:
-                            # FN: Present if came before/at the in_time_limit
-                            if self.morning_in <= in_limit:
-                                self.fn_status = 'present'
-                            else:
-                                # Came late (after in_time_limit) - FN absent
+                            # FN presence requires (1) not late by the IN limit and
+                            # (2) when an OUT time exists, the staff must have stayed
+                            # past the noon split time.
+                            #
+                            # This fixes cases like: In 08:18, Out 10:58, noon 13:00
+                            # where FN should be ABSENT (did not cross noon).
+                            if self.morning_in > in_limit:
                                 self.fn_status = 'absent'
+                            elif self.morning_in > mid_split:
+                                # Arrived after noon, cannot be FN present.
+                                self.fn_status = 'absent'
+                            elif self.evening_out is not None:
+                                # With an explicit OUT, FN is present only if OUT crosses noon.
+                                self.fn_status = 'present' if self.evening_out >= mid_split else 'absent'
+                            else:
+                                # Realtime stream often has IN first; keep FN present
+                                # until an OUT punch confirms early exit.
+                                self.fn_status = 'present'
                         else:
                             # No morning_in time - FN absent
                             self.fn_status = 'absent'

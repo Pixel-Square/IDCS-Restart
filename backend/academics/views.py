@@ -4104,22 +4104,8 @@ class StaffsPageView(APIView):
                 'staffs': staffs,
             })
 
-        # Check if user can import staff (HOD, AHOD, or IQAC role required)
-        can_import = False
-        if user.is_superuser or has_ps_role:
-            can_import = True
-        else:
-            try:
-                if user.roles.filter(name__iexact='IQAC').exists():
-                    can_import = True
-            except Exception:
-                pass
-            if not can_import:
-                from .models import DepartmentRole
-                from .utils import get_user_staff_profile
-                sp = get_user_staff_profile(user)
-                if sp and DepartmentRole.objects.filter(staff=sp, role__in=['HOD', 'AHOD'], is_active=True).exists():
-                    can_import = True
+        # Import is restricted to PS role (and superuser).
+        can_import = bool(user.is_superuser or has_ps_role)
 
         return Response({'results': results, 'can_edit': can_edit, 'can_view_all': can_view_all, 'can_import': can_import})
 
@@ -4450,12 +4436,14 @@ class StaffStatusUpdateView(APIView):
 class StaffImportView(APIView):
     """Import staff members from an uploaded Excel (.xlsx) or CSV file.
 
-    Only HOD, AHOD, IQAC, PS users, or superusers are allowed to call this endpoint.
+        Only PS users or superusers are allowed to call this endpoint.
 
     Expected columns (case-insensitive, spaces/underscores ignored):
-      Staff ID, Username, Password, First Name, Last Name, Email, Designation, Department, Status
+            Staff ID, Username, Password, First Name, Last Name, Email, Designation,
+            Department, Date of Join, Status
 
-    Required: Staff ID, Username, Email, Department, Status
+        Required for updates: Staff ID
+        Required for creates: Staff ID, Username, Email, Password, Department, Status
 
     Returns:
       { imported: int, total: int, errors: [{ row: int, errors: [str] }] }
@@ -4468,16 +4456,8 @@ class StaffImportView(APIView):
         try:
             if user.roles.filter(name__iexact='PS').exists():
                 return True
-            if user.roles.filter(name__iexact='IQAC').exists():
-                return True
         except Exception:
             pass
-        from .utils import get_user_staff_profile
-        sp = get_user_staff_profile(user)
-        if sp:
-            from .models import DepartmentRole
-            if DepartmentRole.objects.filter(staff=sp, role__in=['HOD', 'AHOD'], is_active=True).exists():
-                return True
         return False
 
     @staticmethod
@@ -4490,6 +4470,34 @@ class StaffImportView(APIView):
                     return str(v).strip() if v is not None else ''
         return ''
 
+    @staticmethod
+    def _parse_join_date(value: str):
+        raw = str(value or '').strip()
+        if not raw:
+            return None, None
+
+        from datetime import datetime
+
+        # Handle timestamps emitted by Excel exports like: 2026-04-11 00:00:00
+        if ' ' in raw:
+            raw = raw.split(' ', 1)[0].strip()
+
+        formats = [
+            '%Y-%m-%d',
+            '%d-%m-%Y',
+            '%d/%m/%Y',
+            '%m/%d/%Y',
+            '%Y/%m/%d',
+            '%d.%m.%Y',
+        ]
+        for fmt in formats:
+            try:
+                return datetime.strptime(raw, fmt).date(), None
+            except Exception:
+                continue
+
+        return None, 'Date of Join must be a valid date (recommended format: YYYY-MM-DD).'
+
     def post(self, request):
         import csv
         import io
@@ -4498,7 +4506,7 @@ class StaffImportView(APIView):
         user = request.user
         if not self._is_allowed(user):
             return Response(
-                {'detail': 'Only HOD or IQAC users can import staff.'},
+                {'detail': 'Only PS users can import staff.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -4571,24 +4579,19 @@ class StaffImportView(APIView):
             email      = self._col(row, 'email', 'emailaddress', 'email address', 'email_address')
             designation = self._col(row, 'designation')
             department_name = self._col(row, 'department', 'dept', 'departmentname', 'department name', 'department_name')
+            date_of_join_raw = self._col(row, 'dateofjoin', 'date of join', 'date_of_join', 'doj')
             record_status   = self._col(row, 'status')
+
+            parsed_doj, doj_error = self._parse_join_date(date_of_join_raw)
 
             # ── Validate required fields ──
             row_errors: list[str] = []
             if not staff_id:
                 row_errors.append('Staff ID is required.')
-            if not username:
-                row_errors.append('Username is required.')
-            if not email:
-                row_errors.append('Email is required.')
-            if not password:
-                row_errors.append('Password is required.')
-            if not department_name:
-                row_errors.append('Department is required.')
-            if not record_status:
-                row_errors.append('Status is required.')
-            elif record_status.upper() not in ('ACTIVE', 'INACTIVE'):
+            if record_status and record_status.upper() not in ('ACTIVE', 'INACTIVE'):
                 row_errors.append(f'Status "{record_status}" is invalid. Allowed: ACTIVE, INACTIVE.')
+            if doj_error:
+                row_errors.append(doj_error)
 
             if staff_id and staff_id in seen_staff_ids:
                 row_errors.append(f'Duplicate Staff ID "{staff_id}" in uploaded file.')
@@ -4599,39 +4602,89 @@ class StaffImportView(APIView):
 
             seen_staff_ids.add(staff_id)
 
-            # ── Check DB duplicates ──
-            if StaffProfile.objects.filter(staff_id=staff_id).exists():
-                errors.append({'row': idx, 'errors': [f'Staff ID "{staff_id}" already exists in the system.']})
+            # ── Resolve department (if provided) ──
+            dept = None
+            if department_name:
+                from django.db.models import Q as _Q
+                dept_search = department_name.strip()
+                dept = Department.objects.filter(
+                    _Q(name__iexact=dept_search)
+                    | _Q(code__iexact=dept_search)
+                    | _Q(short_name__iexact=dept_search)
+                ).first()
+                if not dept and ' - ' in dept_search:
+                    code_part = dept_search.split(' - ', 1)[1].strip()
+                    dept = Department.objects.filter(
+                        _Q(code__iexact=code_part) | _Q(short_name__iexact=code_part)
+                    ).first()
+                if not dept:
+                    errors.append({'row': idx, 'errors': [f'Department "{department_name}" not found. Use the department code or "<number> - <code>" format.']})
+                    continue
+
+            norm_status = record_status.upper() if record_status else None
+            existing_staff = StaffProfile.objects.select_related('user').filter(staff_id=staff_id).first()
+
+            # ── Update existing staff by Staff ID (partial update) ──
+            if existing_staff is not None:
+                try:
+                    with transaction.atomic():
+                        user_obj = existing_staff.user
+
+                        if username and username != user_obj.username:
+                            if User.objects.filter(username=username).exclude(pk=user_obj.pk).exists():
+                                raise ValueError(f'Username "{username}" already exists in the system.')
+                            user_obj.username = username
+                        if first_name:
+                            user_obj.first_name = first_name
+                        if last_name:
+                            user_obj.last_name = last_name
+                        if email:
+                            user_obj.email = email
+                        if password:
+                            user_obj.set_password(password)
+                        user_obj.save()
+
+                        # Some legacy records may have staff_id values that do not satisfy
+                        # current validators. For import updates where staff_id is unchanged,
+                        # update columns directly to avoid unrelated validation failure.
+                        staff_updates = {}
+                        if designation:
+                            staff_updates['designation'] = designation
+                        if dept is not None:
+                            staff_updates['department'] = dept
+                        if norm_status is not None:
+                            staff_updates['status'] = norm_status
+                        if date_of_join_raw:
+                            staff_updates['date_of_join'] = parsed_doj
+
+                        if staff_updates:
+                            StaffProfile.objects.filter(pk=existing_staff.pk).update(**staff_updates)
+                        imported += 1
+                except Exception as exc:
+                    errors.append({'row': idx, 'errors': [str(exc)]})
                 continue
+
+            # ── Create new staff ──
+            create_errors: list[str] = []
+            if not username:
+                create_errors.append('Username is required for new staff.')
+            if not email:
+                create_errors.append('Email is required for new staff.')
+            if not password:
+                create_errors.append('Password is required for new staff.')
+            if not department_name:
+                create_errors.append('Department is required for new staff.')
+            if not record_status:
+                create_errors.append('Status is required for new staff.')
+
+            if create_errors:
+                errors.append({'row': idx, 'errors': create_errors})
+                continue
+
             if User.objects.filter(username=username).exists():
                 errors.append({'row': idx, 'errors': [f'Username "{username}" already exists in the system.']})
                 continue
 
-            # ── Resolve department ──
-            # Supports patterns like "103 - CE", "CE", "103", full name.
-            dept = None
-            from django.db.models import Q as _Q
-            dept_search = department_name.strip()
-            # Try the full string first, then strip to code/name split on " - "
-            dept = Department.objects.filter(
-                _Q(name__iexact=dept_search)
-                | _Q(code__iexact=dept_search)
-                | _Q(short_name__iexact=dept_search)
-            ).first()
-            if not dept and ' - ' in dept_search:
-                # "103 - CE" -> try code part after " - "
-                code_part = dept_search.split(' - ', 1)[1].strip()
-                dept = Department.objects.filter(
-                    _Q(code__iexact=code_part) | _Q(short_name__iexact=code_part)
-                ).first()
-            if not dept:
-                errors.append({'row': idx, 'errors': [f'Department "{department_name}" not found. Use the department code or "<number> - <code>" format.']})
-                continue
-
-            # ── Normalise status ──
-            norm_status = record_status.upper()  # already validated above
-
-            # ── Create user + staff profile ──
             try:
                 with transaction.atomic():
                     user_obj = User.objects.create_user(
@@ -4642,16 +4695,12 @@ class StaffImportView(APIView):
                         email=email,
                     )
 
-                    # Create the StaffProfile BEFORE assigning the STAFF role.
-                    # The pre_add M2M signal calls validate_roles_for_user(), which
-                    # raises ValidationError if no staff_profile exists yet.
-                    # Creating the profile first avoids that and prevents the
-                    # TransactionManagementError on subsequent queries.
                     StaffProfile.objects.create(
                         user=user_obj,
                         staff_id=staff_id,
                         department=dept,
                         designation=designation,
+                        date_of_join=parsed_doj,
                         status=norm_status,
                     )
 
@@ -4659,7 +4708,7 @@ class StaffImportView(APIView):
                         staff_role = Role.objects.get(name='STAFF')
                         user_obj.roles.add(staff_role)
                     except Exception:
-                        pass  # STAFF role missing or already assigned; non-critical
+                        pass
 
                     imported += 1
             except Exception as exc:

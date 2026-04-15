@@ -761,6 +761,7 @@ class StaffProfile(models.Model):
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
+    date_of_join = models.DateField(null=True, blank=True, help_text='Date of joining')
     status = models.CharField(max_length=16, choices=STAFF_STATUS_CHOICES, default='ACTIVE')
 
     # Optional mobile number for OTP verification (kept on profile as requested)

@@ -1300,7 +1300,7 @@ class StaffProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = StaffProfile
         fields = [
-            'id', 'staff_id', 'internal_id', 'department', 'designation', 'status',
+            'id', 'staff_id', 'internal_id', 'department', 'designation', 'date_of_join', 'status',
             'mobile_number', 'mobile_number_verified_at', 'profile_image', 'rfid_uid',
             # Write-only user fields
             'username', 'password', 'first_name', 'last_name', 'email',
