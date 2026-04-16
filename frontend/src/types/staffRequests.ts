@@ -154,6 +154,68 @@ export interface ProcessApprovalResponse {
   request: StaffRequest;
 }
 
+export interface VacationEntitlementRule {
+  id?: number;
+  condition?: '>' | '<' | '=' | '>=' | '<=';
+  min_years: number;
+  min_months: number;
+  entitled_days: number;
+  is_active?: boolean;
+  notes?: string;
+}
+
+export interface VacationSemester {
+  id?: number;
+  name: string;
+  from_date: string;
+  to_date: string;
+  is_active?: boolean;
+}
+
+export interface VacationSlot {
+  id?: number;
+  semester_id?: number | null;
+  semester?: string;
+  semester_from_date?: string | null;
+  semester_to_date?: string | null;
+  slot_name: string;
+  from_date: string;
+  to_date: string;
+  total_days?: number;
+  is_active?: boolean;
+}
+
+export interface VacationDashboardSlot {
+  id: number;
+  semester: string;
+  slot_name: string;
+  from_date: string;
+  to_date: string;
+  total_days: number;
+  existing_request_id?: number | null;
+  existing_request_status?: 'pending' | 'approved' | 'rejected' | null;
+  can_apply: boolean;
+  multi_group_key?: number;
+  multi_select_allowed?: boolean;
+}
+
+export interface VacationDashboardResponse {
+  eligible: boolean;
+  experience: { years: number; months: number };
+  entitlement_days: number;
+  used_days: number;
+  remaining_days: number;
+  vacation_template_id: number | null;
+  cancellation_template_id: number | null;
+  slots: VacationDashboardSlot[];
+}
+
+export interface VacationSettingsResponse {
+  rules: VacationEntitlementRule[];
+  semesters: VacationSemester[];
+  slots: VacationSlot[];
+}
+
 // Available approval roles
 export const APPROVER_ROLES = [
   'HOD',

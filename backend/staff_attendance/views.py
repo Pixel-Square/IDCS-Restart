@@ -1473,6 +1473,27 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 return True
         return False  # no matching holiday for this user's dept
 
+    def _is_approved_vacation_day(self, user, target_date):
+        """Return True when user has an approved, non-cancelled vacation request on target_date."""
+        try:
+            from staff_requests.models import StaffRequest
+
+            qs = StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+                template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+            )
+            for req in qs:
+                form_data = req.form_data or {}
+                if bool(form_data.get('vacation_cancelled')):
+                    continue
+                covered_dates = self._request_dates_for_month(form_data, target_date, target_date)
+                if target_date in covered_dates:
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _check_time_based_absence(self, morning_in, evening_out):
         """Check if attendance should be marked absent based on time limits"""
         try:
@@ -1828,10 +1849,41 @@ class CSVUploadViewSet(viewsets.ViewSet):
                            no biometric data are NOT written as absent.
         """
         record = AttendanceRecord.objects.filter(user=user, date=target_date).first()
+        is_vacation_day = self._is_approved_vacation_day(user, target_date)
 
         # Never overwrite attendance rows that were locked by approved 10-min late entry forms.
         if record is not None and record.notes and self.LATE10_LOCK_MARKER in record.notes:
             return None
+
+        if is_vacation_day:
+            has_biometric = morning_in is not None or evening_out is not None
+            if record is None and not has_biometric:
+                return None
+
+            if record is None:
+                record = AttendanceRecord(
+                    user=user,
+                    date=target_date,
+                    morning_in=morning_in,
+                    evening_out=evening_out,
+                    fn_status=None,
+                    an_status=None,
+                    status='vacation',
+                    source_file=source_file,
+                )
+            else:
+                allow_update = overwrite or (mode == 'today')
+                if morning_in is not None and (allow_update or not record.morning_in):
+                    record.morning_in = morning_in
+                if evening_out is not None and (allow_update or not record.evening_out):
+                    record.evening_out = evening_out
+                record.fn_status = None
+                record.an_status = None
+                record.status = 'vacation'
+
+            record.source_file = source_file
+            record.save()
+            return record
 
         # backfill: skip if record already exists and no overwrite.
         # Exception: holiday_mode must still process existing records so COL logic can run.

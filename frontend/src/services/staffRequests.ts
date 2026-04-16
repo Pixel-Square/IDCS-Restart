@@ -7,7 +7,12 @@ import type {
   ProcessApprovalPayload,
   ProcessApprovalResponse,
   ApprovalStep,
-  LeaveBalancesResponse
+  LeaveBalancesResponse,
+  VacationDashboardResponse,
+  VacationSettingsResponse,
+  VacationEntitlementRule,
+  VacationSemester,
+  VacationSlot,
 } from '../types/staffRequests';
 
 const BASE_URL = `${getApiBase()}/api/staff-requests`;
@@ -265,5 +270,24 @@ export async function hrApplyClForLop(data: {
   staff_user_ids: number[];
 }): Promise<any> {
   const res = await apiClient.post(`${BASE_URL}/requests/hr_apply_cl_for_lop/`, data);
+  return res.data;
+}
+
+export async function getVacationDashboard(params: { year: number; month: number }): Promise<VacationDashboardResponse> {
+  const res = await apiClient.get(`${BASE_URL}/requests/vacation_dashboard/`, { params });
+  return res.data;
+}
+
+export async function getVacationSettings(): Promise<VacationSettingsResponse> {
+  const res = await apiClient.get(`${BASE_URL}/templates/vacation_settings/`);
+  return res.data;
+}
+
+export async function saveVacationSettings(data: {
+  rules: VacationEntitlementRule[];
+  semesters: VacationSemester[];
+  slots: VacationSlot[];
+}): Promise<{ message: string }> {
+  const res = await apiClient.post(`${BASE_URL}/templates/save_vacation_settings/`, data);
   return res.data;
 }

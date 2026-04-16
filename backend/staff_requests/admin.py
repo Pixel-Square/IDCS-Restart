@@ -1,5 +1,15 @@
 from django.contrib import admin
-from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance, StaffFormUsage
+from .models import (
+    RequestTemplate,
+    ApprovalStep,
+    StaffRequest,
+    ApprovalLog,
+    StaffLeaveBalance,
+    StaffFormUsage,
+    VacationEntitlementRule,
+    VacationSemester,
+    VacationSlot,
+)
 
 
 class ApprovalStepInline(admin.TabularInline):
@@ -207,3 +217,36 @@ class StaffFormUsageAdmin(admin.ModelAdmin):
         if obj:  # Editing existing object
             return self.readonly_fields + ['staff', 'template', 'reset_period_start', 'reset_period_end']
         return self.readonly_fields
+
+
+@admin.register(VacationEntitlementRule)
+class VacationEntitlementRuleAdmin(admin.ModelAdmin):
+    list_display = ['condition', 'min_years', 'min_months', 'entitled_days', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'updated_at']
+    ordering = ['id']
+
+
+@admin.register(VacationSlot)
+class VacationSlotAdmin(admin.ModelAdmin):
+    list_display = [
+        'slot_name',
+        'semester_ref',
+        'semester',
+        'semester_from_date',
+        'semester_to_date',
+        'from_date',
+        'to_date',
+        'total_days',
+        'is_active',
+    ]
+    list_filter = ['is_active', 'semester']
+    search_fields = ['slot_name', 'semester']
+    ordering = ['from_date', 'slot_name']
+
+
+@admin.register(VacationSemester)
+class VacationSemesterAdmin(admin.ModelAdmin):
+    list_display = ['name', 'from_date', 'to_date', 'is_active', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['name']
+    ordering = ['from_date', 'name']

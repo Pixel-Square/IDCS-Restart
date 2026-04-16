@@ -9,9 +9,18 @@ interface Props {
   onCreated?: () => void;
   onSuccess?: () => void;
   preselectedDate?: string | null;
+  preselectedTemplateId?: number | null;
+  prefilledFormData?: Record<string, any>;
 }
 
-export default function NewRequestModal({ onClose, onCreated, onSuccess, preselectedDate }: Props) {
+export default function NewRequestModal({
+  onClose,
+  onCreated,
+  onSuccess,
+  preselectedDate,
+  preselectedTemplateId,
+  prefilledFormData,
+}: Props) {
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<RequestTemplate | null>(null);
   const [formData, setFormData] = useState<Record<string, any>>({});
@@ -25,6 +34,14 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
   useEffect(() => {
     loadTemplates();
   }, []);
+
+  useEffect(() => {
+    if (!preselectedTemplateId || templates.length === 0 || selectedTemplate) return;
+    const target = templates.find(t => t.id === preselectedTemplateId);
+    if (target) {
+      handleTemplateSelect(target);
+    }
+  }, [preselectedTemplateId, templates, selectedTemplate]);
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -78,6 +95,10 @@ export default function NewRequestModal({ onClose, onCreated, onSuccess, presele
           initialData[field.name] = preselectedDate;
         }
       });
+    }
+
+    if (prefilledFormData && typeof prefilledFormData === 'object') {
+      Object.assign(initialData, prefilledFormData);
     }
     
     setFormData(initialData);

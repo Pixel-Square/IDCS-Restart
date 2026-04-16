@@ -348,7 +348,7 @@ export default function App() {
                 />
                 <Route
                   path="/ps/staff-attendance/upload"
-                  element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['PS', 'IQAC']} element={<StaffAttendanceUpload />} />}
                 />
                 <Route
                   path="/feedback"

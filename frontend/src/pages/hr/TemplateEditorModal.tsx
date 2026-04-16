@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, Plus, Trash2, GripVertical } from 'lucide-react';
 import { createTemplate, updateTemplate } from '../../services/staffRequests';
-import type { RequestTemplate, FormField, ApprovalStep, LeavePolicy, AttendanceAction } from '../../types/staffRequests';
+import type {
+  RequestTemplate,
+  FormField,
+  ApprovalStep,
+  LeavePolicy,
+  AttendanceAction,
+} from '../../types/staffRequests';
 import { fetchRoles } from '../../services/accounts';
 
 interface Props {
@@ -79,6 +85,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     load();
     return () => { mounted = false };
   }, []);
+
 
   const handleAddField = () => {
     setFormFields([

@@ -38,11 +38,11 @@ class StaffAttendanceUploadPermission(permissions.BasePermission):
         if request.user.is_superuser:
             return True
         
-        # Check PS role and upload permission
+        # Check PS/IQAC role and upload permission
         if hasattr(request.user, 'user_roles'):
-            has_ps_role = request.user.user_roles.filter(role__name='PS').exists()
+            has_role = request.user.user_roles.filter(role__name__in=['PS', 'IQAC']).exists()
             has_upload_perm = request.user.has_perm('staff_attendance.upload_csv')
-            return has_ps_role and has_upload_perm
+            return has_role and has_upload_perm
         
         return False
 
@@ -83,7 +83,7 @@ class StaffAttendanceViewPermission(permissions.BasePermission):
 
 
 class StaffAttendanceConfigPermission(permissions.BasePermission):
-    """Permission for attendance configuration management by HR/PS/Admin."""
+    """Permission for attendance configuration management by HR/PS/IQAC/Admin."""
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
@@ -97,7 +97,7 @@ class StaffAttendanceConfigPermission(permissions.BasePermission):
             role_names = set(
                 request.user.user_roles.values_list('role__name', flat=True)
             )
-            if role_names.intersection({'HR', 'PS', 'ADMIN'}):
+            if role_names.intersection({'HR', 'PS', 'IQAC', 'ADMIN'}):
                 return True
 
         return bool(has_admin_perm)

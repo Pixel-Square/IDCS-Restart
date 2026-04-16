@@ -4,6 +4,8 @@ import {
   getTemplates,
   deleteTemplate,
   patchTemplate,
+  getVacationSettings,
+  saveVacationSettings,
   searchStaffForBalanceEdit,
   getBalancesByUser,
   setBalanceForUser,
@@ -12,7 +14,7 @@ import {
   getLateEntryMonthlyByUser,
   deleteLateEntryRecord,
 } from '../../services/staffRequests';
-import type { RequestTemplate } from '../../types/staffRequests';
+import type { RequestTemplate, VacationEntitlementRule, VacationSemester, VacationSlot } from '../../types/staffRequests';
 import TemplateEditorModal from './TemplateEditorModal';
 
 export default function TemplateManagementPage() {
@@ -40,6 +42,19 @@ export default function TemplateManagementPage() {
   const [lateEntryStats, setLateEntryStats] = useState<any | null>(null);
   const [loadingLateEntry, setLoadingLateEntry] = useState(false);
   const [deletingLateRequestId, setDeletingLateRequestId] = useState<number | null>(null);
+  const [activeConfigTab, setActiveConfigTab] = useState<'templates' | 'vacation'>('templates');
+  const [vacationRules, setVacationRules] = useState<VacationEntitlementRule[]>([]);
+  const [vacationSemesters, setVacationSemesters] = useState<VacationSemester[]>([]);
+  const [vacationSlots, setVacationSlots] = useState<VacationSlot[]>([]);
+  const [vacationLoading, setVacationLoading] = useState(false);
+  const [vacationSaving, setVacationSaving] = useState(false);
+  const [editingRuleRows, setEditingRuleRows] = useState<Record<number, boolean>>({});
+  const [editingSlotRows, setEditingSlotRows] = useState<Record<number, boolean>>({});
+  const [showCreateSemester, setShowCreateSemester] = useState(false);
+  const [expandedSemesterName, setExpandedSemesterName] = useState<string | null>(null);
+  const [newSemesterName, setNewSemesterName] = useState('');
+  const [newSemesterFrom, setNewSemesterFrom] = useState('');
+  const [newSemesterTo, setNewSemesterTo] = useState('');
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -57,6 +72,12 @@ export default function TemplateManagementPage() {
   useEffect(() => {
     loadTemplates();
   }, []);
+
+  useEffect(() => {
+    if (activeConfigTab === 'vacation') {
+      loadVacationSettings();
+    }
+  }, [activeConfigTab]);
 
   const handleCreate = () => {
     setEditingTemplate(null);
@@ -92,6 +113,99 @@ export default function TemplateManagementPage() {
     setShowEditor(false);
     setEditingTemplate(null);
     loadTemplates();
+  };
+
+  const loadVacationSettings = async () => {
+    try {
+      setVacationLoading(true);
+      const data = await getVacationSettings();
+      setVacationRules((data.rules || []).map((rule: VacationEntitlementRule) => ({
+        ...rule,
+        condition: rule.condition || '>=',
+      })));
+      setVacationSemesters((data.semesters || []).map((sem: VacationSemester) => ({
+        ...sem,
+      })));
+      setVacationSlots((data.slots || []).map((slot: VacationSlot) => ({
+        ...slot,
+        semester_from_date: slot.semester_from_date || null,
+        semester_to_date: slot.semester_to_date || null,
+      })));
+      setEditingRuleRows({});
+      setEditingSlotRows({});
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to load vacation settings');
+    } finally {
+      setVacationLoading(false);
+    }
+  };
+
+  const handleSaveVacationSettings = async () => {
+    try {
+      setVacationSaving(true);
+      await saveVacationSettings({ rules: vacationRules, semesters: vacationSemesters, slots: vacationSlots });
+      alert('Vacation settings saved successfully');
+      await loadVacationSettings();
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to save vacation settings');
+    } finally {
+      setVacationSaving(false);
+    }
+  };
+
+  const startRuleEdit = (idx: number) => {
+    setEditingRuleRows(prev => ({ ...prev, [idx]: true }));
+  };
+
+  const saveRuleRow = (idx: number) => {
+    setEditingRuleRows(prev => ({ ...prev, [idx]: false }));
+  };
+
+  const startSlotEdit = (idx: number) => {
+    setEditingSlotRows(prev => ({ ...prev, [idx]: true }));
+  };
+
+  const saveSlotRow = (idx: number) => {
+    setEditingSlotRows(prev => ({ ...prev, [idx]: false }));
+  };
+
+  const handleCreateSemester = () => {
+    const name = newSemesterName.trim();
+    if (!name || !newSemesterFrom || !newSemesterTo) {
+      alert('Semester name, from date and to date are required');
+      return;
+    }
+    if (newSemesterTo < newSemesterFrom) {
+      alert('Semester to date must be on or after semester from date');
+      return;
+    }
+    if (vacationSemesters.some(s => (s.name || '').toLowerCase() === name.toLowerCase())) {
+      alert('Semester name already exists');
+      return;
+    }
+
+    setVacationSemesters(prev => ([
+      ...prev,
+      { name, from_date: newSemesterFrom, to_date: newSemesterTo, is_active: true },
+    ]));
+    setExpandedSemesterName(name);
+    setShowCreateSemester(false);
+    setNewSemesterName('');
+    setNewSemesterFrom('');
+    setNewSemesterTo('');
+  };
+
+  const handleAddSlotForSemester = (semesterName: string) => {
+    setVacationSlots(prev => ([
+      ...prev,
+      {
+        semester: semesterName,
+        slot_name: '',
+        from_date: '',
+        to_date: '',
+        is_active: true,
+      },
+    ]));
   };
 
   const handleSearchStaff = async () => {
@@ -299,115 +413,482 @@ export default function TemplateManagementPage() {
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       <div className="bg-white rounded-lg shadow-md">
-        {/* Header */}
         <div className="border-b border-gray-200 px-6 py-4">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">Request Templates</h2>
+              <h2 className="text-2xl font-bold text-gray-900">
+                {activeConfigTab === 'templates' ? 'Request Templates' : 'Vacation Settings'}
+              </h2>
               <p className="text-sm text-gray-600 mt-1">
-                Create and manage dynamic forms for staff requests (Leaves, ODs, Permissions)
+                {activeConfigTab === 'templates'
+                  ? 'Create and manage dynamic forms for staff requests (Leaves, ODs, Permissions)'
+                  : 'Configure common vacation eligibility and slot windows for all staff'}
               </p>
             </div>
+            {activeConfigTab === 'templates' ? (
+              <button
+                onClick={handleCreate}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Plus size={20} />
+                Create Template
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSaveVacationSettings}
+                disabled={vacationSaving || vacationLoading}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
+              >
+                <Save size={16} />
+                {vacationSaving ? 'Saving...' : 'Save Vacation Settings'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="border-b border-gray-200 px-6">
+          <div className="flex gap-4">
             <button
-              onClick={handleCreate}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              onClick={() => setActiveConfigTab('templates')}
+              className={`py-3 px-4 font-medium border-b-2 transition-colors ${
+                activeConfigTab === 'templates'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
             >
-              <Plus size={20} />
-              Create Template
+              Request Templates
+            </button>
+            <button
+              onClick={() => setActiveConfigTab('vacation')}
+              className={`py-3 px-4 font-medium border-b-2 transition-colors ${
+                activeConfigTab === 'vacation'
+                  ? 'border-blue-600 text-blue-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Vacation Settings
             </button>
           </div>
         </div>
 
-        {/* Error Message */}
-        {error && (
+        {error && activeConfigTab === 'templates' && (
           <div className="mx-6 mt-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
             {error}
           </div>
         )}
 
-        {/* Templates List */}
         <div className="p-6">
-          {templates.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <p className="mb-4">No templates created yet.</p>
-              <button
-                onClick={handleCreate}
-                className="text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Create your first template
-              </button>
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              {templates.map((template) => (
-                <div
-                  key={template.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+          {activeConfigTab === 'templates' ? (
+            templates.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <p className="mb-4">No templates created yet.</p>
+                <button
+                  onClick={handleCreate}
+                  className="text-blue-600 hover:text-blue-700 font-medium"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="text-lg font-semibold text-gray-900">
-                          {template.name}
-                        </h3>
-                        <span
-                          className={`px-2 py-1 text-xs font-medium rounded ${
-                            template.is_active
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-gray-100 text-gray-800'
-                          }`}
-                        >
-                          {template.is_active ? 'Active' : 'Inactive'}
-                        </span>
+                  Create your first template
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {templates.map((template) => (
+                  <div
+                    key={template.id}
+                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="text-lg font-semibold text-gray-900">
+                            {template.name}
+                          </h3>
+                          <span
+                            className={`px-2 py-1 text-xs font-medium rounded ${
+                              template.is_active
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-gray-100 text-gray-800'
+                            }`}
+                          >
+                            {template.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-3">
+                          {template.description || 'No description'}
+                        </p>
+                        <div className="flex flex-wrap gap-4 text-sm text-gray-700">
+                          <div>
+                            <span className="font-medium">Form Fields:</span> {template.form_schema?.length || 0}
+                          </div>
+                          <div>
+                            <span className="font-medium">Approval Steps:</span> {template.total_steps || 0}
+                          </div>
+                          <div>
+                            <span className="font-medium">Allowed Roles:</span>{' '}
+                            {template.allowed_roles?.length > 0
+                              ? template.allowed_roles.join(', ')
+                              : 'All'}
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-sm text-gray-600 mb-3">
-                        {template.description || 'No description'}
-                      </p>
-                      <div className="flex flex-wrap gap-4 text-sm text-gray-700">
-                        <div>
-                          <span className="font-medium">Form Fields:</span> {template.form_schema?.length || 0}
-                        </div>
-                        <div>
-                          <span className="font-medium">Approval Steps:</span> {template.total_steps || 0}
-                        </div>
-                        <div>
-                          <span className="font-medium">Allowed Roles:</span>{' '}
-                          {template.allowed_roles?.length > 0
-                            ? template.allowed_roles.join(', ')
-                            : 'All'}
-                        </div>
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={() => handleToggleActive(template)}
+                          className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
+                          title={template.is_active ? 'Deactivate' : 'Activate'}
+                        >
+                          {template.is_active ? (
+                            <ToggleRight size={20} className="text-green-600" />
+                          ) : (
+                            <ToggleLeft size={20} />
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleEdit(template)}
+                          className="p-2 text-blue-600 hover:text-blue-900 hover:bg-blue-50 rounded"
+                          title="Edit"
+                        >
+                          <Edit2 size={20} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(template.id!)}
+                          className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded"
+                          title="Delete"
+                        >
+                          <Trash2 size={20} />
+                        </button>
                       </div>
                     </div>
-                    <div className="flex gap-2 ml-4">
+                  </div>
+                ))}
+              </div>
+            )
+          ) : vacationLoading ? (
+            <div className="text-sm text-gray-600">Loading vacation settings...</div>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-blue-900">
+                  These settings are shared for all staff vacation forms and do not vary per template.
+                </p>
+              </div>
+
+              <div className="border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-gray-900">Eligibility Rules (By Experience)</h4>
+                  <button
+                    type="button"
+                    onClick={() => setVacationRules(prev => ([...prev, { condition: '>=', min_years: 0, min_months: 0, entitled_days: 0, is_active: true }]))}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >
+                    Add Rule
+                  </button>
+                </div>
+                <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide px-1">
+                  <div className="col-span-2">Condition</div>
+                  <div className="col-span-2">Years</div>
+                  <div className="col-span-2">Months</div>
+                  <div className="col-span-2">Vacation Days</div>
+                  <div className="col-span-2">Notes</div>
+                  <div className="col-span-2">Actions</div>
+                </div>
+                {vacationRules.map((rule, idx) => {
+                  const rowEditing = !!editingRuleRows[idx];
+                  return (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center border rounded p-2">
+                    {rowEditing ? (
+                      <>
+                        <select
+                          value={rule.condition || '>='}
+                          onChange={(e) => {
+                            const v = e.target.value as VacationEntitlementRule['condition'];
+                            setVacationRules(prev => prev.map((r, i) => i === idx ? { ...r, condition: v } : r));
+                          }}
+                          className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                        >
+                          <option value=">">&gt;</option>
+                          <option value="<">&lt;</option>
+                          <option value="=">=</option>
+                          <option value=">=">&gt;=</option>
+                          <option value="<=">&lt;=</option>
+                        </select>
+                        <input
+                          type="number"
+                          min={0}
+                          value={rule.min_years}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value || '0', 10);
+                            setVacationRules(prev => prev.map((r, i) => i === idx ? { ...r, min_years: Number.isNaN(v) ? 0 : v } : r));
+                          }}
+                          className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={11}
+                          value={rule.min_months}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value || '0', 10);
+                            setVacationRules(prev => prev.map((r, i) => i === idx ? { ...r, min_months: Number.isNaN(v) ? 0 : Math.min(11, Math.max(0, v)) } : r));
+                          }}
+                          className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          value={rule.entitled_days}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value || '0', 10);
+                            setVacationRules(prev => prev.map((r, i) => i === idx ? { ...r, entitled_days: Number.isNaN(v) ? 0 : v } : r));
+                          }}
+                          className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                        />
+                        <input
+                          type="text"
+                          value={rule.notes || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setVacationRules(prev => prev.map((r, i) => i === idx ? { ...r, notes: v } : r));
+                          }}
+                          className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                          placeholder="Optional"
+                        />
+                        <div className="col-span-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => saveRuleRow(idx)}
+                            className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVacationRules(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-xs text-red-600 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="col-span-2 text-sm text-gray-800">{rule.condition || '>='}</div>
+                        <div className="col-span-2 text-sm text-gray-800">{rule.min_years}</div>
+                        <div className="col-span-2 text-sm text-gray-800">{rule.min_months}</div>
+                        <div className="col-span-2 text-sm text-gray-800">{rule.entitled_days}</div>
+                        <div className="col-span-2 text-sm text-gray-600 truncate" title={rule.notes || ''}>{rule.notes || '-'}</div>
+                        <div className="col-span-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startRuleEdit(idx)}
+                            className="px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVacationRules(prev => prev.filter((_, i) => i !== idx))}
+                            className="text-xs text-red-600 hover:text-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )})}
+              </div>
+
+              <div className="border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-gray-900">Vacation Semesters & Slots</h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateSemester(prev => !prev)}
+                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >
+                    {showCreateSemester ? 'Close' : 'Create Semester'}
+                  </button>
+                </div>
+                {showCreateSemester && (
+                  <div className="border rounded-md p-3 bg-gray-50 grid grid-cols-12 gap-2 items-end">
+                    <div className="col-span-4">
+                      <label className="block text-xs text-gray-600 mb-1">Semester Name</label>
+                      <input
+                        type="text"
+                        value={newSemesterName}
+                        onChange={(e) => setNewSemesterName(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded"
+                        placeholder="Sem 1"
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <label className="block text-xs text-gray-600 mb-1">Semester From</label>
+                      <input
+                        type="date"
+                        value={newSemesterFrom}
+                        onChange={(e) => setNewSemesterFrom(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded"
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <label className="block text-xs text-gray-600 mb-1">Semester To</label>
+                      <input
+                        type="date"
+                        value={newSemesterTo}
+                        onChange={(e) => setNewSemesterTo(e.target.value)}
+                        className="w-full px-2 py-1.5 border border-gray-300 rounded"
+                      />
+                    </div>
+                    <div className="col-span-2">
                       <button
-                        onClick={() => handleToggleActive(template)}
-                        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded"
-                        title={template.is_active ? 'Deactivate' : 'Activate'}
+                        type="button"
+                        onClick={handleCreateSemester}
+                        className="w-full px-2 py-1.5 text-sm rounded bg-green-600 text-white hover:bg-green-700"
                       >
-                        {template.is_active ? (
-                          <ToggleRight size={20} className="text-green-600" />
-                        ) : (
-                          <ToggleLeft size={20} />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => handleEdit(template)}
-                        className="p-2 text-blue-600 hover:text-blue-900 hover:bg-blue-50 rounded"
-                        title="Edit"
-                      >
-                        <Edit2 size={20} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(template.id!)}
-                        className="p-2 text-red-600 hover:text-red-900 hover:bg-red-50 rounded"
-                        title="Delete"
-                      >
-                        <Trash2 size={20} />
+                        Create
                       </button>
                     </div>
                   </div>
-                </div>
-              ))}
+                )}
+
+                {vacationSemesters.length === 0 ? (
+                  <div className="text-sm text-gray-500">No semesters configured yet. Click Create Semester first.</div>
+                ) : (
+                  <div className="space-y-3">
+                    {vacationSemesters.map((sem) => {
+                      const isExpanded = expandedSemesterName === sem.name;
+                      const semSlots = vacationSlots
+                        .map((slot, idx) => ({ slot, idx }))
+                        .filter(({ slot }) => (slot.semester || '').toLowerCase() === (sem.name || '').toLowerCase());
+
+                      return (
+                        <div key={sem.name} className="border rounded-lg">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedSemesterName(isExpanded ? null : sem.name)}
+                            className="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-gray-50"
+                          >
+                            <div>
+                              <div className="font-semibold text-gray-900">{sem.name}</div>
+                              <div className="text-xs text-gray-600">{sem.from_date} to {sem.to_date}</div>
+                            </div>
+                            <span className="text-xs text-gray-500">{isExpanded ? 'Hide Slots' : 'Manage Slots'}</span>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="border-t p-3 space-y-2">
+                              <div className="flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddSlotForSemester(sem.name)}
+                                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                                >
+                                  Add Slot in {sem.name}
+                                </button>
+                              </div>
+
+                              <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide px-1">
+                                <div className="col-span-4">Slot Name</div>
+                                <div className="col-span-3">Slot From</div>
+                                <div className="col-span-3">Slot To</div>
+                                <div className="col-span-2">Actions</div>
+                              </div>
+
+                              {semSlots.length === 0 ? (
+                                <div className="text-sm text-gray-500 px-1">No slots created under this semester.</div>
+                              ) : semSlots.map(({ slot, idx }) => {
+                                const rowEditing = !!editingSlotRows[idx];
+                                return (
+                                  <div key={`${sem.name}-${idx}`} className="grid grid-cols-12 gap-2 items-center border rounded p-2">
+                                    {rowEditing ? (
+                                      <>
+                                        <input
+                                          type="text"
+                                          value={slot.slot_name || ''}
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            setVacationSlots(prev => prev.map((s, i) => i === idx ? { ...s, slot_name: v } : s));
+                                          }}
+                                          className="col-span-4 px-2 py-1.5 border border-gray-300 rounded"
+                                          placeholder="Slot 1"
+                                        />
+                                        <input
+                                          type="date"
+                                          value={slot.from_date || ''}
+                                          min={sem.from_date}
+                                          max={sem.to_date}
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            setVacationSlots(prev => prev.map((s, i) => i === idx ? { ...s, from_date: v } : s));
+                                          }}
+                                          className="col-span-3 px-2 py-1.5 border border-gray-300 rounded"
+                                        />
+                                        <input
+                                          type="date"
+                                          value={slot.to_date || ''}
+                                          min={sem.from_date}
+                                          max={sem.to_date}
+                                          onChange={(e) => {
+                                            const v = e.target.value;
+                                            setVacationSlots(prev => prev.map((s, i) => i === idx ? { ...s, to_date: v } : s));
+                                          }}
+                                          className="col-span-3 px-2 py-1.5 border border-gray-300 rounded"
+                                        />
+                                        <div className="col-span-2 flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => saveSlotRow(idx)}
+                                            className="px-2 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700"
+                                          >
+                                            Save
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setVacationSlots(prev => prev.filter((_, i) => i !== idx))}
+                                            className="text-xs text-red-600 hover:text-red-700"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div className="col-span-4 text-sm text-gray-800">{slot.slot_name || '-'}</div>
+                                        <div className="col-span-3 text-sm text-gray-800">{slot.from_date || '-'}</div>
+                                        <div className="col-span-3 text-sm text-gray-800">{slot.to_date || '-'}</div>
+                                        <div className="col-span-2 flex items-center gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => startSlotEdit(idx)}
+                                            className="px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setVacationSlots(prev => prev.filter((_, i) => i !== idx))}
+                                            className="text-xs text-red-600 hover:text-red-700"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-gray-500">
+                  Semester is declared once. Then add all slot ranges inside the expanded semester section.
+                </p>
+              </div>
             </div>
           )}
         </div>
