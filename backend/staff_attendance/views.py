@@ -2925,6 +2925,19 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
         Returns department-specific settings if available, otherwise global settings.
         Available to all staff."""
         result = {}
+
+        # Resolve global settings singleton first so caller can always patch the
+        # authoritative row for values that are global-only (e.g., essl_skip_minutes).
+        global_settings, _ = AttendanceSettings.objects.get_or_create(
+            id=1,
+            defaults={
+                'attendance_in_time_limit': '08:45:00',
+                'attendance_out_time_limit': '17:45:00',
+                'essl_skip_minutes': 30,
+                'apply_time_based_absence': True,
+                'updated_by': request.user
+            }
+        )
         
         # Try to get department-specific settings
         dept_settings = None
@@ -2940,21 +2953,14 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
             from .serializers import DepartmentAttendanceSettingsSerializer
             result = DepartmentAttendanceSettingsSerializer(dept_settings).data
             result['is_department_specific'] = True
+            result['global_settings_id'] = global_settings.id
+            result['essl_skip_minutes'] = global_settings.essl_skip_minutes
         else:
             # Fall back to global settings
-            settings, created = AttendanceSettings.objects.get_or_create(
-                id=1,
-                defaults={
-                    'attendance_in_time_limit': '08:45:00',
-                    'attendance_out_time_limit': '17:45:00',
-                    'essl_skip_minutes': 30,
-                    'apply_time_based_absence': True,
-                    'updated_by': request.user
-                }
-            )
             from .serializers import AttendanceSettingsSerializer
-            result = AttendanceSettingsSerializer(settings).data
+            result = AttendanceSettingsSerializer(global_settings).data
             result['is_department_specific'] = False
+            result['global_settings_id'] = global_settings.id
         
         return Response(result)
 

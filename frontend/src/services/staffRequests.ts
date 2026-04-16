@@ -179,6 +179,15 @@ export async function recalculateLopBalances(): Promise<any> {
   return res.data;
 }
 
+export async function recalculateAttendanceBalances(data: { year: number; month: number }): Promise<any> {
+  const res = await apiClient.post(
+    `${BASE_URL}/requests/balances/recalculate_attendance/`,
+    data,
+    { timeout: 180000 }
+  );
+  return res.data;
+}
+
 export async function getLateEntryMonthlyByUser(userId: number, month?: string): Promise<any> {
   const params: Record<string, any> = { user_id: userId };
   if (month) params.month = month;

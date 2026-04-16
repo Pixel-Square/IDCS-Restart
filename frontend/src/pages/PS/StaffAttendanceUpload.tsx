@@ -127,6 +127,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const [lunchToLimit, setLunchToLimit] = useState('');
   const [esslSkippingTime, setEsslSkippingTime] = useState(30);
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
+  const [attendanceSettingsId, setAttendanceSettingsId] = useState<number>(1);
   const [loadingSettings, setLoadingSettings] = useState(false);
 
   // Department-specific settings states
@@ -388,6 +389,9 @@ const StaffAttendanceUpload: React.FC = () => {
     try {
       const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
       const settings = response.data;
+
+      const resolvedSettingsId = Number(settings.global_settings_id ?? settings.id ?? 1);
+      setAttendanceSettingsId(Number.isNaN(resolvedSettingsId) ? 1 : resolvedSettingsId);
       
       // Convert time format from "HH:MM:SS" to "HH:MM"
       setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
@@ -507,7 +511,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const handleSaveSettings = async () => {
     setLoadingSettings(true);
     try {
-      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/1/`, {
+      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/${attendanceSettingsId}/`, {
         attendance_in_time_limit: `${inTimeLimit}:00`,
         attendance_out_time_limit: `${outTimeLimit}:00`,
         lunch_from: lunchFromLimit ? `${lunchFromLimit}:00` : null,
@@ -517,6 +521,7 @@ const StaffAttendanceUpload: React.FC = () => {
       });
       
       alert('Attendance settings saved successfully!');
+      await fetchAttendanceSettings();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save settings');
     } finally {

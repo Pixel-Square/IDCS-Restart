@@ -8,6 +8,7 @@ import {
   getBalancesByUser,
   setBalanceForUser,
   recalculateLopBalances,
+  recalculateAttendanceBalances,
   getLateEntryMonthlyByUser,
   deleteLateEntryRecord,
 } from '../../services/staffRequests';
@@ -29,6 +30,7 @@ export default function TemplateManagementPage() {
   const [loadingBalances, setLoadingBalances] = useState(false);
   const [savingBalanceKey, setSavingBalanceKey] = useState<string | null>(null);
   const [recalculatingLop, setRecalculatingLop] = useState(false);
+  const [recalculatingAttendance, setRecalculatingAttendance] = useState(false);
   const [lateEntryMonth, setLateEntryMonth] = useState(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -222,6 +224,52 @@ export default function TemplateManagementPage() {
     }
   };
 
+  const handleRecalculateAttendance = async () => {
+    const now = new Date();
+    const defaultYear = String(now.getFullYear());
+    const defaultMonth = String(now.getMonth() + 1).padStart(2, '0');
+
+    const yearInput = window.prompt('Enter year to recalculate attendance (YYYY):', defaultYear);
+    if (yearInput === null) return;
+    const monthInput = window.prompt('Enter month to recalculate attendance (1-12):', defaultMonth);
+    if (monthInput === null) return;
+
+    const year = Number(yearInput);
+    const month = Number(monthInput);
+
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      alert('Invalid year. Please enter a valid year between 2000 and 2100.');
+      return;
+    }
+
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      alert('Invalid month. Please enter a value between 1 and 12.');
+      return;
+    }
+
+    if (!window.confirm(`Recalculate attendance for ${year}-${String(month).padStart(2, '0')} only?`)) return;
+
+    try {
+      setRecalculatingAttendance(true);
+      const res = await recalculateAttendanceBalances({ year, month });
+      alert(
+        `Attendance recalculation completed for ${res?.year ?? year}-${String(res?.month ?? month).padStart(2, '0')}. ` +
+          `Processed: ${res?.processed_users ?? 0}, ` +
+          `Absent rows created: ${res?.absent_rows_created ?? 0}, ` +
+          `Attendance rows updated: ${res?.attendance_rows_updated ?? 0}, ` +
+          `LOP balances updated: ${res?.lop_balances_updated ?? 0}`
+      );
+
+      if (selectedStaff) {
+        await reloadSelectedStaffData();
+      }
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to recalculate attendance');
+    } finally {
+      setRecalculatingAttendance(false);
+    }
+  };
+
   useEffect(() => {
     if (!selectedStaff) return;
 
@@ -374,15 +422,26 @@ export default function TemplateManagementPage() {
                 HR can search staff and edit balances directly (CL, OD, COL, LOP, Others, etc.)
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleRecalculateLop}
-              disabled={recalculatingLop}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
-            >
-              <RefreshCw size={16} className={recalculatingLop ? 'animate-spin' : ''} />
-              {recalculatingLop ? 'Recalculating...' : 'Recalculate LOP'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleRecalculateAttendance}
+                disabled={recalculatingAttendance}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                <RefreshCw size={16} className={recalculatingAttendance ? 'animate-spin' : ''} />
+                {recalculatingAttendance ? 'Recalculating...' : 'Recalculate attendance'}
+              </button>
+              <button
+                type="button"
+                onClick={handleRecalculateLop}
+                disabled={recalculatingLop}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60"
+              >
+                <RefreshCw size={16} className={recalculatingLop ? 'animate-spin' : ''} />
+                {recalculatingLop ? 'Recalculating...' : 'Recalculate LOP'}
+              </button>
+            </div>
           </div>
         </div>
 

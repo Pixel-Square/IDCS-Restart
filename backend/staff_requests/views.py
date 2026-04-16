@@ -7,6 +7,7 @@ from django.db.models import Q, Prefetch
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from datetime import date as date_type
+from calendar import monthrange
 
 from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance
 from staff_salary.models import SalaryMonthPublish
@@ -4715,6 +4716,399 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         return dates
 
+    def _build_attendance_protection_map(self, user, start_date=None, end_date=None):
+        """Map date -> protected shifts (FN/AN/FULL) changed by approved forms."""
+        protected_by_date = {}
+
+        approved_requests_for_attendance = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+        ).select_related('template')
+
+        for req in approved_requests_for_attendance:
+            template = getattr(req, 'template', None)
+            if not template:
+                continue
+
+            leave_policy = getattr(template, 'leave_policy', None) or {}
+            attendance_action = getattr(template, 'attendance_action', None) or {}
+            impacts_attendance = bool(leave_policy.get('attendance_status')) or bool(attendance_action.get('change_status'))
+            if not impacts_attendance:
+                continue
+
+            try:
+                targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
+            except Exception:
+                targets = []
+
+            for target_date, target_shift in targets:
+                if not target_date:
+                    continue
+                if start_date and target_date < start_date:
+                    continue
+                if end_date and target_date > end_date:
+                    continue
+                shift_token = str(target_shift or '').strip().upper() or 'FULL'
+                protected_by_date.setdefault(target_date, set()).add(shift_token)
+
+        return protected_by_date
+
+    def _is_lop_attendance_template(self, template):
+        """Best-effort check: template explicitly drives LOP attendance behavior."""
+        if not template:
+            return False
+
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        attendance_status = str(leave_policy.get('attendance_status') or '').strip().upper()
+        if attendance_status == 'LOP':
+            return True
+
+        template_name = str(getattr(template, 'name', '') or '').strip().upper()
+        return 'LOP' in template_name
+
+    def _build_holiday_lop_request_map(self, user, start_date=None, end_date=None, holiday_dates=None):
+        """Map holiday date -> requested LOP units and shifts from approved forms."""
+        lop_map = {}
+
+        approved_requests = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+        ).select_related('template')
+
+        for req in approved_requests:
+            if not self._is_lop_attendance_template(getattr(req, 'template', None)):
+                continue
+
+            try:
+                targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
+            except Exception:
+                targets = []
+
+            for target_date, target_shift in targets:
+                if not target_date:
+                    continue
+                if start_date and target_date < start_date:
+                    continue
+                if end_date and target_date > end_date:
+                    continue
+                is_holiday = (target_date in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(target_date, user)
+                if target_date.weekday() != 6 and not is_holiday:
+                    continue
+
+                shift_token = str(target_shift or '').strip().upper() or 'FULL'
+                unit = 1.0 if shift_token == 'FULL' else 0.5
+
+                row = lop_map.setdefault(target_date, {'units': 0.0, 'shifts': set()})
+                row['units'] = min(1.0, float(row['units']) + float(unit))
+                row['shifts'].add(shift_token)
+
+        return lop_map
+
+    def _worked_minutes(self, record):
+        """Return worked minutes from in/out times (0 when incomplete)."""
+        from datetime import datetime, timedelta
+
+        if not record.morning_in or not record.evening_out:
+            return 0
+
+        start_dt = datetime.combine(record.date, record.morning_in)
+        end_dt = datetime.combine(record.date, record.evening_out)
+        if end_dt < start_dt:
+            end_dt = end_dt + timedelta(days=1)
+
+        return max(0, int((end_dt - start_dt).total_seconds() // 60))
+
+    def _backfill_missing_working_dates_as_absent(self, user, start_date=None, end_date=None, holiday_dates=None):
+        """Create absent rows for missing working dates between existing attendance dates."""
+        from datetime import timedelta
+        from staff_attendance.models import AttendanceRecord
+
+        qs = AttendanceRecord.objects.filter(user=user)
+        if start_date:
+            qs = qs.filter(date__gte=start_date)
+        if end_date:
+            qs = qs.filter(date__lte=end_date)
+
+        record_dates = list(qs.order_by('date').values_list('date', flat=True))
+
+        if len(record_dates) < 2:
+            return 0
+
+        existing_dates = set(record_dates)
+        created_count = 0
+
+        for idx in range(len(record_dates) - 1):
+            current_date = record_dates[idx]
+            next_date = record_dates[idx + 1]
+
+            cursor = current_date + timedelta(days=1)
+            while cursor < next_date:
+                is_holiday = (cursor in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(cursor, user)
+                if cursor not in existing_dates and cursor.weekday() != 6 and not is_holiday:
+                    AttendanceRecord.objects.create(
+                        user=user,
+                        date=cursor,
+                        morning_in=None,
+                        evening_out=None,
+                        fn_status='absent',
+                        an_status='absent',
+                        status='absent',
+                        notes='Auto-marked absent (missing attendance between working dates)'
+                    )
+                    existing_dates.add(cursor)
+                    created_count += 1
+
+                cursor += timedelta(days=1)
+
+        return created_count
+
+    def _recalculate_attendance_rows_for_user(self, user, protected_by_date, holiday_lop_map, start_date=None, end_date=None, holiday_dates=None):
+        """Recompute FN/AN/status with holiday and LOP-on-holiday rules."""
+        from staff_attendance.models import AttendanceRecord
+        from .models import StaffLeaveBalance
+
+        updated_count = 0
+        lop_balance_changed = False
+        lop_delta_total = 0.0
+
+        def _marker_token(target_date, units):
+            return f'LOP_HOLIDAY_CREDIT:{target_date.isoformat()}:{units:.1f}'
+
+        def _split_note_tokens(notes):
+            return [p.strip() for p in str(notes or '').split(';') if p.strip()]
+
+        records_qs = AttendanceRecord.objects.filter(user=user)
+        if start_date:
+            records_qs = records_qs.filter(date__gte=start_date)
+        if end_date:
+            records_qs = records_qs.filter(date__lte=end_date)
+
+        for record in records_qs.iterator(chunk_size=500):
+            protected_shifts = protected_by_date.get(record.date, set())
+            protect_fn = 'FULL' in protected_shifts or 'FN' in protected_shifts
+            protect_an = 'FULL' in protected_shifts or 'AN' in protected_shifts
+
+            is_holiday = (record.date in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(record.date, user)
+            is_holiday_day = record.date.weekday() == 6 or is_holiday
+
+            original_fn = record.fn_status
+            original_an = record.an_status
+            original_status = record.status
+            original_notes = record.notes
+
+            if is_holiday_day:
+                # Rule 1: If date became a holiday and no approved-form session is protecting it,
+                # clear attendance statuses only (keep in/out times untouched).
+                lop_req = holiday_lop_map.get(record.date)
+
+                if lop_req:
+                    requested_units = float(lop_req.get('units') or 0.0)
+                    requested_shifts = set(lop_req.get('shifts') or set())
+                    required_minutes = 240 if requested_units <= 0.5 else 480
+                    worked_minutes = self._worked_minutes(record)
+                    qualifies = worked_minutes >= required_minutes
+
+                    # Half-day LOP request: evaluate requested session only.
+                    if requested_units <= 0.5 and requested_shifts:
+                        if 'FN' in requested_shifts and 'AN' not in requested_shifts:
+                            record.fn_status = 'present' if qualifies else 'absent'
+                            record.an_status = None
+                        elif 'AN' in requested_shifts and 'FN' not in requested_shifts:
+                            record.an_status = 'present' if qualifies else 'absent'
+                            record.fn_status = None
+                        else:
+                            # If shift is ambiguous, treat as full-day requirement mapping.
+                            record.fn_status = 'present' if qualifies else 'absent'
+                            record.an_status = 'present' if qualifies else 'absent'
+                    else:
+                        # Full-day LOP request.
+                        record.fn_status = 'present' if qualifies else 'absent'
+                        record.an_status = 'present' if qualifies else 'absent'
+
+                    # Idempotent LOP balance mutation for holiday-work credits:
+                    # - Qualifies => increment by requested units once.
+                    # - No longer qualifies => rollback previously granted increment.
+                    marker = _marker_token(record.date, requested_units)
+                    tokens = _split_note_tokens(record.notes)
+                    has_marker = marker in tokens
+
+                    if qualifies and not has_marker:
+                        lop_delta_total += requested_units
+                        tokens.append(marker)
+                    elif (not qualifies) and has_marker:
+                        lop_delta_total -= requested_units
+                        tokens = [tok for tok in tokens if tok != marker]
+
+                    record.notes = '; '.join(tokens)
+                elif not protect_fn and not protect_an:
+                    record.fn_status = None
+                    record.an_status = None
+
+                record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+
+                if (
+                    record.fn_status != original_fn
+                    or record.an_status != original_an
+                    or record.status != original_status
+                    or record.notes != original_notes
+                ):
+                    record.save(update_fields=['fn_status', 'an_status', 'status', 'notes'])
+                    updated_count += 1
+
+                continue
+
+            protected_fn_value = original_fn if protect_fn else None
+            protected_an_value = original_an if protect_an else None
+
+            record.update_status(defer_an_until_out=False)
+
+            if protect_fn:
+                record.fn_status = protected_fn_value
+            if protect_an:
+                record.an_status = protected_an_value
+
+            record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+
+            if record.fn_status != original_fn or record.an_status != original_an or record.status != original_status:
+                record.save(update_fields=['fn_status', 'an_status', 'status'])
+                updated_count += 1
+
+        if abs(lop_delta_total) > 0.0001:
+            lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type='LOP',
+                defaults={'balance': 0.0}
+            )
+            old_balance = float(lop_balance.balance or 0.0)
+            new_balance = max(0.0, round(old_balance + lop_delta_total, 2))
+            if new_balance != old_balance:
+                lop_balance.balance = new_balance
+                lop_balance.save(update_fields=['balance', 'updated_at'])
+                lop_balance_changed = True
+
+        return updated_count, lop_balance_changed
+
+    @action(detail=False, methods=['post'], url_path='balances/recalculate_attendance')
+    def recalculate_attendance_balances(self, request):
+        """
+        HR/Admin: recalculate FN/AN/status and backfill gaps for a selected month/year.
+        Leaves/approved-form modified FN/AN sessions are preserved.
+        POST /api/staff-requests/requests/balances/recalculate_attendance/
+        """
+        from .permissions import IsAdminOrHR
+        from staff_attendance.models import AttendanceRecord
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can recalculate attendance'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            year = int(request.data.get('year'))
+            month = int(request.data.get('month'))
+        except (TypeError, ValueError):
+            return Response({'error': 'year and month are required as numbers'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if month < 1 or month > 12:
+            return Response({'error': 'month must be between 1 and 12'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if year < 2000 or year > 2100:
+            return Response({'error': 'year must be between 2000 and 2100'}, status=status.HTTP_400_BAD_REQUEST)
+
+        start_date = date_type(year, month, 1)
+        end_date = date_type(year, month, monthrange(year, month)[1])
+
+        User = get_user_model()
+        month_user_ids = list(
+            AttendanceRecord.objects.filter(date__gte=start_date, date__lte=end_date)
+            .values_list('user_id', flat=True)
+            .distinct()
+        )
+
+        users = User.objects.filter(
+            is_active=True,
+            staff_profile__isnull=False,
+            id__in=month_user_ids,
+        ).distinct()
+
+        # Build holiday lookup once for this month and all target users to avoid
+        # repetitive per-day DB queries during recalculation.
+        from staff_attendance.models import Holiday
+
+        month_holidays = list(
+            Holiday.objects.filter(date__gte=start_date, date__lte=end_date).prefetch_related('departments')
+        )
+        global_holiday_dates = set()
+        dept_holiday_dates = {}
+
+        for holiday in month_holidays:
+            dept_ids = list(holiday.departments.values_list('id', flat=True))
+            if not dept_ids:
+                global_holiday_dates.add(holiday.date)
+                continue
+            for dept_id in dept_ids:
+                dept_holiday_dates.setdefault(dept_id, set()).add(holiday.date)
+
+        holiday_dates_by_user = {}
+        for user in users:
+            user_dept_id = None
+            try:
+                if hasattr(user, 'staff_profile') and user.staff_profile:
+                    dept = user.staff_profile.get_current_department()
+                    if dept:
+                        user_dept_id = dept.id
+            except Exception:
+                user_dept_id = None
+
+            merged = set(global_holiday_dates)
+            if user_dept_id in dept_holiday_dates:
+                merged.update(dept_holiday_dates.get(user_dept_id, set()))
+            holiday_dates_by_user[user.id] = merged
+
+        processed_users = 0
+        absent_rows_created = 0
+        attendance_rows_updated = 0
+        lop_balances_updated = 0
+        failed_users = []
+
+        for user in users:
+            processed_users += 1
+            try:
+                user_holiday_dates = holiday_dates_by_user.get(user.id, set())
+                protected_by_date = self._build_attendance_protection_map(user, start_date, end_date)
+                holiday_lop_map = self._build_holiday_lop_request_map(user, start_date, end_date, user_holiday_dates)
+                absent_rows_created += self._backfill_missing_working_dates_as_absent(user, start_date, end_date, user_holiday_dates)
+                updated_rows, lop_changed = self._recalculate_attendance_rows_for_user(
+                    user,
+                    protected_by_date,
+                    holiday_lop_map,
+                    start_date,
+                    end_date,
+                    user_holiday_dates,
+                )
+                attendance_rows_updated += updated_rows
+                if lop_changed:
+                    lop_balances_updated += 1
+            except Exception as exc:
+                failed_users.append({
+                    'user_id': user.id,
+                    'username': user.username,
+                    'error': str(exc),
+                })
+
+        return Response({
+            'success': True,
+            'message': 'Attendance recalculation completed successfully',
+            'year': year,
+            'month': month,
+            'from_date': start_date.isoformat(),
+            'to_date': end_date.isoformat(),
+            'processed_users': processed_users,
+            'absent_rows_created': absent_rows_created,
+            'attendance_rows_updated': attendance_rows_updated,
+            'lop_balances_updated': lop_balances_updated,
+            'failed_users_count': len(failed_users),
+            'failed_users': failed_users[:50],
+        })
+
     @action(detail=False, methods=['post'], url_path='balances/recalculate_lop')
     def recalculate_lop_balances(self, request):
         """
@@ -4732,84 +5126,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         processed_users = 0
         updated_users = 0
-        attendance_rows_updated = 0
-
-        def _overall_status_from_sessions(fn_status, an_status):
-            if fn_status is None and an_status is None:
-                return 'absent'
-            if fn_status is None:
-                return an_status
-            if an_status is None:
-                return fn_status
-            if fn_status == an_status:
-                return fn_status
-            if fn_status != 'absent' or an_status != 'absent':
-                return 'half_day'
-            return 'absent'
 
         for user in users:
             processed_users += 1
 
-            # 1) First, fix biometric FN/AN for this staff while preserving any
-            #    sessions that were intentionally changed by approved forms
-            #    (Late Entry Permission, CL/OD/etc attendance_status sync, etc.).
-            protected_by_date = {}
-            approved_requests_for_attendance = StaffRequest.objects.filter(
-                applicant=user,
-                status='approved',
-            ).select_related('template')
-
-            for req in approved_requests_for_attendance:
-                template = getattr(req, 'template', None)
-                if not template:
-                    continue
-
-                leave_policy = getattr(template, 'leave_policy', None) or {}
-                attendance_action = getattr(template, 'attendance_action', None) or {}
-
-                impacts_attendance = bool((leave_policy or {}).get('attendance_status')) or bool(attendance_action.get('change_status'))
-                if not impacts_attendance:
-                    continue
-
-                try:
-                    targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
-                except Exception:
-                    targets = []
-
-                for target_date, target_shift in targets:
-                    if not target_date:
-                        continue
-                    shift_token = str(target_shift or '').strip().upper() or 'FULL'
-                    protected_by_date.setdefault(target_date, set()).add(shift_token)
-
-            for record in AttendanceRecord.objects.filter(user=user).iterator(chunk_size=500):
-                protected_shifts = protected_by_date.get(record.date, set())
-                protect_fn = 'FULL' in protected_shifts or 'FN' in protected_shifts
-                protect_an = 'FULL' in protected_shifts or 'AN' in protected_shifts
-
-                original_fn = record.fn_status
-                original_an = record.an_status
-                original_status = record.status
-
-                protected_fn_value = original_fn if protect_fn else None
-                protected_an_value = original_an if protect_an else None
-
-                # Recompute biometric statuses (respects time limits + staff noon split).
-                record.update_status(defer_an_until_out=False)
-
-                # Restore sessions that were explicitly controlled by forms.
-                if protect_fn:
-                    record.fn_status = protected_fn_value
-                if protect_an:
-                    record.an_status = protected_an_value
-
-                record.status = _overall_status_from_sessions(record.fn_status, record.an_status)
-
-                if record.fn_status != original_fn or record.an_status != original_an or record.status != original_status:
-                    record.save(update_fields=['fn_status', 'an_status', 'status'])
-                    attendance_rows_updated += 1
-
-            # 2) Now compute LOP based on corrected attendance
+            # Recalculate LOP strictly from currently available attendance records.
             attendance_records = AttendanceRecord.objects.filter(user=user)
             absent_units_by_date = {}
             for record in attendance_records:
@@ -4864,7 +5185,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'message': 'LOP recalculation completed successfully',
             'processed_users': processed_users,
             'updated_users': updated_users,
-            'attendance_rows_updated': attendance_rows_updated,
         })
 
     @action(detail=False, methods=['get'])
