@@ -4895,6 +4895,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             original_an = record.an_status
             original_status = record.status
             original_notes = record.notes
+            original_morning_in = record.morning_in
+            original_evening_out = record.evening_out
 
             if is_holiday_day:
                 # Rule 1: If date became a holiday and no approved-form session is protecting it,
@@ -4952,7 +4954,15 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     or record.status != original_status
                     or record.notes != original_notes
                 ):
-                    record.save(update_fields=['fn_status', 'an_status', 'status', 'notes'])
+                    # Defensive guard: holiday recalculation must never wipe IN/OUT times.
+                    AttendanceRecord.objects.filter(pk=record.pk).update(
+                        fn_status=record.fn_status,
+                        an_status=record.an_status,
+                        status=record.status,
+                        notes=record.notes,
+                        morning_in=original_morning_in,
+                        evening_out=original_evening_out,
+                    )
                     updated_count += 1
 
                 continue
