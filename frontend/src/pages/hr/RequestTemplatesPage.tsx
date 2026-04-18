@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save, RefreshCw } from 'lucide-react';
+import { apiClient } from '../../services/auth';
+import { getApiBase } from '../../services/apiBase';
 import {
   getTemplates,
   deleteTemplate,
@@ -14,8 +16,15 @@ import {
   getLateEntryMonthlyByUser,
   deleteLateEntryRecord,
 } from '../../services/staffRequests';
-import type { RequestTemplate, VacationEntitlementRule, VacationSemester, VacationSlot } from '../../types/staffRequests';
+import type { RequestTemplate, VacationConfirmSlot, VacationEntitlementRule, VacationSemester, VacationSlot } from '../../types/staffRequests';
 import TemplateEditorModal from './TemplateEditorModal';
+
+interface DepartmentOption {
+  id: number;
+  code?: string;
+  short_name?: string;
+  name?: string;
+}
 
 export default function TemplateManagementPage() {
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
@@ -46,10 +55,13 @@ export default function TemplateManagementPage() {
   const [vacationRules, setVacationRules] = useState<VacationEntitlementRule[]>([]);
   const [vacationSemesters, setVacationSemesters] = useState<VacationSemester[]>([]);
   const [vacationSlots, setVacationSlots] = useState<VacationSlot[]>([]);
+  const [vacationConfirmSlots, setVacationConfirmSlots] = useState<VacationConfirmSlot[]>([]);
+  const [vacationDepartments, setVacationDepartments] = useState<DepartmentOption[]>([]);
   const [vacationLoading, setVacationLoading] = useState(false);
   const [vacationSaving, setVacationSaving] = useState(false);
   const [editingRuleRows, setEditingRuleRows] = useState<Record<number, boolean>>({});
   const [editingSlotRows, setEditingSlotRows] = useState<Record<number, boolean>>({});
+  const [editingConfirmRows, setEditingConfirmRows] = useState<Record<number, boolean>>({});
   const [showCreateSemester, setShowCreateSemester] = useState(false);
   const [expandedSemesterName, setExpandedSemesterName] = useState<string | null>(null);
   const [newSemesterName, setNewSemesterName] = useState('');
@@ -76,6 +88,7 @@ export default function TemplateManagementPage() {
   useEffect(() => {
     if (activeConfigTab === 'vacation') {
       loadVacationSettings();
+      loadVacationDepartments();
     }
   }, [activeConfigTab]);
 
@@ -131,8 +144,14 @@ export default function TemplateManagementPage() {
         semester_from_date: slot.semester_from_date || null,
         semester_to_date: slot.semester_to_date || null,
       })));
+      setVacationConfirmSlots((data.confirm_slots || []).map((slot: VacationConfirmSlot) => ({
+        ...slot,
+        slot_name: slot.slot_name || 'Compulsory Slot',
+        department_ids: Array.isArray(slot.department_ids) ? slot.department_ids : [],
+      })));
       setEditingRuleRows({});
       setEditingSlotRows({});
+      setEditingConfirmRows({});
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Failed to load vacation settings');
     } finally {
@@ -140,14 +159,46 @@ export default function TemplateManagementPage() {
     }
   };
 
-  const handleSaveVacationSettings = async () => {
+  const loadVacationDepartments = async () => {
+    try {
+      const res = await apiClient.get(`${getApiBase()}/api/staff-attendance/holidays/departments/`);
+      const rows = res.data?.results || res.data || [];
+      setVacationDepartments(Array.isArray(rows) ? rows : []);
+    } catch {
+      setVacationDepartments([]);
+    }
+  };
+
+  const persistVacationSettings = async (
+    payload?: {
+      rules?: VacationEntitlementRule[];
+      semesters?: VacationSemester[];
+      slots?: VacationSlot[];
+      confirm_slots?: VacationConfirmSlot[];
+    },
+    notify: boolean = true,
+  ): Promise<boolean> => {
+    const rules = payload?.rules || vacationRules;
+    const semesters = payload?.semesters || vacationSemesters;
+    const slots = payload?.slots || vacationSlots;
+    const confirm_slots = payload?.confirm_slots || vacationConfirmSlots;
+
     try {
       setVacationSaving(true);
-      await saveVacationSettings({ rules: vacationRules, semesters: vacationSemesters, slots: vacationSlots });
-      alert('Vacation settings saved successfully');
+      await saveVacationSettings({
+        rules,
+        semesters,
+        slots,
+        confirm_slots,
+      });
+      if (notify) {
+        alert('Saved successfully');
+      }
       await loadVacationSettings();
+      return true;
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Failed to save vacation settings');
+      return false;
     } finally {
       setVacationSaving(false);
     }
@@ -157,19 +208,36 @@ export default function TemplateManagementPage() {
     setEditingRuleRows(prev => ({ ...prev, [idx]: true }));
   };
 
-  const saveRuleRow = (idx: number) => {
-    setEditingRuleRows(prev => ({ ...prev, [idx]: false }));
+  const saveRuleRow = async (idx: number) => {
+    const ok = await persistVacationSettings();
+    if (ok) {
+      setEditingRuleRows(prev => ({ ...prev, [idx]: false }));
+    }
   };
 
   const startSlotEdit = (idx: number) => {
     setEditingSlotRows(prev => ({ ...prev, [idx]: true }));
   };
 
-  const saveSlotRow = (idx: number) => {
-    setEditingSlotRows(prev => ({ ...prev, [idx]: false }));
+  const saveSlotRow = async (idx: number) => {
+    const ok = await persistVacationSettings();
+    if (ok) {
+      setEditingSlotRows(prev => ({ ...prev, [idx]: false }));
+    }
   };
 
-  const handleCreateSemester = () => {
+  const startConfirmEdit = (idx: number) => {
+    setEditingConfirmRows(prev => ({ ...prev, [idx]: true }));
+  };
+
+  const saveConfirmRow = async (idx: number) => {
+    const ok = await persistVacationSettings();
+    if (ok) {
+      setEditingConfirmRows(prev => ({ ...prev, [idx]: false }));
+    }
+  };
+
+  const handleCreateSemester = async () => {
     const name = newSemesterName.trim();
     if (!name || !newSemesterFrom || !newSemesterTo) {
       alert('Semester name, from date and to date are required');
@@ -184,10 +252,14 @@ export default function TemplateManagementPage() {
       return;
     }
 
-    setVacationSemesters(prev => ([
-      ...prev,
+    const nextSemesters = [
+      ...vacationSemesters,
       { name, from_date: newSemesterFrom, to_date: newSemesterTo, is_active: true },
-    ]));
+    ];
+    const ok = await persistVacationSettings({ semesters: nextSemesters }, false);
+    if (!ok) {
+      return;
+    }
     setExpandedSemesterName(name);
     setShowCreateSemester(false);
     setNewSemesterName('');
@@ -203,6 +275,20 @@ export default function TemplateManagementPage() {
         slot_name: '',
         from_date: '',
         to_date: '',
+        is_active: true,
+      },
+    ]));
+  };
+
+  const handleAddConfirmSlotForSemester = (semesterName: string) => {
+    setVacationConfirmSlots(prev => ([
+      ...prev,
+      {
+        semester: semesterName,
+        slot_name: 'Compulsory Slot',
+        from_date: '',
+        to_date: '',
+        department_ids: [],
         is_active: true,
       },
     ]));
@@ -434,15 +520,7 @@ export default function TemplateManagementPage() {
                 Create Template
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={handleSaveVacationSettings}
-                disabled={vacationSaving || vacationLoading}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
-              >
-                <Save size={16} />
-                {vacationSaving ? 'Saving...' : 'Save Vacation Settings'}
-              </button>
+              <></>
             )}
           </div>
         </div>
@@ -761,6 +839,9 @@ export default function TemplateManagementPage() {
                       const semSlots = vacationSlots
                         .map((slot, idx) => ({ slot, idx }))
                         .filter(({ slot }) => (slot.semester || '').toLowerCase() === (sem.name || '').toLowerCase());
+                      const semConfirmSlots = vacationConfirmSlots
+                        .map((slot, idx) => ({ slot, idx }))
+                        .filter(({ slot }) => (slot.semester || '').toLowerCase() === (sem.name || '').toLowerCase());
 
                       return (
                         <div key={sem.name} className="border rounded-lg">
@@ -779,13 +860,22 @@ export default function TemplateManagementPage() {
                           {isExpanded && (
                             <div className="border-t p-3 space-y-2">
                               <div className="flex justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAddSlotForSemester(sem.name)}
-                                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-                                >
-                                  Add Slot in {sem.name}
-                                </button>
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddSlotForSemester(sem.name)}
+                                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                                  >
+                                    Add Slot in {sem.name}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddConfirmSlotForSemester(sem.name)}
+                                    className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                                  >
+                                    Add Compulsory Slot
+                                  </button>
+                                </div>
                               </div>
 
                               <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide px-1">
@@ -878,6 +968,124 @@ export default function TemplateManagementPage() {
                                   </div>
                                 );
                               })}
+
+                              <div className="pt-2 mt-2 border-t border-dashed">
+                                <div className="text-sm font-semibold text-gray-800 mb-2">Compulsory Slots (Auto Vacation by Department)</div>
+                                <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wide px-1">
+                                  <div className="col-span-2">Compulsory Slot</div>
+                                  <div className="col-span-2">Slot From</div>
+                                  <div className="col-span-2">Slot To</div>
+                                  <div className="col-span-5">Departments</div>
+                                  <div className="col-span-1">Actions</div>
+                                </div>
+
+                                {semConfirmSlots.length === 0 ? (
+                                  <div className="text-sm text-gray-500 px-1">No confirm slots under this semester.</div>
+                                ) : semConfirmSlots.map(({ slot, idx }) => {
+                                  const rowEditing = !!editingConfirmRows[idx];
+                                  return (
+                                    <div key={`${sem.name}-confirm-${idx}`} className="grid grid-cols-12 gap-2 items-start border rounded p-2 mt-2">
+                                      {rowEditing ? (
+                                        <>
+                                          <input
+                                            type="text"
+                                            value={slot.slot_name || ''}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              setVacationConfirmSlots(prev => prev.map((s, i) => i === idx ? { ...s, slot_name: v } : s));
+                                            }}
+                                            className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                                            placeholder="Compulsory Slot"
+                                          />
+                                          <input
+                                            type="date"
+                                            value={slot.from_date || ''}
+                                            min={sem.from_date}
+                                            max={sem.to_date}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              setVacationConfirmSlots(prev => prev.map((s, i) => i === idx ? { ...s, from_date: v } : s));
+                                            }}
+                                            className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                                          />
+                                          <input
+                                            type="date"
+                                            value={slot.to_date || ''}
+                                            min={sem.from_date}
+                                            max={sem.to_date}
+                                            onChange={(e) => {
+                                              const v = e.target.value;
+                                              setVacationConfirmSlots(prev => prev.map((s, i) => i === idx ? { ...s, to_date: v } : s));
+                                            }}
+                                            className="col-span-2 px-2 py-1.5 border border-gray-300 rounded"
+                                          />
+                                          <div className="col-span-5 border border-gray-200 rounded p-2 max-h-28 overflow-y-auto">
+                                            <div className="grid grid-cols-2 gap-1">
+                                              {vacationDepartments.map((dept) => {
+                                                const did = Number(dept.id);
+                                                const checked = (slot.department_ids || []).includes(did);
+                                                return (
+                                                  <label key={`${idx}-${did}`} className="text-xs text-gray-700 flex items-center gap-1">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={checked}
+                                                      onChange={(e) => {
+                                                        setVacationConfirmSlots(prev => prev.map((s, i) => {
+                                                          if (i !== idx) return s;
+                                                          const existing = Array.isArray(s.department_ids) ? [...s.department_ids] : [];
+                                                          const next = e.target.checked
+                                                            ? Array.from(new Set([...existing, did]))
+                                                            : existing.filter(x => x !== did);
+                                                          return { ...s, department_ids: next };
+                                                        }));
+                                                      }}
+                                                    />
+                                                    <span>{dept.short_name || dept.code || dept.name}</span>
+                                                  </label>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                          <div className="col-span-1 flex items-center justify-end gap-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => saveConfirmRow(idx)}
+                                              className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                                            >
+                                              Save
+                                            </button>
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div className="col-span-2 text-sm text-gray-900">{slot.slot_name || 'Compulsory Slot'}</div>
+                                          <div className="col-span-2 text-sm text-gray-700">{slot.from_date || '-'}</div>
+                                          <div className="col-span-2 text-sm text-gray-700">{slot.to_date || '-'}</div>
+                                          <div className="col-span-5 text-xs text-gray-700">
+                                            {(slot.department_ids || []).length === 0
+                                              ? 'No departments selected'
+                                              : (slot.department_ids || [])
+                                                .map((did) => {
+                                                  const dept = vacationDepartments.find(d => Number(d.id) === Number(did));
+                                                  return dept ? (dept.short_name || dept.code || dept.name || String(did)) : String(did);
+                                                })
+                                                .join(', ')}
+                                          </div>
+                                          <div className="col-span-1 flex items-center justify-end gap-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => startConfirmEdit(idx)}
+                                              className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                                            >
+                                              Edit
+                                            </button>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>

@@ -12,6 +12,7 @@ import type {
   VacationSettingsResponse,
   VacationEntitlementRule,
   VacationSemester,
+  VacationConfirmSlot,
   VacationSlot,
 } from '../types/staffRequests';
 
@@ -287,6 +288,7 @@ export async function saveVacationSettings(data: {
   rules: VacationEntitlementRule[];
   semesters: VacationSemester[];
   slots: VacationSlot[];
+  confirm_slots: VacationConfirmSlot[];
 }): Promise<{ message: string }> {
   const res = await apiClient.post(`${BASE_URL}/templates/save_vacation_settings/`, data);
   return res.data;

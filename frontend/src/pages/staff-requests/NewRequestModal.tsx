@@ -11,6 +11,17 @@ interface Props {
   preselectedDate?: string | null;
   preselectedTemplateId?: number | null;
   prefilledFormData?: Record<string, any>;
+  attendanceSnapshot?: {
+    date: string;
+    in_time?: string | null;
+    out_time?: string | null;
+    effective_hours?: string | null;
+    fn_status?: string | null;
+    an_status?: string | null;
+    go_time?: string | null;
+    gi_time?: string | null;
+    overall_status?: string | null;
+  } | null;
 }
 
 export default function NewRequestModal({
@@ -20,6 +31,7 @@ export default function NewRequestModal({
   preselectedDate,
   preselectedTemplateId,
   prefilledFormData,
+  attendanceSnapshot,
 }: Props) {
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<RequestTemplate | null>(null);
@@ -30,6 +42,12 @@ export default function NewRequestModal({
   const [filterMessage, setFilterMessage] = useState<string | null>(null);
   const [colInfo, setColInfo] = useState<any | null>(null);
   const [useColClaim, setUseColClaim] = useState(false);
+
+  const normalizeStatus = (value?: string | null) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '-';
+    return raw.toUpperCase();
+  };
 
   useEffect(() => {
     loadTemplates();
@@ -201,6 +219,49 @@ export default function NewRequestModal({
               {filterMessage && (
                 <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded text-blue-700 text-sm">
                   ℹ️ {filterMessage}
+                </div>
+              )}
+
+              {attendanceSnapshot && (
+                <div className="mb-4 border border-indigo-200 bg-indigo-50 rounded-lg p-3">
+                  <h4 className="text-sm font-semibold text-indigo-900 mb-2">Selected Date Attendance</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">Date</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.date}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">IN</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.in_time || '-'}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">OUT</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.out_time || '-'}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">Eff. Hrs</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.effective_hours || '-'}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">FN</span>
+                      <div className="font-semibold text-gray-900">{normalizeStatus(attendanceSnapshot.fn_status)}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">AN</span>
+                      <div className="font-semibold text-gray-900">{normalizeStatus(attendanceSnapshot.an_status)}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">GO</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.go_time || '-'}</div>
+                    </div>
+                    <div className="bg-white border border-indigo-100 rounded px-2 py-1">
+                      <span className="text-gray-500">GI</span>
+                      <div className="font-semibold text-gray-900">{attendanceSnapshot.gi_time || '-'}</div>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-indigo-900">
+                    Overall Status: <span className="font-semibold">{normalizeStatus(attendanceSnapshot.overall_status)}</span>
+                  </div>
                 </div>
               )}
               

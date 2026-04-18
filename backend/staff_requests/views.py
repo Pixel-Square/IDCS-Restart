@@ -16,6 +16,7 @@ from .models import (
     ApprovalLog,
     StaffLeaveBalance,
     VacationEntitlementRule,
+    VacationConfirmSlot,
     VacationSemester,
     VacationSlot,
 )
@@ -550,6 +551,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         rules = VacationEntitlementRule.objects.all().order_by('id')
         semesters = VacationSemester.objects.all().order_by('from_date', 'id')
         slots = VacationSlot.objects.select_related('semester_ref').all().order_by('from_date', 'id')
+        confirm_slots = VacationConfirmSlot.objects.select_related('semester_ref').prefetch_related('departments').all().order_by('from_date', 'id')
 
         return Response({
             'rules': [
@@ -588,7 +590,21 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
                     'is_active': s.is_active,
                 }
                 for s in slots
-            ]
+            ],
+            'confirm_slots': [
+                {
+                    'id': s.id,
+                    'semester_id': s.semester_ref_id,
+                    'semester': s.semester_ref.name if s.semester_ref else s.semester,
+                    'slot_name': s.slot_name,
+                    'from_date': s.from_date.isoformat(),
+                    'to_date': s.to_date.isoformat(),
+                    'total_days': s.total_days,
+                    'department_ids': list(s.departments.values_list('id', flat=True)),
+                    'is_active': s.is_active,
+                }
+                for s in confirm_slots
+            ],
         })
 
     @action(detail=False, methods=['post'])
@@ -603,12 +619,20 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         rules_payload = request.data.get('rules', [])
         semesters_payload = request.data.get('semesters', [])
         slots_payload = request.data.get('slots', [])
+        confirm_slots_payload = request.data.get('confirm_slots', [])
 
-        if not isinstance(rules_payload, list) or not isinstance(semesters_payload, list) or not isinstance(slots_payload, list):
-            return Response({'error': 'rules, semesters and slots must be arrays'}, status=status.HTTP_400_BAD_REQUEST)
+        if (
+            not isinstance(rules_payload, list)
+            or not isinstance(semesters_payload, list)
+            or not isinstance(slots_payload, list)
+            or not isinstance(confirm_slots_payload, list)
+        ):
+            return Response({'error': 'rules, semesters, slots and confirm_slots must be arrays'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             with transaction.atomic():
+                from academics.models import Department
+
                 VacationEntitlementRule.objects.all().delete()
                 for item in rules_payload:
                     condition = str(item.get('condition') or '>=').strip()
@@ -631,6 +655,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
                         notes=str(item.get('notes') or '').strip(),
                     )
 
+                VacationConfirmSlot.objects.all().delete()
                 VacationSlot.objects.all().delete()
                 VacationSemester.objects.all().delete()
 
@@ -686,6 +711,54 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
                         to_date=to_date,
                         is_active=bool(item.get('is_active', True)),
                     )
+
+                for item in confirm_slots_payload:
+                    semester_name = str(item.get('semester') or '').strip()
+                    from_raw = str(item.get('from_date') or '').strip()
+                    to_raw = str(item.get('to_date') or '').strip()
+                    slot_name = str(item.get('slot_name') or 'Confirmed Slot').strip() or 'Confirmed Slot'
+                    department_ids = item.get('department_ids') or []
+
+                    if not semester_name or not from_raw or not to_raw:
+                        raise ValueError('Each confirm slot requires semester, from_date and to_date')
+                    if not isinstance(department_ids, list) or not department_ids:
+                        raise ValueError('Each confirm slot must include at least one department')
+
+                    sem = sem_by_name.get(semester_name.lower())
+                    if not sem:
+                        raise ValueError(f'Semester "{semester_name}" not found for confirm slot')
+
+                    from_date = datetime.strptime(from_raw, '%Y-%m-%d').date()
+                    to_date = datetime.strptime(to_raw, '%Y-%m-%d').date()
+                    if to_date < from_date:
+                        raise ValueError('Confirm slot to_date must be on or after from_date')
+                    if from_date < sem.from_date:
+                        raise ValueError('Confirm slot from date must be within semester availability window')
+                    if to_date > sem.to_date:
+                        raise ValueError('Confirm slot to date must be within semester availability window')
+
+                    dept_ids = []
+                    for raw in department_ids:
+                        try:
+                            did = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if did > 0 and did not in dept_ids:
+                            dept_ids.append(did)
+
+                    departments = list(Department.objects.filter(id__in=dept_ids))
+                    if len(departments) != len(dept_ids):
+                        raise ValueError('One or more selected departments are invalid for confirm slot')
+
+                    confirm_slot = VacationConfirmSlot.objects.create(
+                        semester_ref=sem,
+                        semester=sem.name,
+                        slot_name=slot_name,
+                        from_date=from_date,
+                        to_date=to_date,
+                        is_active=bool(item.get('is_active', True)),
+                    )
+                    confirm_slot.departments.set(departments)
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -924,6 +997,34 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         slot = VacationSlot.objects.filter(id=slot_id, is_active=True).first()
         return slot
 
+    def _get_user_department_id(self, user):
+        try:
+            profile = getattr(user, 'staff_profile', None)
+            if not profile:
+                return None
+
+            dept = None
+            if hasattr(profile, 'get_current_department'):
+                dept = profile.get_current_department()
+            if not dept:
+                dept = getattr(profile, 'department', None)
+
+            return int(getattr(dept, 'id', None)) if getattr(dept, 'id', None) else None
+        except Exception:
+            return None
+
+    def _has_confirm_vacation_overlap(self, user, from_date, to_date):
+        dept_id = self._get_user_department_id(user)
+        if not dept_id or not from_date or not to_date:
+            return False
+
+        return VacationConfirmSlot.objects.filter(
+            is_active=True,
+            departments__id=dept_id,
+            from_date__lte=to_date,
+            to_date__gte=from_date,
+        ).exists()
+
     def _latest_active_vacation_requests_by_slot(self, user):
         """Return {slot_id: latest request} for pending/approved non-cancelled vacation requests."""
         result = {}
@@ -1033,8 +1134,18 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
             from_date = selected_slots[0].from_date
             to_date = max(slot.to_date for slot in selected_slots)
+            today = timezone.localdate()
             if from_date.year != to_date.year:
                 return Response({'error': 'Selected slots must belong to the same year'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if from_date <= today:
+                return Response({'error': 'Vacation can be applied only for slots after the current date'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if self._has_confirm_vacation_overlap(request.user, from_date, to_date):
+                return Response(
+                    {'error': 'Selected dates are part of HR compulsory vacation slots and cannot be applied manually'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             entitlement = self._get_vacation_entitlement_days(request.user)
             if entitlement <= 0:
@@ -1121,6 +1232,12 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
             if from_date and to_date and to_date < from_date:
                 return Response({'error': 'to_date must be on or after from_date'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if from_date and to_date and self._has_confirm_vacation_overlap(request.user, from_date, to_date):
+                return Response(
+                    {'error': 'Vacation cancellation is not allowed for HR compulsory vacation slot dates'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
             if vacation_request is None:
                 vacation_request = self._find_matching_vacation_request(request.user, from_date, to_date)
@@ -4132,6 +4249,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         entitlement = self._get_vacation_entitlement_days(request.user)
         used = self._vacation_used_days(request.user, year)
         remaining = max(0, entitlement - used)
+        today = timezone.localdate()
+        user_dept_id = self._get_user_department_id(request.user)
 
         app_template = self._get_vacation_template_for_user(request.user, cancellation=False)
         cancel_template = self._get_vacation_template_for_user(request.user, cancellation=True)
@@ -4142,6 +4261,20 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             to_date__gte=month_start,
         ).order_by('from_date', 'id')
 
+        confirm_slots_qs = VacationConfirmSlot.objects.filter(
+            is_active=True,
+            from_date__lte=month_end,
+            to_date__gte=month_start,
+        ).order_by('from_date', 'id')
+        if user_dept_id:
+            confirm_slots_qs = confirm_slots_qs.filter(departments__id=user_dept_id)
+        else:
+            confirm_slots_qs = confirm_slots_qs.none()
+        confirm_slots_qs = confirm_slots_qs.prefetch_related('departments').distinct()
+
+        confirmed_slots_list = list(confirm_slots_qs)
+        confirmed_ranges = [(s.from_date, s.to_date) for s in confirmed_slots_list]
+
         slots_list = list(slots_qs)
         latest_by_slot = self._latest_active_vacation_requests_by_slot(request.user)
         group_by_slot_id, group_sizes = self._vacation_slot_groups(slots_list, request.user)
@@ -4149,9 +4282,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         slots = []
         for slot in slots_list:
             last_req = latest_by_slot.get(slot.id)
+            overlaps_confirmed = any(slot.from_date <= c_to and slot.to_date >= c_from for c_from, c_to in confirmed_ranges)
 
             slot_days = int(slot.total_days)
             group_key = int(group_by_slot_id.get(slot.id, 0) or 0)
+            existing_status = last_req.status if last_req else ('compulsory' if overlaps_confirmed else None)
             slots.append({
                 'id': slot.id,
                 'semester': slot.semester,
@@ -4160,11 +4295,37 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 'to_date': slot.to_date.isoformat(),
                 'total_days': slot_days,
                 'existing_request_id': last_req.id if last_req else None,
-                'existing_request_status': last_req.status if last_req else None,
-                'can_apply': bool(app_template and entitlement > 0 and remaining >= slot_days and not last_req),
+                'existing_request_status': existing_status,
+                'can_apply': bool(
+                    app_template
+                    and entitlement > 0
+                    and remaining >= slot_days
+                    and not last_req
+                    and not overlaps_confirmed
+                    and slot.from_date > today
+                ),
                 'multi_group_key': group_key,
                 'multi_select_allowed': bool(group_key and int(group_sizes.get(group_key, 0)) > 1),
+                'is_confirmed': False,
             })
+
+        for cslot in confirmed_slots_list:
+            slots.append({
+                'id': -int(cslot.id),
+                'semester': cslot.semester,
+                'slot_name': cslot.slot_name or 'Compulsory Slot',
+                'from_date': cslot.from_date.isoformat(),
+                'to_date': cslot.to_date.isoformat(),
+                'total_days': int(cslot.total_days),
+                'existing_request_id': None,
+                'existing_request_status': 'compulsory',
+                'can_apply': False,
+                'multi_group_key': 0,
+                'multi_select_allowed': False,
+                'is_confirmed': True,
+            })
+
+        slots = sorted(slots, key=lambda s: (str(s.get('from_date') or ''), str(s.get('slot_name') or '')))
 
         return Response({
             'eligible': entitlement > 0,

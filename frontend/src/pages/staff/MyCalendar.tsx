@@ -71,6 +71,17 @@ export default function MyCalendarPage() {
   const [vacationDashboard, setVacationDashboard] = useState<any | null>(null);
   const [vacationLoading, setVacationLoading] = useState(false);
   const [selectedVacationSlotIds, setSelectedVacationSlotIds] = useState<number[]>([]);
+  const [selectedDateAttendanceSnapshot, setSelectedDateAttendanceSnapshot] = useState<{
+    date: string;
+    in_time?: string | null;
+    out_time?: string | null;
+    effective_hours?: string | null;
+    fn_status?: string | null;
+    an_status?: string | null;
+    go_time?: string | null;
+    gi_time?: string | null;
+    overall_status?: string | null;
+  } | null>(null);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -255,6 +266,21 @@ export default function MyCalendarPage() {
     return attendanceData.records.find(r => r.date === dateStr);
   };
 
+  const buildDateAttendanceSnapshot = (dateStr: string) => {
+    const attendance = attendanceData?.records?.find(r => r.date === dateStr);
+    return {
+      date: dateStr,
+      in_time: attendance?.morning_in || null,
+      out_time: attendance?.evening_out || null,
+      effective_hours: attendance?.effective_hours || null,
+      fn_status: attendance?.fn_status || null,
+      an_status: attendance?.an_status || null,
+      go_time: attendance?.gate_out_time || null,
+      gi_time: attendance?.gate_in_time || null,
+      overall_status: attendance?.status || null,
+    };
+  };
+
   const getDaysInMonth = () => {
     return new Date(selectedYear, selectedMonth, 0).getDate();
   };
@@ -285,6 +311,7 @@ export default function MyCalendarPage() {
     setSelectedDate(dateStr);
     setPreselectedTemplateId(null);
     setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(dateStr));
     setShowNewRequestModal(true);
   };
 
@@ -332,9 +359,46 @@ export default function MyCalendarPage() {
 
   const handleDateClick = (day: number) => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+    // If the clicked date is within a vacation slot, open only cancellation flow.
+    const clickedVacationSlot = (vacationDashboard?.slots || []).find((slot: any) => {
+      const from = String(slot?.from_date || '').slice(0, 10);
+      const to = String(slot?.to_date || '').slice(0, 10);
+      const isVacationCovered = Boolean(
+        slot?.is_confirmed ||
+        (slot?.existing_request_id && String(slot?.existing_request_status || '').toLowerCase() === 'approved')
+      );
+      return Boolean(from && to && isVacationCovered && dateStr >= from && dateStr <= to);
+    });
+
+    if (clickedVacationSlot) {
+      if (clickedVacationSlot.is_confirmed) {
+        alert('Vacation cancellation is not allowed for compulsory slot dates.');
+        return;
+      }
+
+      if (vacationDashboard?.cancellation_template_id && clickedVacationSlot.existing_request_id) {
+        const slotFrom = String(clickedVacationSlot.from_date || '').slice(0, 10);
+        const slotTo = String(clickedVacationSlot.to_date || '').slice(0, 10);
+        if (slotFrom && slotTo) {
+          setSelectedDate(slotFrom);
+          setPreselectedTemplateId(vacationDashboard.cancellation_template_id);
+          setPrefilledFormData({
+            from_date: slotFrom,
+            to_date: slotTo,
+            linked_vacation_request_id: clickedVacationSlot.existing_request_id,
+          });
+          setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(slotFrom));
+          setShowNewRequestModal(true);
+          return;
+        }
+      }
+    }
+
     setSelectedDate(dateStr);
     setPreselectedTemplateId(null);
     setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(dateStr));
     setShowNewRequestModal(true);
   };
 
@@ -342,6 +406,7 @@ export default function MyCalendarPage() {
     setShowNewRequestModal(false);
     setPreselectedTemplateId(null);
     setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(null);
     setSelectedVacationSlotIds([]);
     fetchMyRequests();
     fetchColInfo();
@@ -355,6 +420,24 @@ export default function MyCalendarPage() {
 
   const isVacationCancelled = (request: StaffRequest) => {
     return Boolean((request.form_data || {}).vacation_cancelled);
+  };
+
+  const isConfirmedVacationRange = (request: StaffRequest) => {
+    const fromDate = normalizeDateInput(
+      request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    const toDate = normalizeDateInput(
+      request.form_data?.to_date || request.form_data?.end_date || request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    if (!fromDate || !toDate) return false;
+
+    return (vacationDashboard?.slots || []).some((slot: any) => {
+      if (!slot?.is_confirmed) return false;
+      const slotFrom = String(slot.from_date || '').slice(0, 10);
+      const slotTo = String(slot.to_date || '').slice(0, 10);
+      if (!slotFrom || !slotTo) return false;
+      return fromDate <= slotTo && toDate >= slotFrom;
+    });
   };
 
   const normalizeDateInput = (value: any): string => {
@@ -430,6 +513,7 @@ export default function MyCalendarPage() {
       to_date: toDate,
       slot_ids: selectedVacationSlotIds,
     });
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(fromDate));
     setShowNewRequestModal(true);
   };
 
@@ -450,6 +534,7 @@ export default function MyCalendarPage() {
       to_date: toDate,
       linked_vacation_request_id: request.id,
     });
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(fromDate));
     setShowNewRequestModal(true);
   };
 
@@ -457,6 +542,16 @@ export default function MyCalendarPage() {
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
     const dateObj = new Date(dateStr);
+
+    const confirmedSlot = (vacationDashboard?.slots || []).find((slot: any) => {
+      if (!slot?.is_confirmed) return false;
+      const from = String(slot.from_date || '').slice(0, 10);
+      const to = String(slot.to_date || '').slice(0, 10);
+      return Boolean(from && to && dateStr >= from && dateStr <= to);
+    });
+    if (confirmedSlot) {
+      return 'VAC';
+    }
     
     // Find approved requests that cover this date
     for (const request of myRequests) {
@@ -1133,7 +1228,7 @@ export default function MyCalendarPage() {
                           Delete
                         </button>
                       )}
-                      {request.status === 'approved' && isVacationRequest(request) && !isVacationCancelled(request) && vacationDashboard?.cancellation_template_id && (
+                      {request.status === 'approved' && isVacationRequest(request) && !isVacationCancelled(request) && !isConfirmedVacationRange(request) && vacationDashboard?.cancellation_template_id && (
                         <button
                           type="button"
                           onClick={() => handleApplyCancellation(request)}
@@ -1212,10 +1307,12 @@ export default function MyCalendarPage() {
             preselectedDate={selectedDate}
             preselectedTemplateId={preselectedTemplateId}
             prefilledFormData={prefilledFormData}
+            attendanceSnapshot={selectedDateAttendanceSnapshot}
             onClose={() => {
               setShowNewRequestModal(false);
               setPreselectedTemplateId(null);
               setPrefilledFormData(undefined);
+              setSelectedDateAttendanceSnapshot(null);
             }}
             onSuccess={handleRequestCreated}
           />

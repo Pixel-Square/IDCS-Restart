@@ -185,6 +185,18 @@ export interface VacationSlot {
   is_active?: boolean;
 }
 
+export interface VacationConfirmSlot {
+  id?: number;
+  semester_id?: number | null;
+  semester?: string;
+  slot_name?: string;
+  from_date: string;
+  to_date: string;
+  total_days?: number;
+  department_ids: number[];
+  is_active?: boolean;
+}
+
 export interface VacationDashboardSlot {
   id: number;
   semester: string;
@@ -195,6 +207,7 @@ export interface VacationDashboardSlot {
   existing_request_id?: number | null;
   existing_request_status?: 'pending' | 'approved' | 'rejected' | null;
   can_apply: boolean;
+  is_confirmed?: boolean;
   multi_group_key?: number;
   multi_select_allowed?: boolean;
 }
@@ -214,6 +227,7 @@ export interface VacationSettingsResponse {
   rules: VacationEntitlementRule[];
   semesters: VacationSemester[];
   slots: VacationSlot[];
+  confirm_slots: VacationConfirmSlot[];
 }
 
 // Available approval roles

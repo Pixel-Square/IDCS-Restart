@@ -8,6 +8,7 @@ from .models import (
     StaffFormUsage,
     VacationEntitlementRule,
     VacationSemester,
+    VacationConfirmSlot,
     VacationSlot,
 )
 
@@ -48,11 +49,20 @@ class RequestTemplateAdmin(admin.ModelAdmin):
     )
     
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def total_approval_steps(self, obj):
         """Display the number of approval steps"""
         return obj.approval_steps.count()
     total_approval_steps.short_description = 'Approval Steps'
+
+
+@admin.register(VacationConfirmSlot)
+class VacationConfirmSlotAdmin(admin.ModelAdmin):
+    list_display = ['slot_name', 'semester', 'from_date', 'to_date', 'is_active', 'created_at']
+    list_filter = ['is_active', 'semester', 'from_date']
+    search_fields = ['slot_name', 'semester']
+    filter_horizontal = ['departments']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(ApprovalStep)

@@ -465,6 +465,49 @@ class VacationSlot(models.Model):
         return f"{self.slot_name} ({self.from_date} to {self.to_date})"
 
 
+class VacationConfirmSlot(models.Model):
+    """HR-confirmed vacation windows auto-applied for selected departments."""
+
+    semester_ref = models.ForeignKey(
+        VacationSemester,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='confirm_slots'
+    )
+    semester = models.CharField(max_length=80, blank=True, default='')
+    slot_name = models.CharField(max_length=120, blank=True, default='Confirmed Slot')
+    from_date = models.DateField(db_index=True)
+    to_date = models.DateField(db_index=True)
+    departments = models.ManyToManyField(
+        'academics.Department',
+        related_name='vacation_confirm_slots',
+        blank=True,
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['from_date', 'id']
+        verbose_name = 'Vacation Confirm Slot'
+        verbose_name_plural = 'Vacation Confirm Slots'
+
+    def clean(self):
+        super().clean()
+        if self.to_date and self.from_date and self.to_date < self.from_date:
+            raise ValidationError({'to_date': 'To date must be on or after from date'})
+
+    @property
+    def total_days(self):
+        if not self.from_date or not self.to_date:
+            return 0
+        return (self.to_date - self.from_date).days + 1
+
+    def __str__(self):
+        return f"{self.slot_name or 'Confirmed Slot'} ({self.from_date} to {self.to_date})"
+
+
 class ApprovalLog(models.Model):
     """
     Audit trail of all approval actions on a StaffRequest.
