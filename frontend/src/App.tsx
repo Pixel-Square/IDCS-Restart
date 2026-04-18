@@ -18,6 +18,7 @@ import OBERequestsPage from './pages/obe/OBERequestsPage';
 import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/containers/HomePage";
+import Login from './pages/auth/Login';
 import DashboardPage from "./pages/dashboard/Dashboard";
 import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
@@ -264,6 +265,7 @@ export default function App() {
             <div className="app-main-zoom">
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/login" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/credits" element={<CreditsPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
@@ -850,6 +852,7 @@ export default function App() {
         <div className="pt-16">
           <Routes>
             <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+            <Route path="/login" element={<Login />} />
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>

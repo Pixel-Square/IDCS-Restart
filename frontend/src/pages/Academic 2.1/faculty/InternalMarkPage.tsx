@@ -8,7 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookOpen, Users, CheckCircle, Clock, AlertCircle,
-  Edit2, Lock, Unlock, RefreshCw, FileText, Download, BarChart3,
+  Edit2, Lock, RefreshCw, FileText, Download, BarChart3,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
@@ -49,6 +49,9 @@ interface COExam {
   max_marks: number;
   weight: number;
   co_weights: Record<string, number>;  // Per-CO weights from ClassType config
+  cia_enabled?: boolean;
+  cia_weight?: number;
+  exam_max_marks?: number;
   covered_cos: number[];
   weight_per_co: number;
   max_per_co: number;
@@ -83,7 +86,6 @@ export default function InternalMarkPage() {
   const [loading, setLoading] = useState(true);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [processing, setProcessing] = useState<string | null>(null);
   const [tab, setTab] = useState<'exams' | 'co'>('exams');
 
   // CO summary
@@ -129,26 +131,6 @@ export default function InternalMarkPage() {
     if (tab === 'co' && !coSummary && !coLoading) loadCOSummary();
   }, [tab]);
 
-  const requestUnlock = async (examId: string) => {
-    try {
-      setProcessing(examId);
-      const reason = window.prompt('Please provide a reason for unlocking this exam:');
-      if (!reason) { setProcessing(null); return; }
-      const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/request-unlock/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason }),
-      });
-      if (!response.ok) throw new Error('Request failed');
-      setMessage({ type: 'success', text: 'Unlock request submitted' });
-      loadData();
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to submit unlock request' });
-    } finally {
-      setProcessing(null);
-    }
-  };
-
   const exportReport = async () => {
     try {
       const response = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/export-report/`);
@@ -174,9 +156,14 @@ export default function InternalMarkPage() {
     const headers: string[] = ['#', 'Reg No', 'Name'];
     for (const ex of exams) {
       if (isW) {
-        for (const co of ex.covered_cos) headers.push(`${ex.short_name}_CO${co} (wt:${ex.weight_per_co})`);
+        for (const co of ex.covered_cos) {
+          const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
+          headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
+        }
+        if (ex.cia_enabled) headers.push(`${ex.short_name} Exam (wt:${(ex.cia_weight || 0) > 0 ? (ex.cia_weight || 0) : 'NOT_SET'} /${ex.exam_max_marks || 0})`);
       } else {
         for (const co of ex.covered_cos) headers.push(`${ex.short_name} CO${co} (/${ex.max_per_co})`);
+        if (ex.cia_enabled) headers.push(`${ex.short_name} Exam (split /${ex.exam_max_marks || 0})`);
         headers.push(`${ex.short_name} Total (/${ex.max_marks})`);
       }
     }
@@ -191,8 +178,16 @@ export default function InternalMarkPage() {
         const em = s.exam_marks[ex.short_name] || {};
         if (isW) {
           for (const co of ex.covered_cos) row.push(s.weighted_marks[`${ex.short_name}_CO${co}`] ?? '');
+          if (ex.cia_enabled) {
+            const rawExam = (em.exam as number) ?? 0;
+            const examMax = ex.exam_max_marks || 0;
+            const examWt = ex.cia_weight || 0;
+            const wExam = examMax > 0 && examWt > 0 ? Math.round(((rawExam / examMax) * examWt) * 100) / 100 : '';
+            row.push(wExam);
+          }
         } else {
           for (const co of ex.covered_cos) row.push(em[`co${co}`] ?? '');
+          if (ex.cia_enabled) row.push(em.exam ?? '');
           row.push(em.total ?? '');
         }
       }
@@ -317,7 +312,11 @@ export default function InternalMarkPage() {
             {courseInfo.exams.length === 0 ? (
               <div className="p-8 text-center text-gray-500">No exam components configured</div>
             ) : courseInfo.exams.map((exam) => (
-              <div key={exam.id} className="p-4 hover:bg-gray-50">
+              <div
+                key={exam.id}
+                className="p-4 hover:bg-gray-50 cursor-pointer"
+                onClick={() => navigate(`/academic-v2/exam/${exam.id}`)}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
                     <div className="p-2 bg-gray-100 rounded-lg"><FileText className="w-5 h-5 text-gray-600" /></div>
@@ -353,17 +352,15 @@ export default function InternalMarkPage() {
                       </div>
                       {getProgressBar(exam.entered_count, exam.total_students)}
                     </div>
-                    {exam.is_locked ? (
-                      <button onClick={() => requestUnlock(exam.id)} disabled={processing === exam.id}
-                        className="flex items-center gap-2 px-3 py-1.5 text-sm border border-yellow-500 text-yellow-600 rounded-lg hover:bg-yellow-50 disabled:opacity-50">
-                        <Unlock className="w-4 h-4" /> Request Unlock
-                      </button>
-                    ) : (
-                      <button onClick={() => navigate(`/academic-v2/exam/${exam.id}`)}
-                        className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                        <Edit2 className="w-4 h-4" /> Enter Marks
-                      </button>
-                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/academic-v2/exam/${exam.id}`);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      <Edit2 className="w-4 h-4" /> Enter Marks
+                    </button>
                   </div>
                 </div>
               </div>
@@ -414,9 +411,20 @@ function COSummaryTab({
       if (view === 'raw') {
         cols.push({ key: `${ex.short_name}_co${co}`, label: `CO${co}`, sub: `/${coMax}`, examIdx: ei, co });
       } else {
-        cols.push({ key: `${ex.short_name}_CO${co}`, label: `CO${co}`, sub: `wt: ${ex.weight_per_co}`, examIdx: ei, co });
+        const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
+        const sub = w && w > 0 ? `wt: ${w}` : 'wt: NOT SET';
+        cols.push({ key: `${ex.short_name}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co });
       }
     }
+
+    // If Mark Manager Exam component is enabled, show it as a separate column (informational).
+    if (ex.cia_enabled) {
+      const sub = view === 'weighted'
+        ? `wt: ${(ex.cia_weight || 0) > 0 ? (ex.cia_weight || 0) : 'NOT SET'} /${ex.exam_max_marks || 0}`
+        : `split /${ex.exam_max_marks || 0}`;
+      cols.push({ key: `${ex.short_name}_exam`, label: 'Exam', sub, examIdx: ei, co: -1 });
+    }
+
     if (view === 'raw') {
       cols.push({ key: `${ex.short_name}_total`, label: 'Total', sub: `/${ex.max_marks}`, examIdx: ei, co: 0 });
     }
@@ -426,7 +434,7 @@ function COSummaryTab({
   type ExamGroup = { exam: COExam; colCount: number };
   const examGroups: ExamGroup[] = [];
   exams.forEach((ex) => {
-    const count = ex.covered_cos.length + (view === 'raw' ? 1 : 0);
+    const count = ex.covered_cos.length + (ex.cia_enabled ? 1 : 0) + (view === 'raw' ? 1 : 0);
     examGroups.push({ exam: ex, colCount: count });
   });
 
@@ -437,11 +445,26 @@ function COSummaryTab({
         const em = s.exam_marks[exams[col.examIdx].short_name];
         return em ? (em.total as number) ?? '' : '';
       }
+      if (col.co === -1) {
+        // Exam split column (raw)
+        const em = s.exam_marks[exams[col.examIdx].short_name];
+        return em ? (em.exam as number) ?? '' : '';
+      }
       // CO column
       const em = s.exam_marks[exams[col.examIdx].short_name];
       return em ? (em[`co${col.co}`] as number) ?? '' : '';
     }
     // Weighted
+    if (col.co === -1) {
+      const ex = exams[col.examIdx];
+      const em = s.exam_marks[ex.short_name];
+      if (!em) return '';
+      const rawExam = (em.exam as number) ?? 0;
+      const examMax = ex.exam_max_marks || 0;
+      const examWt = ex.cia_weight || 0;
+      if (examMax <= 0 || examWt <= 0) return '';
+      return Math.round(((rawExam / examMax) * examWt) * 100) / 100;
+    }
     return s.weighted_marks[col.key] ?? '';
   };
 

@@ -4,23 +4,43 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Clock, RefreshCw, Eye, MessageSquare, Filter, Search } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, RefreshCw, Eye, Filter, Search } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface EditRequest {
   id: string;
-  course_code: string;
-  course_name: string;
-  exam_name: string;
-  faculty_name: string;
-  faculty_email: string;
-  department: string;
+  exam_info: {
+    exam: string;
+    subject_code: string;
+    subject_name: string;
+    section_name: string;
+    department_code?: string;
+    department_name?: string;
+    department_short_name?: string;
+  };
+  requested_by: string;
+  requested_by_name: string;
+  requested_by_username?: string;
+  requested_by_staff_id?: string;
+  requested_by_profile_image?: string;
+  requested_at: string;
   reason: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  status: string;
   current_stage: number;
-  created_at: string;
-  updated_at: string;
+  approval_history?: any[];
+  approved_until?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  rejection_reason?: string | null;
 }
+
+const initialsFromName = (name: string) =>
+  (name || '')
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(s => s[0]?.toUpperCase())
+    .join('') || 'U';
 
 export default function ApprovalInboxPage() {
   const [loading, setLoading] = useState(true);
@@ -32,9 +52,37 @@ export default function ApprovalInboxPage() {
   const [selectedRequest, setSelectedRequest] = useState<EditRequest | null>(null);
   const [responseNote, setResponseNote] = useState('');
 
+  const readErrorMessage = async (response: Response): Promise<string> => {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        const data: any = await response.json();
+        return (
+          data?.detail ||
+          data?.error ||
+          (typeof data === 'string' ? data : '') ||
+          JSON.stringify(data)
+        );
+      } catch {
+        // fall through
+      }
+    }
+    try {
+      const text = await response.text();
+      return text || `Request failed (HTTP ${response.status})`;
+    } catch {
+      return `Request failed (HTTP ${response.status})`;
+    }
+  };
+
   useEffect(() => {
     loadData();
   }, []);
+
+  const isPendingStatus = (status: string) => {
+    const s = String(status || '').toUpperCase();
+    return s === 'PENDING' || s === 'HOD_PENDING' || s === 'IQAC_PENDING';
+  };
 
   const loadData = async () => {
     try {
@@ -56,10 +104,14 @@ export default function ApprovalInboxPage() {
       setProcessing(requestId);
       const response = await fetchWithAuth(`/api/academic-v2/edit-requests/${requestId}/approve/`, {
         method: 'POST',
-        body: JSON.stringify({ note: responseNote }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: responseNote }),
       });
       
-      if (!response.ok) throw new Error('Approve failed');
+      if (!response.ok) {
+        const msg = await readErrorMessage(response);
+        throw new Error(msg || 'Approve failed');
+      }
       
       setMessage({ type: 'success', text: 'Request approved' });
       setSelectedRequest(null);
@@ -67,7 +119,8 @@ export default function ApprovalInboxPage() {
       loadData();
     } catch (error) {
       console.error('Approve failed:', error);
-      setMessage({ type: 'error', text: 'Failed to approve request' });
+      const msg = error instanceof Error ? error.message : 'Failed to approve request';
+      setMessage({ type: 'error', text: msg || 'Failed to approve request' });
     } finally {
       setProcessing(null);
     }
@@ -83,10 +136,14 @@ export default function ApprovalInboxPage() {
       setProcessing(requestId);
       const response = await fetchWithAuth(`/api/academic-v2/edit-requests/${requestId}/reject/`, {
         method: 'POST',
-        body: JSON.stringify({ note: responseNote }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: responseNote }),
       });
       
-      if (!response.ok) throw new Error('Reject failed');
+      if (!response.ok) {
+        const msg = await readErrorMessage(response);
+        throw new Error(msg || 'Reject failed');
+      }
       
       setMessage({ type: 'success', text: 'Request rejected' });
       setSelectedRequest(null);
@@ -94,31 +151,40 @@ export default function ApprovalInboxPage() {
       loadData();
     } catch (error) {
       console.error('Reject failed:', error);
-      setMessage({ type: 'error', text: 'Failed to reject request' });
+      const msg = error instanceof Error ? error.message : 'Failed to reject request';
+      setMessage({ type: 'error', text: msg || 'Failed to reject request' });
     } finally {
       setProcessing(null);
     }
   };
 
   const filteredRequests = requests.filter(r => {
-    if (filter !== 'ALL' && r.status !== filter) return false;
+    if (filter !== 'ALL') {
+      if (filter === 'PENDING' && !isPendingStatus(r.status)) return false;
+      if (filter === 'APPROVED' && String(r.status || '').toUpperCase() !== 'APPROVED') return false;
+      if (filter === 'REJECTED' && String(r.status || '').toUpperCase() !== 'REJECTED') return false;
+    }
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       return (
-        r.course_code.toLowerCase().includes(query) ||
-        r.course_name.toLowerCase().includes(query) ||
-        r.faculty_name.toLowerCase().includes(query) ||
-        r.department.toLowerCase().includes(query)
+        r.exam_info?.subject_code?.toLowerCase().includes(query) ||
+        r.exam_info?.subject_name?.toLowerCase().includes(query) ||
+        r.exam_info?.exam?.toLowerCase().includes(query) ||
+        r.requested_by_name?.toLowerCase().includes(query) ||
+        r.exam_info?.section_name?.toLowerCase().includes(query)
       );
     }
     return true;
   });
 
-  const pendingCount = requests.filter(r => r.status === 'PENDING').length;
+  const pendingCount = requests.filter(r => isPendingStatus(r.status)).length;
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
+    const s = String(status || '').toUpperCase();
+    switch (s) {
       case 'PENDING':
+      case 'HOD_PENDING':
+      case 'IQAC_PENDING':
         return <span className="flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-sm"><Clock className="w-3 h-3" />Pending</span>;
       case 'APPROVED':
         return <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-sm"><CheckCircle className="w-3 h-3" />Approved</span>;
@@ -189,7 +255,7 @@ export default function ApprovalInboxPage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by course, faculty, or department..."
+                placeholder="Search by subject, exam, faculty, or section..."
                 className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -220,13 +286,13 @@ export default function ApprovalInboxPage() {
               {filteredRequests.map((req) => (
                 <tr key={req.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <div className="font-medium">{req.course_code}</div>
-                    <div className="text-sm text-gray-500">{req.course_name}</div>
+                    <div className="font-medium">{req.exam_info?.subject_code}</div>
+                    <div className="text-sm text-gray-500">{req.exam_info?.subject_name}</div>
                   </td>
-                  <td className="px-4 py-3 text-sm">{req.exam_name}</td>
+                  <td className="px-4 py-3 text-sm">{req.exam_info?.exam}</td>
                   <td className="px-4 py-3">
-                    <div className="text-sm">{req.faculty_name}</div>
-                    <div className="text-xs text-gray-500">{req.department}</div>
+                    <div className="text-sm">{req.requested_by_name}</div>
+                    <div className="text-xs text-gray-500">{req.exam_info?.section_name}</div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">
                     {req.reason}
@@ -235,10 +301,10 @@ export default function ApprovalInboxPage() {
                     {getStatusBadge(req.status)}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {new Date(req.created_at).toLocaleDateString()}
+                    {req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '—'}
                   </td>
                   <td className="px-4 py-3">
-                    {req.status === 'PENDING' ? (
+                    {isPendingStatus(req.status) ? (
                       <button
                         onClick={() => setSelectedRequest(req)}
                         className="flex items-center gap-1 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm"
@@ -269,22 +335,49 @@ export default function ApprovalInboxPage() {
             <h2 className="text-lg font-semibold mb-4">Review Edit Request</h2>
             
             <div className="space-y-4 mb-6">
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center gap-3">
+                {selectedRequest.requested_by_profile_image ? (
+                  <img
+                    src={selectedRequest.requested_by_profile_image}
+                    alt={selectedRequest.requested_by_name || selectedRequest.requested_by_username || 'User'}
+                    className="w-12 h-12 rounded-full object-cover border border-gray-200 bg-white"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                    {initialsFromName(selectedRequest.requested_by_name || selectedRequest.requested_by_username || 'User')}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-900 truncate">
+                    {selectedRequest.requested_by_name || selectedRequest.requested_by_username || '—'}
+                  </div>
+                  <div className="text-xs text-gray-600 truncate">
+                    {selectedRequest.requested_by_staff_id || selectedRequest.requested_by_username || '—'}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-gray-500">Course:</span>
-                  <p className="font-medium">{selectedRequest.course_code}</p>
+                  <p className="font-medium">{selectedRequest.exam_info?.subject_code}</p>
                 </div>
                 <div>
                   <span className="text-gray-500">Exam:</span>
-                  <p className="font-medium">{selectedRequest.exam_name}</p>
+                  <p className="font-medium">{selectedRequest.exam_info?.exam}</p>
                 </div>
                 <div>
-                  <span className="text-gray-500">Faculty:</span>
-                  <p className="font-medium">{selectedRequest.faculty_name}</p>
+                  <span className="text-gray-500">Section:</span>
+                  <p className="font-medium">{selectedRequest.exam_info?.section_name}</p>
                 </div>
                 <div>
                   <span className="text-gray-500">Department:</span>
-                  <p className="font-medium">{selectedRequest.department}</p>
+                  <p className="font-medium">
+                    {selectedRequest.exam_info?.department_short_name ||
+                      selectedRequest.exam_info?.department_name ||
+                      selectedRequest.exam_info?.department_code ||
+                      '—'}
+                  </p>
                 </div>
               </div>
               
@@ -293,10 +386,10 @@ export default function ApprovalInboxPage() {
                 <p className="mt-1 p-3 bg-gray-50 rounded-lg">{selectedRequest.reason}</p>
               </div>
 
-              {selectedRequest.status === 'PENDING' && (
+              {isPendingStatus(selectedRequest.status) && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Response Note {selectedRequest.status === 'PENDING' && '(required for rejection)'}
+                    Response Note (required for rejection)
                   </label>
                   <textarea
                     value={responseNote}
@@ -316,7 +409,7 @@ export default function ApprovalInboxPage() {
               >
                 Close
               </button>
-              {selectedRequest.status === 'PENDING' && (
+              {isPendingStatus(selectedRequest.status) && (
                 <>
                   <button
                     onClick={() => handleReject(selectedRequest.id)}

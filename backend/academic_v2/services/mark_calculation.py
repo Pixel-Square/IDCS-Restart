@@ -135,7 +135,7 @@ def compute_section_internal_marks(section) -> List[Dict]:
     
     Aggregates weighted marks from all exam assignments.
     """
-    from .models import AcV2InternalMark, AcV2StudentMark
+    from ..models import AcV2InternalMark, AcV2StudentMark
     
     # Get all exam assignments for this section
     exam_assignments = section.exam_assignments.filter(

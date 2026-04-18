@@ -4,6 +4,14 @@ import { processApproval } from '../../services/staffRequests';
 import type { StaffRequest } from '../../types/staffRequests';
 import { formatFieldLabel, renderFormValue } from './formValueUtils';
 
+const initialsFromName = (name: string) =>
+  (name || '')
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(s => s[0]?.toUpperCase())
+    .join('') || 'U';
+
 interface ApprovalReviewModalProps {
   request: StaffRequest;
   onClose: () => void;
@@ -86,6 +94,29 @@ export default function ApprovalReviewModal({ request, onClose, onProcessed }: A
           {/* Applicant Information */}
           <div className="bg-blue-50 rounded-lg p-4 mb-6">
             <h3 className="text-sm font-semibold text-blue-900 mb-3">Applicant Information</h3>
+
+            <div className="mb-4 p-3 bg-white/60 border border-blue-100 rounded-lg flex items-center gap-3">
+              {request.applicant.profile_image ? (
+                <img
+                  src={request.applicant.profile_image}
+                  alt={request.applicant.full_name || request.applicant.username}
+                  className="w-12 h-12 rounded-full object-cover border border-gray-200 bg-white"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                  {initialsFromName(request.applicant.full_name || request.applicant.username)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">
+                  {request.applicant.full_name || request.applicant.username}
+                </div>
+                <div className="text-xs text-gray-600 truncate">
+                  {request.applicant.staff_id || request.applicant.username}
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <div className="flex items-center gap-2">
                 <User size={16} className="text-blue-600" />

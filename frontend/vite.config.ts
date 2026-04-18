@@ -3,7 +3,12 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: 'build' },
+  build: {
+    // Prevent stale-client chunk 404s after deploys by keeping older hashed assets.
+    // (Index/main bundle might be cached and still reference older chunk filenames.)
+    emptyOutDir: false,
+    outDir: 'build',
+  },
   server: {
     host: true,
     allowedHosts: ['idcs.krgi.co.in', "idcs.zynix.us"],

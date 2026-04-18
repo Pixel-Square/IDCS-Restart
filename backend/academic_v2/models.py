@@ -44,6 +44,13 @@ class AcV2SemesterConfig(models.Model):
     
     # Default approval window in minutes
     approval_window_minutes = models.IntegerField(default=120)
+
+    # Pending edit request validity window (hours). If expired, faculty can submit again.
+    edit_request_validity_hours = models.IntegerField(default=24)
+
+    # If enabled, approved edit access stays open until faculty clicks Publish again.
+    # When disabled, edit access is granted only for approval_window_minutes.
+    approval_until_publish = models.BooleanField(default=False)
     
     # ========== DUE DATE (Semester-wide) ==========
     # Opens mark entry for all exams
@@ -458,6 +465,7 @@ class AcV2ExamAssignment(models.Model):
     # ========== EDIT REQUEST STATE ==========
     has_pending_edit_request = models.BooleanField(default=False)
     edit_window_until = models.DateTimeField(null=True, blank=True)
+    edit_window_until_publish = models.BooleanField(default=False)
     
     # Timestamps
     last_saved_at = models.DateTimeField(null=True, blank=True)
@@ -506,8 +514,17 @@ class AcV2ExamAssignment(models.Model):
 
     def is_editable(self):
         """Check if this exam can be edited."""
+        # Mark entry can be gated by semester open window
+        config = self.get_semester_config()
+        if config and config.open_from and timezone.now() < config.open_from:
+            return False
+
         # Check edit window first
         if self.edit_window_until and self.edit_window_until > timezone.now():
+            return True
+
+        # Unlimited edit access until the next Publish
+        if self.edit_window_until_publish:
             return True
         
         # If DRAFT, check due date
@@ -745,6 +762,9 @@ class AcV2EditRequest(models.Model):
     
     # When approved, edit window ends at
     approved_until = models.DateTimeField(null=True, blank=True)
+
+    # Pending request expires at (after this, faculty can request again)
+    expires_at = models.DateTimeField(null=True, blank=True)
     
     # Final reviewer
     reviewed_by = models.ForeignKey(
@@ -780,8 +800,9 @@ class AcV2EditRequest(models.Model):
         
         # Update exam assignment
         self.exam_assignment.edit_window_until = self.approved_until
+        self.exam_assignment.edit_window_until_publish = False
         self.exam_assignment.has_pending_edit_request = False
-        self.exam_assignment.save(update_fields=['edit_window_until', 'has_pending_edit_request'])
+        self.exam_assignment.save(update_fields=['edit_window_until', 'edit_window_until_publish', 'has_pending_edit_request'])
         
         # Add to history
         history = self.approval_history or []

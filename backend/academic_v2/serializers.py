@@ -27,6 +27,7 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'semester', 'semester_name',
             'publish_control_enabled', 'approval_workflow', 'approval_window_minutes',
+            'edit_request_validity_hours', 'approval_until_publish',
             'open_from', 'due_at', 'auto_publish_on_due',
             'is_open', 'time_remaining_seconds',
             'updated_by', 'updated_at',
@@ -194,12 +195,16 @@ class AcV2StudentMarkBulkSerializer(serializers.Serializer):
 class AcV2EditRequestSerializer(serializers.ModelSerializer):
     exam_info = serializers.SerializerMethodField()
     requested_by_name = serializers.CharField(source='requested_by.get_full_name', read_only=True)
+    requested_by_username = serializers.SerializerMethodField()
+    requested_by_staff_id = serializers.SerializerMethodField()
+    requested_by_profile_image = serializers.SerializerMethodField()
     
     class Meta:
         model = AcV2EditRequest
         fields = [
             'id', 'exam_assignment', 'exam_info',
-            'requested_by', 'requested_by_name', 'requested_at',
+            'requested_by', 'requested_by_name', 'requested_by_username', 'requested_by_staff_id', 'requested_by_profile_image',
+            'requested_at',
             'reason', 'status', 'current_stage',
             'approval_history', 'approved_until',
             'reviewed_by', 'reviewed_at', 'rejection_reason',
@@ -208,12 +213,69 @@ class AcV2EditRequestSerializer(serializers.ModelSerializer):
     
     def get_exam_info(self, obj):
         ea = obj.exam_assignment
+        dept = None
+        try:
+            ta = getattr(ea.section, 'teaching_assignment', None)
+            acad_section = getattr(ta, 'section', None) if ta else None
+            if acad_section is not None:
+                dept = getattr(acad_section, 'managing_department', None) or getattr(getattr(acad_section, 'batch', None), 'department', None)
+        except Exception:
+            dept = None
+
         return {
             'exam': ea.exam,
             'subject_code': ea.section.course.subject_code,
             'subject_name': ea.section.course.subject_name,
             'section_name': ea.section.section_name,
+            'department_code': getattr(dept, 'code', '') or '',
+            'department_name': getattr(dept, 'name', '') or '',
+            'department_short_name': getattr(dept, 'short_name', '') or '',
         }
+
+    def get_requested_by_username(self, obj):
+        try:
+            return str(getattr(obj.requested_by, 'username', '') or '')
+        except Exception:
+            return ''
+
+    def get_requested_by_staff_id(self, obj):
+        try:
+            from academics.models import StaffProfile
+            profile = StaffProfile.objects.filter(user=obj.requested_by).first()
+            return profile.staff_id if profile and getattr(profile, 'staff_id', None) else (getattr(obj.requested_by, 'username', '') or '')
+        except Exception:
+            return getattr(obj.requested_by, 'username', '') or ''
+
+    def get_requested_by_profile_image(self, obj):
+        value = ''
+
+        try:
+            student_profile = getattr(obj.requested_by, 'student_profile', None)
+            if student_profile is not None and getattr(student_profile, 'profile_image', None):
+                value = str(student_profile.profile_image)
+        except Exception:
+            value = ''
+
+        if not value:
+            try:
+                staff_profile = getattr(obj.requested_by, 'staff_profile', None)
+                if staff_profile is not None and getattr(staff_profile, 'profile_image', None):
+                    value = str(staff_profile.profile_image)
+            except Exception:
+                value = ''
+
+        if not value:
+            value = str(getattr(obj.requested_by, 'profile_image', '') or '')
+
+        value = value.strip()
+        if not value:
+            return ''
+
+        if value.startswith('http://') or value.startswith('https://'):
+            return value
+
+        cleaned = value.lstrip('/')
+        return f'/media/{cleaned}'
 
 
 class AcV2InternalMarkSerializer(serializers.ModelSerializer):

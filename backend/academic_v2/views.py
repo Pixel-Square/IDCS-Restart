@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
+from django.db.models import Q
 
 from .models import (
     AcV2SemesterConfig,
@@ -388,46 +389,312 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
         
         if status_filter:
             qs = qs.filter(status=status_filter)
+
+        user = getattr(self.request, 'user', None)
+
         if requested_by:
+            # Non-admin users can only query their own requests
+            if not self._has_any_role(user, ['ADMIN']) and not getattr(user, 'is_superuser', False):
+                if str(requested_by) != str(getattr(user, 'id', '')):
+                    return qs.none()
             qs = qs.filter(requested_by_id=requested_by)
-        
-        return qs.select_related('exam_assignment__section__course', 'requested_by')
+
+        qs = qs.select_related(
+            'exam_assignment__section__course',
+            'exam_assignment__section__teaching_assignment__section__batch__department',
+            'exam_assignment__section__teaching_assignment__section__managing_department',
+            'requested_by',
+        )
+
+        # Inbox forwarding: only show items for the *current* approver stage.
+        # This is computed from (semester_config.approval_workflow + current_stage).
+        if self.action == 'list' and not requested_by:
+            if not user:
+                return qs.none()
+
+            # Only pending-ish items belong in approval inboxes.
+            qs = qs.filter(status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING'])
+
+            allowed_ids: list[int] = []
+            for er in qs:
+                required_role = self._current_required_role(er)
+                if not required_role:
+                    continue
+                # Enforce exact role membership (do NOT treat superuser as all roles)
+                if self._has_role_exact(user, required_role):
+                    allowed_ids.append(er.id)
+
+            if not allowed_ids:
+                return qs.none()
+            return qs.filter(id__in=allowed_ids)
+
+        return qs
+
+    def _has_role_exact(self, user, role_name: str) -> bool:
+        """Check role membership without superuser override (used for inbox gating)."""
+        if not user:
+            return False
+        role_u = str(role_name or '').strip()
+        if not role_u:
+            return False
+        try:
+            if hasattr(user, 'roles'):
+                return user.roles.filter(name__iexact=role_u).exists()
+        except Exception:
+            pass
+        try:
+            if hasattr(user, 'user_roles'):
+                return user.user_roles.filter(role__name__iexact=role_u).exists()
+        except Exception:
+            pass
+        return False
+
+    def _current_required_role(self, edit_request) -> str | None:
+        wf_roles = self._workflow_roles(edit_request)
+        if not wf_roles:
+            return None
+        stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+        if stage_index < len(wf_roles):
+            return wf_roles[stage_index]
+        return wf_roles[-1]
+
+    def _has_any_role(self, user, role_names: list[str]) -> bool:
+        if not user:
+            return False
+        if getattr(user, 'is_superuser', False):
+            return True
+        wanted = [str(r).strip() for r in (role_names or []) if str(r).strip()]
+        if not wanted:
+            return False
+        try:
+            if hasattr(user, 'roles'):
+                q = Q()
+                for r in wanted:
+                    q |= Q(name__iexact=str(r))
+                return user.roles.filter(q).exists()
+        except Exception:
+            pass
+        try:
+            if hasattr(user, 'user_roles'):
+                q = Q()
+                for r in wanted:
+                    q |= Q(role__name__iexact=str(r))
+                return user.user_roles.filter(q).exists()
+        except Exception:
+            pass
+        return False
+
+    def _workflow_roles(self, edit_request) -> list[str]:
+        cfg = None
+        try:
+            cfg = edit_request.exam_assignment.get_semester_config()
+        except Exception:
+            cfg = None
+        wf = getattr(cfg, 'approval_workflow', None) if cfg else None
+        roles: list[str] = []
+        raw = wf or []
+        for item in raw:
+            if isinstance(item, str):
+                role = item
+            elif isinstance(item, dict):
+                role = item.get('role')
+            else:
+                role = None
+            role_u = str(role or '').strip().upper()
+            if role_u and role_u not in roles:
+                roles.append(role_u)
+        return roles
     
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve edit request."""
         edit_request = self.get_object()
-        window_minutes = request.data.get('window_minutes', 120)
         notes = request.data.get('notes', '')
-        
+
+        wf_roles = self._workflow_roles(edit_request)
+        if wf_roles:
+            required_role = self._current_required_role(edit_request)
+            if not required_role:
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+            if not (getattr(request.user, 'is_superuser', False) or self._has_role_exact(request.user, required_role)):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            # Fallback legacy behavior when no workflow is configured
+            if not self._has_any_role(request.user, ['HOD', 'IQAC', 'ADMIN']):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
         if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
             return Response(
                 {'error': 'This request cannot be approved.'},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
+        now = timezone.now()
+        history = edit_request.approval_history or []
+
+        # If workflow is configured, enforce stage order strictly (no skipping).
+        if wf_roles:
+            stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+            required_role = wf_roles[stage_index] if stage_index < len(wf_roles) else wf_roles[-1]
+
+            # Determine acting role for this request/stage
+            acting_role = None
+            if getattr(request.user, 'is_superuser', False) or self._has_role_exact(request.user, required_role):
+                acting_role = required_role
+
+            if acting_role != required_role:
+                return Response({'detail': f'Awaiting {required_role} approval.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            history.append({
+                'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+                'role': required_role,
+                'user_id': getattr(request.user, 'id', None),
+                'user_name': str(request.user),
+                'action': 'APPROVED',
+                'at': now.isoformat(),
+                'notes': notes,
+            })
+
+            # If there is a next stage, move to it
+            if stage_index + 1 < len(wf_roles):
+                next_role = wf_roles[stage_index + 1]
+                edit_request.current_stage = stage_index + 2
+                if next_role == 'HOD':
+                    edit_request.status = 'HOD_PENDING'
+                elif next_role == 'IQAC':
+                    edit_request.status = 'IQAC_PENDING'
+                else:
+                    edit_request.status = 'PENDING'
+                edit_request.approval_history = history
+                edit_request.save(update_fields=['current_stage', 'status', 'approval_history'])
+                return Response({'success': True, 'status': edit_request.status, 'current_stage': edit_request.current_stage})
+
+        # Final approve (no workflow or last stage)
+        cfg = None
+        try:
+            cfg = edit_request.exam_assignment.get_semester_config()
+        except Exception:
+            cfg = None
+
+        approval_until_publish = bool(getattr(cfg, 'approval_until_publish', False)) if cfg else False
+        try:
+            window_minutes = int(request.data.get('window_minutes') or (getattr(cfg, 'approval_window_minutes', 120) if cfg else 120))
+        except Exception:
+            window_minutes = int(getattr(cfg, 'approval_window_minutes', 120) if cfg else 120)
+
+        # Persist approval history before final approve
+        edit_request.approval_history = history
+        edit_request.save(update_fields=['approval_history'])
+
+        if approval_until_publish:
+            # Grant unlimited edit until next publish
+            with transaction.atomic():
+                edit_request.status = 'APPROVED'
+                edit_request.reviewed_by = request.user
+                edit_request.reviewed_at = now
+                edit_request.approved_until = None
+                edit_request.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'approved_until'])
+
+                ea = edit_request.exam_assignment
+                ea.edit_window_until = None
+                ea.edit_window_until_publish = True
+                ea.has_pending_edit_request = False
+                ea.save(update_fields=['edit_window_until', 'edit_window_until_publish', 'has_pending_edit_request'])
+
+            return Response({'success': True, 'status': edit_request.status, 'approved_until': None, 'edit_mode': 'UNTIL_PUBLISH'})
+
         edit_request.approve(request.user, window_minutes, notes)
-        
-        return Response({
-            'success': True,
-            'approved_until': edit_request.approved_until.isoformat(),
-        })
+        return Response({'success': True, 'status': edit_request.status, 'approved_until': edit_request.approved_until.isoformat() if edit_request.approved_until else None})
     
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         """Reject edit request."""
         edit_request = self.get_object()
         reason = request.data.get('reason', '')
+
+        wf_roles = self._workflow_roles(edit_request)
+        if wf_roles:
+            required_role = self._current_required_role(edit_request)
+            if not required_role:
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+            if not (getattr(request.user, 'is_superuser', False) or self._has_role_exact(request.user, required_role)):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            if not self._has_any_role(request.user, ['HOD', 'IQAC', 'ADMIN']):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
         
         if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
             return Response(
                 {'error': 'This request cannot be rejected.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # If workflow is configured, enforce stage order strictly (no skipping).
+        if wf_roles:
+            stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+            required_role = wf_roles[stage_index] if stage_index < len(wf_roles) else wf_roles[-1]
+
+            # Determine acting role for this request/stage
+            acting_role = None
+            if getattr(request.user, 'is_superuser', False) or self._has_role_exact(request.user, required_role):
+                acting_role = required_role
+            if acting_role != required_role:
+                return Response({'detail': f'Awaiting {required_role} action.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Add role into history as well
+        now = timezone.now()
+        stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+        required_role = wf_roles[stage_index] if (wf_roles and stage_index < len(wf_roles)) else None
+        history = edit_request.approval_history or []
+        history.append({
+            'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+            'role': required_role,
+            'user_id': getattr(request.user, 'id', None),
+            'user_name': str(request.user),
+            'action': 'REJECTED',
+            'at': now.isoformat(),
+            'reason': reason,
+        })
+        edit_request.approval_history = history
+        edit_request.save(update_fields=['approval_history'])
+
         edit_request.reject(request.user, reason)
-        
-        return Response({'success': True})
+        return Response({'success': True, 'status': edit_request.status})
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel an edit request (requester only)."""
+        edit_request = self.get_object()
+
+        # Only requester (or superuser) can cancel
+        if not getattr(request.user, 'is_superuser', False):
+            if getattr(edit_request, 'requested_by_id', None) != getattr(request.user, 'id', None):
+                return Response({'detail': 'Only the requester can cancel this request.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
+            return Response({'error': 'This request cannot be cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        history = edit_request.approval_history or []
+        history.append({
+            'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+            'role': None,
+            'user_id': getattr(request.user, 'id', None),
+            'user_name': str(request.user),
+            'action': 'CANCELLED',
+            'at': now.isoformat(),
+        })
+
+        with transaction.atomic():
+            edit_request.status = 'CANCELLED'
+            edit_request.approval_history = history
+            edit_request.save(update_fields=['status', 'approval_history'])
+
+            ea = edit_request.exam_assignment
+            ea.has_pending_edit_request = False
+            ea.save(update_fields=['has_pending_edit_request'])
+
+        return Response({'success': True, 'status': edit_request.status})
 
 
 # ============================================================================
@@ -900,7 +1167,38 @@ def faculty_exam_info(request, exam_id):
     course_code = (cr.course_code if cr else None) or (getattr(es, 'course_code', None)) or '-'
     course_name = (cr.course_name if cr else None) or (getattr(es, 'course_name', None)) or '-'
 
-    is_locked = ea.status in ('PUBLISHED', 'APPROVED')
+    # Publish control / editability (semester open window, due date, publish lock, edit window)
+    ctrl = check_publish_control(ea)
+    # JSON-safe conversion (timedelta is not serializable)
+    if ctrl.get('time_remaining') is not None:
+        try:
+            ctrl['time_remaining_seconds'] = int(ctrl['time_remaining'].total_seconds())
+        except Exception:
+            ctrl['time_remaining_seconds'] = None
+        try:
+            del ctrl['time_remaining']
+        except Exception:
+            pass
+    semester_config = ea.get_semester_config()
+    open_from = getattr(semester_config, 'open_from', None) if semester_config else None
+    due_at = getattr(semester_config, 'due_at', None) if semester_config else None
+
+    open_remaining_seconds = None
+    due_remaining_seconds = None
+    try:
+        now = timezone.now()
+        if open_from and now < open_from:
+            open_remaining_seconds = int((open_from - now).total_seconds())
+        if due_at:
+            if now > due_at:
+                due_remaining_seconds = 0
+            else:
+                due_remaining_seconds = int((due_at - now).total_seconds())
+    except Exception:
+        open_remaining_seconds = None
+        due_remaining_seconds = None
+
+    is_locked = bool(ctrl.get('is_locked', False))
 
     dept_name = ''
     if acad_sec and acad_sec.managing_department:
@@ -991,11 +1289,92 @@ def faculty_exam_info(request, exam_id):
         'section': acad_sec.name if acad_sec else '',
         'department': dept_name,
         'due_date': ea.edit_window_until.isoformat() if ea.edit_window_until else None,
+        'status': ea.status,
         'is_locked': is_locked,
+        'has_pending_edit_request': bool(getattr(ea, 'has_pending_edit_request', False)),
+        'publish_control': {
+            **ctrl,
+            'open_from': open_from.isoformat() if open_from else None,
+            'due_at': due_at.isoformat() if due_at else None,
+            'is_open': semester_config.is_open() if semester_config else True,
+            'open_remaining_seconds': open_remaining_seconds,
+            'due_remaining_seconds': due_remaining_seconds,
+        },
         'qp_pattern': qp_pattern_response,
         'question_btls': question_btls,
         'mark_manager': mark_manager,
     })
+
+
+# ==========================================================================
+# FACULTY EXAM PUBLISH + REQUEST EDIT (for MarkEntryPage publish control)
+# ==========================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_exam_publish(request, exam_id):
+    """Publish an exam (locks if publish control is enabled)."""
+    ea = get_object_or_404(
+        AcV2ExamAssignment.objects.select_related('section__course__semester'),
+        id=exam_id,
+        section__faculty_user=request.user,
+    )
+
+    if not ea.is_editable():
+        return Response({'detail': 'This exam is locked and cannot be published.'}, status=403)
+
+    semester_config = ea.get_semester_config()
+    with transaction.atomic():
+        ea.published_data = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+        ea.published_at = timezone.now()
+        ea.published_by = request.user
+        if semester_config and semester_config.publish_control_enabled:
+            ea.status = 'PUBLISHED'
+        else:
+            ea.status = 'DRAFT'
+        # Any approved edit window is consumed by publishing
+        ea.edit_window_until = None
+        ea.edit_window_until_publish = False
+        ea.save(update_fields=['published_data', 'published_at', 'published_by', 'status', 'edit_window_until', 'edit_window_until_publish'])
+
+        # Recompute internal marks for this section
+        try:
+            compute_section_internal_marks(ea.section)
+        except Exception:
+            pass
+
+    return Response({'success': True, 'status': ea.status, 'published_at': ea.published_at.isoformat()})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_exam_request_edit(request, exam_id):
+    """Request edit access for a published/locked exam."""
+    ea = get_object_or_404(
+        AcV2ExamAssignment.objects.select_related('section__course__semester'),
+        id=exam_id,
+        section__faculty_user=request.user,
+    )
+
+    reason = request.data.get('reason', '')
+    if not reason:
+        return Response({'detail': 'Reason is required.'}, status=400)
+
+    result = create_edit_request(ea, request.user, reason)
+    if result.get('success'):
+        return Response(result)
+
+    # Ensure failures are returned as a proper JSON response
+    # (previously this view could fall through and return None, causing a 500)
+    return Response(
+        {
+            'success': False,
+            'request_id': result.get('request_id'),
+            'error': result.get('error') or 'Request failed',
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+    return Response(result, status=400)
 
 
 # ============================================================================
@@ -1051,12 +1430,12 @@ def faculty_exam_marks(request, exam_id):
         return Response({'students': students})
 
     # POST — save marks
-    if ea.status in ('PUBLISHED', 'APPROVED'):
+    if not ea.is_editable():
         return Response({'detail': 'Exam is locked'}, status=403)
 
     marks_data = request.data.get('marks', [])
     question_btls = request.data.get('question_btls', {})
-    publish = request.data.get('publish', False)
+    # Note: publish action is handled via /exams/<id>/publish/ (publish control)
 
     # Resolve pattern for CO calculation - check user_pattern first (course-specific)
     draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
@@ -1064,10 +1443,14 @@ def faculty_exam_marks(request, exam_id):
 
     qp_cos = []
     qp_enabled = []
+    qp_titles = []
+    mm_config = None
     if user_pattern and isinstance(user_pattern, dict):
         # Use course-specific pattern from Mark Manager
         qp_cos = user_pattern.get('cos', [])
         qp_enabled = user_pattern.get('enabled', [True] * len(qp_cos))
+        qp_titles = user_pattern.get('titles', [])
+        mm_config = user_pattern.get('mark_manager') if isinstance(user_pattern.get('mark_manager'), dict) else None
     else:
         # Fall back to global QP pattern
         qp_type_val = ea.qp_type or ea.exam or ''
@@ -1123,6 +1506,39 @@ def faculty_exam_marks(request, exam_id):
                         for c in co_nums:
                             if 1 <= c <= 5:
                                 co_totals[c] += q_mark / len(co_nums)
+
+            # Mark Manager rule: if Exam column is enabled, split Exam marks equally
+            # across the enabled COs in Mark Manager (no separate CO mapping for Exam).
+            if mm_config and mm_config.get('cia_enabled'):
+                # Determine which COs are enabled in Mark Manager
+                enabled_cos = []
+                for co_key, co_cfg in (mm_config.get('cos', {}) or {}).items():
+                    try:
+                        co_num = int(co_key)
+                    except Exception:
+                        continue
+                    if isinstance(co_cfg, dict) and co_cfg.get('enabled') and 1 <= co_num <= 5:
+                        enabled_cos.append(co_num)
+                enabled_cos = sorted(set(enabled_cos))
+
+                # Find the Exam question index in the pattern to read its mark.
+                exam_index = None
+                if qp_titles and isinstance(qp_titles, list):
+                    for idx, t in enumerate(qp_titles):
+                        if isinstance(t, str) and t.strip().lower() == 'exam':
+                            exam_index = idx
+                # Fallback: last column if it exists and has no CO mapping
+                if exam_index is None and qp_cos:
+                    last_idx = len(qp_cos) - 1
+                    if last_idx >= 0 and (last_idx >= len(qp_enabled) or qp_enabled[last_idx]) and qp_cos[last_idx] is None:
+                        exam_index = last_idx
+
+                if exam_index is not None and enabled_cos:
+                    exam_mark = co_marks.get(f'q{exam_index}', 0) or 0
+                    if isinstance(exam_mark, (int, float)) and exam_mark > 0:
+                        share = exam_mark / len(enabled_cos)
+                        for c in enabled_cos:
+                            co_totals[c] += share
 
             sm.co1_mark = round(co_totals[1], 2)
             sm.co2_mark = round(co_totals[2], 2)
@@ -1303,6 +1719,10 @@ def faculty_course_co_summary(request, ta_id):
     # Build weight lookup from ClassType config (single source of truth)
     ct_weight_map = {}
     ct_co_weights_map = {}  # exam -> {co_num: weight}
+    # Mark Manager conditional weights (admin-defined)
+    ct_mm_co_weights_with_exam_map = {}  # exam -> {co_num: weight}
+    ct_mm_co_weights_without_exam_map = {}  # exam -> {co_num: weight}
+    ct_mm_exam_weight_map = {}  # exam -> exam_weight
     if class_type and class_type.exam_assignments:
         for ea_conf in class_type.exam_assignments:
             exam_code = ea_conf.get('exam', '')
@@ -1311,6 +1731,27 @@ def faculty_course_co_summary(request, ta_id):
             co_weights = ea_conf.get('co_weights', {})
             if co_weights:
                 ct_co_weights_map[exam_code] = {int(k): v for k, v in co_weights.items()}
+
+            # Mark Manager conditional config (optional)
+            mm_on = ea_conf.get('mm_co_weights_with_exam')
+            mm_off = ea_conf.get('mm_co_weights_without_exam')
+            mm_exam_weight = ea_conf.get('mm_exam_weight')
+            # Backward compatibility: allow nested keys
+            if not mm_on and isinstance(ea_conf.get('mm_with_exam'), dict):
+                mm_on = ea_conf.get('mm_with_exam', {}).get('co_weights')
+                mm_exam_weight = ea_conf.get('mm_with_exam', {}).get('exam_weight', mm_exam_weight)
+            if not mm_off and isinstance(ea_conf.get('mm_without_exam'), dict):
+                mm_off = ea_conf.get('mm_without_exam', {}).get('co_weights')
+
+            if isinstance(mm_on, dict) and mm_on:
+                ct_mm_co_weights_with_exam_map[exam_code] = {int(k): v for k, v in mm_on.items()}
+            if isinstance(mm_off, dict) and mm_off:
+                ct_mm_co_weights_without_exam_map[exam_code] = {int(k): v for k, v in mm_off.items()}
+            if mm_exam_weight is not None:
+                try:
+                    ct_mm_exam_weight_map[exam_code] = float(mm_exam_weight) or 0
+                except Exception:
+                    ct_mm_exam_weight_map[exam_code] = 0
 
     exams_data = []
     exam_map = {}  # exam_id -> exam info
@@ -1331,9 +1772,11 @@ def faculty_course_co_summary(request, ta_id):
         user_pattern = draft.get('user_pattern')
         
         co_max_map = {}  # {co_num: total_marks_for_that_co}
-        co_weights = {}  # Per-CO weights - will be populated based on condition
+        co_weights = {}  # Effective per-CO weights
         cia_enabled = False  # Whether Mark Manager has Exam enabled
-        cia_weight = 0  # Exam weight from Mark Manager
+        cia_weight = 0  # Exam component weight (admin-defined)
+        exam_max_marks = 0  # Exam component max marks (only when Mark Manager Exam is enabled)
+        exam_q_index = None  # Internal: index of Exam question in question_marks (q{index})
         
         if user_pattern and isinstance(user_pattern, dict):
             # Use course-specific pattern from Mark Manager
@@ -1361,36 +1804,66 @@ def faculty_course_co_summary(request, ta_id):
                 if c is not None and isinstance(c, int) and i < len(qp_enabled) and qp_enabled[i]:
                     co_max_map[c] = co_max_map.get(c, 0) + (qp_marks[i] if i < len(qp_marks) else 0)
             
-            # Get Mark Manager config for weight handling
-            mm_config = p.get('mark_manager', {})
-            cia_enabled = mm_config.get('cia_enabled', False)
-            cia_weight = mm_config.get('cia_weight', 0)
-            mm_cos_config = mm_config.get('cos', {})
-            
-            # CONDITION 1: Mark Manager WITH Exam - use Mark Manager weights
+            # Get Mark Manager config for condition handling
+            mm_config = p.get('mark_manager', {}) if isinstance(p.get('mark_manager'), dict) else {}
+            cia_enabled = bool(mm_config.get('cia_enabled', False))
+            mm_cos_config = mm_config.get('cos', {}) if isinstance(mm_config.get('cos'), dict) else {}
+
+            # Enabled COs (authoritative for Mark Manager)
+            enabled_cos = []
+            for co_str, co_cfg in mm_cos_config.items():
+                try:
+                    co_num = int(co_str)
+                except Exception:
+                    continue
+                if isinstance(co_cfg, dict) and co_cfg.get('enabled') and 1 <= co_num <= 50:
+                    enabled_cos.append(co_num)
+            enabled_cos = sorted(set(enabled_cos))
+            if enabled_cos:
+                covered_cos = enabled_cos
+
+            # Find Exam max marks in user pattern (needed to scale redistributed Exam marks)
+            exam_max = 0
+            titles = p.get('titles', []) if isinstance(p.get('titles'), list) else []
+            for i, t in enumerate(titles):
+                if isinstance(t, str) and t.strip().lower() == 'exam':
+                    if i < len(qp_marks) and i < len(qp_enabled) and qp_enabled[i]:
+                        try:
+                            exam_max = float(qp_marks[i] or 0)
+                        except Exception:
+                            exam_max = 0
+                        exam_q_index = i
+            if exam_max == 0 and qp_marks and qp_cos and len(qp_marks) == len(qp_cos):
+                last_idx = len(qp_cos) - 1
+                if last_idx >= 0 and qp_cos[last_idx] is None and (last_idx < len(qp_enabled) and qp_enabled[last_idx]):
+                    try:
+                        exam_max = float(qp_marks[last_idx] or 0)
+                    except Exception:
+                        exam_max = 0
+                    exam_q_index = last_idx
+
+            exam_max_marks = float(exam_max or 0)
+
             if cia_enabled:
-                for co_str, co_cfg in mm_cos_config.items():
-                    if co_cfg.get('enabled'):
-                        co_num = int(co_str)
-                        co_weights[co_num] = co_cfg.get('weight', 0)
-                # Total exam weight comes from cia_weight - will be added to overall weight
-                weight = cia_weight + sum(co_weights.values())
+                # CONDITION A: WITH Exam -> use admin-defined Mark Manager "with exam" weights
+                base = ct_mm_co_weights_with_exam_map.get(ea.exam) or ct_co_weights_map.get(ea.exam, {})
+                cia_weight = float(ct_mm_exam_weight_map.get(ea.exam, 0) or 0)
+
+                # Base CO weights
+                for co_num in covered_cos:
+                    co_weights[int(co_num)] = float(base.get(int(co_num), 0) or 0)
+
+                # IMPORTANT UX RULE:
+                # In CO Summary tables, "Direct CO" columns should NOT include the Exam split.
+                # Exam is displayed as a separate column, and its split affects only the right-side
+                # CO totals (and DB co1..co5 persistence), not the left-table CO cells.
+                weight = sum(float(v or 0) for v in co_weights.values()) + float(cia_weight or 0)
             else:
-                # CONDITION 2: Mark Manager WITHOUT Exam - use admin-defined co_weights
-                admin_co_weights = ct_co_weights_map.get(ea.exam, {})
-                if admin_co_weights:
-                    for co_str, co_cfg in mm_cos_config.items():
-                        if co_cfg.get('enabled'):
-                            co_num = int(co_str)
-                            # Use admin-defined weight for this CO if available
-                            co_weights[co_num] = admin_co_weights.get(co_num, co_cfg.get('weight', 0))
-                else:
-                    # No admin weights, use Mark Manager CO weights
-                    for co_str, co_cfg in mm_cos_config.items():
-                        if co_cfg.get('enabled'):
-                            co_num = int(co_str)
-                            co_weights[co_num] = co_cfg.get('weight', 0)
-                weight = sum(co_weights.values())
+                # CONDITION B: WITHOUT Exam -> use admin-defined Mark Manager "without exam" weights
+                base = ct_mm_co_weights_without_exam_map.get(ea.exam) or ct_co_weights_map.get(ea.exam, {})
+                for co_num in covered_cos:
+                    co_weights[int(co_num)] = float(base.get(int(co_num), 0) or 0)
+                weight = sum(float(v or 0) for v in co_weights.values())
         else:
             # Fall back to global QP pattern (no Mark Manager)
             qp_type_val = ea.qp_type or ea.exam or ''
@@ -1442,6 +1915,7 @@ def faculty_course_co_summary(request, ta_id):
             'co_weights': co_weights,  # Per-CO weights (from Mark Manager or admin config)
             'cia_enabled': cia_enabled,  # Whether Mark Manager Exam checkbox is enabled
             'cia_weight': cia_weight,  # Weight for Exam component from Mark Manager
+            'exam_max_marks': exam_max_marks,
             'covered_cos': covered_cos,
             'weight_per_co': weight_per_co,
             'max_per_co': max_per_co,
@@ -1449,7 +1923,15 @@ def faculty_course_co_summary(request, ta_id):
             'status': ea.status,
         }
         exams_data.append(exam_info)
-        exam_map[str(ea.id)] = exam_info
+        # Keep internal fields for per-student recomputation from question_marks.
+        # This avoids relying on stale co1..co5 columns when Mark Manager logic changes.
+        internal = {
+            '_exam_q_index': exam_q_index,
+        }
+        if user_pattern and isinstance(user_pattern, dict):
+            internal['_qp_cos'] = qp_cos
+            internal['_qp_enabled'] = qp_enabled
+        exam_map[str(ea.id)] = {**exam_info, **internal}
 
     # Get all active students in the academic section
     student_assignments = (
@@ -1497,14 +1979,111 @@ def faculty_course_co_summary(request, ta_id):
                 'is_absent': sm.is_absent if sm else False,
             }
 
+            # For Mark Manager exams, recompute CO marks from question_marks so "Exam" split
+            # always applies only to the enabled COs (and stays correct even if older DB rows exist).
+            direct_raw = None  # type: ignore
+            effective_for_db = None  # type: ignore
+            exam_raw_for_split = 0.0
+            computed_total_from_questions = None  # type: ignore
+            if sm and not sm.is_absent and isinstance(sm.question_marks, dict) and isinstance(einfo.get('_qp_cos'), list):
+                qp_cos_local = einfo.get('_qp_cos') or []
+                qp_enabled_local = einfo.get('_qp_enabled') or [True] * len(qp_cos_local)
+                qmarks = sm.question_marks
+
+                # Base totals from CO-mapped questions
+                co_totals_direct = {c: 0.0 for c in range(1, co_count + 1)}
+                total_from_questions = 0.0
+                for i, co in enumerate(qp_cos_local):
+                    if i < len(qp_enabled_local) and not qp_enabled_local[i]:
+                        continue
+                    q_key = f'q{i}'
+                    q_mark = qmarks.get(q_key, 0) or 0
+                    if not isinstance(q_mark, (int, float)):
+                        continue
+
+                    # Total mark should reflect all enabled question marks (including Exam)
+                    total_from_questions += float(q_mark)
+
+                    if co is None:
+                        continue
+                    if isinstance(co, int) and 1 <= co <= co_count:
+                        co_totals_direct[co] += float(q_mark)
+                    elif isinstance(co, str) and '&' in co:
+                        try:
+                            co_nums = [int(x.strip()) for x in co.split('&')]
+                        except Exception:
+                            co_nums = []
+                        co_nums = [c for c in co_nums if 1 <= c <= co_count]
+                        if co_nums:
+                            share = float(q_mark) / len(co_nums)
+                            for c in co_nums:
+                                co_totals_direct[c] += share
+
+                # Exam split (only when Mark Manager Exam is enabled)
+                if einfo.get('cia_enabled'):
+                    exam_idx = einfo.get('_exam_q_index')
+                    raw_exam = 0.0
+                    if isinstance(exam_idx, int) and exam_idx >= 0:
+                        v = qmarks.get(f'q{exam_idx}', 0) or 0
+                        if isinstance(v, (int, float)):
+                            raw_exam = float(v)
+                    exam_entry['exam'] = round(raw_exam, 2)
+                    exam_raw_for_split = float(raw_exam or 0)
+
+                    covered = einfo.get('covered_cos') or []
+                    enabled_cos = [int(c) for c in covered if isinstance(c, int) and 1 <= int(c) <= co_count]
+                else:
+                    # Ensure the key exists for UI columns when configured
+                    if einfo.get('cia_enabled'):
+                        exam_entry['exam'] = 0
+
+                # What we show in the table (direct-only)
+                direct_raw = co_totals_direct
+
+                # What we persist to DB (direct + Exam split), so downstream reports remain correct.
+                co_totals_effective = dict(co_totals_direct)
+                if einfo.get('cia_enabled'):
+                    covered = einfo.get('covered_cos') or []
+                    enabled_cos = [int(c) for c in covered if isinstance(c, int) and 1 <= int(c) <= co_count]
+                    if exam_raw_for_split and enabled_cos:
+                        share = float(exam_raw_for_split) / len(enabled_cos)
+                        for c in enabled_cos:
+                            co_totals_effective[c] = float(co_totals_effective.get(c, 0.0) + share)
+
+                effective_for_db = co_totals_effective
+                computed_total_from_questions = round(total_from_questions, 2)
+
+                # Persist back to DB to keep co1..co5 in sync (best-effort)
+                try:
+                    new_vals = [round(co_totals_effective.get(i, 0.0), 2) for i in range(1, 6)]
+                    old_vals = [
+                        round(float(getattr(sm, f'co{i}_mark', 0) or 0), 2)
+                        for i in range(1, 6)
+                    ]
+                    if new_vals != old_vals:
+                        sm.co1_mark, sm.co2_mark, sm.co3_mark, sm.co4_mark, sm.co5_mark = new_vals
+                        sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark'])
+                except Exception:
+                    pass
+            else:
+                # If Mark Manager Exam is enabled, still expose exam key for UI
+                if einfo.get('cia_enabled'):
+                    exam_entry['exam'] = 0
+
             # Raw CO marks from AcV2StudentMark co1..co5 fields
             for co_num in range(1, co_count + 1):
                 co_field = f'co{co_num}_mark'
-                raw_val = float(getattr(sm, co_field, None) or 0) if sm else 0
+                if direct_raw is not None:
+                    raw_val = float(direct_raw.get(co_num, 0) or 0)
+                else:
+                    raw_val = float(getattr(sm, co_field, None) or 0) if sm else 0
                 exam_entry[f'co{co_num}'] = raw_val
 
             # Total raw mark
-            exam_entry['total'] = float(sm.total_mark) if sm and sm.total_mark is not None else 0
+            if computed_total_from_questions is not None:
+                exam_entry['total'] = float(computed_total_from_questions)
+            else:
+                exam_entry['total'] = float(sm.total_mark) if sm and sm.total_mark is not None else 0
 
             student_entry['exam_marks'][einfo['short_name']] = exam_entry
 
@@ -1515,11 +2094,16 @@ def faculty_course_co_summary(request, ta_id):
                 weight_per_co = einfo['weight_per_co']
                 co_weights = einfo.get('co_weights', {})
 
+                # Direct-only weighted marks (for left-side per-exam CO columns)
+
                 for co_num in covered_cos:
                     if co_num < 1 or co_num > co_count:
                         continue
                     co_field = f'co{co_num}_mark'
-                    raw = float(getattr(sm, co_field, None) or 0)
+                    if direct_raw is not None:
+                        raw = float(direct_raw.get(co_num, 0) or 0)
+                    else:
+                        raw = float(getattr(sm, co_field, None) or 0)
                     # Use per-CO max from QP pattern if available, else fall back
                     co_max = einfo['co_max_map'].get(co_num, max_per_co)
                     # Use per-CO weight if defined, else fall back to even split
@@ -1531,6 +2115,23 @@ def faculty_course_co_summary(request, ta_id):
                     key = f"{einfo['short_name']}_CO{co_num}"
                     student_entry['weighted_marks'][key] = weighted
                     student_entry['co_totals'][co_num - 1] += weighted
+
+                # Exam split weighted contribution (ONLY to right-side CO totals)
+                if einfo.get('cia_enabled') and exam_raw_for_split:
+                    enabled_cos = [
+                        int(c) for c in (covered_cos or [])
+                        if isinstance(c, int) and 1 <= int(c) <= co_count
+                    ]
+                    exam_max_marks_local = float(einfo.get('exam_max_marks') or 0)
+                    exam_weight_local = float(einfo.get('cia_weight') or 0)
+                    if enabled_cos and exam_max_marks_local > 0 and exam_weight_local > 0:
+                        share_raw = float(exam_raw_for_split) / len(enabled_cos)
+                        share_max = float(exam_max_marks_local) / len(enabled_cos)
+                        share_wt = float(exam_weight_local) / len(enabled_cos)
+                        if share_max > 0:
+                            for c in enabled_cos:
+                                add_w = round((share_raw / share_max) * share_wt, 2)
+                                student_entry['co_totals'][c - 1] += add_w
 
         # Round CO totals
         student_entry['co_totals'] = [round(v, 2) for v in student_entry['co_totals']]

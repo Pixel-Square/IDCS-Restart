@@ -136,10 +136,11 @@ class ApplicantSerializer(serializers.ModelSerializer):
     """Minimal user serializer for applicant info"""
     full_name = serializers.SerializerMethodField()
     staff_id = serializers.SerializerMethodField()
+    profile_image = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name', 'staff_id']
+        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name', 'staff_id', 'profile_image']
         read_only_fields = fields
     
     def get_full_name(self, obj):
@@ -152,6 +153,37 @@ class ApplicantSerializer(serializers.ModelSerializer):
             return profile.staff_id if profile else obj.username
         except Exception:
             return obj.username
+
+    def get_profile_image(self, obj):
+        value = ''
+
+        try:
+            student_profile = getattr(obj, 'student_profile', None)
+            if student_profile is not None and getattr(student_profile, 'profile_image', None):
+                value = str(student_profile.profile_image)
+        except Exception:
+            value = ''
+
+        if not value:
+            try:
+                staff_profile = getattr(obj, 'staff_profile', None)
+                if staff_profile is not None and getattr(staff_profile, 'profile_image', None):
+                    value = str(staff_profile.profile_image)
+            except Exception:
+                value = ''
+
+        if not value:
+            value = str(getattr(obj, 'profile_image', '') or '')
+
+        value = value.strip()
+        if not value:
+            return ''
+
+        if value.startswith('http://') or value.startswith('https://'):
+            return value
+
+        cleaned = value.lstrip('/')
+        return f'/media/{cleaned}'
 
 
 class ApproverSerializer(serializers.ModelSerializer):

@@ -15,6 +15,10 @@ interface ExamAssignment {
   qp_type: string;
   weight: number;  // Legacy - sum of co_weights
   co_weights: Record<string, number>;  // Per-CO weights: { "1": 2.5, "2": 2.5 }
+  mark_manager_enabled?: boolean;
+  mm_exam_weight?: number; // Used only when Mark Manager "Exam" is checked by faculty
+  mm_co_weights_with_exam?: Record<string, number>; // CO weights when faculty uses Mark Manager with Exam
+  mm_co_weights_without_exam?: Record<string, number>; // CO weights when faculty uses Mark Manager without Exam
   default_cos: number[];
   customize_questions: boolean;
 }
@@ -36,7 +40,7 @@ interface ExamTemplate {
   name: string;
   qp_type: string;
   default_weight: number;
-  pattern?: { cos?: number[]; marks?: number[]; enabled?: boolean[] };
+  pattern?: { cos?: number[]; marks?: number[]; enabled?: boolean[]; mark_manager?: { enabled?: boolean } | null };
 }
 
 export default function ClassTypeEditorPage() {
@@ -84,17 +88,35 @@ export default function ClassTypeEditorPage() {
 
   useEffect(() => {
     if (selectedClassType) {
+      const normalizedExams = (selectedClassType.exam_assignments || []).map((ex) => {
+        // Auto-detect Mark Manager templates (older saved data may not have the flag)
+        const tpl = examTemplates.find(t => t.qp_type === ex.qp_type || t.qp_type === ex.exam);
+        const detectedMm = !!tpl?.pattern?.mark_manager?.enabled;
+        const isMm = ex.mark_manager_enabled ?? detectedMm;
+
+        if (!isMm) return ex;
+
+        const base = ex.co_weights || {};
+        return {
+          ...ex,
+          mark_manager_enabled: true,
+          mm_exam_weight: Number(ex.mm_exam_weight) || 0,
+          mm_co_weights_with_exam: ex.mm_co_weights_with_exam || { ...base },
+          mm_co_weights_without_exam: ex.mm_co_weights_without_exam || { ...base },
+        };
+      });
+
       setLocalData({
         name: selectedClassType.name,
         short_code: selectedClassType.short_code,
         display_name: selectedClassType.display_name,
         total_internal_marks: selectedClassType.total_internal_marks,
-        exam_assignments: [...selectedClassType.exam_assignments],
+        exam_assignments: normalizedExams,
         allow_customize_questions: selectedClassType.allow_customize_questions,
       });
       setIsDirty(false);
     }
-  }, [selectedClassType]);
+  }, [selectedClassType, examTemplates]);
 
   const handleChange = (field: string, value: unknown) => {
     setLocalData(prev => ({ ...prev, [field]: value }));
@@ -130,12 +152,20 @@ export default function ClassTypeEditorPage() {
     } else {
       derivedCos.forEach(co => { coWeights[String(co)] = 0; });
     }
+
+    const isMarkManager = !!tpl.pattern?.mark_manager?.enabled;
+    const mmCoWeightsWith: Record<string, number> = { ...coWeights };
+    const mmCoWeightsWithout: Record<string, number> = { ...coWeights };
     exams.push({
       exam: tpl.qp_type,
       exam_display_name: tpl.name,
       qp_type: tpl.qp_type,
-      weight: defaultWeight,  // Legacy
+      weight: defaultWeight,  // Legacy (we keep this as total weight for display)
       co_weights: coWeights,
+      mark_manager_enabled: isMarkManager,
+      mm_exam_weight: 0,
+      mm_co_weights_with_exam: mmCoWeightsWith,
+      mm_co_weights_without_exam: mmCoWeightsWithout,
       default_cos: derivedCos,
       customize_questions: false,
     });
@@ -218,8 +248,14 @@ export default function ClassTypeEditorPage() {
     }
   };
 
-  // Compute total weight from all co_weights across all exams
+  // Compute total weight from all exams.
+  // For Mark Manager exams, show the "with exam" total (CO with-exam + exam weight)
   const totalWeight = (localData.exam_assignments || []).reduce((sum, exam) => {
+    if (exam.mark_manager_enabled) {
+      const withCo = exam.mm_co_weights_with_exam || {};
+      const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
+      return sum + (withTotal || exam.weight || 0);
+    }
     const coWeights = exam.co_weights || {};
     const examTotal = Object.values(coWeights).reduce((s, w) => s + (w || 0), 0);
     return sum + (examTotal || exam.weight || 0);
@@ -466,44 +502,151 @@ export default function ClassTypeEditorPage() {
                                 <span className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{exam.qp_type}</span>
                               </td>
                               <td className="px-3 py-2">
-                                {/* Per-CO weight inputs */}
-                                <div className="flex flex-wrap gap-1.5">
-                                  {(exam.default_cos || []).map((co) => {
-                                    const coKey = String(co);
-                                    const coWeight = (exam.co_weights || {})[coKey] ?? 0;
-                                    return (
-                                      <div key={co} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
-                                        <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
-                                        {isEditing ? (
-                                          <input
-                                            type="number"
-                                            step="any"
-                                            value={coWeight}
-                                            onChange={(e) => {
-                                              const newCoWeights = { ...(exam.co_weights || {}) };
-                                              newCoWeights[coKey] = parseFloat(e.target.value) || 0;
-                                              // Also update legacy weight as sum
-                                              const newTotal = Object.values(newCoWeights).reduce((s, w) => s + (w || 0), 0);
-                                              const exams = [...(localData.exam_assignments || [])];
-                                              exams[index] = { ...exams[index], co_weights: newCoWeights, weight: newTotal };
-                                              handleChange('exam_assignments', exams);
-                                            }}
-                                            className="w-12 px-1 py-0.5 border rounded text-center text-xs"
-                                          />
-                                        ) : (
-                                          <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
-                                        )}
+                                {exam.mark_manager_enabled ? (
+                                  <div className="space-y-2">
+                                    {/* WITHOUT Exam */}
+                                    <div>
+                                      <div className="text-[10px] text-gray-500 mb-1">Without Exam</div>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {(exam.default_cos || []).map((co) => {
+                                          const coKey = String(co);
+                                          const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
+                                          return (
+                                            <div key={`wo-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                              <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                              {isEditing ? (
+                                                <input
+                                                  type="number"
+                                                  step="any"
+                                                  value={coWeight}
+                                                  onChange={(e) => {
+                                                    const newWo = { ...(exam.mm_co_weights_without_exam || {}) };
+                                                    newWo[coKey] = parseFloat(e.target.value) || 0;
+                                                    const withCo = exam.mm_co_weights_with_exam || {};
+                                                    const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
+                                                    const exams = [...(localData.exam_assignments || [])];
+                                                    exams[index] = { ...exams[index], mm_co_weights_without_exam: newWo, weight: withTotal };
+                                                    handleChange('exam_assignments', exams);
+                                                  }}
+                                                  className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                                />
+                                              ) : (
+                                                <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                        <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                          <span className="text-[10px] text-gray-500">Σ</span>
+                                          <span className="text-xs font-semibold text-gray-700">
+                                            {Object.values(exam.mm_co_weights_without_exam || {}).reduce((s, w) => s + (w || 0), 0) || 0}
+                                          </span>
+                                        </div>
                                       </div>
-                                    );
-                                  })}
-                                  {/* Show total weight */}
-                                  <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
-                                    <span className="text-[10px] text-gray-500">Σ</span>
-                                    <span className="text-xs font-semibold text-gray-700">
-                                      {Object.values(exam.co_weights || {}).reduce((s, w) => s + (w || 0), 0) || exam.weight || 0}
-                                    </span>
+                                    </div>
+
+                                    {/* WITH Exam */}
+                                    <div>
+                                      <div className="text-[10px] text-gray-500 mb-1">With Exam</div>
+                                      <div className="flex flex-wrap gap-1.5 items-center">
+                                        <div className="flex items-center gap-1 bg-amber-50 rounded px-1 py-0.5">
+                                          <span className="text-[10px] text-amber-700 font-medium">Exam</span>
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              step="any"
+                                              value={Number(exam.mm_exam_weight) || 0}
+                                              onChange={(e) => {
+                                                const newExamW = parseFloat(e.target.value) || 0;
+                                                const withCo = exam.mm_co_weights_with_exam || {};
+                                                const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + newExamW;
+                                                const exams = [...(localData.exam_assignments || [])];
+                                                exams[index] = { ...exams[index], mm_exam_weight: newExamW, weight: withTotal };
+                                                handleChange('exam_assignments', exams);
+                                              }}
+                                              className="w-14 px-1 py-0.5 border rounded text-center text-xs"
+                                            />
+                                          ) : (
+                                            <span className="text-xs font-semibold text-amber-800">{Number(exam.mm_exam_weight) || 0}</span>
+                                          )}
+                                        </div>
+
+                                        {(exam.default_cos || []).map((co) => {
+                                          const coKey = String(co);
+                                          const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
+                                          return (
+                                            <div key={`w-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                              <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                              {isEditing ? (
+                                                <input
+                                                  type="number"
+                                                  step="any"
+                                                  value={coWeight}
+                                                  onChange={(e) => {
+                                                    const newWith = { ...(exam.mm_co_weights_with_exam || {}) };
+                                                    newWith[coKey] = parseFloat(e.target.value) || 0;
+                                                    const withTotal = Object.values(newWith).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
+                                                    const exams = [...(localData.exam_assignments || [])];
+                                                    exams[index] = { ...exams[index], mm_co_weights_with_exam: newWith, weight: withTotal };
+                                                    handleChange('exam_assignments', exams);
+                                                  }}
+                                                  className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                                />
+                                              ) : (
+                                                <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                        <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                          <span className="text-[10px] text-gray-500">Σ</span>
+                                          <span className="text-xs font-semibold text-gray-700">
+                                            {(Object.values(exam.mm_co_weights_with_exam || {}).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0)) || exam.weight || 0}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
                                   </div>
-                                </div>
+                                ) : (
+                                  /* Non-Mark-Manager: single co_weights */
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {(exam.default_cos || []).map((co) => {
+                                      const coKey = String(co);
+                                      const coWeight = (exam.co_weights || {})[coKey] ?? 0;
+                                      return (
+                                        <div key={co} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                          <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                          {isEditing ? (
+                                            <input
+                                              type="number"
+                                              step="any"
+                                              value={coWeight}
+                                              onChange={(e) => {
+                                                const newCoWeights = { ...(exam.co_weights || {}) };
+                                                newCoWeights[coKey] = parseFloat(e.target.value) || 0;
+                                                // Also update legacy weight as sum
+                                                const newTotal = Object.values(newCoWeights).reduce((s, w) => s + (w || 0), 0);
+                                                const exams = [...(localData.exam_assignments || [])];
+                                                exams[index] = { ...exams[index], co_weights: newCoWeights, weight: newTotal };
+                                                handleChange('exam_assignments', exams);
+                                              }}
+                                              className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                            />
+                                          ) : (
+                                            <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                    {/* Show total weight */}
+                                    <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                      <span className="text-[10px] text-gray-500">Σ</span>
+                                      <span className="text-xs font-semibold text-gray-700">
+                                        {Object.values(exam.co_weights || {}).reduce((s, w) => s + (w || 0), 0) || exam.weight || 0}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
                               </td>
                               {isEditing && (
                                 <td className="px-2 py-2 text-center">
