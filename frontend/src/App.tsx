@@ -114,7 +114,9 @@ import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
 
 // Academic 2.1 - Lazy load pages for code splitting
+const AcV2AdminDashboard = React.lazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'));
 const AcV2PublishControlPage = React.lazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'));
+const AcV2CycleManagementPage = React.lazy(() => import('./pages/Academic 2.1/admin/CycleManagementPage'));
 const AcV2ClassTypeEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'));
 const AcV2QpPatternEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'));
 const AcV2ExamAssignmentAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'));
@@ -701,6 +703,22 @@ export default function App() {
                 />
 
                 {/* ── Academic 2.1 Routes ─────────────────────────────────── */}
+                {/* Admin Dashboard */}
+                <Route
+                  path="/academic-v2/admin"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2AdminDashboard />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
                 {/* Admin Routes (IQAC only) */}
                 <Route
                   path="/academic-v2/admin/publish-control"
@@ -712,6 +730,21 @@ export default function App() {
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2PublishControlPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/cycles"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CycleManagementPage />
                         </React.Suspense>
                       }
                     />

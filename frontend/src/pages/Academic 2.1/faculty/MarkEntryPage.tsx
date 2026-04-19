@@ -10,6 +10,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Upload, Download, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
+import { getApiBase } from '../../../services/apiBase';
 import krlogo from '../../../assets/krlogo.png';
 
 const initialsFromName = (name: string) =>
@@ -32,6 +33,7 @@ interface Student {
   id: string;
   roll_number: string;
   name: string;
+  department?: string;
   mark: number | null;
   co_marks: Record<string, number>;
   is_absent: boolean;
@@ -50,6 +52,7 @@ interface ExamInfo {
   due_date: string | null;
   is_locked: boolean;
   status?: string;
+  qp_type?: string | null;
   has_pending_edit_request?: boolean;
   publish_control?: {
     is_editable?: boolean;
@@ -65,6 +68,9 @@ interface ExamInfo {
     edit_window_until?: string | null;
     edit_window_until_publish?: boolean;
     status?: string;
+    seal_animation_enabled?: boolean;
+    seal_watermark_enabled?: boolean;
+    seal_image?: string | null;
     approval_workflow_roles?: string[];
     approval_workflow_assignees?: Array<{ role: string; user_id: string | null; user_name: string | null }>;
     pending_request?: {
@@ -125,6 +131,22 @@ export default function MarkEntryPage() {
   const [processingAction, setProcessingAction] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Sort/Filter state
+  const [sortFilterOpen, setSortFilterOpen] = useState(false);
+  const [sortOption, setSortOption] = useState<'register' | 'name' | 'department'>('register');
+  const [showDepartmentColumn, setShowDepartmentColumn] = useState(false);
+  const [filterRegisterRange, setFilterRegisterRange] = useState({ start: '', end: '' });
+  const [selectedDepartments, setSelectedDepartments] = useState<Set<string>>(new Set());
+  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
+
+  // Cell labels/warnings state: tracks which cells have import/edit warnings
+  const [importedCells, setImportedCells] = useState<Set<string>>(new Set()); // Set of "studentId:questionId" or "studentId:mark"
+  const [concurrentEditCells, setConcurrentEditCells] = useState<Set<string>>(new Set()); // Future: tracks concurrent edits
+
+  // Auto-save state
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Request Edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editModalView, setEditModalView] = useState<'reason' | 'sending' | 'track'>('reason');
@@ -138,9 +160,32 @@ export default function MarkEntryPage() {
     return () => window.clearInterval(id);
   }, []);
 
+  // Cleanup auto-save timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+      if (sealHideTimeoutRef.current) clearTimeout(sealHideTimeoutRef.current);
+    };
+  }, []);
+
   // Publish Confirmation states
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [publishStatus, setPublishStatus] = useState<'idle' | 'loading' | 'success'>('idle');
+  const [sealImageUrl, setSealImageUrl] = useState<string | null>(null);
+  const [showSealStamp, setShowSealStamp] = useState(true);
+  const [sealAnimationEnabled, setSealAnimationEnabled] = useState(false);
+  const [sealWatermarkEnabled, setSealWatermarkEnabled] = useState(false);
+  const [publishCountdown, setPublishCountdown] = useState<number | null>(null);
+  const sealHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resolveMediaUrl = (value: string | null | undefined): string | null => {
+    if (!value) return null;
+    const v = String(value);
+    if (v.startsWith('http://') || v.startsWith('https://')) return v;
+    if (v.startsWith('/')) return `${getApiBase()}${v}`;
+    return v;
+  };
 
   // Mark Manager (user_define) state
   const [mmSetup, setMmSetup] = useState<{
@@ -155,6 +200,8 @@ export default function MarkEntryPage() {
   const [importPhase, setImportPhase] = useState<'idle' | 'loading' | 'confirm' | 'success'>('idle');
   const [importPreview, setImportPreview] = useState<{
     matched: number; skipped: number; total_in_file: number; total_in_class: number;
+    unfilled_count?: number;
+    unfilled_rows?: Array<{ roll_number: string; name: string; row_number: number }>;
     students: Array<{ student_id: string; roll_number: string; name: string; mark: number | null; co_marks: Record<string, number>; is_absent: boolean }>;
   } | null>(null);
 
@@ -217,6 +264,12 @@ export default function MarkEntryPage() {
       setExamInfo(examData);
       setQuestionBtls(examData.question_btls || {});
 
+      // Seal settings come from publish_control (server already resolves semester config)
+      const pc = (examData as any)?.publish_control || {};
+      setSealImageUrl(resolveMediaUrl(pc?.seal_image));
+      setSealAnimationEnabled(Boolean(pc?.seal_animation_enabled));
+      setSealWatermarkEnabled(Boolean(pc?.seal_watermark_enabled));
+
       // Init Mark Manager setup if needed
       if (examData.mark_manager?.enabled && examData.mark_manager?.mode === 'user_define' && !examData.mark_manager?.confirmed) {
         const cos: Record<number, MarkManagerCOConfig> = {};
@@ -271,6 +324,43 @@ export default function MarkEntryPage() {
     }
   };
 
+  /* ────── Auto-save helper ────── */
+  const triggerAutoSave = async () => {
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+    
+    // Set timeout to auto-save after 2 seconds
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      setAutoSaveStatus('saving');
+      try {
+        const marksData = students.map(s => ({
+          student_id: s.id,
+          mark: s.mark,
+          co_marks: s.co_marks,
+          is_absent: s.is_absent,
+        }));
+        const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ marks: marksData, question_btls: questionBtls, publish: false }),
+        });
+        if (!response.ok) throw new Error('Auto-save failed');
+        
+        setStudents(prev => prev.map(s => ({ ...s, saved: true })));
+        setHasChanges(false);
+        const now = new Date().toLocaleString();
+        setLastSaved(now);
+        
+        // Show saved state for 2 seconds then revert to idle
+        setAutoSaveStatus('saved');
+        setTimeout(() => setAutoSaveStatus('idle'), 2000);
+      } catch (error) {
+        console.error('Auto-save error:', error);
+        setAutoSaveStatus('idle');
+      }
+    }, 2000);
+  };
+
   /* ────── Mark helpers ────── */
   const updateMark = (studentId: string, value: string) => {
     const numValue = value === '' ? null : (wholeNumber ? parseInt(value, 10) : parseFloat(value));
@@ -279,6 +369,7 @@ export default function MarkEntryPage() {
       s.id === studentId ? { ...s, mark: numValue, saved: false } : s
     ));
     setHasChanges(true);
+    triggerAutoSave();
   };
 
   const updateQuestionMark = (studentId: string, qId: string, value: string) => {
@@ -293,6 +384,7 @@ export default function MarkEntryPage() {
       return { ...s, co_marks, mark: total, saved: false };
     }));
     setHasChanges(true);
+    triggerAutoSave();
   };
 
   const toggleAbsent = (studentId: string) => {
@@ -302,6 +394,7 @@ export default function MarkEntryPage() {
         : s
     ));
     setHasChanges(true);
+    triggerAutoSave();
   };
 
   const handlePublishClick = () => {
@@ -331,15 +424,38 @@ export default function MarkEntryPage() {
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       setPublishStatus('success');
+      
+      // Wait 1 second, then show seal stamp and start screen shake
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      setShowSealStamp(Boolean(sealAnimationEnabled));
+      
+      // Start 10-second countdown
+      setPublishCountdown(10);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = window.setInterval(() => {
+        setPublishCountdown(prev => {
+          if (prev === null || prev <= 1) {
+            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+            return null;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      
+      // Auto-close after 10 seconds
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      setShowPublishConfirm(false);
+      setPublishStatus('idle');
+      setPublishCountdown(null);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      
       await loadData();
-      setTimeout(() => {
-        setShowPublishConfirm(false);
-        setPublishStatus('idle');
-      }, 4000); // Wait 4s to show the grand grand animation!
     } catch (e) {
       setPublishStatus('idle');
       setShowPublishConfirm(false);
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to publish' });
+      setPublishCountdown(null);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     } finally {
       setPublishing(false);
     }
@@ -378,8 +494,25 @@ export default function MarkEntryPage() {
     setEditModalOpen(true);
   };
 
-  const openTrackModal = () => {
+  const openTrackModal = async () => {
     setEditModalError(null);
+    // Refresh ONLY exam info to get latest publish_control without clearing student marks
+    try {
+      const examRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
+      if (examRes.ok) {
+        const examData = await examRes.json();
+        if (examData.qp_pattern && (!examData.qp_pattern.questions || examData.qp_pattern.questions.length === 0)) {
+          examData.qp_pattern = null;
+        }
+        setExamInfo(examData);
+        const pc = (examData as any)?.publish_control || {};
+        setSealImageUrl(resolveMediaUrl(pc?.seal_image));
+        setSealAnimationEnabled(Boolean(pc?.seal_animation_enabled));
+        setSealWatermarkEnabled(Boolean(pc?.seal_watermark_enabled));
+      }
+    } catch (error) {
+      console.error('Failed to refresh exam info:', error);
+    }
     setEditModalView('track');
     // show the latest reason if available
     const pr = examInfo?.publish_control?.pending_request;
@@ -470,7 +603,17 @@ export default function MarkEntryPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ marks: marksData, question_btls: questionBtls, publish }),
       });
-      if (!response.ok) throw new Error('Save failed');
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const err = await response.json().catch(() => ({}));
+          const anyErr: any = err;
+          throw new Error(anyErr.detail || anyErr.error || anyErr.message || 'Save failed');
+        }
+        const text = await response.text().catch(() => '');
+        throw new Error(text?.trim() || 'Save failed');
+      }
       setStudents(prev => prev.map(s => ({ ...s, saved: true })));
       setHasChanges(false);
       const now = new Date().toLocaleString();
@@ -481,7 +624,7 @@ export default function MarkEntryPage() {
       }
       setTimeout(() => setMessage(null), 3000);
     } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to save marks' });
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to save marks' });
     } finally {
       setSaving(false);
       setPublishing(false);
@@ -562,13 +705,75 @@ export default function MarkEntryPage() {
     }
   };
 
+  // Helper: Generate cell label info (warnings, indicators like "Max Exceeded", "Imported (Empty)", "Editing...")
+  const getCellLabel = (studentId: string, fieldType: 'mark' | 'question', fieldId?: string): { type: string; label: string; color: string } | null => {
+    const cellKey = fieldType === 'mark' ? `${studentId}:mark` : `${studentId}:${fieldId}`;
+    const student = students.find(s => s.id === studentId);
+    if (!student) return null;
+
+    // 1. Check if cell was imported but is empty (HIGHEST PRIORITY - show not filled warning)
+    if (importedCells.has(cellKey)) {
+      if (fieldType === 'mark' && student.mark === null) {
+        return { type: 'not_filled', label: 'Not filled in Excel', color: 'gray' };
+      }
+      if (fieldType === 'question' && fieldId && (student.co_marks[fieldId] === null || student.co_marks[fieldId] === undefined)) {
+        return { type: 'not_filled', label: 'Not filled in Excel', color: 'gray' };
+      }
+    }
+
+    // 2. Check if mark exceeds max (HIGH PRIORITY - shows even if imported)
+    if (fieldType === 'mark' && examInfo && student.mark !== null && student.mark > examInfo.max_marks) {
+      return { type: 'max_exceeded', label: 'Max Exceeded', color: 'red' };
+    }
+    if (fieldType === 'question' && fieldId) {
+      const q = questions.find(qu => qu.id === fieldId);
+      if (q && student.co_marks[fieldId] !== null && student.co_marks[fieldId] !== undefined && student.co_marks[fieldId] > q.max_marks) {
+        return { type: 'max_exceeded', label: 'Max Exceeded', color: 'red' };
+      }
+    }
+
+    // 3. Check if cell was imported with valid value
+    if (importedCells.has(cellKey)) {
+      if (fieldType === 'mark' && student.mark !== null) {
+        return { type: 'imported', label: 'Imported', color: 'blue' };
+      }
+      if (fieldType === 'question' && fieldId && student.co_marks[fieldId] !== null && student.co_marks[fieldId] !== undefined) {
+        return { type: 'imported', label: 'Imported', color: 'blue' };
+      }
+    }
+
+    // 4. Check for concurrent edits (future feature)
+    if (concurrentEditCells.has(cellKey)) {
+      return { type: 'concurrent_edit', label: 'Editing...', color: 'blue' };
+    }
+
+    return null;
+  };
+
   const confirmImport = () => {
     if (!importPreview) return;
     // Apply imported data to students state
     const importMap = new Map(importPreview.students.map(s => [s.student_id, s]));
+    const newImportedCells = new Set<string>();
+    
     setStudents(prev => prev.map(student => {
       const imported = importMap.get(student.id);
       if (!imported) return student;
+      
+      // Track ALL cells that were imported (including empty ones)
+      // Mark field
+      if (imported.mark !== undefined) {
+        newImportedCells.add(`${student.id}:mark`);
+      }
+      // Question fields
+      if (imported.co_marks) {
+        Object.keys(imported.co_marks).forEach(qId => {
+          if (imported.co_marks[qId] !== undefined) {
+            newImportedCells.add(`${student.id}:${qId}`);
+          }
+        });
+      }
+      
       return {
         ...student,
         mark: imported.mark,
@@ -577,11 +782,15 @@ export default function MarkEntryPage() {
         saved: false,
       };
     }));
+    
+    setImportedCells(newImportedCells);
     setHasChanges(true);
     setImportPhase('success');
     setTimeout(() => {
       setImportPhase('idle');
       setImportPreview(null);
+      // DO NOT call loadData() here - marks are only in frontend state until user clicks Save Draft
+      // If we refresh now, it will overwrite imported marks with empty DB data
     }, 2500);
   };
 
@@ -602,13 +811,45 @@ export default function MarkEntryPage() {
     setMmSetup({ cos, cia_enabled: mm.cia_enabled, cia_max_marks: mm.cia_max_marks, cia_weight: (mm as any).cia_weight || 0 });
   };
 
-  /* ────── Filtered students ────── */
-  const filteredStudents = students.filter(s => {
-    if (showAbsentOnly && !s.is_absent) return false;
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return s.roll_number.toLowerCase().includes(q) || s.name.toLowerCase().includes(q);
-  });
+  /* ────── Get unique departments ────── */
+  const uniqueDepartments = Array.from(
+    new Set(students.map(s => s.department || 'N/A').filter(Boolean))
+  ).sort();
+
+  /* ────── Filtered and sorted students ────── */
+  const filteredStudents = students
+    .filter(s => {
+      // Absent filter
+      if (showAbsentOnly && !s.is_absent) return false;
+      // Search query filter
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        if (!s.roll_number.toLowerCase().includes(q) && !s.name.toLowerCase().includes(q)) return false;
+      }
+      // Register number range filter
+      if (filterRegisterRange.start || filterRegisterRange.end) {
+        const regNum = s.roll_number.toLowerCase();
+        if (filterRegisterRange.start && regNum < filterRegisterRange.start.toLowerCase()) return false;
+        if (filterRegisterRange.end && regNum > filterRegisterRange.end.toLowerCase()) return false;
+      }
+      // Department filter
+      if (selectedDepartments.size > 0 && !selectedDepartments.has(s.department || 'N/A')) return false;
+      // Student selection filter
+      if (selectedStudents.size > 0 && !selectedStudents.has(s.id)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortOption === 'name') {
+        return a.name.localeCompare(b.name);
+      } else if (sortOption === 'department') {
+        const deptA = a.department || 'N/A';
+        const deptB = b.department || 'N/A';
+        if (deptA !== deptB) return deptA.localeCompare(deptB);
+        return a.roll_number.localeCompare(b.roll_number);
+      }
+      // Default: register number
+      return a.roll_number.localeCompare(b.roll_number);
+    });
 
   /* ────── Render ────── */
   if (loading) {
@@ -647,6 +888,9 @@ export default function MarkEntryPage() {
     ? Math.ceil((editWindowUntilMs - nowMs) / 1000)
     : null;
 
+  // Can import if editable OR if we have an active edit window
+  const canImport = isEditable || (editWindowRemainingSec !== null && editWindowRemainingSec > 0);
+
   const formatRemaining = (seconds: number) => {
     const s = Math.max(0, Math.floor(seconds));
     const days = Math.floor(s / 86400);
@@ -662,10 +906,13 @@ export default function MarkEntryPage() {
   const openRemainingSec = Number.isFinite(openFromMs) && openFromMs > nowMs ? Math.ceil((openFromMs - nowMs) / 1000) : 0;
   const dueRemainingSec = Number.isFinite(dueAtMs) ? Math.ceil((dueAtMs - nowMs) / 1000) : null;
 
+  const isDueOver = publishControlEnabled && dueRemainingSec !== null && dueRemainingSec <= 0;
+  const isLockedByPublished = isLocked && (examInfo.status === 'PUBLISHED' || examInfo.status === 'LOCKED');
+
   return (
-    <div className="p-4 max-w-[1400px] mx-auto space-y-3">
+    <div className="p-2 w-full max-w-none h-screen flex flex-col gap-2">
       {/* Header row */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 shrink-0">
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg">
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -673,24 +920,40 @@ export default function MarkEntryPage() {
           <h1 className="text-xl font-bold text-gray-900 truncate">
             {examInfo.course_code} — {examInfo.name}
           </h1>
-          <p className="text-sm text-gray-500 truncate">
-            {examInfo.course_name} &middot; {examInfo.class_name} &middot; Sec {examInfo.section}
-          </p>
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <p className="text-sm text-gray-500">
+              {examInfo.course_name} &middot; {examInfo.class_name} &middot; Sec {examInfo.section}
+            </p>
+            {examInfo.qp_type && (
+              <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-medium rounded">QP: {examInfo.qp_type}</span>
+            )}
+          </div>
         </div>
-        {isLocked && (
-          <span className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium">Locked</span>
+        {isLocked && (isLockedByPublished || editWindowRemainingSec === null) && (
+          isLockedByPublished ? (
+            <span className="relative inline-flex items-center">
+              <span className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium">Locked by Published</span>
+              {isDueOver && (
+                <span className="absolute -top-2 -right-2 px-2 py-0.5 bg-amber-100 text-amber-800 rounded text-[11px] font-semibold border border-amber-200 shadow-sm">
+                  Due date over
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="px-3 py-1 bg-red-100 text-red-700 rounded text-sm font-medium">Locked</span>
+          )
         )}
       </div>
 
       {message && (
-        <div className={`px-4 py-2 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+        <div className={`px-4 py-2 rounded-lg text-sm shrink-0 ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
           {message.text}
         </div>
       )}
 
       {/* ───── Toolbar + Table (hidden during Mark Manager setup) ───── */}
       {!(needsMarkManagerSetup && mmSetup) && (<>
-      <div className="bg-white rounded-xl shadow-sm border">
+      <div className="bg-white rounded-xl shadow-sm border shrink-0">
 
         {/* Publish control timers (above the table) */}
         {(openRemainingSec > 0 || (publishControlEnabled && dueRemainingSec !== null) || (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0))) && (
@@ -725,7 +988,7 @@ export default function MarkEntryPage() {
           <button onClick={loadData} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
             <RefreshCw className="w-3.5 h-3.5" /> Load/Refresh Roster
           </button>
-          {isEditable && (
+          {canImport && (
             <button onClick={resetMarks} className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 flex items-center gap-1.5">
               <Trash2 className="w-3.5 h-3.5" /> Reset Marks
             </button>
@@ -737,6 +1000,15 @@ export default function MarkEntryPage() {
             <Eye className="w-3.5 h-3.5" /> {showAbsentOnly ? 'Show All' : 'Show Absentees'}
           </button>
 
+          <button
+            onClick={() => setSortFilterOpen(!sortFilterOpen)}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-1.5 ${
+              sortFilterOpen ? 'bg-blue-50 border-blue-300 text-blue-700' : 'hover:bg-gray-50'
+            }`}
+          >
+            <Settings2 className="w-3.5 h-3.5" /> Sort/Filter
+          </button>
+
           <div className="w-px h-6 bg-gray-200 mx-1" />
 
           <button onClick={exportCSV} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
@@ -745,7 +1017,7 @@ export default function MarkEntryPage() {
           <button onClick={exportExcel} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
             <FileSpreadsheet className="w-3.5 h-3.5" /> Export Excel
           </button>
-          {isEditable && (
+          {canImport && (
             <>
               <button onClick={() => fileInputRef.current?.click()} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
                 <Upload className="w-3.5 h-3.5" /> Import Excel
@@ -758,7 +1030,7 @@ export default function MarkEntryPage() {
           </button>
 
           {/* Mark Manager edit (user_define mode, already confirmed) */}
-          {isEditable && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && examInfo.mark_manager?.confirmed && (
+          {canImport && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && examInfo.mark_manager?.confirmed && (
             <button onClick={editMarkManager} className="px-3 py-1.5 text-sm border border-teal-300 text-teal-700 rounded-lg hover:bg-teal-50 flex items-center gap-1.5">
               <Edit3 className="w-3.5 h-3.5" /> Mark Manager
             </button>
@@ -766,15 +1038,43 @@ export default function MarkEntryPage() {
 
           {/* Right group — pushed to end */}
           <div className="flex-1" />
-          {isEditable && (
+          {canImport && (
             <>
+              <style>{`
+                @keyframes slideInCheck {
+                  0% { transform: scale(0.5) rotate(-90deg); opacity: 0; }
+                  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+                }
+                @keyframes slideOutSave {
+                  0% { transform: scale(1) rotate(0deg); opacity: 1; }
+                  100% { transform: scale(0.5) rotate(90deg); opacity: 0; }
+                }
+                .auto-save-check {
+                  animation: slideInCheck 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+                }
+                .auto-save-save {
+                  animation: slideOutSave 0.3s cubic-bezier(0.4, 0, 0.6, 1);
+                }
+              `}</style>
               <button
                 onClick={() => saveMarks(false)}
-                disabled={!hasChanges || saving}
-                className="px-4 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                disabled={autoSaveStatus === 'saving' || autoSaveStatus === 'saved' || saving}
+                className={`px-4 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white transition-all duration-300 ${
+                  autoSaveStatus === 'saved' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-green-600 hover:bg-green-700'
+                } disabled:opacity-75`}
               >
-                {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                Save Draft
+                {autoSaveStatus === 'saving' && (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                )}
+                {autoSaveStatus === 'saved' && (
+                  <CheckCircle className="w-3.5 h-3.5 auto-save-check" />
+                )}
+                {autoSaveStatus === 'idle' && (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                {autoSaveStatus === 'saving' && 'Saving...'}
+                {autoSaveStatus === 'saved' && 'Saved Draft'}
+                {autoSaveStatus === 'idle' && 'Save Draft'}
               </button>
               <button
                 onClick={handlePublishClick}
@@ -811,30 +1111,44 @@ export default function MarkEntryPage() {
 
       {/* Publish Confirmation Modal */}
       {showPublishConfirm && (
-        <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm transition-opacity duration-500">
-          <div className={`w-full max-w-sm bg-white rounded-2xl shadow-2xl border transform transition-all duration-500 animate-in zoom-in-95 ${publishStatus === 'success' ? 'scale-105 border-emerald-400/50 shadow-[0_0_100px_rgba(52,211,153,0.3)]' : 'overflow-hidden'}`}>
+        <div className="fixed inset-0 z-[60] bg-slate-950/55 flex items-center justify-center p-4 backdrop-blur-[2px] transition-opacity duration-500">
+          <div className={`w-full max-w-xl bg-white/95 rounded-3xl shadow-[0_24px_80px_-20px_rgba(15,23,42,0.55)] border border-slate-200/80 transform transition-all duration-500 animate-in zoom-in-95 overflow-visible ${publishStatus === 'success' ? 'scale-[1.01]' : ''} ${showSealStamp && publishStatus === 'success' ? 'modal-screen-shake' : ''}`}>
             {publishStatus === 'idle' && (
               <>
-                <div className="p-6 text-center space-y-4">
-                  <div className="mx-auto w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4">
-                    <Send className="w-8 h-8 text-blue-600" />
+                <div className="h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500"></div>
+                <div className="p-8 md:p-10 space-y-7">
+                  <div className="flex items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0 shadow-sm">
+                      <Send className="w-7 h-7 text-emerald-700" />
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-bold tracking-[0.2em] text-slate-500 uppercase">Final Action</p>
+                      <h3 className="text-3xl font-extrabold text-slate-900 leading-tight">Confirm Mark Publication</h3>
+                    </div>
                   </div>
-                  <h3 className="text-xl font-bold text-gray-900">Publish Marks?</h3>
-                  <p className="text-sm text-gray-500">
-                    Are you sure you want to publish? This will lock the entry and marks cannot be edited further without an edit request.
-                    {hasChanges && <span className="block mt-2 font-medium text-amber-600">Unsaved changes will be saved automatically.</span>}
+
+                  <p className="text-base text-slate-600 leading-relaxed">
+                    Publishing will finalize this mark entry. After this step, edits can only be made through the formal edit-request workflow.
                   </p>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-2">
+                    <p className="text-sm font-semibold text-slate-700">What happens next</p>
+                    <p className="text-sm text-slate-600">. Marks are submitted to the approved record.</p>
+                    <p className="text-sm text-slate-600">. Editing is locked immediately after publication.</p>
+                    {hasChanges && <p className="text-sm font-semibold text-amber-700">. Unsaved entries will be saved automatically before publish.</p>}
+                  </div>
                 </div>
-                <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-end gap-3">
+
+                <div className="px-8 py-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3">
                   <button 
                     onClick={() => setShowPublishConfirm(false)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors"
                   >
                     Cancel
                   </button>
                   <button 
                     onClick={confirmPublish}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+                    className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-emerald-700 to-emerald-600 rounded-xl hover:from-emerald-800 hover:to-emerald-700 transition-colors shadow-[0_10px_25px_-10px_rgba(5,150,105,0.9)]"
                   >
                     Confirm Publish
                   </button>
@@ -843,46 +1157,355 @@ export default function MarkEntryPage() {
             )}
             
             {publishStatus === 'loading' && (
-              <div className="p-8 text-center space-y-8 flex flex-col items-center justify-center py-16 animate-in slide-in-from-bottom-4 fade-in duration-500">
+              <div className="p-10 md:p-12 text-center space-y-8 flex flex-col items-center justify-center py-16 animate-in fade-in duration-500">
                 <div className="relative w-24 h-24">
-                  {/* Outer spinning ring */}
-                  <div className="absolute inset-0 border-4 border-blue-100 rounded-full"></div>
-                  <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-[spin_1.5s_linear_infinite]"></div>
-                  {/* Inner pulsing star/element */}
-                  <div className="absolute inset-4 bg-teal-400/20 rounded-full animate-pulse flex items-center justify-center shadow-[0_0_20px_rgba(52,211,153,0.3)]">
-                    <Send className="w-6 h-6 text-blue-600 animate-pulse" />
+                  <div className="absolute inset-0 border-[6px] border-emerald-100 rounded-full"></div>
+                  <div className="absolute inset-0 border-[6px] border-emerald-700 rounded-full border-t-transparent animate-[spin_1.15s_linear_infinite]"></div>
+                  <div className="absolute inset-5 rounded-full bg-emerald-700/10 flex items-center justify-center">
+                    <Send className="w-6 h-6 text-emerald-700" />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <h3 className="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-500 animate-pulse">Publishing Marks...</h3>
-                  <p className="text-sm font-medium text-gray-500">Gathering entries and securing locks.</p>
+
+                <div className="space-y-3 max-w-md">
+                  <h3 className="text-3xl font-extrabold text-slate-900 tracking-tight">Publishing In Progress</h3>
+                  <p className="text-sm font-medium text-slate-600">Validating entries, syncing records, and applying final lock controls.</p>
+                </div>
+
+                <div className="w-full max-w-md h-2 rounded-full bg-slate-200 overflow-hidden">
+                  <div className="h-full w-2/3 bg-gradient-to-r from-emerald-700 via-emerald-500 to-teal-500 animate-[pulse_1.2s_ease-in-out_infinite]"></div>
                 </div>
               </div>
             )}
             
             {publishStatus === 'success' && (
-              <div className="relative p-8 text-center space-y-8 flex flex-col items-center justify-center py-16 animate-in zoom-in-95 fade-in duration-1000 ease-out">
-                <div className="relative z-10 mx-auto">
-                  {/* Subtle grand halo */}
-                  <div className="absolute inset-[-40%] bg-gradient-to-tr from-emerald-600/20 to-teal-400/20 rounded-full blur-3xl opacity-60"></div>
-                  
-                  {/* Single sweeping ripple */}
-                  <div className="absolute inset-[-2rem] border-[1px] border-emerald-500/30 rounded-full animate-[ping_3s_cubic-bezier(0,0,0.2,1)_infinite]"></div>
-                  
-                  {/* Main stately center badge */}
-                  <div className="relative mx-auto w-36 h-36 bg-gradient-to-br from-emerald-500 to-emerald-800 rounded-full flex items-center justify-center shadow-[0_20px_60px_-15px_rgba(5,150,105,0.7)] transform transition-transform duration-700 hover:scale-[1.02]">
-                    <div className="absolute inset-1 border border-white/20 rounded-full"></div>
-                    <CheckCircle className="w-20 h-20 text-white drop-shadow-lg" strokeWidth={2.5} />
+              <div className="relative p-10 md:p-12 flex flex-row items-stretch justify-between min-h-[380px] bg-gradient-to-br from-slate-50 to-white overflow-visible gap-12">
+                <style>{`
+                  @keyframes checkmarkDraw {
+                    0% { 
+                      stroke-dasharray: 52;
+                      stroke-dashoffset: 52;
+                    }
+                    100% { 
+                      stroke-dasharray: 52;
+                      stroke-dashoffset: 0;
+                    }
+                  }
+                  @keyframes circleFill {
+                    0% { 
+                      r: 0;
+                      opacity: 0;
+                    }
+                    30% { opacity: 1; }
+                    100% { 
+                      r: 48;
+                      opacity: 1;
+                    }
+                  }
+                  @keyframes titleSlideIn {
+                    0% {
+                      opacity: 0;
+                      transform: translateX(12px);
+                    }
+                    100% {
+                      opacity: 1;
+                      transform: translateX(0);
+                    }
+                  }
+                  @keyframes subtitleFadeIn {
+                    0% { opacity: 0; }
+                    100% { opacity: 1; }
+                  }
+                  /* SEAL ANIMATIONS */
+                  @keyframes sealSpinDropStick {
+                    0% {
+                      opacity: 0;
+                      transform: translate(-50%, -50%) rotate(0deg) scale(0.3);
+                    }
+                    50% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) rotate(720deg) scale(1.2);
+                    }
+                    85% {
+                      transform: translate(-50%, -50%) rotate(780deg) scale(1.15);
+                    }
+                    100% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) rotate(810deg) scale(1);
+                    }
+                  }
+                  @keyframes sealSwingStamp {
+                    0% {
+                      opacity: 0;
+                      transform: translate(-50%, -50%) rotate(-35deg) translateY(-25px) scale(0.4);
+                      filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0));
+                    }
+                    25% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) rotate(-20deg) translateY(-15px) scale(0.7);
+                      filter: drop-shadow(0 2px 8px rgba(239, 68, 68, 0.3));
+                    }
+                    50% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) rotate(0deg) translateY(8px) scale(1.08);
+                      filter: drop-shadow(0 8px 16px rgba(239, 68, 68, 0.5));
+                    }
+                    65% {
+                      transform: translate(-50%, -50%) rotate(2deg) translateY(0px) scale(1.01);
+                      filter: drop-shadow(0 4px 12px rgba(239, 68, 68, 0.4));
+                    }
+                    80% {
+                      transform: translate(-50%, -50%) rotate(-1deg) translateY(1px) scale(0.99);
+                      filter: drop-shadow(0 3px 10px rgba(239, 68, 68, 0.35));
+                    }
+                    100% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) rotate(0deg) translateY(0px) scale(1);
+                      filter: drop-shadow(0 4px 12px rgba(239, 68, 68, 0.3));
+                    }
+                  }
+                  @keyframes sealGlowPulse {
+                    0% {
+                      opacity: 0;
+                      transform: translate(-50%, -50%) scale(0.8);
+                      filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0.6));
+                    }
+                    30% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) scale(1);
+                      filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.8));
+                    }
+                    60% {
+                      filter: drop-shadow(0 0 25px rgba(239, 68, 68, 0.6));
+                    }
+                    100% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) scale(1);
+                      filter: drop-shadow(0 8px 20px rgba(239, 68, 68, 0.3));
+                    }
+                  }
+                  @keyframes sealBouncePress {
+                    0% {
+                      opacity: 0;
+                      transform: translate(-50%, -50%) translateY(-30px) scale(0.4);
+                    }
+                    50% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) translateY(5px) scale(1.05);
+                    }
+                    70% {
+                      transform: translate(-50%, -50%) translateY(-2px) scale(0.98);
+                    }
+                    100% {
+                      opacity: 1;
+                      transform: translate(-50%, -50%) translateY(0px) scale(1);
+                    }
+                  }
+                  @keyframes screenShake {
+                    0%, 100% {
+                      transform: translate(0, 0) rotate(0deg);
+                    }
+                    5% {
+                      transform: translate(-5px, -4px) rotate(-0.5deg);
+                    }
+                    10% {
+                      transform: translate(4px, 5px) rotate(0.4deg);
+                    }
+                    15% {
+                      transform: translate(-4px, -5px) rotate(-0.4deg);
+                    }
+                    20% {
+                      transform: translate(5px, 3px) rotate(0.5deg);
+                    }
+                    25% {
+                      transform: translate(-5px, 4px) rotate(-0.45deg);
+                    }
+                    30% {
+                      transform: translate(3px, -5px) rotate(0.45deg);
+                    }
+                    35% {
+                      transform: translate(-3px, 4px) rotate(-0.35deg);
+                    }
+                    40% {
+                      transform: translate(4px, -3px) rotate(0.35deg);
+                    }
+                    45% {
+                      transform: translate(-4px, 3px) rotate(-0.3deg);
+                    }
+                    50% {
+                      transform: translate(3px, -4px) rotate(0.3deg);
+                    }
+                    55% {
+                      transform: translate(-3px, 3px) rotate(-0.25deg);
+                    }
+                    60% {
+                      transform: translate(2px, -3px) rotate(0.25deg);
+                    }
+                    65% {
+                      transform: translate(-2px, 3px) rotate(-0.2deg);
+                    }
+                    70% {
+                      transform: translate(3px, -2px) rotate(0.2deg);
+                    }
+                    75% {
+                      transform: translate(-2px, 2px) rotate(-0.15deg);
+                    }
+                    80% {
+                      transform: translate(2px, -2px) rotate(0.15deg);
+                    }
+                    85% {
+                      transform: translate(-1px, 1px) rotate(-0.1deg);
+                    }
+                    90% {
+                      transform: translate(1px, -1px) rotate(0.1deg);
+                    }
+                    95% {
+                      transform: translate(-0.5px, 0.5px) rotate(-0.05deg);
+                    }
+                  }
+                  .modal-screen-shake {
+                    animation: screenShake 0.6s ease-in-out;
+                  }
+                  .seal-animation-spin {
+                    animation: sealSpinDropStick 1s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards;
+                  }
+                  .seal-animation-swing {
+                    animation: sealSwingStamp 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0s forwards;
+                  }
+                  .seal-animation-glow {
+                    animation: sealGlowPulse 1.5s ease-out 0.2s forwards;
+                  }
+                  .seal-animation-bounce {
+                    animation: sealBouncePress 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards;
+                  }
+                  .success-checkmark {
+                    animation: checkmarkDraw 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.4s forwards;
+                    stroke-dasharray: 52;
+                    stroke-dashoffset: 52;
+                  }
+                  .success-circle {
+                    animation: circleFill 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+                  }
+                  .success-title {
+                    animation: titleSlideIn 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.3s forwards;
+                    opacity: 0;
+                  }
+                  .success-subtitle {
+                    animation: subtitleFadeIn 0.5s ease-out 0.5s forwards;
+                    opacity: 0;
+                  }
+                `}</style>
+
+                {/* LEFT COLUMN - Instructions */}
+                <div className="flex-1 flex flex-col justify-between min-w-0">
+                  <div>
+                    <h2 className="success-title text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mb-4">
+                      Marks Published
+                    </h2>
+                    <p className="success-subtitle text-sm text-slate-600 leading-relaxed mb-6">
+                      Your marks have been successfully submitted and official records are now locked.
+                    </p>
+                  </div>
+
+                  {/* Info cards - left column */}
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-100/50">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-2.5 flex-shrink-0"></div>
+                      <p className="text-sm text-slate-600">Records submitted to official database</p>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-100/50">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-2.5 flex-shrink-0"></div>
+                      <p className="text-sm text-slate-600">Editing locked — request edit if changes needed</p>
+                    </div>
+                  </div>
+
+                  {/* Action Section - Button and Timer */}
+                  <div className="mt-6 pt-6 border-t border-slate-200 flex flex-col gap-4">
+                    <button 
+                      onClick={() => setShowPublishConfirm(false)}
+                      className="w-full px-6 py-2.5 text-sm font-semibold text-blue-700 bg-white border-2 border-blue-300 rounded-xl hover:bg-blue-50 transition-colors"
+                    >
+                      Back to Mark Entry
+                    </button>
+                    
+                    {/* Countdown Timer - below button */}
+                    {publishCountdown !== null && publishCountdown > 0 && (
+                      <div className="text-center">
+                        <p className="text-xs text-slate-500 mb-1">Auto-closing in</p>
+                        <div className="text-2xl font-bold text-emerald-600">
+                          {publishCountdown}s
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-                
-                <div className="mt-10 space-y-3 z-10">
-                  <h3 className="text-4xl font-extrabold tracking-tight text-gray-900 drop-shadow-sm">
-                    MARKS PUBLISHED
-                  </h3>
-                  <p className="text-lg font-semibold text-emerald-700 tracking-wide uppercase">
-                    Records Successfully Locked
-                  </p>
+
+                {/* RIGHT COLUMN - Checkmark + Seal */}
+                <div className="flex-1 flex flex-col items-center justify-center relative min-w-0">
+                  {/* SEAL STAMP - positioned in top-right, extends beyond popup */}
+                  {showSealStamp && (
+                    <div className="absolute -top-8 -right-8 seal-animation-swing w-40 h-40 pointer-events-none" style={{ filter: 'drop-shadow(0 15px 30px rgba(0, 0, 0, 0.25))' }}>
+                      {sealImageUrl ? (
+                        <img 
+                          src={sealImageUrl} 
+                          alt="Official Seal" 
+                          className="w-full h-full object-contain drop-shadow-lg"
+                        />
+                      ) : (
+                        <svg viewBox="0 0 200 200" className="w-full h-full">
+                          {/* Outer circle ring */}
+                          <circle cx="100" cy="100" r="95" fill="none" stroke="#ef4444" strokeWidth="3" opacity="0.8" />
+                          
+                          {/* Inner decorative circle */}
+                          <circle cx="100" cy="100" r="85" fill="none" stroke="#ef4444" strokeWidth="1.5" opacity="0.5" />
+                          
+                          {/* Center seal badge */}
+                          <circle cx="100" cy="100" r="60" fill="#ef4444" opacity="0.95" />
+                          
+                          {/* Checkmark inside badge */}
+                          <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+                          
+                          {/* Decorative text around circle - OFFICIAL SEAL */}
+                          <defs>
+                            <path id="sealCircle" d="M 100, 100 m -70, 0 a 70,70 0 1,1 140,0 a 70,70 0 1,1 -140,0" fill="none" />
+                          </defs>
+                          <text fontSize="16" fontWeight="bold" fill="#ef4444" opacity="0.7" letterSpacing="2">
+                            <textPath href="#sealCircle" startOffset="0%" textAnchor="start">
+                              OFFICIAL SEAL • PUBLISHED • LOCKED
+                            </textPath>
+                          </text>
+                        </svg>
+                      )}
+                    </div>
+                  )}
+
+                  {/* SVG Checkmark Icon - Green Circle + White Checkmark */}
+                  <div className="relative w-28 h-28">
+                    <svg
+                      viewBox="0 0 100 100"
+                      className="w-full h-full"
+                      style={{ filter: 'drop-shadow(0 4px 12px rgba(16, 185, 129, 0.25))' }}
+                    >
+                      {/* Filled green circle background - animates in first */}
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="0"
+                        fill="#10b981"
+                        className="success-circle"
+                      />
+                      
+                      {/* White checkmark - draws on top after circle fills */}
+                      <polyline
+                        points="32,50 46,62 68,38"
+                        fill="none"
+                        stroke="white"
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="success-checkmark"
+                      />
+                    </svg>
+                  </div>
                 </div>
               </div>
             )}
@@ -1249,7 +1872,7 @@ export default function MarkEntryPage() {
       </div>
 
       {/* Search + mode toggle */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 shrink-0">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
@@ -1423,10 +2046,27 @@ export default function MarkEntryPage() {
 
       {/* ───── Marks Table ───── */}
       {!(needsMarkManagerSetup && mmSetup) && (
-      <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-        <div className="overflow-x-auto">
+      <div className="bg-white rounded-xl shadow-sm border flex-1 min-h-0 overflow-hidden flex flex-col relative">
+        <style>{`
+          .marks-table-scroll::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+          }
+          .marks-table-scroll::-webkit-scrollbar-track {
+            background: #f9fafb;
+            border-radius: 4px;
+          }
+          .marks-table-scroll::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+          }
+          .marks-table-scroll::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+          }
+        `}</style>
+        <div className="marks-table-scroll flex-1 min-h-0 overflow-auto">
           <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
+            <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase w-12">#</th>
                 <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">Roll No</th>
@@ -1464,7 +2104,7 @@ export default function MarkEntryPage() {
             <tbody className="divide-y divide-gray-100">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={4 + questions.length + 1} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={4 + questions.length + 1 + (showDepartmentColumn ? 1 : 0)} className="px-4 py-8 text-center text-gray-400">
                     {students.length === 0 ? 'No students loaded. Click "Load/Refresh Roster" above.' : 'No matching students.'}
                   </td>
                 </tr>
@@ -1473,40 +2113,77 @@ export default function MarkEntryPage() {
                   <td className="px-3 py-1.5 text-gray-400">{index + 1}</td>
                   <td className="px-3 py-1.5 font-mono text-xs">{student.roll_number}</td>
                   <td className="px-3 py-1.5">{student.name}</td>
-                  {hasQ && questions.map(q => (
-                    <td key={q.id} className="px-1 py-1">
-                      <input
-                        type="number"
-                        value={student.co_marks[q.id] ?? ''}
-                        onChange={e => updateQuestionMark(student.id, q.id, e.target.value)}
-                        onKeyDown={handleCellKeyDown}
-                        disabled={!isEditable || student.is_absent}
-                        min="0"
-                        max={q.max_marks}
-                        step={wholeNumber ? '1' : '0.5'}
-                        className="w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
-                      />
-                    </td>
-                  ))}
-                  <td className="px-2 py-1">
-                    <input
-                      type="number"
-                      value={student.mark ?? ''}
-                      onChange={e => updateMark(student.id, e.target.value)}
-                      onKeyDown={handleCellKeyDown}
-                      disabled={!isEditable || student.is_absent || hasQ}
-                      min="0"
-                      max={examInfo.max_marks}
-                      step={wholeNumber ? '1' : '0.5'}
-                      className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''}`}
-                    />
+                  {showDepartmentColumn && (
+                    <td className="px-3 py-1.5 text-sm text-gray-600">{student.department || 'N/A'}</td>
+                  )}
+                  {hasQ && questions.map(q => {
+                    const cellLabel = getCellLabel(student.id, 'question', q.id);
+                    const labelColors = {
+                      red: 'bg-red-100 text-red-700 border-red-200',
+                      gray: 'bg-gray-100 text-gray-600 border-gray-200',
+                      blue: 'bg-blue-100 text-blue-700 border-blue-200',
+                    };
+                    return (
+                      <td key={q.id} className="px-1 py-1 relative">
+                        <div className="relative group w-full">
+                          <input
+                            type="number"
+                            value={student.co_marks[q.id] ?? ''}
+                            onChange={e => updateQuestionMark(student.id, q.id, e.target.value)}
+                            onKeyDown={handleCellKeyDown}
+                            disabled={!canImport || student.is_absent}
+                            min="0"
+                            max={q.max_marks}
+                            step={wholeNumber ? '1' : '0.5'}
+                            className="w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
+                          />
+                          {cellLabel && (
+                            <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
+                              {cellLabel.label}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td className="px-2 py-1 relative">
+                    <div className="relative group w-full">
+                      {(() => {
+                        const cellLabel = getCellLabel(student.id, 'mark');
+                        const labelColors = {
+                          red: 'bg-red-100 text-red-700 border-red-200',
+                          gray: 'bg-gray-100 text-gray-600 border-gray-200',
+                          blue: 'bg-blue-100 text-blue-700 border-blue-200',
+                        };
+                        return (
+                          <>
+                            <input
+                              type="number"
+                              value={student.mark ?? ''}
+                              onChange={e => updateMark(student.id, e.target.value)}
+                              onKeyDown={handleCellKeyDown}
+                              disabled={!canImport || student.is_absent || hasQ}
+                              min="0"
+                              max={examInfo.max_marks}
+                              step={wholeNumber ? '1' : '0.5'}
+                              className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''}`}
+                            />
+                            {cellLabel && (
+                              <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
+                                {cellLabel.label}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
                   </td>
                   <td className="px-3 py-1.5 text-center">
                     <input
                       type="checkbox"
                       checked={student.is_absent}
                       onChange={() => toggleAbsent(student.id)}
-                      disabled={!isEditable}
+                      disabled={!canImport}
                       className="w-4 h-4 text-red-500 rounded border-gray-300 focus:ring-red-400"
                     />
                   </td>
@@ -1515,7 +2192,244 @@ export default function MarkEntryPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Watermark overlay - professional zigzag slanted seal images on published exams */}
+        {examInfo?.status === 'PUBLISHED' && sealWatermarkEnabled && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {/* Professional zigzag watermark pattern with staggered rows extending below table */}
+            {[...Array(40)].map((_, idx) => {
+              const row = Math.floor(idx / 6);
+              const col = idx % 6;
+              // Zigzag: odd rows are offset by half a column width
+              const isOddRow = row % 2 === 1;
+              const offsetX = isOddRow ? 8.33 : 0; // Offset by half column (50%)
+              const xPercent = col * 16.67 + offsetX;
+              const yPercent = row * 14.3; // Tighter spacing for more rows below table
+              
+              // Vary opacity slightly for depth (0.08-0.15)
+              const baseOpacity = 0.08 + (idx % 3) * 0.035;
+              
+              return (
+                <div
+                  key={idx}
+                  className="absolute"
+                  style={{
+                    left: `${xPercent}%`,
+                    top: `${yPercent}%`,
+                    transform: 'translate(-50%, -50%) rotate(-45deg)',
+                    width: '100px',
+                    height: '100px',
+                    opacity: baseOpacity,
+                  }}
+                >
+                  {sealImageUrl ? (
+                    <img 
+                      src={sealImageUrl} 
+                      alt="Watermark" 
+                      className="w-full h-full object-contain"
+                      style={{ filter: 'grayscale(20%)' }}
+                    />
+                  ) : (
+                    <svg viewBox="0 0 200 200" className="w-full h-full">
+                      <circle cx="100" cy="100" r="95" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.8" />
+                      <circle cx="100" cy="100" r="60" fill="currentColor" opacity="0.95" />
+                      <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+                    </svg>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
+      )}
+
+      {/* ───── Sort/Filter Modal ───── */}
+      {sortFilterOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setSortFilterOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto space-y-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-gray-900">Sort & Filter</h2>
+              <button onClick={() => setSortFilterOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Sorting Section */}
+            <div className="space-y-3">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <RefreshCw className="w-5 h-5 text-blue-600" /> Sorting
+              </h3>
+              <div className="space-y-2">
+                <label className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="sort"
+                    value="register"
+                    checked={sortOption === 'register'}
+                    onChange={e => setSortOption(e.target.value as 'register' | 'name' | 'department')}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <span className="text-gray-700">By Register Number</span>
+                </label>
+                <label className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="sort"
+                    value="name"
+                    checked={sortOption === 'name'}
+                    onChange={e => setSortOption(e.target.value as 'register' | 'name' | 'department')}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <span className="text-gray-700">By Name</span>
+                </label>
+                <label className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="sort"
+                    value="department"
+                    checked={sortOption === 'department'}
+                    onChange={e => setSortOption(e.target.value as 'register' | 'name' | 'department')}
+                    className="w-4 h-4 text-blue-600"
+                  />
+                  <span className="text-gray-700">By Department</span>
+                  <span className="text-xs text-gray-500">(shows Department column)</span>
+                </label>
+                <label className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-gray-50 border-t pt-2 mt-2">
+                  <input
+                    type="checkbox"
+                    checked={showDepartmentColumn}
+                    onChange={e => setShowDepartmentColumn(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded"
+                  />
+                  <span className="text-gray-700 font-medium">Show Department Column in Table</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Filtering Section */}
+            <div className="space-y-3 border-t pt-6">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <Search className="w-5 h-5 text-teal-600" /> Filtering
+              </h3>
+
+              {/* Register Number Range Filter */}
+              <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                <label className="block text-sm font-medium text-gray-700">Register Number Range</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Start (e.g., 001)"
+                      value={filterRegisterRange.start}
+                      onChange={e => setFilterRegisterRange(p => ({ ...p, start: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="End (e.g., 050)"
+                      value={filterRegisterRange.end}
+                      onChange={e => setFilterRegisterRange(p => ({ ...p, end: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Department Filter */}
+              {uniqueDepartments.length > 0 && (
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <label className="block text-sm font-medium text-gray-700">Departments</label>
+                  <div className="space-y-2 max-h-[150px] overflow-y-auto">
+                    {uniqueDepartments.map(dept => (
+                      <label key={dept} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-white">
+                        <input
+                          type="checkbox"
+                          checked={selectedDepartments.has(dept)}
+                          onChange={e => {
+                            const newSet = new Set(selectedDepartments);
+                            if (e.target.checked) {
+                              newSet.add(dept);
+                            } else {
+                              newSet.delete(dept);
+                            }
+                            setSelectedDepartments(newSet);
+                          }}
+                          className="w-4 h-4 text-teal-600 rounded"
+                        />
+                        <span className="text-gray-700">{dept}</span>
+                        <span className="ml-auto text-xs text-gray-500">
+                          ({students.filter(s => (s.department || 'N/A') === dept).length})
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Student Selection Filter */}
+              {students.length > 0 && (
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-medium text-gray-700">Students</label>
+                    <div className="text-xs text-gray-500">
+                      {selectedStudents.size}/{students.length} selected
+                    </div>
+                  </div>
+                  <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                    {students.map(student => (
+                      <label key={student.id} className="flex items-center gap-3 p-2 rounded cursor-pointer hover:bg-white text-sm">
+                        <input
+                          type="checkbox"
+                          checked={selectedStudents.has(student.id)}
+                          onChange={e => {
+                            const newSet = new Set(selectedStudents);
+                            if (e.target.checked) {
+                              newSet.add(student.id);
+                            } else {
+                              newSet.delete(student.id);
+                            }
+                            setSelectedStudents(newSet);
+                          }}
+                          className="w-4 h-4 text-teal-600 rounded flex-shrink-0"
+                        />
+                        <span className="font-mono text-xs text-gray-600 w-16 flex-shrink-0">{student.roll_number}</span>
+                        <span className="text-gray-700 truncate flex-1">{student.name}</span>
+                        {student.department && (
+                          <span className="text-xs text-gray-500 flex-shrink-0">{student.department}</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 border-t pt-6">
+              <button
+                onClick={() => {
+                  setSortOption('register');
+                  setShowDepartmentColumn(false);
+                  setFilterRegisterRange({ start: '', end: '' });
+                  setSelectedDepartments(new Set());
+                  setSelectedStudents(new Set());
+                }}
+                className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50"
+              >
+                Reset All
+              </button>
+              <button
+                onClick={() => setSortFilterOpen(false)}
+                className="flex-1 px-4 py-2.5 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 flex items-center justify-center gap-2"
+              >
+                <CheckCircle className="w-4 h-4" /> Apply
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ───── Import Overlay: Loading ───── */}
@@ -1566,6 +2480,24 @@ export default function MarkEntryPage() {
                   </span>
                 </div>
               )}
+
+              {(importPreview.unfilled_count || 0) > 0 && (
+                <div className="col-span-2 bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                    <span className="text-xs text-red-700 font-medium">
+                      {importPreview.unfilled_count} matched row(s) have empty marks. They will remain blank after import.
+                    </span>
+                  </div>
+                  {(importPreview.unfilled_rows || []).length > 0 && (
+                    <div className="text-[11px] text-red-700 max-h-24 overflow-auto space-y-0.5 pl-6">
+                      {(importPreview.unfilled_rows || []).slice(0, 5).map((r) => (
+                        <div key={`${r.roll_number}-${r.row_number}`}>Row {r.row_number}: {r.roll_number} {r.name ? `- ${r.name}` : ''}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-3">
@@ -1577,9 +2509,9 @@ export default function MarkEntryPage() {
               </button>
               <button
                 onClick={confirmImport}
-                className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2"
+                className={`flex-1 px-4 py-2.5 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2 ${(importPreview.unfilled_count || 0) > 0 ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}
               >
-                <CheckCircle className="w-4 h-4" /> Confirm Import
+                <CheckCircle className="w-4 h-4" /> Sure, Confirm
               </button>
             </div>
           </div>

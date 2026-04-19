@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Lock, Unlock, CheckCircle, AlertTriangle, Shield, Save, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, Lock, Unlock, CheckCircle, AlertTriangle, Shield, Save, RefreshCw, Trash2, X } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface Semester {
@@ -27,6 +27,9 @@ interface SemesterConfig {
   approval_window_minutes: number;
   edit_request_validity_hours?: number;
   approval_until_publish?: boolean;
+  seal_animation_enabled?: boolean;
+  seal_watermark_enabled?: boolean;
+  seal_image?: string | null;
   is_open: boolean;
   time_remaining_seconds: number | null;
   updated_at: string;
@@ -41,6 +44,17 @@ export default function PublishControlPage() {
   const [isDirty, setIsDirty] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Reset modals state
+  const [resetModal, setResetModal] = useState<{ type: 'requests' | 'marks' | null; stage: 'confirm' | 'password' | 'success' }>({ type: null, stage: 'confirm' });
+  const [resetPassword, setResetPassword] = useState('');
+  const [resetPasswordError, setResetPasswordError] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<{ cancelled_count?: number; reopened_count?: number; affected_count?: number } | null>(null);
+
+  // Seal upload state
+  const [sealImage, setSealImage] = useState<string | null>(null);
+  const [sealImageFile, setSealImageFile] = useState<File | null>(null);
+
   const [localConfig, setLocalConfig] = useState({
     due_at: '',
     open_from: '',
@@ -50,6 +64,8 @@ export default function PublishControlPage() {
     approval_window_minutes: 120,
     edit_request_validity_hours: 24,
     approval_until_publish: false,
+    seal_animation_enabled: false,
+    seal_watermark_enabled: false,
   });
 
   const AVAILABLE_WORKFLOW_ROLES = ['HOD', 'IQAC', 'ADMIN'] as const;
@@ -113,7 +129,14 @@ export default function PublishControlPage() {
         approval_window_minutes: existingConfig.approval_window_minutes || 120,
         edit_request_validity_hours: typeof existingConfig.edit_request_validity_hours === 'number' ? existingConfig.edit_request_validity_hours : 24,
         approval_until_publish: Boolean(existingConfig.approval_until_publish),
+        seal_animation_enabled: Boolean((existingConfig as any).seal_animation_enabled),
+        seal_watermark_enabled: Boolean((existingConfig as any).seal_watermark_enabled),
       });
+
+      // Load persisted seal image (URL) for this semester
+      const persistedSeal = (existingConfig as any).seal_image as (string | null | undefined);
+      setSealImage(persistedSeal || null);
+      setSealImageFile(null);
       setIsDirty(false);
     } else {
       setLocalConfig({
@@ -125,7 +148,12 @@ export default function PublishControlPage() {
         approval_window_minutes: 120,
         edit_request_validity_hours: 24,
         approval_until_publish: false,
+        seal_animation_enabled: false,
+        seal_watermark_enabled: false,
       });
+
+      setSealImage(null);
+      setSealImageFile(null);
       setIsDirty(true);
     }
   }, [selectedSemester, configs]);
@@ -176,6 +204,9 @@ export default function PublishControlPage() {
       setMessage(null);
 
       const existingConfig = configs.find(c => String(c.semester) === String(selectedSemester));
+
+      const shouldUploadSeal = Boolean(sealImageFile && sealImage && String(sealImage).startsWith('data:'));
+      const shouldClearSeal = Boolean(existingConfig && (existingConfig as any).seal_image && !sealImage && !sealImageFile);
       const payload = {
         semester: selectedSemester,
         due_at: localConfig.due_at ? new Date(localConfig.due_at).toISOString() : null,
@@ -186,6 +217,10 @@ export default function PublishControlPage() {
         approval_window_minutes: localConfig.approval_window_minutes,
         edit_request_validity_hours: localConfig.edit_request_validity_hours,
         approval_until_publish: localConfig.approval_until_publish,
+        seal_animation_enabled: localConfig.seal_animation_enabled,
+        seal_watermark_enabled: localConfig.seal_watermark_enabled,
+        ...(shouldUploadSeal ? { seal_image_base64: sealImage } : {}),
+        ...(shouldClearSeal ? { seal_image_base64: '' } : {}),
       };
 
       const url = existingConfig
@@ -227,6 +262,130 @@ export default function PublishControlPage() {
     return { label: `${days} days left`, color: 'text-green-600 bg-green-50', icon: Clock };
   };
 
+  const handleResetRequests = async () => {
+    if (!selectedSemester || resetModal.stage !== 'password') return;
+    
+    try {
+      setResetting(true);
+      setResetPasswordError('');
+      const config = configs.find(c => String(c.semester) === String(selectedSemester));
+      if (!config) throw new Error('Config not found');
+
+      const response = await fetchWithAuth(
+        `/api/academic-v2/semester-configs/${config.id}/reset_requests/`,
+        { method: 'POST', body: JSON.stringify({ password: resetPassword }) }
+      );
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        const errorMsg = err.detail || 'Reset failed';
+        if (response.status === 400 && errorMsg.includes('password')) {
+          setResetPasswordError(errorMsg);
+          setResetPassword('');
+        } else {
+          throw new Error(errorMsg);
+        }
+        return;
+      }
+
+      const data = await response.json();
+      setResetResult(data);
+      setResetModal({ type: 'requests', stage: 'success' });
+      setResetPassword('');
+      setTimeout(() => {
+        setResetModal({ type: null, stage: 'confirm' });
+        setMessage({ type: 'success', text: `${data.reopened_count} courses opened for edits` });
+        setResetResult(null);
+        loadData();
+      }, 3000);
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Failed to reset requests' });
+      setResetModal({ type: 'requests', stage: 'password' });
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const handleResetMarks = async () => {
+    if (!selectedSemester || resetModal.stage !== 'password') return;
+    
+    try {
+      setResetting(true);
+      setResetPasswordError('');
+      const config = configs.find(c => String(c.semester) === String(selectedSemester));
+      if (!config) throw new Error('Config not found');
+
+      const response = await fetchWithAuth(
+        `/api/academic-v2/semester-configs/${config.id}/reset_marks/`,
+        { method: 'POST', body: JSON.stringify({ password: resetPassword }) }
+      );
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        const errorMsg = err.detail || 'Reset failed';
+        if (response.status === 400 && errorMsg.includes('password')) {
+          setResetPasswordError(errorMsg);
+          setResetPassword('');
+        } else {
+          throw new Error(errorMsg);
+        }
+        return;
+      }
+
+      const data = await response.json();
+      setResetResult(data);
+      setResetModal({ type: 'marks', stage: 'success' });
+      setResetPassword('');
+      setTimeout(() => {
+        setResetModal({ type: null, stage: 'confirm' });
+        setMessage({ type: 'success', text: `Marks reset for ${data.affected_count} exam assignments` });
+        setResetResult(null);
+        loadData();
+      }, 3000);
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Failed to reset marks' });
+      setResetModal({ type: 'marks', stage: 'password' });
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const handleSealImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      setMessage({ type: 'error', text: 'Please upload an image file (PNG, JPG, GIF)' });
+      return;
+    }
+
+    // Validate file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      setMessage({ type: 'error', text: 'Image size must be less than 2MB' });
+      return;
+    }
+
+    setSealImageFile(file);
+    setIsDirty(true);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSealImage(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+    setMessage({ type: 'success', text: 'Seal image uploaded successfully' });
+  };
+
+  const handleRemoveSealImage = () => {
+    setSealImage(null);
+    setSealImageFile(null);
+    setIsDirty(true);
+    const input = document.getElementById('seal-upload') as HTMLInputElement;
+    if (input) input.value = '';
+  };
+
   const dueDateStatus = getDueDateStatus();
 
   if (loading) {
@@ -243,7 +402,7 @@ export default function PublishControlPage() {
     : 'Select a semester';
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-6 w-full max-w-none space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Publish Control Settings</h1>
@@ -519,6 +678,126 @@ export default function PublishControlPage() {
               </div>
             </div>
           </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Shield className="w-5 h-5 text-red-600" />
+              <h2 className="text-lg font-semibold">Office Seal Stamp</h2>
+            </div>
+            <div className="space-y-4">
+              <div className="border rounded-lg p-4 bg-gray-50 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Upload Seal Image</label>
+                  
+                  {sealImage ? (
+                    <div className="border-2 border-green-300 rounded-lg p-6 bg-green-50 grid grid-cols-2 gap-6 items-center">
+                      {/* Left side - Controls */}
+                      <div className="space-y-4">
+                        <div>
+                          <p className="text-sm font-medium text-green-900">Seal image uploaded</p>
+                          {sealImageFile ? (
+                            <>
+                              <p className="text-xs text-green-700 mt-1 break-words">{sealImageFile.name}</p>
+                              <p className="text-xs text-green-600 mt-2">
+                                Size: {sealImageFile.size / 1024 > 1024
+                                  ? (sealImageFile.size / (1024 * 1024)).toFixed(2) + ' MB'
+                                  : (sealImageFile.size / 1024).toFixed(2) + ' KB'}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-xs text-green-700 mt-1">Saved on server</p>
+                          )}
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const input = document.getElementById('seal-upload') as HTMLInputElement;
+                              input?.click();
+                            }}
+                            className="w-full px-3 py-2 rounded-lg bg-blue-100 text-blue-700 text-sm font-medium hover:bg-blue-200 transition-colors"
+                          >
+                            Upload Another Image
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleRemoveSealImage}
+                            className="w-full px-3 py-2 rounded-lg bg-red-100 text-red-700 text-sm font-medium hover:bg-red-200 transition-colors"
+                          >
+                            Remove Image
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Right side - Image Preview */}
+                      <div className="flex justify-center">
+                        <div className="w-40 h-40 flex items-center justify-center bg-white rounded-lg border-2 border-green-300 overflow-hidden shadow-md">
+                          <img src={sealImage} alt="Seal preview" className="w-full h-full object-contain p-2" />
+                        </div>
+                      </div>
+
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        id="seal-upload"
+                        onChange={handleSealImageUpload}
+                      />
+                    </div>
+                  ) : (
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors cursor-pointer bg-gray-50">
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        id="seal-upload"
+                        onChange={handleSealImageUpload}
+                      />
+                      <label htmlFor="seal-upload" className="cursor-pointer flex flex-col items-center gap-2">
+                        <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        <p className="text-sm font-medium text-gray-700">Click to upload seal image</p>
+                        <p className="text-xs text-gray-500">PNG, JPG, or GIF (recommended: square, transparent background)</p>
+                      </label>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 mt-2">Upload an official seal stamp image to display on published marks (max 2MB)</p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-gray-200 hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={localConfig.seal_animation_enabled}
+                      onChange={(e) => handleChange('seal_animation_enabled', e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Seal Animation on Published Popup</p>
+                      <p className="text-sm text-gray-600">Display animated seal stamp when marks are published (top-right corner)</p>
+                      <p className="text-xs text-gray-500 mt-1">Options: Spin-Drop, Swing-Stamp, Glow-Pulse, Bounce-Press</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-gray-200 hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={localConfig.seal_watermark_enabled}
+                      onChange={(e) => handleChange('seal_watermark_enabled', e.target.checked)}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">Seal Watermark on Mark Entry Table</p>
+                      <p className="text-sm text-gray-600">Display watermarked seal on mark entry table after marks are published (prevents editing)</p>
+                      <p className="text-xs text-gray-500 mt-1">Shows subtle seal in background + read-only overlay</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
             </>
           ) : (
             <div className="bg-white rounded-lg shadow border-dashed border-2 p-12 text-center">
@@ -526,8 +805,148 @@ export default function PublishControlPage() {
               <p className="text-gray-500">Select a semester from the left</p>
             </div>
           )}
+
+          {selectedSemester && (
+            <div className="bg-white rounded-lg shadow border p-6 space-y-4">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+                Danger Zone
+              </h3>
+              <p className="text-sm text-gray-600">These actions affect all exam assignments in this semester. Proceed with caution.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <button
+                  onClick={() => setResetModal({ type: 'requests', stage: 'confirm' })}
+                  className="px-4 py-2.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 font-medium text-sm flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Reset All Requests
+                </button>
+                <button
+                  onClick={() => setResetModal({ type: 'marks', stage: 'confirm' })}
+                  className="px-4 py-2.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 font-medium text-sm flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Reset All Marks
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Reset Modals */}
+      {resetModal.type && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+          {resetModal.stage === 'confirm' && (
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <div className="flex-1">
+                  <h2 className="font-bold text-gray-900">
+                    {resetModal.type === 'requests' ? 'Cancel All Edit Requests?' : 'Reset All Marks?'}
+                  </h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {resetModal.type === 'requests'
+                      ? 'All pending edit requests for this semester will be cancelled. This action cannot be undone.'
+                      : 'All marks and exam assignments will be reset to DRAFT status. All data will be cleared. This action cannot be undone.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setResetModal({ type: null, stage: 'confirm' })}
+                  className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setResetModal({ type: resetModal.type, stage: 'password' })}
+                  className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700"
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
+          {resetModal.stage === 'password' && (
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95">
+              <div>
+                <h2 className="font-bold text-gray-900 text-lg">Verify Your Password</h2>
+                <p className="text-sm text-gray-600 mt-1">Enter your password to confirm this action.</p>
+              </div>
+              <input
+                type="password"
+                value={resetPassword}
+                onChange={(e) => setResetPassword(e.target.value)}
+                placeholder="Password"
+                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 ${resetPasswordError ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-red-500'}`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && resetPassword.trim()) {
+                    if (resetModal.type === 'requests') handleResetRequests();
+                    else handleResetMarks();
+                  }
+                }}
+              />
+              {resetPasswordError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-red-700">{resetPasswordError}</p>
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setResetModal({ type: null, stage: 'confirm' });
+                    setResetPassword('');
+                  }}
+                  className="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (resetModal.type === 'requests') handleResetRequests();
+                    else handleResetMarks();
+                  }}
+                  disabled={!resetPassword.trim() || resetting}
+                  className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-50"
+                >
+                  {resetting ? 'Resetting...' : 'Confirm'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {resetModal.stage === 'success' && (
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-8 text-center space-y-4 animate-in fade-in zoom-in-95">
+              <style>{`
+                @keyframes checkmarkDraw {
+                  0% { stroke-dasharray: 52; stroke-dashoffset: 52; }
+                  100% { stroke-dasharray: 52; stroke-dashoffset: 0; }
+                }
+                .success-checkmark { animation: checkmarkDraw 0.7s ease-out 0.3s forwards; stroke-dasharray: 52; stroke-dashoffset: 52; }
+              `}</style>
+              <div className="w-16 h-16 mx-auto">
+                <svg viewBox="0 0 100 100" className="w-full h-full" style={{ filter: 'drop-shadow(0 4px 12px rgba(34, 197, 94, 0.25))' }}>
+                  <circle cx="50" cy="50" r="48" fill="#22c55e" />
+                  <polyline points="32,50 46,62 68,38" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" className="success-checkmark" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="font-bold text-gray-900 text-lg">Success!</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {resetModal.type === 'requests' 
+                    ? `${resetResult?.reopened_count || 0} courses opened for edits.`
+                    : `All marks have been reset for ${resetResult?.affected_count || 0} exam assignments.`}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

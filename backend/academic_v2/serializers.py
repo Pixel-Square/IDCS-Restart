@@ -2,6 +2,9 @@
 Academic 2.1 Serializers
 """
 
+import base64
+from django.core.files.base import ContentFile
+from django.utils.crypto import get_random_string
 from rest_framework import serializers
 from .models import (
     AcV2SemesterConfig,
@@ -14,6 +17,7 @@ from .models import (
     AcV2UserPatternOverride,
     AcV2EditRequest,
     AcV2InternalMark,
+    AcV2QpType,
 )
 
 
@@ -21,6 +25,8 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
     semester_name = serializers.CharField(source='semester.name', read_only=True)
     is_open = serializers.SerializerMethodField()
     time_remaining_seconds = serializers.SerializerMethodField()
+    # Accept base64 data URL (or raw base64) and store it in seal_image
+    seal_image_base64 = serializers.CharField(write_only=True, required=False, allow_blank=True)
     
     class Meta:
         model = AcV2SemesterConfig
@@ -29,10 +35,77 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
             'publish_control_enabled', 'approval_workflow', 'approval_window_minutes',
             'edit_request_validity_hours', 'approval_until_publish',
             'open_from', 'due_at', 'auto_publish_on_due',
+            'seal_animation_enabled', 'seal_watermark_enabled', 'seal_image', 'seal_image_base64',
             'is_open', 'time_remaining_seconds',
             'updated_by', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']
+
+    def _apply_seal_image_base64(self, instance: AcV2SemesterConfig, raw: str | None):
+        if raw is None:
+            return
+
+        data = str(raw)
+
+        # Explicit clear
+        if data == '':
+            if instance.seal_image:
+                instance.seal_image.delete(save=False)
+            instance.seal_image = None
+            return
+
+        # Only accept base64; ignore URLs/paths
+        if data.startswith('http://') or data.startswith('https://') or data.startswith('/'):
+            return
+
+        mime = None
+        b64 = data
+        if data.startswith('data:') and ';base64,' in data:
+            header, b64 = data.split(';base64,', 1)
+            # header looks like: data:image/png
+            mime = header.split(':', 1)[1] if ':' in header else None
+
+        try:
+            decoded = base64.b64decode(b64, validate=True)
+        except Exception:
+            raise serializers.ValidationError({'seal_image_base64': 'Invalid base64 image data'})
+
+        # Basic size guard (2MB)
+        if len(decoded) > 2 * 1024 * 1024:
+            raise serializers.ValidationError({'seal_image_base64': 'Image size must be less than 2MB'})
+
+        ext = 'png'
+        if mime:
+            m = mime.lower()
+            if 'jpeg' in m or 'jpg' in m:
+                ext = 'jpg'
+            elif 'webp' in m:
+                ext = 'webp'
+            elif 'gif' in m:
+                ext = 'gif'
+            elif 'png' in m:
+                ext = 'png'
+
+        # Remove old file to avoid orphaned uploads
+        if instance.seal_image:
+            instance.seal_image.delete(save=False)
+
+        filename = f"seal_{instance.semester_id}_{get_random_string(8)}.{ext}"
+        instance.seal_image.save(filename, ContentFile(decoded), save=False)
+
+    def create(self, validated_data):
+        seal_b64 = validated_data.pop('seal_image_base64', None)
+        instance = super().create(validated_data)
+        self._apply_seal_image_base64(instance, seal_b64)
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        seal_b64 = validated_data.pop('seal_image_base64', None)
+        instance = super().update(instance, validated_data)
+        self._apply_seal_image_base64(instance, seal_b64)
+        instance.save()
+        return instance
     
     def get_is_open(self, obj):
         return obj.is_open()
@@ -132,20 +205,23 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
     is_past_due = serializers.SerializerMethodField()
     publish_control = serializers.SerializerMethodField()
     question_btls = serializers.SerializerMethodField()
+    class_type = serializers.SerializerMethodField()
+    class_type_name = serializers.SerializerMethodField()
+    name = serializers.CharField(source='exam_display_name', read_only=True)
     
     class Meta:
         model = AcV2ExamAssignment
         fields = [
             'id', 'section', 'section_info',
-            'exam', 'exam_display_name', 'qp_type',
+            'exam', 'exam_display_name', 'name', 'qp_type',
             'max_marks', 'weight', 'covered_cos',
-            'qp_pattern', 'allow_customize',
+            'qp_pattern', 'pattern', 'allow_customize',
             'status', 'draft_data', 'published_data',
             'published_at', 'published_by',
             'has_pending_edit_request', 'edit_window_until',
             'last_saved_at', 'last_saved_by',
             'is_editable', 'is_past_due', 'publish_control',
-            'question_btls',
+            'question_btls', 'class_type', 'class_type_name',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'published_at', 'published_by']
@@ -168,6 +244,20 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
             ctrl['time_remaining_seconds'] = int(ctrl['time_remaining'].total_seconds())
             del ctrl['time_remaining']
         return ctrl
+    
+    def get_class_type(self, obj):
+        """Get class_type ID from nested section.course"""
+        try:
+            return str(obj.section.course.class_type.id) if obj.section.course.class_type else None
+        except Exception:
+            return None
+    
+    def get_class_type_name(self, obj):
+        """Get class_type name from nested section.course"""
+        try:
+            return obj.section.course.class_type.name if obj.section.course.class_type else None
+        except Exception:
+            return None
 
 
 class AcV2StudentMarkSerializer(serializers.ModelSerializer):
@@ -301,3 +391,18 @@ class AcV2UserPatternOverrideSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by']
+
+
+class AcV2QpTypeSerializer(serializers.ModelSerializer):
+    """Serializer for QP Type (Question Paper Type)"""
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True)
+    
+    class Meta:
+        model = AcV2QpType
+        fields = [
+            'id', 'name', 'code', 'description',
+            'class_type', 'class_type_name',
+            'is_active', 'college',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']

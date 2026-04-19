@@ -155,6 +155,9 @@ def check_publish_control(exam_assignment) -> dict:
         'edit_window_until': exam_assignment.edit_window_until,
         'edit_window_until_publish': bool(getattr(exam_assignment, 'edit_window_until_publish', False)),
         'status': exam_assignment.status,
+        'seal_animation_enabled': False,
+        'seal_watermark_enabled': False,
+        'seal_image': None,
         'approval_workflow_roles': workflow_roles,
         'approval_workflow_assignees': [
             {
@@ -171,6 +174,13 @@ def check_publish_control(exam_assignment) -> dict:
     if semester_config:
         result['publish_control_enabled'] = semester_config.publish_control_enabled
         result['due_at'] = semester_config.due_at
+        result['seal_animation_enabled'] = bool(getattr(semester_config, 'seal_animation_enabled', False))
+        result['seal_watermark_enabled'] = bool(getattr(semester_config, 'seal_watermark_enabled', False))
+        try:
+            if getattr(semester_config, 'seal_image', None):
+                result['seal_image'] = semester_config.seal_image.url
+        except Exception:
+            result['seal_image'] = None
         
         if semester_config.due_at:
             now = timezone.now()
@@ -273,7 +283,9 @@ def process_auto_publish(semester_config) -> dict:
             'errors': list,
         }
     """
-    from ..models import AcV2ExamAssignment
+    from ..models import AcV2ExamAssignment, AcV2DraftMark, AcV2StudentMark
+    from .mark_calculation import compute_section_internal_marks
+    from academics.models import StudentProfile
     
     if not semester_config.auto_publish_on_due:
         return {'success': True, 'published_count': 0, 'errors': []}
@@ -297,11 +309,62 @@ def process_auto_publish(semester_config) -> dict:
     with transaction.atomic():
         for exam in draft_exams:
             try:
+                draft_data = exam.draft_data if isinstance(exam.draft_data, dict) else {}
+                marks_map = draft_data.get('marks', {}) if isinstance(draft_data.get('marks', {}), dict) else {}
+                if not marks_map:
+                    marks_map = {
+                        str(dm.student_id): {
+                            'mark': float(dm.total_mark) if dm.total_mark is not None else None,
+                            'co_marks': dm.question_marks if isinstance(dm.question_marks, dict) else {},
+                            'is_absent': bool(dm.is_absent),
+                        }
+                        for dm in AcV2DraftMark.objects.filter(exam_assignment=exam)
+                    }
+                    if marks_map:
+                        draft_data['marks'] = marks_map
+
                 # Copy draft to published
-                exam.published_data = exam.draft_data
+                exam.published_data = draft_data
                 exam.published_at = now
                 exam.status = 'PUBLISHED' if semester_config.publish_control_enabled else 'DRAFT'
-                exam.save(update_fields=['published_data', 'published_at', 'status'])
+                exam.edit_window_until = None
+                exam.edit_window_until_publish = False
+                exam.save(update_fields=['published_data', 'published_at', 'status', 'edit_window_until', 'edit_window_until_publish'])
+
+                if marks_map:
+                    student_ids = list(marks_map.keys())
+                    student_map = {
+                        str(sp.id): sp
+                        for sp in StudentProfile.objects.filter(id__in=student_ids).select_related('user')
+                    }
+                    for sid, payload in marks_map.items():
+                        sp = student_map.get(str(sid))
+                        if not sp:
+                            continue
+                        co_marks = payload.get('co_marks', {}) if isinstance(payload, dict) else {}
+                        if not isinstance(co_marks, dict):
+                            co_marks = {}
+                        mark_val = payload.get('mark') if isinstance(payload, dict) else None
+                        try:
+                            mark_val = float(mark_val) if mark_val not in (None, '') else None
+                        except (TypeError, ValueError):
+                            mark_val = None
+
+                        AcV2StudentMark.objects.update_or_create(
+                            exam_assignment=exam,
+                            student=sp,
+                            defaults={
+                                'reg_no': sp.reg_no or '',
+                                'student_name': str(sp.user) if sp.user else sp.reg_no or '',
+                                'total_mark': mark_val,
+                                'question_marks': co_marks,
+                                'is_absent': bool(payload.get('is_absent', False)) if isinstance(payload, dict) else False,
+                            },
+                        )
+                try:
+                    compute_section_internal_marks(exam.section)
+                except Exception:
+                    pass
                 published_count += 1
             except Exception as e:
                 errors.append(f"{exam.section.course.subject_code} - {exam.exam}: {str(e)}")

@@ -524,7 +524,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Academic 2.1 Admin for IQAC - collapsible group
   if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
-    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '#' });
+    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '/academic-v2/admin' });
   }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
@@ -642,7 +642,24 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+        {/* Custom scrollbar styles */}
+        <style>{`
+          aside::-webkit-scrollbar {
+            width: 8px;
+          }
+          aside::-webkit-scrollbar-track {
+            background: #f3f4f6;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+          }
+        `}</style>
         {/* Header - Hidden */}
         <div className="hidden" />
 
@@ -944,11 +961,29 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     <ul className="pl-8 mt-1 space-y-1">
                       <li>
                         <Link
+                          to="/academic-v2/admin"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Dashboard</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
                           to="/academic-v2/admin/publish-control"
                           className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/publish-control' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
                           onClick={() => { if (window.innerWidth < 1024) toggle(); }}
                         >
                           <Settings className="w-4 h-4" /> <span>Publish Control</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/cycles"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/cycles' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Calendar className="w-4 h-4" /> <span>Cycle Management</span>
                         </Link>
                       </li>
                       <li>
@@ -967,6 +1002,15 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                           onClick={() => { if (window.innerWidth < 1024) toggle(); }}
                         >
                           <FileText className="w-4 h-4" /> <span>QP Patterns</span>
+                        </Link>
+                      </li>
+                      <li>
+                        <Link
+                          to="/academic-v2/admin/exam-assignments"
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname === '/academic-v2/admin/exam-assignments' ? 'bg-blue-50 text-blue-600 font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => { if (window.innerWidth < 1024) toggle(); }}
+                        >
+                          <Grid className="w-4 h-4" /> <span>Exam Assignments</span>
                         </Link>
                       </li>
                       <li>

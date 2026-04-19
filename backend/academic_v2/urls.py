@@ -8,6 +8,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AcV2SemesterConfigViewSet,
     AcV2ClassTypeViewSet,
+    AcV2QpTypeViewSet,
     AcV2QpPatternViewSet,
     AcV2CourseViewSet,
     AcV2SectionViewSet,
@@ -34,6 +35,7 @@ app_name = 'academic_v2'
 router = DefaultRouter()
 router.register(r'semester-configs', AcV2SemesterConfigViewSet, basename='semester-config')
 router.register(r'class-types', AcV2ClassTypeViewSet, basename='class-type')
+router.register(r'qp-types', AcV2QpTypeViewSet, basename='qp-type')
 router.register(r'qp-patterns', AcV2QpPatternViewSet, basename='qp-pattern')
 router.register(r'courses', AcV2CourseViewSet, basename='course')
 router.register(r'sections', AcV2SectionViewSet, basename='section')

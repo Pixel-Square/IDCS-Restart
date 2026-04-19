@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, Save, FileText, Edit2, X, RefreshCw, GripVertical, Settings2 } from 'lucide-react';
+import { Plus, Trash2, Save, FileText, Edit2, X, RefreshCw, Settings2 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface QuestionRow {
@@ -49,10 +49,19 @@ interface ExamAssignment {
   qp_type: string;
   class_type: string | null;
   class_type_name: string | null;
+  cycle?: string | null;
+  cycle_name?: string | null;
   pattern: ExamPattern;
   questions: QuestionRow[];
   is_active: boolean;
   updated_at: string;
+}
+
+interface Cycle {
+  id: string;
+  name: string;
+  code: string;
+  is_active: boolean;
 }
 
 const QP_TYPE_OPTIONS = [
@@ -138,6 +147,7 @@ export default function ExamAssignmentAdminPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [exams, setExams] = useState<ExamAssignment[]>([]);
+  const [cycles, setCycles] = useState<Cycle[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -146,6 +156,7 @@ export default function ExamAssignmentAdminPage() {
   // Form state for selected exam
   const [formName, setFormName] = useState('');
   const [formWeight, setFormWeight] = useState<number>(0);
+  const [formCycle, setFormCycle] = useState<string | null>(null);
   const [formRows, setFormRows] = useState<QuestionRow[]>([]);
   const [markManager, setMarkManager] = useState<MarkManagerConfig>(getDefaultMarkManager());
   const [isDirty, setIsDirty] = useState(false);
@@ -159,10 +170,20 @@ export default function ExamAssignmentAdminPage() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetchWithAuth('/api/academic-v2/qp-patterns/');
-      if (!res.ok) throw new Error('Failed to load');
-      const data = await res.json();
+      const [pRes, cRes] = await Promise.all([
+        fetchWithAuth('/api/academic-v2/qp-patterns/'),
+        fetchWithAuth('/api/academic-v2/cycles/').catch(() => ({ ok: false })),
+      ]);
+      
+      if (!pRes.ok) throw new Error('Failed to load');
+      const data = await pRes.json();
       setExams(Array.isArray(data) ? data : (data.results || []));
+
+      // Load cycles if available
+      if (cRes.ok) {
+        const cycleData = await cRes.json();
+        setCycles(Array.isArray(cycleData) ? cycleData : (cycleData.results || []));
+      }
     } catch {
       setMessage({ type: 'error', text: 'Failed to load exam assignments' });
     } finally {
@@ -176,6 +197,7 @@ export default function ExamAssignmentAdminPage() {
     if (selectedExam) {
       setFormName(selectedExam.name || '');
       setFormWeight(Number(selectedExam.default_weight) || 0);
+      setFormCycle(selectedExam.cycle || null);
       setFormRows(patternToRows(selectedExam.pattern));
       // Load mark manager config from pattern
       const mm = selectedExam.pattern?.mark_manager;
@@ -271,14 +293,21 @@ export default function ExamAssignmentAdminPage() {
         ...rowsToPattern(finalRows),
         mark_manager: markManager.enabled ? markManager : null,
       };
+      const payload: Record<string, any> = {
+        name: formName,
+        qp_type: qpType,
+        default_weight: formWeight,
+        pattern,
+      };
+      
+      // Add cycle if selected
+      if (formCycle) {
+        payload.cycle = formCycle;
+      }
+
       const res = await fetchWithAuth(`/api/academic-v2/qp-patterns/${selectedId}/`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          name: formName,
-          qp_type: qpType,
-          default_weight: formWeight,
-          pattern,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const errText = await res.text();
@@ -386,7 +415,7 @@ export default function ExamAssignmentAdminPage() {
                 <div className="flex gap-2">
                   {isEditing ? (
                     <>
-                      <button onClick={() => { setIsEditing(false); setIsDirty(false); if (selectedExam) { setFormName(selectedExam.name); setFormWeight(Number(selectedExam.default_weight)); setFormRows(patternToRows(selectedExam.pattern)); const mm = selectedExam.pattern?.mark_manager; if (mm && typeof mm === 'object') { const loaded: MarkManagerConfig = { enabled: !!mm.enabled, mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define', cia_enabled: !!mm.cia_enabled, cia_max_marks: mm.cia_max_marks ?? 30, whole_number: !!mm.whole_number, arrow_keys: mm.arrow_keys !== false, cos: {} }; for (let i = 1; i <= 5; i++) { const c = mm.cos?.[i] || mm.cos?.[String(i)]; loaded.cos[i] = c ? { enabled: !!c.enabled, num_items: c.num_items ?? 5, max_marks: c.max_marks ?? 25 } : { enabled: false, num_items: 5, max_marks: 25 }; } setMarkManager(loaded); } else { setMarkManager(getDefaultMarkManager()); } } }} className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50">Cancel</button>
+                      <button onClick={() => { setIsEditing(false); setIsDirty(false); if (selectedExam) { setFormName(selectedExam.name); setFormWeight(Number(selectedExam.default_weight)); setFormCycle(selectedExam.cycle || null); setFormRows(patternToRows(selectedExam.pattern)); const mm = selectedExam.pattern?.mark_manager; if (mm && typeof mm === 'object') { const loaded: MarkManagerConfig = { enabled: !!mm.enabled, mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define', cia_enabled: !!mm.cia_enabled, cia_max_marks: mm.cia_max_marks ?? 30, whole_number: !!mm.whole_number, arrow_keys: mm.arrow_keys !== false, cos: {} }; for (let i = 1; i <= 5; i++) { const c = mm.cos?.[i] || mm.cos?.[String(i)]; loaded.cos[i] = c ? { enabled: !!c.enabled, num_items: c.num_items ?? 5, max_marks: c.max_marks ?? 25 } : { enabled: false, num_items: 5, max_marks: 25 }; } setMarkManager(loaded); } else { setMarkManager(getDefaultMarkManager()); } } }} className="px-3 py-1.5 border rounded-lg text-sm hover:bg-gray-50">Cancel</button>
                       <button onClick={handleSave} disabled={!isDirty || saving} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${isDirty && !saving ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
                         <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save'}
                       </button>
@@ -406,7 +435,7 @@ export default function ExamAssignmentAdminPage() {
 
               <div className="p-5 space-y-5">
                 {/* Metadata row */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Exam Name</label>
                     {isEditing ? (
@@ -421,6 +450,21 @@ export default function ExamAssignmentAdminPage() {
                       <input type="number" min={0} step="any" value={formWeight} onChange={e => { setFormWeight(Number(e.target.value)); markDirty(); }} className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
                     ) : (
                       <div className="text-sm font-semibold text-blue-700">{Number(selectedExam.default_weight)}</div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">Cycle</label>
+                    {isEditing ? (
+                      <select value={formCycle || ''} onChange={e => { setFormCycle(e.target.value || null); markDirty(); }} className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        <option value="">Select Cycle...</option>
+                        {cycles.map(c => (
+                          <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="text-sm font-medium text-gray-900">
+                        {formCycle && cycles.find(c => c.id === formCycle)?.name || '—'}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -629,120 +673,7 @@ export default function ExamAssignmentAdminPage() {
                   )}
                 </div>
 
-                {/* Question table — shown only when Mark Manager is OFF */}
-                {!markManager.enabled && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-700">Question Table</h3>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        Total: {totalMarks} marks
-                      </span>
-                      {isEditing && (
-                        <button onClick={addRow} className="flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-lg hover:bg-blue-200">
-                          <Plus className="w-3.5 h-3.5" /> Add Row
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          {isEditing && <th className="w-8 px-2 py-2 text-gray-400">#</th>}
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Enabled</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Question Title</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Max Marks</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">BTL</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">CO</th>
-                          {isEditing && <th className="px-2 py-2 w-8"></th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {formRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={isEditing ? 7 : 5} className="text-center py-8 text-gray-400">
-                              No questions yet. {isEditing && 'Click "Add Row" to create one.'}
-                            </td>
-                          </tr>
-                        ) : (
-                          formRows.map((row, idx) => (
-                            <tr key={idx} className={`hover:bg-gray-50 ${!row.enabled ? 'opacity-50' : ''}`}>
-                              {isEditing && (
-                                <td className="px-2 py-2 text-center text-gray-300 cursor-grab">
-                                  <GripVertical className="w-4 h-4 inline" />
-                                </td>
-                              )}
-                              <td className="px-3 py-2 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={row.enabled}
-                                  disabled={!isEditing}
-                                  onChange={e => updateRow(idx, 'enabled', e.target.checked)}
-                                  className="w-4 h-4 accent-blue-600"
-                                />
-                              </td>
-                              <td className="px-3 py-2">
-                                {isEditing ? (
-                                  <input
-                                    value={row.title}
-                                    onChange={e => updateRow(idx, 'title', e.target.value)}
-                                    className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-500 text-sm"
-                                    placeholder="Q1 (a)"
-                                  />
-                                ) : (
-                                  <span className="font-medium">{row.title}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={row.max_marks}
-                                    onChange={e => updateRow(idx, 'max_marks', Number(e.target.value))}
-                                    className="w-16 px-2 py-1 border rounded text-center focus:ring-1 focus:ring-blue-500 text-sm"
-                                  />
-                                ) : (
-                                  <span className="font-semibold text-gray-700">{row.max_marks}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <select value={row.btl_level ?? ''} onChange={e => updateRow(idx, 'btl_level', e.target.value ? Number(e.target.value) : null)} className="px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500">
-                                    <option value="">User Selection</option>
-                                    {BTL_LEVELS.map(l => <option key={l} value={l}>BT{l}</option>)}
-                                  </select>
-                                ) : (
-                                  row.btl_level ? <span className="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded">BT{row.btl_level}</span> : <span className="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">User Sel.</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <select value={row.co_number ?? ''} onChange={e => updateRow(idx, 'co_number', e.target.value ? Number(e.target.value) : null)} className="px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500">
-                                    <option value="">—</option>
-                                    {CO_NUMBERS.map(c => <option key={c} value={c}>CO{c}</option>)}
-                                  </select>
-                                ) : (
-                                  row.co_number ? <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded">CO{row.co_number}</span> : <span className="text-gray-300">—</span>
-                                )}
-                              </td>
-                              {isEditing && (
-                                <td className="px-2 py-2 text-center">
-                                  <button onClick={() => removeRow(idx)} className="p-1 text-red-400 hover:text-red-600 rounded">
-                                    <X className="w-4 h-4" />
-                                  </button>
-                                </td>
-                              )}
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                )}
+                {/* Question Table moved to QP Pattern Editor page (Class Type -> QP Type -> Exam) */}
               </div>
             </div>
           ) : (

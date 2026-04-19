@@ -19,9 +19,11 @@ from .models import (
     AcV2Section,
     AcV2ExamAssignment,
     AcV2StudentMark,
+    AcV2DraftMark,
     AcV2UserPatternOverride,
     AcV2EditRequest,
     AcV2InternalMark,
+    AcV2QpType,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -35,8 +37,9 @@ from .serializers import (
     AcV2EditRequestSerializer,
     AcV2InternalMarkSerializer,
     AcV2UserPatternOverrideSerializer,
+    AcV2QpTypeSerializer,
 )
-from .services.publish_control import check_publish_control, create_edit_request
+from .services.publish_control import check_publish_control, create_edit_request, process_auto_publish
 from .services.mark_calculation import compute_section_internal_marks
 
 
@@ -65,6 +68,174 @@ class AcV2SemesterConfigViewSet(viewsets.ModelViewSet):
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
+    
+    @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
+    def reset_requests(self, request, pk=None):
+        """
+        Admin action: Cancel all pending edit requests for this semester.
+        Returns count of cancelled requests.
+        """
+        try:
+            config = self.get_object()
+        except Exception as e:
+            return Response(
+                {'detail': f'Config not found: {str(e)}'},
+                status=404
+            )
+        
+        # Verify user is staff/admin
+        if not request.user.is_staff:
+            return Response({'detail': 'Permission denied'}, status=403)
+        
+        # Verify password
+        password = request.data.get('password', '')
+        if not password or not request.user.check_password(password):
+            return Response(
+                {'detail': 'Incorrect password. Action cancelled.'},
+                status=400
+            )
+        
+        try:
+            # Find all exam assignments for this semester
+            exams = AcV2ExamAssignment.objects.filter(
+                section__course__semester_id=config.semester_id
+            )
+            print(f"[RESET_REQUESTS] Found {exams.count()} exams for semester {config.semester_id}")
+
+            # Find pending edit requests
+            pending_qs = AcV2EditRequest.objects.filter(
+                exam_assignment__in=exams,
+                status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING']
+            )
+            print(f"[RESET_REQUESTS] Found {pending_qs.count()} pending requests")
+
+            # Get exam IDs that will be affected
+            affected_exam_ids = list(
+                pending_qs.values_list('exam_assignment_id', flat=True).distinct()
+            )
+            print(f"[RESET_REQUESTS] Affected exams: {len(affected_exam_ids)}")
+
+            with transaction.atomic():
+                # 1. Reject all pending requests
+                cancelled_count = pending_qs.update(status='REJECTED')
+                print(f"[RESET_REQUESTS] Rejected {cancelled_count} requests")
+                
+                # 2. Clear the has_pending_edit_request flag on affected exams
+                if affected_exam_ids:
+                    flag_clear_count = AcV2ExamAssignment.objects.filter(
+                        id__in=affected_exam_ids
+                    ).update(has_pending_edit_request=False)
+                    print(f"[RESET_REQUESTS] Cleared flags on {flag_clear_count} exams")
+
+                # 3. Reopen ALL published/locked exams (both auto-published AND manually published)
+                # Marks are preserved; only the read-only state is unlocked so faculty can edit and republish
+                reopened_count = AcV2ExamAssignment.objects.filter(
+                    section__course__semester_id=config.semester_id,
+                    status__in=['PUBLISHED', 'LOCKED'],
+                ).update(
+                    status='DRAFT',
+                    edit_window_until=None,
+                    edit_window_until_publish=False,
+                    has_pending_edit_request=False,
+                    published_by=None,  # Clear the publish lock
+                )
+                print(f"[RESET_REQUESTS] Reopened {reopened_count} published exams (auto + manually published)")
+            
+            print(f"[RESET_REQUESTS] Transaction committed successfully")
+            return Response({
+                'status': 'success',
+                'message': f'Cancelled {cancelled_count} pending edit requests and reopened {reopened_count} auto-published exams',
+                'cancelled_count': cancelled_count,
+                'reopened_count': reopened_count,
+            }, status=200)
+            
+        except Exception as e:
+            print(f"[RESET_REQUESTS] ERROR: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'detail': f'Reset failed: {str(e)}'},
+                status=500
+            )
+    
+    @action(detail=True, methods=['POST'], permission_classes=[IsAuthenticated])
+    def reset_marks(self, request, pk=None):
+        """
+        Admin action: Clear all marks and revert all exams to DRAFT status for this semester.
+        Returns count of affected exams.
+        """
+        try:
+            config = self.get_object()
+        except Exception as e:
+            return Response(
+                {'detail': f'Config not found: {str(e)}'},
+                status=404
+            )
+        
+        # Verify user is staff/admin
+        if not request.user.is_staff:
+            return Response({'detail': 'Permission denied'}, status=403)
+        
+        # Verify password
+        password = request.data.get('password', '')
+        if not password or not request.user.check_password(password):
+            return Response(
+                {'detail': 'Incorrect password. Action cancelled.'},
+                status=400
+            )
+        
+        try:
+            # Find all exam assignments for this semester
+            exams = AcV2ExamAssignment.objects.filter(
+                section__course__semester_id=config.semester_id
+            )
+            print(f"[RESET_MARKS] Found {exams.count()} exams for semester {config.semester_id}")
+            
+            affected_count = 0
+            with transaction.atomic():
+                for exam in exams:
+                    # Clear draft and published marks
+                    exam.draft_data = {}
+                    exam.published_data = {}
+                    exam.status = 'DRAFT'
+                    exam.edit_window_until = None
+                    exam.edit_window_until_publish = False
+                    exam.has_pending_edit_request = False
+                    exam.save(update_fields=[
+                        'draft_data', 'published_data', 'status', 
+                        'edit_window_until', 'edit_window_until_publish', 
+                        'has_pending_edit_request'
+                    ])
+                    
+                    # Clear draft mark rows
+                    AcV2DraftMark.objects.filter(exam_assignment=exam).delete()
+                    
+                    # Clear student marks
+                    AcV2StudentMark.objects.filter(exam_assignment=exam).delete()
+                    
+                    # Reject all pending edit requests for this exam
+                    AcV2EditRequest.objects.filter(
+                        exam_assignment=exam,
+                        status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING']
+                    ).update(status='REJECTED')
+                    
+                    affected_count += 1
+            
+            print(f"[RESET_MARKS] Transaction committed successfully, affected: {affected_count}")
+            return Response({
+                'status': 'success',
+                'message': f'Reset marks for {affected_count} exam assignments',
+                'affected_count': affected_count
+            }, status=200)
+            
+        except Exception as e:
+            print(f"[RESET_MARKS] ERROR: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'detail': f'Reset failed: {str(e)}'},
+                status=500
+            )
 
 
 # ============================================================================
@@ -78,6 +249,39 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
     """
     queryset = AcV2ClassType.objects.filter(is_active=True)
     serializer_class = AcV2ClassTypeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = super().get_queryset()
+        college_id = self.request.query_params.get('college')
+        if college_id:
+            qs = qs.filter(college_id=college_id)
+        return qs.order_by('name')
+    
+    def perform_create(self, serializer):
+        serializer.save(updated_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+    
+    def perform_destroy(self, instance):
+        # Soft delete
+        instance.is_active = False
+        instance.save()
+
+
+# ============================================================================
+# QP TYPE (Admin - Master data for exam types)
+# ============================================================================
+
+class AcV2QpTypeViewSet(viewsets.ModelViewSet):
+    """
+    QP Type (Question Paper Type) CRUD.
+    Master data for exam types (SSA, CIA, MODEL, LAB, etc.)
+    Admin only.
+    """
+    queryset = AcV2QpType.objects.filter(is_active=True)
+    serializer_class = AcV2QpTypeSerializer
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
@@ -206,10 +410,11 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
         
         marks_data = request.data.get('marks', {})
         question_btls = request.data.get('question_btls', None)
+        marks_map = _save_draft_marks_for_exam(exam, marks_data)
 
         # Preserve existing draft_data structure; update marks and optional btls
         draft = exam.draft_data if isinstance(exam.draft_data, dict) else {}
-        draft['marks'] = marks_data
+        draft['marks'] = marks_map
         if question_btls is not None:
             draft['question_btls'] = question_btls
         
@@ -249,6 +454,11 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
                 exam.status = 'DRAFT'  # Keep as draft if no publish control
             
             exam.save()
+
+            # Keep materialized student marks in sync with published snapshot.
+            published_marks = exam.published_data.get('marks', {}) if isinstance(exam.published_data, dict) else {}
+            if isinstance(published_marks, dict) and published_marks:
+                _materialize_student_marks_from_map(exam, published_marks)
             
             # Recompute internal marks
             compute_section_internal_marks(exam.section)
@@ -1158,6 +1368,7 @@ def faculty_exam_info(request, exam_id):
         id=exam_id,
         section__faculty_user=request.user,
     )
+    ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
     acad_sec = ta.section
@@ -1246,10 +1457,43 @@ def faculty_exam_info(request, exam_id):
             mark_manager = mm
     else:
         # Fall back to global QP pattern
-        qp_type = ea.qp_type or ea.exam or ''
-        matched_pattern = AcV2QpPattern.objects.filter(
-            qp_type=qp_type, is_active=True
-        ).first()
+        qp_type = ''
+        try:
+            qp_type = (ea.section.course.question_paper_type or '').strip()
+        except Exception:
+            qp_type = ''
+        if not qp_type:
+            qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
+        if not qp_type:
+            qp_type = (ea.qp_type or '').strip() or (ea.exam or '').strip() or ''
+
+        exam_key = (ea.exam_display_name or ea.exam or '').strip()
+
+        ct = None
+        try:
+            ct = ea.section.course.class_type
+        except Exception:
+            ct = None
+
+        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
+        matched_pattern = None
+
+        # 1) Class Type + QP Type + Exam name match
+        if ct is not None:
+            scoped = base_qs.filter(class_type=ct)
+            if exam_key:
+                matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                matched_pattern = scoped.order_by('-updated_at').first()
+
+        # 3) Global + QP Type + Exam name match
+        if not matched_pattern:
+            global_qs = base_qs.filter(class_type__isnull=True)
+            if exam_key:
+                matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                matched_pattern = global_qs.order_by('-updated_at').first()
+
         if matched_pattern and isinstance(matched_pattern.pattern, dict):
             p = matched_pattern.pattern
             titles = p.get('titles', [])
@@ -1309,6 +1553,224 @@ def faculty_exam_info(request, exam_id):
 # ==========================================================================
 # FACULTY EXAM PUBLISH + REQUEST EDIT (for MarkEntryPage publish control)
 # ==========================================================================
+# ==========================================================================
+# FACULTY EXAM INFO (for MarkEntryPage)
+# ============================================================================
+
+def _normalize_mark_number(value):
+    if value in (None, ''):
+        return None
+    try:
+        num = float(value)
+        # Guard against NaN/Infinity which break JSON/Decimal conversions.
+        if num != num or num in (float('inf'), float('-inf')):
+            return None
+        return num
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_question_marks(value):
+    """Normalize question/CO marks mapping for JSON + DB safety."""
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for k, v in value.items():
+        key = str(k)
+        if v in (None, ''):
+            out[key] = None
+            continue
+        try:
+            num = float(v)
+        except (TypeError, ValueError):
+            out[key] = None
+            continue
+        if num != num or num in (float('inf'), float('-inf')):
+            out[key] = None
+        else:
+            out[key] = num
+    return out
+
+
+def _normalize_marks_payload(marks_payload):
+    """Normalize incoming marks payload to list rows + map keyed by student_id."""
+    rows = []
+
+    if isinstance(marks_payload, list):
+        for item in marks_payload:
+            if not isinstance(item, dict):
+                continue
+            student_id = str(item.get('student_id') or '').strip()
+            if not student_id:
+                continue
+            co_marks = item.get('co_marks') if isinstance(item.get('co_marks'), dict) else item.get('question_marks', {})
+            co_marks = _normalize_question_marks(co_marks)
+            rows.append({
+                'student_id': student_id,
+                'mark': _normalize_mark_number(item.get('mark')),
+                'co_marks': co_marks,
+                'is_absent': bool(item.get('is_absent', False)),
+            })
+    elif isinstance(marks_payload, dict):
+        for student_id, item in marks_payload.items():
+            sid = str(student_id or '').strip()
+            if not sid:
+                continue
+            if isinstance(item, dict):
+                co_marks = item.get('co_marks') if isinstance(item.get('co_marks'), dict) else item.get('question_marks', {})
+                co_marks = _normalize_question_marks(co_marks)
+                mark_val = item.get('mark')
+                is_absent = bool(item.get('is_absent', False))
+            else:
+                co_marks = {}
+                mark_val = item
+                is_absent = False
+            rows.append({
+                'student_id': sid,
+                'mark': _normalize_mark_number(mark_val),
+                'co_marks': co_marks,
+                'is_absent': is_absent,
+            })
+
+    marks_map = {
+        row['student_id']: {
+            'mark': row['mark'],
+            'co_marks': row['co_marks'],
+            'is_absent': row['is_absent'],
+        }
+        for row in rows
+    }
+    return rows, marks_map
+
+
+def _save_draft_marks_for_exam(exam_assignment, marks_payload):
+    """Persist row-level draft marks into acv2_draft_mark and return normalized map."""
+    from academics.models import StudentProfile
+    from decimal import Decimal, InvalidOperation
+
+    rows, marks_map = _normalize_marks_payload(marks_payload)
+    if not rows:
+        return marks_map
+
+    student_ids = [r['student_id'] for r in rows if r.get('student_id')]
+    student_map = {
+        str(sp.id): sp
+        for sp in StudentProfile.objects.filter(id__in=student_ids).select_related('user')
+    }
+
+    def _to_decimal_2(value):
+        if value in (None, ''):
+            return None
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return None
+        if num != num or num in (float('inf'), float('-inf')):
+            return None
+        try:
+            return Decimal(str(num)).quantize(Decimal('0.01'))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    for row in rows:
+        sp = student_map.get(row['student_id'])
+        if not sp:
+            continue
+        AcV2DraftMark.objects.update_or_create(
+            exam_assignment=exam_assignment,
+            student=sp,
+            defaults={
+                'reg_no': sp.reg_no or '',
+                'student_name': str(sp.user) if sp.user else sp.reg_no or '',
+                'total_mark': _to_decimal_2(row.get('mark')),
+                'question_marks': _normalize_question_marks(row.get('co_marks')),
+                'is_absent': bool(row['is_absent']),
+            },
+        )
+
+    return marks_map
+
+
+def _materialize_student_marks_from_map(exam_assignment, marks_map):
+    """Ensure published/derived marks exist in acv2_student_mark for reporting."""
+    from academics.models import StudentProfile
+
+    if not isinstance(marks_map, dict) or not marks_map:
+        return
+
+    student_map = {
+        str(sp.id): sp
+        for sp in StudentProfile.objects.filter(id__in=list(marks_map.keys())).select_related('user')
+    }
+
+    for student_id, payload in marks_map.items():
+        sp = student_map.get(str(student_id))
+        if not sp:
+            continue
+        co_marks = payload.get('co_marks') if isinstance(payload, dict) else {}
+        if not isinstance(co_marks, dict):
+            co_marks = {}
+        mark_val = payload.get('mark') if isinstance(payload, dict) else None
+        if mark_val in ('',):
+            mark_val = None
+
+        AcV2StudentMark.objects.update_or_create(
+            exam_assignment=exam_assignment,
+            student=sp,
+            defaults={
+                'reg_no': sp.reg_no or '',
+                'student_name': str(sp.user) if sp.user else sp.reg_no or '',
+                'total_mark': _normalize_mark_number(mark_val),
+                'question_marks': co_marks,
+                'is_absent': bool(payload.get('is_absent', False)) if isinstance(payload, dict) else False,
+            },
+        )
+
+
+def _ensure_due_auto_publish(exam_assignment):
+    """Run due-date auto publish lazily for a single exam if configured and overdue."""
+    semester_config = exam_assignment.get_semester_config()
+    if not semester_config or not semester_config.due_at:
+        return exam_assignment
+    now = timezone.now()
+
+    # If the due date was extended after an auto-publish, reopen only those auto-published
+    # assignments (published_by is NULL). Manually published exams must remain locked
+    # until an edit request is approved.
+    if now <= semester_config.due_at:
+        if exam_assignment.status in ('PUBLISHED', 'LOCKED') and getattr(exam_assignment, 'published_by_id', None) is None:
+            exam_assignment.status = 'DRAFT'
+            exam_assignment.save(update_fields=['status'])
+        return exam_assignment
+    if exam_assignment.status in ('PUBLISHED', 'LOCKED'):
+        return exam_assignment
+
+    process_auto_publish(semester_config)
+
+    refreshed = AcV2ExamAssignment.objects.get(id=exam_assignment.id)
+    if refreshed.status not in ('PUBLISHED', 'LOCKED'):
+        return refreshed
+
+    published = refreshed.published_data if isinstance(refreshed.published_data, dict) else {}
+    marks_map = published.get('marks', {}) if isinstance(published.get('marks', {}), dict) else {}
+    if not marks_map:
+        marks_map = {
+            str(dm.student_id): {
+                'mark': float(dm.total_mark) if dm.total_mark is not None else None,
+                'co_marks': dm.question_marks if isinstance(dm.question_marks, dict) else {},
+                'is_absent': bool(dm.is_absent),
+            }
+            for dm in AcV2DraftMark.objects.filter(exam_assignment=refreshed)
+        }
+    if marks_map:
+        _materialize_student_marks_from_map(refreshed, marks_map)
+        try:
+            compute_section_internal_marks(refreshed.section)
+        except Exception:
+            pass
+
+    return AcV2ExamAssignment.objects.get(id=exam_assignment.id)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1336,6 +1798,10 @@ def faculty_exam_publish(request, exam_id):
         ea.edit_window_until = None
         ea.edit_window_until_publish = False
         ea.save(update_fields=['published_data', 'published_at', 'published_by', 'status', 'edit_window_until', 'edit_window_until_publish'])
+
+        published_marks = ea.published_data.get('marks', {}) if isinstance(ea.published_data, dict) else {}
+        if isinstance(published_marks, dict) and published_marks:
+            _materialize_student_marks_from_map(ea, published_marks)
 
         # Recompute internal marks for this section
         try:
@@ -1394,6 +1860,7 @@ def faculty_exam_marks(request, exam_id):
         id=exam_id,
         section__faculty_user=request.user,
     )
+    ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
     acad_sec = ta.section
@@ -1403,7 +1870,7 @@ def faculty_exam_marks(request, exam_id):
         assignments = (
             StudentSectionAssignment.objects
             .filter(section=acad_sec, end_date__isnull=True)
-            .select_related('student__user')
+            .select_related('student__user', 'student__home_department')
             .order_by('student__reg_no')
         )
 
@@ -1412,18 +1879,64 @@ def faculty_exam_marks(request, exam_id):
             str(sm.student_id): sm
             for sm in AcV2StudentMark.objects.filter(exam_assignment=ea)
         }
+        draft_existing = {
+            str(dm.student_id): dm
+            for dm in AcV2DraftMark.objects.filter(exam_assignment=ea)
+        }
+
+        draft_data = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+        published_data = ea.published_data if isinstance(ea.published_data, dict) else {}
+        draft_marks_map = draft_data.get('marks', {}) if isinstance(draft_data.get('marks', {}), dict) else {}
+        published_marks_map = published_data.get('marks', {}) if isinstance(published_data.get('marks', {}), dict) else {}
+        # Prefer draft values whenever the exam is currently editable.
+        # This fixes the "approved edit request => blank/old table" issue by showing
+        # the per-student draft rows (`AcV2DraftMark`) and draft snapshot first.
+        is_currently_editable = ea.is_editable()
+        if is_currently_editable:
+            active_snapshot = draft_marks_map
+        else:
+            active_snapshot = published_marks_map if ea.status in ('PUBLISHED', 'LOCKED') else draft_marks_map
 
         students = []
         for sa in assignments:
             sp = sa.student
             sm = existing.get(str(sp.id))
+            dm = draft_existing.get(str(sp.id))
+            snapshot = active_snapshot.get(str(sp.id)) or draft_marks_map.get(str(sp.id)) or published_marks_map.get(str(sp.id))
+            if not isinstance(snapshot, dict):
+                snapshot = {}
+
+            mark_val = None
+            co_marks_val = {}
+            is_absent_val = False
+
+            # Priority: whenever editable, draft overrides published.
+            if is_currently_editable and dm:
+                mark_val = float(dm.total_mark) if dm.total_mark is not None else None
+                co_marks_val = dm.question_marks if isinstance(dm.question_marks, dict) else {}
+                is_absent_val = bool(dm.is_absent)
+            elif sm:
+                mark_val = float(sm.total_mark) if sm.total_mark is not None else None
+                co_marks_val = sm.question_marks if isinstance(sm.question_marks, dict) else {}
+                is_absent_val = bool(sm.is_absent)
+            elif dm:
+                mark_val = float(dm.total_mark) if dm.total_mark is not None else None
+                co_marks_val = dm.question_marks if isinstance(dm.question_marks, dict) else {}
+                is_absent_val = bool(dm.is_absent)
+            else:
+                mark_val = _normalize_mark_number(snapshot.get('mark'))
+                maybe_co_marks = snapshot.get('co_marks', {})
+                co_marks_val = maybe_co_marks if isinstance(maybe_co_marks, dict) else {}
+                is_absent_val = bool(snapshot.get('is_absent', False))
+
             students.append({
                 'id': str(sp.id),
                 'roll_number': sp.reg_no or '',
                 'name': str(sp.user) if sp.user else sp.reg_no or '',
-                'mark': float(sm.total_mark) if sm and sm.total_mark is not None else None,
-                'co_marks': sm.question_marks if sm and isinstance(sm.question_marks, dict) else {},
-                'is_absent': sm.is_absent if sm else False,
+                'department': sp.home_department.name if sp.home_department else 'N/A',
+                'mark': mark_val,
+                'co_marks': co_marks_val,
+                'is_absent': is_absent_val,
                 'saved': True,
             })
 
@@ -1433,125 +1946,33 @@ def faculty_exam_marks(request, exam_id):
     if not ea.is_editable():
         return Response({'detail': 'Exam is locked'}, status=403)
 
-    marks_data = request.data.get('marks', [])
+    raw_marks_data = request.data.get('marks', [])
     question_btls = request.data.get('question_btls', {})
     # Note: publish action is handled via /exams/<id>/publish/ (publish control)
+    # Draft save: persist separately (draft_marks + draft_data). Do not touch
+    # published rows here; publishing is handled via /publish/.
+    marks_map = _save_draft_marks_for_exam(ea, raw_marks_data)
 
-    # Resolve pattern for CO calculation - check user_pattern first (course-specific)
+    # Save question_btls + marks snapshot in draft_data
     draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
-    user_pattern = draft.get('user_pattern')
-
-    qp_cos = []
-    qp_enabled = []
-    qp_titles = []
-    mm_config = None
-    if user_pattern and isinstance(user_pattern, dict):
-        # Use course-specific pattern from Mark Manager
-        qp_cos = user_pattern.get('cos', [])
-        qp_enabled = user_pattern.get('enabled', [True] * len(qp_cos))
-        qp_titles = user_pattern.get('titles', [])
-        mm_config = user_pattern.get('mark_manager') if isinstance(user_pattern.get('mark_manager'), dict) else None
-    else:
-        # Fall back to global QP pattern
-        qp_type_val = ea.qp_type or ea.exam or ''
-        matched_pattern = AcV2QpPattern.objects.filter(
-            qp_type=qp_type_val, is_active=True
-        ).first()
-        if matched_pattern and isinstance(matched_pattern.pattern, dict):
-            p = matched_pattern.pattern
-            qp_cos = p.get('cos', [])
-            qp_enabled = p.get('enabled', [True] * len(qp_cos))
-
-    for entry in marks_data:
-        student_id = entry.get('student_id')
-        if not student_id:
-            continue
-
-        total_mark = entry.get('mark')
-        co_marks = entry.get('co_marks', {})
-        is_absent = entry.get('is_absent', False)
-
-        try:
-            from academics.models import StudentProfile
-            sp = StudentProfile.objects.get(id=student_id)
-        except Exception:
-            continue
-
-        sm, _ = AcV2StudentMark.objects.update_or_create(
-            exam_assignment=ea,
-            student=sp,
-            defaults={
-                'reg_no': sp.reg_no or '',
-                'student_name': str(sp.user) if sp.user else sp.reg_no or '',
-                'total_mark': total_mark,
-                'question_marks': co_marks,
-                'is_absent': is_absent,
-            }
-        )
-
-        # Compute CO marks from question_marks using QP pattern CO mapping
-        # Frontend sends keys q0, q1, ... (0-indexed)
-        if qp_cos and co_marks and not is_absent:
-            co_totals = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
-            for i, co in enumerate(qp_cos):
-                if i < len(qp_enabled) and not qp_enabled[i]:
-                    continue
-                q_key = f'q{i}'  # 0-indexed keys from frontend
-                q_mark = co_marks.get(q_key, 0) or 0
-                if isinstance(q_mark, (int, float)) and co is not None:
-                    if isinstance(co, int) and 1 <= co <= 5:
-                        co_totals[co] += q_mark
-                    elif isinstance(co, str) and '&' in co:
-                        co_nums = [int(c.strip()) for c in co.split('&')]
-                        for c in co_nums:
-                            if 1 <= c <= 5:
-                                co_totals[c] += q_mark / len(co_nums)
-
-            # Mark Manager rule: if Exam column is enabled, split Exam marks equally
-            # across the enabled COs in Mark Manager (no separate CO mapping for Exam).
-            if mm_config and mm_config.get('cia_enabled'):
-                # Determine which COs are enabled in Mark Manager
-                enabled_cos = []
-                for co_key, co_cfg in (mm_config.get('cos', {}) or {}).items():
-                    try:
-                        co_num = int(co_key)
-                    except Exception:
-                        continue
-                    if isinstance(co_cfg, dict) and co_cfg.get('enabled') and 1 <= co_num <= 5:
-                        enabled_cos.append(co_num)
-                enabled_cos = sorted(set(enabled_cos))
-
-                # Find the Exam question index in the pattern to read its mark.
-                exam_index = None
-                if qp_titles and isinstance(qp_titles, list):
-                    for idx, t in enumerate(qp_titles):
-                        if isinstance(t, str) and t.strip().lower() == 'exam':
-                            exam_index = idx
-                # Fallback: last column if it exists and has no CO mapping
-                if exam_index is None and qp_cos:
-                    last_idx = len(qp_cos) - 1
-                    if last_idx >= 0 and (last_idx >= len(qp_enabled) or qp_enabled[last_idx]) and qp_cos[last_idx] is None:
-                        exam_index = last_idx
-
-                if exam_index is not None and enabled_cos:
-                    exam_mark = co_marks.get(f'q{exam_index}', 0) or 0
-                    if isinstance(exam_mark, (int, float)) and exam_mark > 0:
-                        share = exam_mark / len(enabled_cos)
-                        for c in enabled_cos:
-                            co_totals[c] += share
-
-            sm.co1_mark = round(co_totals[1], 2)
-            sm.co2_mark = round(co_totals[2], 2)
-            sm.co3_mark = round(co_totals[3], 2)
-            sm.co4_mark = round(co_totals[4], 2)
-            sm.co5_mark = round(co_totals[5], 2)
-            sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark'])
-
-    # Save question_btls in draft_data
-    draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+    draft['marks'] = marks_map
     draft['question_btls'] = question_btls
     ea.draft_data = draft
-    ea.save(update_fields=['draft_data'])
+    ea.last_saved_at = timezone.now()
+    ea.last_saved_by = request.user
+    
+    # Auto-publish reopening logic:
+    # If exam was auto-published (status=PUBLISHED, edit_window_until_publish=False)
+    # and faculty saves new marks, revert to DRAFT to allow continued editing.
+    # This differs from manual publish which requires edit request workflow.
+    ctrl = check_publish_control(ea)
+    if ea.status == 'PUBLISHED' and ctrl.get('publish_control_enabled'):
+        # Reopen only auto-published exams (published_by is NULL). Manually published
+        # exams must stay published and editable only within approved edit windows.
+        if getattr(ea, 'published_by_id', None) is None and not bool(getattr(ea, 'edit_window_until_publish', False)):
+            ea.status = 'DRAFT'
+    
+    ea.save(update_fields=['draft_data', 'last_saved_at', 'last_saved_by', 'status'])
 
     return Response({'status': 'saved'})
 
@@ -2346,8 +2767,11 @@ def faculty_exam_import_marks(request, exam_id):
         section__faculty_user=request.user,
     )
 
+    # Check if import is allowed: Allow if DRAFT, or if there's an active edit window
     if ea.status in ('PUBLISHED', 'APPROVED'):
-        return Response({'detail': 'Exam is locked'}, status=403)
+        # Allow import if there's an active edit_window_until
+        if not ea.edit_window_until or timezone.now() >= ea.edit_window_until:
+            return Response({'detail': 'Exam is locked'}, status=403)
 
     uploaded = request.FILES.get('file')
     if not uploaded:
@@ -2450,6 +2874,7 @@ def faculty_exam_import_marks(request, exam_id):
     matched = 0
     skipped = 0
     imported_students = []
+    unfilled_rows = []
 
     for r in range(start_row, ws.max_row + 1):
         reg_val = ws.cell(row=r, column=reg_col).value
@@ -2512,12 +2937,20 @@ def faculty_exam_import_marks(request, exam_id):
             'co_marks': co_marks,
             'is_absent': is_absent,
         })
+        if not is_absent and total_mark is None and not co_marks:
+            unfilled_rows.append({
+                'roll_number': sp.reg_no or '',
+                'name': str(sp.user) if sp.user else sp.reg_no or '',
+                'row_number': r,
+            })
         matched += 1
 
     return Response({
         'status': 'preview',
         'matched': matched,
         'skipped': skipped,
+        'unfilled_count': len(unfilled_rows),
+        'unfilled_rows': unfilled_rows[:20],
         'total_in_file': matched + skipped,
         'total_in_class': len(reg_to_student),
         'students': imported_students,

@@ -7,6 +7,9 @@ from .models import (
     AcV2SemesterConfig,
     AcV2ClassType,
     AcV2QpPattern,
+    AcV2QpType,
+    AcV2Question,
+    AcV2QpAssignment,
     AcV2Course,
     AcV2Section,
     AcV2ExamAssignment,
@@ -33,12 +36,21 @@ class AcV2ClassTypeAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
 
 
+class AcV2QuestionInline(admin.TabularInline):
+    """Inline editor for questions within QP Pattern."""
+    model = AcV2Question
+    extra = 1
+    fields = ['title', 'max_marks', 'btl_level', 'co_number', 'is_enabled', 'order']
+    ordering = ['order']
+
+
 @admin.register(AcV2QpPattern)
 class AcV2QpPatternAdmin(admin.ModelAdmin):
     list_display = ['qp_type', 'class_type', 'batch', 'is_active', 'updated_at']
     list_filter = ['qp_type', 'is_active', 'class_type']
     search_fields = ['qp_type']
     readonly_fields = ['created_at', 'updated_at']
+    inlines = [AcV2QuestionInline]
 
 
 @admin.register(AcV2Course)
@@ -104,3 +116,37 @@ class AcV2InternalMarkAdmin(admin.ModelAdmin):
     search_fields = ['reg_no', 'student_name']
     raw_id_fields = ['section', 'student']
     readonly_fields = ['computed_at']
+
+
+@admin.register(AcV2QpType)
+class AcV2QpTypeAdmin(admin.ModelAdmin):
+    """Admin for QP Type master data."""
+    list_display = ['name', 'code', 'college', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'college']
+    search_fields = ['name', 'code', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+    fields = ['name', 'code', 'description', 'college', 'is_active', 'updated_by', 'created_at', 'updated_at']
+
+
+@admin.register(AcV2Question)
+class AcV2QuestionAdmin(admin.ModelAdmin):
+    """Admin for individual questions."""
+    list_display = ['title', 'qp_pattern', 'max_marks', 'btl_level', 'co_number', 'is_enabled', 'order']
+    list_filter = ['is_enabled', 'btl_level', 'co_number', 'qp_pattern']
+    search_fields = ['title', 'qp_pattern__name']
+    readonly_fields = ['created_at', 'updated_at']
+    fields = ['qp_pattern', 'title', 'max_marks', 'btl_level', 'co_number', 'is_enabled', 'order', 'updated_by', 'created_at', 'updated_at']
+    raw_id_fields = ['qp_pattern']
+    ordering = ['qp_pattern', 'order']
+
+
+@admin.register(AcV2QpAssignment)
+class AcV2QpAssignmentAdmin(admin.ModelAdmin):
+    """Admin for QP Assignments (Class Type -> QP Type -> Exam Assignment)."""
+    list_display = ['class_type', 'qp_type', 'exam_assignment', 'weight', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'class_type', 'qp_type']
+    search_fields = ['class_type__name', 'qp_type__name', 'exam_assignment__exam']
+    raw_id_fields = ['class_type', 'qp_type', 'exam_assignment']
+    readonly_fields = ['created_at', 'updated_at']
+    fields = ['class_type', 'qp_type', 'exam_assignment', 'weight', 'is_active', 'config', 'updated_by', 'created_at', 'updated_at']
+    ordering = ['class_type', 'qp_type']

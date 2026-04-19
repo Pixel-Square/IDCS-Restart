@@ -74,13 +74,18 @@ export default function DeptList() {
       .catch(() => setAdminClassTypes([]));
   }, []);
 
-  // Fetch admin-created QP patterns from Academic v2
+  // Fetch admin-created QP types (master data only) from Academic v2
   useEffect(() => {
-    fetchWithAuth('/api/academic-v2/qp-patterns/')
-      .then(res => res.ok ? res.json() : [])
+    fetchWithAuth('/api/academic-v2/qp-types/')
+      .then(res => res.ok ? res.json() : { results: [] })
       .then(data => {
-        const items = (Array.isArray(data) ? data : data?.results || []);
-        setAdminQpTypes(items.map((qp: any) => ({ id: qp.id, code: qp.qp_type || qp.name, label: qp.name })));
+        const qpTypesList = Array.isArray(data) ? data : (data.results || []);
+        setAdminQpTypes(qpTypesList.map((qt: any) => ({
+          id: qt.id,
+          code: qt.code,
+          label: qt.name || qt.code,
+          class_type_id: qt.class_type,
+        })));
       })
       .catch(() => setAdminQpTypes([]));
   }, []);
@@ -135,21 +140,40 @@ export default function DeptList() {
     </>
   );
 
-  // Helper: render QP type <option> elements with admin items in orange optgroup on top
-  const renderQpTypeOptions = () => (
-    <>
-      {adminQpTypes.length > 0 && (
-        <optgroup label="Admin (Academic v2)" style={{ backgroundColor: '#FFF7ED' }}>
-          {adminQpTypes.map(qt => (
-            <option key={`adm-${qt.code}`} value={qt.code} style={{ backgroundColor: '#FFF7ED', color: '#9A3412' }}>{qt.label}</option>
-          ))}
-        </optgroup>
-      )}
-      {qpTypes.map(qt => (
-        <option key={qt.code} value={qt.code}>{qt.label}</option>
-      ))}
-    </>
-  );
+  // Helper: filter QP types by class type (null = global, applied to all)
+  const getQpTypesForClassType = (classTypeCode: string | null) => {
+    if (!classTypeCode) return [];
+    
+    // Find the class type ID from the selected code
+    const selectedClassType = adminClassTypes.find(ct => ct.code === classTypeCode);
+    const classTypeId = selectedClassType?.id;
+    
+    if (!classTypeId) return [];
+    
+    // Show QP types that are:
+    // 1. Global (class_type_id is null)
+    // 2. OR specifically mapped to this class type
+    return adminQpTypes.filter(qt => !qt.class_type_id || qt.class_type_id === classTypeId);
+  };
+
+  // Helper: render QP type <option> elements filtered by class type
+  const renderQpTypeOptions = (classTypeCode?: string) => {
+    const filtered = classTypeCode ? getQpTypesForClassType(classTypeCode) : adminQpTypes;
+    return (
+      <>
+        {filtered.length > 0 && (
+          <optgroup label="Admin (Academic v2)" style={{ backgroundColor: '#FFF7ED' }}>
+            {filtered.map(qt => (
+              <option key={`adm-${qt.code}`} value={qt.code} style={{ backgroundColor: '#FFF7ED', color: '#9A3412' }}>{qt.label}</option>
+            ))}
+          </optgroup>
+        )}
+        {qpTypes.map(qt => (
+          <option key={qt.code} value={qt.code}>{qt.label}</option>
+        ))}
+      </>
+    );
+  };
 
   async function onSave(row: any) {
     try {
@@ -651,6 +675,9 @@ export default function DeptList() {
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
+                      {!r.class_type ? (
+                        <span className="text-xs text-gray-500">Select class type first</span>
+                      ) : (
                       <select
                         value={r.question_paper_type || ''}
                         onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))}
@@ -658,8 +685,9 @@ export default function DeptList() {
                         style={{ minWidth: 90 }}
                       >
                         <option value="">— Select —</option>
-                        {renderQpTypeOptions()}
+                        {renderQpTypeOptions(r.class_type)}
                       </select>
+                      )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -1158,14 +1186,18 @@ export default function DeptList() {
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Question Paper Type</label>
+                {!addForm.class_type ? (
+                  <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm">Please select a class type first</div>
+                ) : (
                 <select
                   value={addForm.question_paper_type || ''}
                   onChange={e => setAddForm(f => ({ ...f, question_paper_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {renderQpTypeOptions()}
+                  {renderQpTypeOptions(addForm.class_type)}
                 </select>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <input 

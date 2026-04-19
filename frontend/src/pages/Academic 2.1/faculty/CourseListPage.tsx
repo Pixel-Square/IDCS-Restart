@@ -20,6 +20,7 @@ interface Course {
   academic_year: string;
   is_elective: boolean;
   status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+  qp_type?: string | null;
 }
 
 export default function CourseListPage() {
@@ -54,6 +55,7 @@ export default function CourseListPage() {
         academic_year: ta.academic_year || '',
         is_elective: !!ta.elective_subject_id,
         status: 'NOT_STARTED' as const, // Default status - can be enhanced later
+        qp_type: (ta as any)?.question_paper_type || (ta as any)?.qp_type || null,
       }));
       
       setCourses(mappedCourses);
@@ -198,13 +200,16 @@ export default function CourseListPage() {
                       <BookOpen className="w-6 h-6 text-blue-600" />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-semibold text-gray-900">{course.course_code}</h3>
                         {course.is_elective && (
                           <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">Elective</span>
                         )}
                         {course.class_type && (
                           <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">{course.class_type}</span>
+                        )}
+                        {course.qp_type && (
+                          <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded">{course.qp_type}</span>
                         )}
                       </div>
                       <p className="text-gray-600">{course.course_name}</p>

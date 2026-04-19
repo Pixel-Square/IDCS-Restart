@@ -7,7 +7,9 @@ import React from 'react';
 import { RouteObject } from 'react-router-dom';
 
 // Lazy load pages for code splitting
+const AcademicV2AdminDashboard = React.lazy(() => import('./admin/AcademicV2AdminDashboard'));
 const PublishControlPage = React.lazy(() => import('./admin/PublishControlPage'));
+const CycleManagementPage = React.lazy(() => import('./admin/CycleManagementPage'));
 const ClassTypeEditorPage = React.lazy(() => import('./admin/ClassTypeEditorPage'));
 const QpPatternEditorPage = React.lazy(() => import('./admin/QpPatternEditorPage'));
 const ExamAssignmentAdminPage = React.lazy(() => import('./admin/ExamAssignmentAdminPage'));
@@ -18,10 +20,18 @@ const MarkEntryPage = React.lazy(() => import('./faculty/MarkEntryPage'));
 const InternalMarkPage = React.lazy(() => import('./faculty/InternalMarkPage'));
 
 export const academicV2Routes: RouteObject[] = [
-  // Admin Routes
+  // Admin Routes - Dashboard
+  {
+    path: 'academic-v2/admin',
+    element: <AcademicV2AdminDashboard />,
+  },
   {
     path: 'academic-v2/admin/publish-control',
     element: <PublishControlPage />,
+  },
+  {
+    path: 'academic-v2/admin/cycles',
+    element: <CycleManagementPage />,
   },
   {
     path: 'academic-v2/admin/class-types',
@@ -63,9 +73,19 @@ export const academicV2Routes: RouteObject[] = [
 export const academicV2Navigation = {
   admin: [
     {
+      title: 'Dashboard',
+      path: '/academic-v2/admin',
+      description: 'View all admin modules and quick access',
+    },
+    {
       title: 'Publish Control',
       path: '/academic-v2/admin/publish-control',
       description: 'Configure semester due dates and publish settings',
+    },
+    {
+      title: 'Cycle Management',
+      path: '/academic-v2/admin/cycles',
+      description: 'Create and manage academic cycles',
     },
     {
       title: 'Class Types',
@@ -73,14 +93,14 @@ export const academicV2Navigation = {
       description: 'Manage class types and exam assignments',
     },
     {
-      title: 'Exam Assignments',
-      path: '/academic-v2/admin/exam-assignments',
-      description: 'Create reusable exam templates with question table customization',
-    },
-    {
       title: 'QP Patterns',
       path: '/academic-v2/admin/qp-patterns',
       description: 'Create and edit question paper patterns',
+    },
+    {
+      title: 'Exam Assignments',
+      path: '/academic-v2/admin/exam-assignments',
+      description: 'Create reusable exam templates with question table customization',
     },
     {
       title: 'Approval Inbox',

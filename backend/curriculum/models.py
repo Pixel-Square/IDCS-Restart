@@ -52,7 +52,26 @@ def validate_question_paper_type_code(value: str):
     except Exception:
         # Be defensive during early migrations / introspection failures
         return
-    if not QuestionPaperType.objects.filter(code=code).exists():
+        if QuestionPaperType.objects.filter(code=code).exists():
+            return
+
+        # Also allow Academic v2 QP Types (master data) by code.
+        # This keeps Department Curriculum compatible with the Academic v2 admin-managed QP Types.
+        try:
+            from django.db import connection
+            if 'academic_v2_acv2qptype' in connection.introspection.table_names():
+                try:
+                    from academic_v2.models import AcV2QpType
+                    if AcV2QpType.objects.filter(code=code, is_active=True).exists():
+                        return
+                except Exception:
+                    # Be defensive: if academic_v2 isn't installed/migrated or import fails,
+                    # fall back to the original curriculum validation.
+                    pass
+        except Exception:
+            # If introspection fails, fall back to the original curriculum validation.
+            pass
+
         raise ValidationError(f"Invalid Question Paper Type: {code}")
 
 

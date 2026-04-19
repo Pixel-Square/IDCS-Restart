@@ -61,6 +61,14 @@ class AcV2SemesterConfig(models.Model):
     
     # Auto publish when due date passes
     auto_publish_on_due = models.BooleanField(default=True)
+
+    # ========== SEAL STAMP SETTINGS ==========
+    # Show animated seal on publish success popup
+    seal_animation_enabled = models.BooleanField(default=False)
+    # Show watermark seal on mark entry table after publish
+    seal_watermark_enabled = models.BooleanField(default=False)
+    # Optional seal image for UI (stored in MEDIA_ROOT)
+    seal_image = models.ImageField(upload_to='academic_v2/seals/', null=True, blank=True)
     
     # ========== METADATA ==========
     updated_by = models.ForeignKey(
@@ -542,22 +550,40 @@ class AcV2ExamAssignment(models.Model):
             return self.qp_pattern
         
         # Try to find from AcV2QpPattern
-        ct = self.section.course.class_type
-        pattern = AcV2QpPattern.objects.filter(
-            qp_type=self.qp_type,
-            class_type=ct,
-            is_active=True
-        ).first()
+        qp_type = ''
+        try:
+            qp_type = (self.section.course.question_paper_type or '').strip()
+        except Exception:
+            qp_type = ''
+        if not qp_type:
+            qp_type = (self.qp_type or '').strip() or (self.exam or '').strip() or ''
+        exam_key = (self.exam_display_name or self.exam or '').strip()
+
+        ct = None
+        try:
+            ct = self.section.course.class_type
+        except Exception:
+            ct = None
+
+        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
+        pattern = None
+
+        if ct is not None:
+            scoped = base_qs.filter(class_type=ct)
+            if exam_key:
+                pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                pattern = scoped.order_by('-updated_at').first()
         
         if pattern:
             return pattern.pattern
         
         # Fallback to global pattern
-        pattern = AcV2QpPattern.objects.filter(
-            qp_type=self.qp_type,
-            class_type__isnull=True,
-            is_active=True
-        ).first()
+        global_qs = base_qs.filter(class_type__isnull=True)
+        if exam_key:
+            pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
+        else:
+            pattern = global_qs.order_by('-updated_at').first()
         
         return pattern.pattern if pattern else {}
 
@@ -668,6 +694,55 @@ class AcV2StudentMark(models.Model):
         self.co3_mark = round(co_totals[3], 2)
         self.co4_mark = round(co_totals[4], 2)
         self.co5_mark = round(co_totals[5], 2)
+
+
+class AcV2DraftMark(models.Model):
+    """
+    Per-student draft marks snapshot.
+    Used to preserve draft values independently of published marks and lock state.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    exam_assignment = models.ForeignKey(
+        AcV2ExamAssignment,
+        on_delete=models.CASCADE,
+        related_name='draft_marks'
+    )
+
+    student = models.ForeignKey(
+        'academics.StudentProfile',
+        on_delete=models.CASCADE,
+        related_name='acv2_draft_marks'
+    )
+
+    reg_no = models.CharField(max_length=50)
+    student_name = models.CharField(max_length=255)
+
+    total_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    question_marks = models.JSONField(default=dict, blank=True)
+    is_absent = models.BooleanField(default=False)
+
+    last_saved_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_draft_mark'
+        verbose_name = 'Draft Mark'
+        verbose_name_plural = 'Draft Marks'
+        constraints = [
+            UniqueConstraint(
+                fields=['exam_assignment', 'student'],
+                name='unique_acv2_draft_mark_per_exam'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['exam_assignment', 'reg_no']),
+            models.Index(fields=['student']),
+        ]
+
+    def __str__(self):
+        return f"Draft {self.reg_no} - {self.exam_assignment.exam}"
 
 
 # ============================================================================
@@ -931,3 +1006,223 @@ class AcV2InternalMark(models.Model):
         self.co5_total = round(co_totals[5], 2)
         
         self.final_mark = round(sum(co_totals.values()), 2)
+
+
+# ============================================================================
+# QP TYPE MASTER TABLE (New)
+# ============================================================================
+
+class AcV2QpType(models.Model):
+    """
+    Master table for Question Paper Types.
+    Defines the type of exam (SSA, CIA, MODEL, LAB, THEORY, etc.)
+    Can be global or scoped to a specific class type.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Type name (e.g., "SSA-1", "CIA-1", "MODEL EXAM", "LAB EXAM")
+    name = models.CharField(max_length=100, unique=True, db_index=True)
+    
+    # Type code (e.g., "SSA", "CIA", "MODEL", "LAB")
+    code = models.CharField(max_length=20, unique=True, db_index=True)
+    
+    # Optional: Link to specific class type (if null, it's global)
+    class_type = models.ForeignKey(
+        AcV2ClassType,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='qp_types'
+    )
+    
+    # Description
+    description = models.TextField(blank=True)
+    
+    # Is this type active and available for use?
+    is_active = models.BooleanField(default=True, db_index=True)
+    
+    # College scope (if multi-tenant)
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='acv2_qp_types'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_qp_types_updated'
+    )
+    
+    class Meta:
+        db_table = 'acv2_qp_type'
+        verbose_name = 'QP Type'
+        verbose_name_plural = 'QP Types'
+        constraints = [
+            UniqueConstraint(
+                fields=['name', 'college'],
+                condition=Q(college__isnull=False),
+                name='unique_acv2_qp_type_per_college'
+            ),
+            UniqueConstraint(
+                fields=['code', 'college'],
+                condition=Q(college__isnull=False),
+                name='unique_acv2_qp_type_code_per_college'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['is_active', 'college']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
+# ============================================================================
+# QUESTION MODEL (New)
+# Stores individual questions with metadata
+# ============================================================================
+
+class AcV2Question(models.Model):
+    """
+    Individual question within a QP Pattern.
+    Each question has title, max marks, BTL level, CO mapping.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Link to QP Pattern
+    qp_pattern = models.ForeignKey(
+        AcV2QpPattern,
+        on_delete=models.CASCADE,
+        related_name='questions'
+    )
+    
+    # Question details
+    title = models.CharField(max_length=255)  # e.g., "Q1", "Part A - Q1"
+    max_marks = models.DecimalField(max_digits=5, decimal_places=2)
+    
+    # BTL (Bloom's Taxonomy Level) 1-6
+    btl_level = models.IntegerField(
+        null=True,
+        blank=True,
+        choices=[(i, f'BTL {i}') for i in range(1, 7)]
+    )
+    
+    # CO (Course Outcome) number
+    co_number = models.IntegerField(null=True, blank=True)
+    
+    # Whether this question is enabled/active
+    is_enabled = models.BooleanField(default=True)
+    
+    # Question order/sequence in the pattern
+    order = models.IntegerField(default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_questions_updated'
+    )
+    
+    class Meta:
+        db_table = 'acv2_question'
+        verbose_name = 'Question'
+        verbose_name_plural = 'Questions'
+        constraints = [
+            UniqueConstraint(
+                fields=['qp_pattern', 'order'],
+                name='unique_question_order_per_pattern'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['qp_pattern', 'order']),
+            models.Index(fields=['co_number']),
+            models.Index(fields=['is_enabled']),
+        ]
+        ordering = ['order']
+    
+    def __str__(self):
+        return f"{self.title} ({self.max_marks} marks, CO{self.co_number})"
+
+
+# ============================================================================
+# QP ASSIGNMENT (New)
+# Junction table: Class Type -> QP Type -> Exam Assignment
+# ============================================================================
+
+class AcV2QpAssignment(models.Model):
+    """
+    Maps QP Types to Class Types and Exam Assignments.
+    Allows linking which QP Types are used for specific exam types.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Links to the three tables
+    class_type = models.ForeignKey(
+        AcV2ClassType,
+        on_delete=models.CASCADE,
+        related_name='qp_assignments'
+    )
+    
+    qp_type = models.ForeignKey(
+        AcV2QpType,
+        on_delete=models.CASCADE,
+        related_name='assignments'
+    )
+    
+    # Link to exam assignment (optional - can be null for template)
+    exam_assignment = models.ForeignKey(
+        AcV2ExamAssignment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='qp_assignments'
+    )
+    
+    # Weight/percentage for this exam type within the class type
+    weight = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    
+    # Is this assignment active?
+    is_active = models.BooleanField(default=True)
+    
+    # Additional configuration
+    # Can store exam-specific settings like "allow_customize", "covered_cos", etc.
+    config = models.JSONField(default=dict, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_qp_assignments_updated'
+    )
+    
+    class Meta:
+        db_table = 'acv2_qp_assignment'
+        verbose_name = 'QP Assignment'
+        verbose_name_plural = 'QP Assignments'
+        constraints = [
+            UniqueConstraint(
+                fields=['class_type', 'qp_type', 'exam_assignment'],
+                name='unique_qp_assignment'
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['class_type', 'qp_type']),
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        exam_info = f" - {self.exam_assignment.exam}" if self.exam_assignment else " (Template)"
+        return f"{self.class_type.name} -> {self.qp_type.name}{exam_info}"
