@@ -425,7 +425,61 @@ class StaffUploadOptionsView(APIView):
                     }
                 )
 
-        return Response({'results': rows})
+        # Merge same subject across multiple class/department assignments into one option.
+        merged = OrderedDict()
+        for item in rows:
+            subject_code_val = str(item.get('subject_code') or '').strip()
+            subject_name_val = str(item.get('subject_name') or '').strip()
+
+            if subject_code_val or subject_name_val:
+                merge_key = f"subj::{subject_code_val.lower()}::{subject_name_val.lower()}"
+            else:
+                merge_key = f"ta::{item['teaching_assignment_id']}"
+
+            if merge_key not in merged:
+                merged[merge_key] = {
+                    'teaching_assignment_id': item['teaching_assignment_id'],
+                    'course_id': item['course_id'],
+                    'course_name': subject_name_val or subject_code_val or item['course_name'],
+                    'subject_code': subject_code_val or None,
+                    'subject_name': subject_name_val or None,
+                    'assignment_ids': [],
+                    'course_ids': [],
+                    'class_names': [],
+                    'targets': [],
+                }
+
+            row = merged[merge_key]
+
+            ta_id = int(item['teaching_assignment_id'])
+            course_id = int(item['course_id'])
+            class_name = str(item['course_name'] or '').strip()
+
+            if ta_id not in row['assignment_ids']:
+                row['assignment_ids'].append(ta_id)
+            if course_id not in row['course_ids']:
+                row['course_ids'].append(course_id)
+            if class_name and class_name not in row['class_names']:
+                row['class_names'].append(class_name)
+
+            target_key = (ta_id, course_id)
+            existing_target_keys = {(t['teaching_assignment_id'], t['course_id']) for t in row['targets']}
+            if target_key not in existing_target_keys:
+                row['targets'].append(
+                    {
+                        'teaching_assignment_id': ta_id,
+                        'course_id': course_id,
+                        'class_name': class_name,
+                    }
+                )
+
+        results = list(merged.values())
+        for r in results:
+            r['class_names'] = sorted(r['class_names'])
+            r['assignment_ids'] = sorted(r['assignment_ids'])
+            r['course_ids'] = sorted(r['course_ids'])
+
+        return Response({'results': results})
 
 
 class StaffUploadMetadataView(APIView):
