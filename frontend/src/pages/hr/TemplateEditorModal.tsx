@@ -46,6 +46,10 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [leavePolicy, setLeavePolicy] = useState<LeavePolicy>({});
   const [attendanceAction, setAttendanceAction] = useState<AttendanceAction>({});
 
+  const isLateEntryTemplateName =
+    String(name || '').trim().toLowerCase() === 'late entry permission' ||
+    String(name || '').trim().toLowerCase() === 'late entry permission - spl';
+
   useEffect(() => {
     if (template) {
       setName(template.name);
@@ -179,6 +183,24 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     for (const step of approvalSteps) {
       if (!step.approver_role) return 'All approval steps must have a role assigned';
     }
+
+    if (leavePolicy.action === 'deduct' || leavePolicy.action === 'earn') {
+      if (!leavePolicy.from_date || !leavePolicy.to_date) {
+        return 'From date and to date are required for this action type';
+      }
+    }
+
+    if (leavePolicy.action === 'neutral') {
+      if (isLateEntryTemplateName) {
+        if (!leavePolicy.reset_period) {
+          return 'Reset period is required for late entry templates';
+        }
+      } else {
+        if (!leavePolicy.from_date || !leavePolicy.to_date) {
+          return 'From date and to date are required for neutral forms';
+        }
+      }
+    }
     
     return null;
   };
@@ -194,6 +216,18 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     setError(null);
 
     try {
+      const normalizedLeavePolicy: LeavePolicy = { ...leavePolicy };
+      if (normalizedLeavePolicy.action === 'neutral') {
+        if (isLateEntryTemplateName) {
+          delete normalizedLeavePolicy.from_date;
+          delete normalizedLeavePolicy.to_date;
+          delete normalizedLeavePolicy.split_date;
+        } else {
+          delete normalizedLeavePolicy.reset_period;
+          delete normalizedLeavePolicy.reset_duration;
+        }
+      }
+
       const payload: Partial<RequestTemplate> = {
         name,
         description,
@@ -202,7 +236,9 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
         form_schema: formFields,
         allowed_roles: allowedRoles.length > 0 ? allowedRoles : [],
         approval_steps: approvalSteps as ApprovalStep[],
-        leave_policy: (leavePolicy.action || leavePolicy.allotment_per_role || leavePolicy.attendance_status) ? leavePolicy : {}
+        leave_policy: (normalizedLeavePolicy.action || normalizedLeavePolicy.allotment_per_role || normalizedLeavePolicy.attendance_status)
+          ? normalizedLeavePolicy
+          : {}
       };
 
       if (template?.id) {
@@ -623,31 +659,58 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             </div>
                           </div>
 
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Reset Period <span className="text-red-500">*</span>
-                            </label>
-                            <p className="text-xs text-gray-500 mb-2">
-                              Define when the balance should reset for all staff.
-                            </p>
-                            <select
-                              value={leavePolicy.reset_period || ''}
-                              onChange={(e) => handleLeavePolicyChange({ reset_period: e.target.value as 'monthly' | 'half_yearly' | 'yearly' })}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              required
-                            >
-                              <option value="">-- Select Reset Frequency --</option>
-                              <option value="monthly">Monthly</option>
-                              <option value="half_yearly">Half Yearly (Every 6 months)</option>
-                              <option value="yearly">Yearly</option>
-                            </select>
-                            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-                              <strong>Reset Behavior:</strong> Balances will automatically reset at the frequency you select.
-                              <br />• <strong>Monthly:</strong> Reset on 1st of each month
-                              <br />• <strong>Half Yearly:</strong> Reset every 6 months
-                              <br />• <strong>Yearly:</strong> Reset annually
+                          {isLateEntryTemplateName ? (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Reset Period <span className="text-red-500">*</span>
+                              </label>
+                              <p className="text-xs text-gray-500 mb-2">
+                                Late Entry forms use frequency-based monthly reset behavior.
+                              </p>
+                              <select
+                                value={leavePolicy.reset_period || ''}
+                                onChange={(e) => handleLeavePolicyChange({ reset_period: e.target.value as 'monthly' | 'half_yearly' | 'yearly' })}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                required
+                              >
+                                <option value="">-- Select Reset Frequency --</option>
+                                <option value="monthly">Monthly</option>
+                                <option value="half_yearly">Half Yearly (Every 6 months)</option>
+                                <option value="yearly">Yearly</option>
+                              </select>
                             </div>
-                          </div>
+                          ) : (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Reset Period <span className="text-red-500">*</span>
+                              </label>
+                              <p className="text-xs text-gray-500 mb-2">
+                                Define semester date range for neutral forms. Balance resets after to date.
+                              </p>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-xs text-gray-600 mb-1">From Date</label>
+                                  <input
+                                    type="date"
+                                    value={leavePolicy.from_date || ''}
+                                    onChange={(e) => handleLeavePolicyChange({ from_date: e.target.value })}
+                                    required
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-xs text-gray-600 mb-1">To Date</label>
+                                  <input
+                                    type="date"
+                                    value={leavePolicy.to_date || ''}
+                                    onChange={(e) => handleLeavePolicyChange({ to_date: e.target.value })}
+                                    required
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">

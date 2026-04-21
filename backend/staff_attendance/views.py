@@ -1528,14 +1528,37 @@ class CSVUploadViewSet(viewsets.ViewSet):
             return 'OUT'
         return 'UNKNOWN'
 
+    def _normalize_essl_log_datetime(self, raw_timestamp):
+        """Return local timezone datetime for raw eSSL log timestamp."""
+        if not raw_timestamp:
+            return None
+
+        if isinstance(raw_timestamp, datetime):
+            dt_obj = raw_timestamp
+        else:
+            try:
+                dt_obj = datetime.fromisoformat(str(raw_timestamp))
+            except Exception:
+                return None
+
+        try:
+            if timezone.is_naive(dt_obj):
+                dt_obj = timezone.make_aware(dt_obj, timezone.get_current_timezone())
+            return timezone.localtime(dt_obj)
+        except Exception:
+            return None
+
     def _essl_log_matches_filter(self, log_dt, year=None, month=None, target_date=None):
         if not log_dt:
             return False
+        local_dt = self._normalize_essl_log_datetime(log_dt)
+        if not local_dt:
+            return False
         if target_date is not None:
-            return log_dt.date() == target_date
+            return local_dt.date() == target_date
         if year is None or month is None:
             return False
-        return log_dt.year == year and log_dt.month == month
+        return local_dt.year == year and local_dt.month == month
 
     def _retrieve_from_single_essl_device(self, *, device, year=None, month=None, target_date=None):
         """Pull logs from one eSSL machine and ingest them into attendance."""
@@ -1578,19 +1601,22 @@ class CSVUploadViewSet(viewsets.ViewSet):
             attendance_logs = conn.get_attendance() or []
             conn.enable_device()
 
+            # Device logs may not be returned in chronological order.
+            # Sorting prevents OUT-before-IN ingestion that can drop same-day pairs.
+            attendance_logs = sorted(
+                attendance_logs,
+                key=lambda att: self._normalize_essl_log_datetime(getattr(att, 'timestamp', None)) or datetime.min,
+            )
+
             for att in attendance_logs:
                 total_logs_checked += 1
                 raw_timestamp = getattr(att, 'timestamp', None)
                 if not raw_timestamp:
                     continue
 
-                if isinstance(raw_timestamp, datetime):
-                    dt_obj = raw_timestamp
-                else:
-                    try:
-                        dt_obj = datetime.fromisoformat(str(raw_timestamp))
-                    except Exception:
-                        continue
+                dt_obj = self._normalize_essl_log_datetime(raw_timestamp)
+                if not dt_obj:
+                    continue
 
                 if not self._essl_log_matches_filter(dt_obj, year=year, month=month, target_date=target_date):
                     continue

@@ -37,6 +37,177 @@ VACATION_APPLICATION_TEMPLATES = {'vacation application', 'vacation application 
 VACATION_CANCELLATION_TEMPLATES = {'vacation cancellation form', 'vacation cancellation form - spl'}
 
 
+def _parse_iso_date(raw_value):
+    if not raw_value:
+        return None
+    try:
+        return datetime.strptime(str(raw_value).strip(), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _is_late_entry_template_name(template_name: str) -> bool:
+    return str(template_name or '').strip().lower() in ['late entry permission', 'late entry permission - spl']
+
+
+def _notify_hr_semester_alert(*, reset_key, title, message, data=None):
+    """Create/update high-priority in-app alerts for HR/Admin users.
+
+    The alert remains unread until resolved by policy updates.
+    """
+    from accounts.models import UserNotification
+
+    payload = dict(data or {})
+    payload['reset_key'] = reset_key
+    payload['priority'] = 'high'
+
+    User = get_user_model()
+    recipients = User.objects.filter(
+        Q(user_roles__role__name__iexact='HR') | Q(user_roles__role__name__iexact='ADMIN')
+    ).distinct()
+
+    if not recipients.exists():
+        recipients = User.objects.filter(is_superuser=True)
+
+    for recipient in recipients:
+        existing = (
+            UserNotification.objects
+            .filter(user=recipient, data__reset_key=reset_key)
+            .order_by('-created_at')
+            .first()
+        )
+        if existing:
+            existing.title = title
+            existing.message = message
+            existing.link = '/hr/vacation-settings'
+            existing.data = payload
+            existing.read = False
+            existing.save(update_fields=['title', 'message', 'link', 'data', 'read'])
+        else:
+            UserNotification.objects.create(
+                user=recipient,
+                title=title,
+                message=message,
+                link='/hr/vacation-settings',
+                read=False,
+                data=payload,
+            )
+
+
+def _mark_resolved_semester_alerts(*, active_template_alert_ids=None, active_vacation_semester_ids=None):
+    """Mark stale semester alerts as read once the period is corrected."""
+    from accounts.models import UserNotification
+
+    active_template_alert_ids = set(active_template_alert_ids or [])
+    active_vacation_semester_ids = set(active_vacation_semester_ids or [])
+
+    template_alerts = UserNotification.objects.filter(data__type='template_period_expired', read=False)
+    for n in template_alerts:
+        data = n.data or {}
+        template_id = data.get('template_id')
+        try:
+            template_id = int(template_id)
+        except Exception:
+            template_id = None
+        if template_id and template_id not in active_template_alert_ids:
+            n.read = True
+            n.save(update_fields=['read'])
+
+    vacation_alerts = UserNotification.objects.filter(data__type='vacation_semester_expired', read=False)
+    for n in vacation_alerts:
+        data = n.data or {}
+        semester_id = data.get('semester_id')
+        try:
+            semester_id = int(semester_id)
+        except Exception:
+            semester_id = None
+        if semester_id and semester_id not in active_vacation_semester_ids:
+            n.read = True
+            n.save(update_fields=['read'])
+
+
+def run_semester_policy_maintenance(as_of_date=None):
+    """Auto-reset expired semester windows and alert HR to configure next period."""
+    today = as_of_date or timezone.localdate()
+
+    # 1) Template leave policy expiry reset (except late entry forms).
+    templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+    active_template_alert_ids = set()
+    for template in templates:
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral', 'earn']:
+            continue
+        if _is_late_entry_template_name(template.name):
+            continue
+
+        to_date = _parse_iso_date(leave_policy.get('to_date'))
+        from_date = _parse_iso_date(leave_policy.get('from_date'))
+        if not from_date or not to_date:
+            continue
+        if today <= to_date:
+            continue
+
+        active_template_alert_ids.add(int(template.id))
+
+        StaffLeaveBalance.objects.filter(leave_type=template.name).exclude(balance=0).update(balance=0.0)
+
+        # Optional LOP reset per policy.
+        if action in ['deduct', 'neutral'] and not bool(leave_policy.get('lop_non_reset', False)):
+            overdraft_name = str(leave_policy.get('overdraft_name') or 'LOP').strip() or 'LOP'
+            StaffLeaveBalance.objects.filter(leave_type=overdraft_name).exclude(balance=0).update(balance=0.0)
+
+        _notify_hr_semester_alert(
+            reset_key=f'template-period-ended:{template.id}',
+            title='SEMESTER PERIOD ENDED - UPDATE FORM WINDOWS',
+            message=(
+                f'"{template.name}" period ended on {to_date.isoformat()}. '
+                f'Please configure a new from/to semester period for this form.'
+            ),
+            data={
+                'type': 'template_period_expired',
+                'template_id': template.id,
+                'template_name': template.name,
+                'from_date': from_date.isoformat(),
+                'to_date': to_date.isoformat(),
+            },
+        )
+
+    # 2) Vacation semester expiry reset + alert.
+    expired_semesters = VacationSemester.objects.filter(is_active=True, to_date__lt=today)
+    active_vacation_semester_ids = set(int(s.id) for s in expired_semesters)
+    if expired_semesters.exists():
+        vacation_leave_types = ['Vacation Application', 'Vacation Application - SPL']
+        StaffLeaveBalance.objects.filter(leave_type__in=vacation_leave_types).exclude(balance=0).update(balance=0.0)
+
+    for sem in expired_semesters:
+        VacationSlot.objects.filter(semester_ref=sem).update(is_active=False)
+        VacationConfirmSlot.objects.filter(semester_ref=sem).update(is_active=False)
+        sem.is_active = False
+        sem.save(update_fields=['is_active', 'updated_at'])
+
+        _notify_hr_semester_alert(
+            reset_key=f'vacation-semester-ended:{sem.id}',
+            title='VACATION SEMESTER ENDED - DEFINE NEW SEMESTER',
+            message=(
+                f'Vacation semester "{sem.name}" ended on {sem.to_date.isoformat()}. '
+                'Please set the next semester from/to dates and vacation slots.'
+            ),
+            data={
+                'type': 'vacation_semester_expired',
+                'semester_id': sem.id,
+                'semester_name': sem.name,
+                'from_date': sem.from_date.isoformat(),
+                'to_date': sem.to_date.isoformat(),
+            },
+        )
+
+    _mark_resolved_semester_alerts(
+        active_template_alert_ids=active_template_alert_ids,
+        active_vacation_semester_ids=active_vacation_semester_ids,
+    )
+
+
 def is_user_approver_for_request(user, staff_request, approver_role):
     """
     Checks if the current user has the authority to approve the request at this step.
@@ -163,7 +334,7 @@ def can_user_apply_with_template(user, template):
     return False
 
 
-def template_has_nonzero_allocation_for_user(user, template) -> bool:
+def template_has_nonzero_allocation_for_user(user, template, effective_date=None) -> bool:
     """Return False when template has explicit per-role allotment of 0 for this user.
 
     This is used to hide templates from availability endpoints. The create endpoint
@@ -178,6 +349,16 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
         action = str(leave_policy.get('action') or '').strip().lower()
         if action not in ['deduct', 'neutral']:
             return True
+
+        check_date = effective_date or timezone.localdate()
+        is_late_entry = _is_late_entry_template_name(getattr(template, 'name', ''))
+
+        # Semester window gating for all non-late-entry deduct/neutral forms.
+        period_from = _parse_iso_date(leave_policy.get('from_date'))
+        period_to = _parse_iso_date(leave_policy.get('to_date'))
+        if not is_late_entry and period_from and period_to:
+            if check_date < period_from or check_date > period_to:
+                return False
 
         def is_monthly_reset(policy: dict) -> bool:
             token = str(policy.get('reset_period') or policy.get('reset_duration') or '').strip().lower()
@@ -242,7 +423,7 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
                         if allocated <= 0.0:
                             return False
 
-                        if is_monthly_reset(leave_policy):
+                        if is_late_entry and is_monthly_reset(leave_policy):
                             # Hide when monthly allocation is used up.
                             period_start, period_end = monthly_period_bounds(timezone.localdate())
                             used = 0.0
@@ -293,7 +474,7 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
         if allocated <= 0:
             return False
 
-        if is_monthly_reset(leave_policy):
+        if is_late_entry and is_monthly_reset(leave_policy):
             period_start, period_end = monthly_period_bounds(timezone.localdate())
             used = 0.0
             qs = StaffRequest.objects.filter(
@@ -304,6 +485,25 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
             for req in qs:
                 used += request_units_in_period(req, period_start, period_end)
             remaining = round(allocated - used, 2)
+            return remaining > 0.0
+
+        # Non-late-entry semester usage check with split carry-forward.
+        if not is_late_entry and period_from and period_to:
+            cap = allocated
+            split_date = _parse_iso_date(leave_policy.get('split_date'))
+            if split_date and check_date < split_date:
+                cap = allocated / 2.0
+
+            used = 0.0
+            qs = StaffRequest.objects.filter(
+                applicant=user,
+                template=template,
+                status__in=['pending', 'approved'],
+            ).select_related('template')
+            for req in qs:
+                used += request_units_in_period(req, period_from, min(check_date, period_to))
+
+            remaining = round(float(cap or 0.0) - float(used or 0.0), 2)
             return remaining > 0.0
 
         return True
@@ -356,13 +556,14 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         Filters based on user's roles and SPL/normal template logic.
         GET /api/request-templates/active/
         """
+        run_semester_policy_maintenance()
         active_templates = self.queryset.filter(is_active=True)
         
         # Filter templates based on user's ability to apply
         filtered_templates = [
             template for template in active_templates
             if can_user_apply_with_template(request.user, template)
-            and template_has_nonzero_allocation_for_user(request.user, template)
+            and template_has_nonzero_allocation_for_user(request.user, template, effective_date=timezone.localdate())
         ]
         
         serializer = self.get_serializer(filtered_templates, many=True)
@@ -432,6 +633,8 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         date_str = request.data.get('date')
         if not date_str:
             return Response({'error': 'date parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        run_semester_policy_maintenance()
         
         try:
             from datetime import datetime
@@ -494,7 +697,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             filtered_absent = [
                 template for template in absent_templates
                 if can_user_apply_with_template(request.user, template)
-                and template_has_nonzero_allocation_for_user(request.user, template)
+                and template_has_nonzero_allocation_for_user(request.user, template, effective_date=check_date)
             ]
             
             return Response({
@@ -516,7 +719,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             if not can_user_apply_with_template(request.user, template):
                 continue
 
-            if not template_has_nonzero_allocation_for_user(request.user, template):
+            if not template_has_nonzero_allocation_for_user(request.user, template, effective_date=check_date):
                 continue
                 
             leave_policy = template.leave_policy
@@ -964,7 +1167,16 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         return int(round(self._calculate_days_from_form_data(form_data) or 0))
 
-    def _vacation_used_days(self, user, year):
+    def _get_vacation_semester_for_date(self, target_date):
+        if not target_date:
+            return None
+        return VacationSemester.objects.filter(
+            is_active=True,
+            from_date__lte=target_date,
+            to_date__gte=target_date,
+        ).order_by('from_date', 'id').first()
+
+    def _vacation_used_days(self, user, semester_from, semester_to):
         qs = StaffRequest.objects.filter(
             applicant=user,
             status='approved',
@@ -979,18 +1191,23 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             from_str = str(form_data.get('from_date') or '')
             if not from_str:
                 continue
+            to_str = str(form_data.get('to_date') or from_str)
             try:
-                req_year = datetime.strptime(from_str, '%Y-%m-%d').date().year
+                req_from = datetime.strptime(from_str, '%Y-%m-%d').date()
+                req_to = datetime.strptime(to_str, '%Y-%m-%d').date()
             except ValueError:
                 continue
-            if req_year != int(year):
+            if req_to < semester_from or req_from > semester_to:
                 continue
             used += self._vacation_days_from_request(req)
         return max(0, int(used))
 
-    def _vacation_remaining_days(self, user, year):
+    def _vacation_remaining_days(self, user, target_date):
+        semester = self._get_vacation_semester_for_date(target_date)
+        if not semester:
+            return 0
         entitlement = self._get_vacation_entitlement_days(user)
-        used = self._vacation_used_days(user, year)
+        used = self._vacation_used_days(user, semester.from_date, semester.to_date)
         return max(0, int(entitlement - used))
 
     def _resolve_vacation_slot(self, slot_id):
@@ -1110,6 +1327,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             }
         }
         """
+        run_semester_policy_maintenance()
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -1135,6 +1354,14 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             from_date = selected_slots[0].from_date
             to_date = max(slot.to_date for slot in selected_slots)
             today = timezone.localdate()
+
+            active_semester = self._get_vacation_semester_for_date(from_date)
+            if not active_semester:
+                return Response(
+                    {'error': 'Vacation semester period is not active for selected slot dates. Contact HR to set new semester dates.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if from_date.year != to_date.year:
                 return Response({'error': 'Selected slots must belong to the same year'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1151,8 +1378,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             if entitlement <= 0:
                 return Response({'error': 'You are not eligible for vacation by current experience rules'}, status=status.HTTP_400_BAD_REQUEST)
 
-            slot_year = from_date.year
-            remaining = self._vacation_remaining_days(request.user, slot_year)
+            remaining = self._vacation_remaining_days(request.user, from_date)
             total_days = int(sum(int(slot.total_days) for slot in selected_slots))
             if remaining < total_days:
                 return Response(
@@ -1396,6 +1622,68 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         end = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
         return start, end
 
+    def _policy_window_bounds(self, leave_policy):
+        from_date = _parse_iso_date((leave_policy or {}).get('from_date'))
+        to_date = _parse_iso_date((leave_policy or {}).get('to_date'))
+        return from_date, to_date
+
+    def _split_adjusted_allocation_cap(self, user, template, *, effective_date=None):
+        allocated = float(self._resolve_template_allocation(user, template) or 0.0)
+        if allocated <= 0.0:
+            return 0.0
+
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        split_date = _parse_iso_date(leave_policy.get('split_date'))
+        if split_date and effective_date and effective_date < split_date:
+            return round(allocated / 2.0, 2)
+        return round(allocated, 2)
+
+    def _used_units_in_period(self, user, template, *, period_start, period_end):
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status__in=['pending', 'approved'],
+        ).select_related('template')
+
+        used = 0.0
+        for req in qs:
+            used += self._request_units_for_usage(
+                template,
+                req.form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        return round(used, 2)
+
+    def _approved_units_in_period(self, user, template, *, period_start, period_end, exclude_request_id=None):
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status='approved',
+        ).select_related('template')
+        if exclude_request_id:
+            qs = qs.exclude(id=exclude_request_id)
+
+        used = 0.0
+        action = str((getattr(template, 'leave_policy', None) or {}).get('action') or '').strip().lower()
+        for req in qs:
+            if action == 'deduct':
+                try:
+                    if bool((req.form_data or {}).get('claim_col')):
+                        continue
+                except Exception:
+                    pass
+
+            used += self._request_units_for_usage(
+                template,
+                req.form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        return round(used, 2)
+
     def _request_units_for_usage(self, template, form_data, user, *, period_start=None, period_end=None) -> float:
         """Compute how much allocation a request consumes for monthly usage checks."""
         if self._is_late_entry_template(template):
@@ -1499,6 +1787,20 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         leave_policy = getattr(template, 'leave_policy', None) or {}
         action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral', 'earn']:
+            return None
+
+        effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+        is_late_entry = self._is_late_entry_template(template)
+        period_start, period_end = self._policy_window_bounds(leave_policy)
+
+        # Semester-wise reset window for all non-late-entry forms.
+        if not is_late_entry and period_start and period_end:
+            if effective_date < period_start:
+                return f'You cannot apply this form before semester start date ({period_start.isoformat()}).'
+            if effective_date > period_end:
+                return 'You cannot apply this form because the semester period has ended. Please contact HR to update from/to dates.'
+
         if action not in ['deduct', 'neutral']:
             return None
 
@@ -1506,9 +1808,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         if allocated <= 0.0:
             return 'You cannot apply this form because the allocated count is 0.'
 
-        # Monthly reset policy: block once used up for the month.
-        if self._is_monthly_reset_policy(leave_policy):
-            effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+        # Late entry continues monthly behavior.
+        if is_late_entry and self._is_monthly_reset_policy(leave_policy):
             period_start, period_end = self._monthly_period_bounds(effective_date)
 
             used = self._used_units_in_month(user, template, period_start=period_start, period_end=period_end)
@@ -1516,6 +1817,26 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             remaining = round(allocated - used, 2)
             if remaining + 1e-9 < requested or remaining <= 0.0:
                 return 'You cannot apply this form because your monthly allocation is exhausted.'
+
+        # Non-late-entry forms are enforced semester-wise using from_date/to_date.
+        if not is_late_entry and period_start and period_end:
+            cap = self._split_adjusted_allocation_cap(user, template, effective_date=effective_date)
+            used = self._used_units_in_period(
+                user,
+                template,
+                period_start=period_start,
+                period_end=min(effective_date, period_end),
+            )
+            requested = self._request_units_for_usage(
+                template,
+                form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            remaining = round(cap - used, 2)
+            if remaining + 1e-9 < requested or remaining <= 0.0:
+                return 'You cannot apply this form because your semester allocation is exhausted.'
 
         return None
 
@@ -2870,8 +3191,40 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
                     logger.info(f'[LeaveBalance] Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
 
+                    # Semester/split policy rebase for non-late-entry forms:
+                    # carry first-half remainder into second-half automatically.
+                    period_start, period_end = self._policy_window_bounds(leave_policy)
+                    effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+                    if (
+                        not self._is_late_entry_template(template)
+                        and period_start
+                        and period_end
+                        and period_start <= effective_date <= period_end
+                    ):
+                        cap = self._split_adjusted_allocation_cap(
+                            staff_request.applicant,
+                            template,
+                            effective_date=effective_date,
+                        )
+                        used_before_current = self._approved_units_in_period(
+                            staff_request.applicant,
+                            template,
+                            period_start=period_start,
+                            period_end=min(effective_date, period_end),
+                            exclude_request_id=staff_request.id,
+                        )
+                        expected_before = round(max(0.0, cap - used_before_current), 2)
+                        if abs(float(balance_obj.balance or 0.0) - expected_before) > 1e-9:
+                            logger.info(
+                                '[LeaveBalance] Rebased balance by semester policy: %s -> %s',
+                                balance_obj.balance,
+                                expected_before,
+                            )
+                            balance_obj.balance = expected_before
+                            balance_obj.save()
+
                     # Initialize balance for new entries (deduct action only)
-                    if created:
+                    if created and (period_start is None or period_end is None or self._is_late_entry_template(template)):
                         from datetime import datetime, date
                         
                         # Get user's role (simplified - use first matching role)
@@ -2991,9 +3344,39 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 )
                 
                 logger.info(f'[LeaveBalance] Neutral (with allotment) - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+
+                period_start, period_end = self._policy_window_bounds(leave_policy)
+                effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+                if (
+                    not self._is_late_entry_template(template)
+                    and period_start
+                    and period_end
+                    and period_start <= effective_date <= period_end
+                ):
+                    cap = self._split_adjusted_allocation_cap(
+                        staff_request.applicant,
+                        template,
+                        effective_date=effective_date,
+                    )
+                    used_before_current = self._approved_units_in_period(
+                        staff_request.applicant,
+                        template,
+                        period_start=period_start,
+                        period_end=min(effective_date, period_end),
+                        exclude_request_id=staff_request.id,
+                    )
+                    expected_before = round(max(0.0, cap - used_before_current), 2)
+                    if abs(float(balance_obj.balance or 0.0) - expected_before) > 1e-9:
+                        logger.info(
+                            '[LeaveBalance] Neutral rebase by semester policy: %s -> %s',
+                            balance_obj.balance,
+                            expected_before,
+                        )
+                        balance_obj.balance = expected_before
+                        balance_obj.save()
                 
                 # Initialize balance for new entries
-                if created:
+                if created and (period_start is None or period_end is None or self._is_late_entry_template(template)):
                     from datetime import datetime, date
                     
                     # Get user's role
