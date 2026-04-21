@@ -96,8 +96,40 @@ export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjec
   return res.data;
 }
 
-export async function resetAssessmentMarks(assessment: 'cia1' | 'cia2', subjectId: string, teachingAssignmentId: number): Promise<any> {
-  const primaryUrl = `${apiBase()}/api/obe/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
+function normalizeResetAssessmentKey(value: string): 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'review1' | 'review2' | 'formative1' | 'formative2' | 'model' | null {
+  const token = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const map: Record<string, 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'review1' | 'review2' | 'formative1' | 'formative2' | 'model'> = {
+    ssa1: 'ssa1',
+    asmt1: 'ssa1',
+    assessment1: 'ssa1',
+    ssa2: 'ssa2',
+    asmt2: 'ssa2',
+    assessment2: 'ssa2',
+    cia1: 'cia1',
+    cycle1: 'cia1',
+    cia2: 'cia2',
+    cycle2: 'cia2',
+    review1: 'review1',
+    reviewone: 'review1',
+    review2: 'review2',
+    reviewtwo: 'review2',
+    formative1: 'formative1',
+    fa1: 'formative1',
+    formative2: 'formative2',
+    fa2: 'formative2',
+    model: 'model',
+    modelexam: 'model',
+  };
+  return map[token] || null;
+}
+
+export async function resetAssessmentMarks(assessment: 'ssa1' | 'ssa2' | 'cia1' | 'cia2' | 'review1' | 'review2' | 'formative1' | 'formative2' | 'model', subjectId: string, teachingAssignmentId: number): Promise<any> {
+  const normalizedAssessment = normalizeResetAssessmentKey(String(assessment));
+  if (!normalizedAssessment) {
+    throw new Error(`Invalid assessment key for reset: ${String(assessment)}`);
+  }
+
+  const primaryUrl = `${apiBase()}/api/obe/reset/${encodeURIComponent(normalizedAssessment)}/${encodeURIComponent(String(subjectId))}`;
   const body = JSON.stringify({ teaching_assignment_id: teachingAssignmentId });
 
   const primary = await fetchWithAuth(primaryUrl, {
@@ -108,7 +140,7 @@ export async function resetAssessmentMarks(assessment: 'cia1' | 'cia2', subjectI
 
   // Backward-compatible fallback for deployments that only expose the older IQAC reset route.
   if (primary.status === 404) {
-    const legacyUrl = `${apiBase()}/api/obe/iqac/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
+    const legacyUrl = `${apiBase()}/api/obe/iqac/reset/${encodeURIComponent(normalizedAssessment)}/${encodeURIComponent(String(subjectId))}`;
     const legacy = await fetchWithAuth(legacyUrl, {
       method: 'POST',
       body,
@@ -437,6 +469,51 @@ export async function fetchSpecialCourseEnabledAssessments(courseCode: string, a
   return arr.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean);
 }
 
+// ── IQAC Special Exam Config (QP page: which exams are enabled for SPECIAL) ──
+
+export async function fetchSpecialExamConfig(qpType?: string): Promise<string[]> {
+  const qp = qpType ? `?question_paper_type=${encodeURIComponent(qpType)}` : '';
+  const url = `${apiBase()}/api/obe/iqac/special-exam-config${qp}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Failed to fetch special exam config');
+  const data = await res.json();
+  return Array.isArray(data?.exams) ? data.exams.map((x: any) => String(x).toUpperCase()) : [];
+}
+
+export async function addSpecialExam(examGroup: string, qpType?: string): Promise<{ exams: string[]; added: string | null }> {
+  const url = `${apiBase()}/api/obe/iqac/special-exam-config`;
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'add', exam_group: examGroup, question_paper_type: qpType || '' }),
+  });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Failed to add exam');
+  return res.json();
+}
+
+export async function removeSpecialExam(examGroup: string, qpType?: string): Promise<{ exams: string[]; removed: string | null }> {
+  const url = `${apiBase()}/api/obe/iqac/special-exam-config`;
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'remove', exam_group: examGroup, question_paper_type: qpType || '' }),
+  });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Failed to remove exam');
+  return res.json();
+}
+
+export async function setSpecialExamConfig(exams: string[], qpType?: string): Promise<{ exams: string[]; enabled_assessments: string[] }> {
+  const url = `${apiBase()}/api/obe/iqac/special-exam-config`;
+  const res = await fetchWithAuth(url, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'set', exams, question_paper_type: qpType || '' }),
+  });
+  if (res.status === 401) throw new Error('Authentication required');
+  if (!res.ok) await parseError(res, 'Failed to save special exam config');
+  return res.json();
+}
+
 export async function confirmMarkManagerLock(
   assessment: DueAssessmentKey,
   subjectId: string,
@@ -695,6 +772,16 @@ export type QpPatternResponse = {
   updated_by: number | null;
 };
 
+function normalizeQpPatternKey(value: unknown): string | null {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return null;
+  const compact = raw.replace(/[\s_-]+/g, '');
+  if (compact === 'QP1') return 'QP1';
+  if (compact === 'QP2') return 'QP2';
+  if (compact === 'CSD') return 'CSD';
+  return null;
+}
+
 function normalizeQpPattern(raw: any): QpPatternConfig {
   // Legacy: pattern is an array of marks.
   if (Array.isArray(raw)) {
@@ -733,8 +820,9 @@ function normalizeQpPattern(raw: any): QpPatternConfig {
 export async function fetchIqacQpPattern(params: { class_type: string; question_paper_type?: string | null; exam: QpPatternExam }): Promise<QpPatternResponse> {
   const qpParts: string[] = [];
   const ct = String(params.class_type || '').trim();
+  const qpType = normalizeQpPatternKey(params.question_paper_type);
   if (ct) qpParts.push(`class_type=${encodeURIComponent(ct)}`);
-  if (params.question_paper_type) qpParts.push(`question_paper_type=${encodeURIComponent(String(params.question_paper_type || '').trim())}`);
+  if (qpType) qpParts.push(`question_paper_type=${encodeURIComponent(qpType)}`);
   qpParts.push(`exam=${encodeURIComponent(String(params.exam || '').trim())}`);
   const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
   const url = `${apiBase()}/api/obe/iqac/qp-pattern${qp}`;
@@ -764,9 +852,10 @@ export async function fetchIqacQpPattern(params: { class_type: string; question_
 
 export async function upsertIqacQpPattern(payload: { class_type: string; question_paper_type?: string | null; exam: QpPatternExam; pattern: QpPatternConfig }): Promise<QpPatternResponse> {
   const url = `${apiBase()}/api/obe/iqac/qp-pattern/save`;
+  const qpType = normalizeQpPatternKey(payload.question_paper_type);
   const body = {
     class_type: String(payload.class_type || '').trim(),
-    question_paper_type: payload.question_paper_type ? String(payload.question_paper_type || '').trim() : null,
+    question_paper_type: qpType,
     exam: payload.exam,
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
@@ -851,10 +940,11 @@ export type CustomExamQpPatternResponse = {
 
 export async function fetchIqacBatchQpPattern(params: { batch_id: number; class_type: string; question_paper_type?: string | null; exam: string }): Promise<CustomExamQpPatternResponse> {
   const qpParts: string[] = [];
+  const qpType = normalizeQpPatternKey(params.question_paper_type);
   qpParts.push(`batch_id=${encodeURIComponent(String(params.batch_id))}`);
   const ct = String(params.class_type || '').trim();
   if (ct) qpParts.push(`class_type=${encodeURIComponent(ct)}`);
-  if (params.question_paper_type) qpParts.push(`question_paper_type=${encodeURIComponent(String(params.question_paper_type || '').trim())}`);
+  if (qpType) qpParts.push(`question_paper_type=${encodeURIComponent(qpType)}`);
   qpParts.push(`exam=${encodeURIComponent(String(params.exam || '').trim())}`);
   const qp = qpParts.length ? `?${qpParts.join('&')}` : '';
   const url = `${apiBase()}/api/obe/iqac/custom-exam/qp-pattern${qp}`;
@@ -876,10 +966,11 @@ export async function fetchIqacBatchQpPattern(params: { batch_id: number; class_
 
 export async function upsertIqacBatchQpPattern(payload: { batch_id: number; class_type: string; question_paper_type?: string | null; exam: string; pattern: QpPatternConfig }): Promise<CustomExamQpPatternResponse> {
   const url = `${apiBase()}/api/obe/iqac/custom-exam/qp-pattern/save`;
+  const qpType = normalizeQpPatternKey(payload.question_paper_type);
   const body = {
     batch_id: payload.batch_id,
     class_type: String(payload.class_type || '').trim(),
-    question_paper_type: payload.question_paper_type ? String(payload.question_paper_type || '').trim() : null,
+    question_paper_type: qpType,
     exam: String(payload.exam || '').trim(),
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
@@ -1091,7 +1182,7 @@ export type ClassTypeWeightsItem = {
   ssa1: number;
   cia1: number;
   formative1: number;
-  internal_mark_weights?: number[] | null;
+  internal_mark_weights?: number[] | Record<string, any> | null;
   // Alternative field names used by some endpoints
   cia_weight?: number;
   ssa_weight?: number;
@@ -1544,7 +1635,7 @@ export async function publishModelSheet(subjectId: string, data: any, teachingAs
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
-    body: JSON.stringify({ data }),
+    body: JSON.stringify({ data, coMarks: data.coMarks || [] }),
   });
   if (!res.ok) await parseError(res, 'MODEL publish failed');
   return res.json();

@@ -20,6 +20,7 @@ import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { isLabClassType, isSpecialClassType, normalizeClassType } from '../constants/classTypes';
+import { getCycleOneWeightsFromInternal } from '../utils/internalMarkWeights';
 
 type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null };
 
@@ -116,25 +117,6 @@ function getMaxCONumber(classType: string | null, isLabCourse: boolean, enabledA
 // Helper to get active CO numbers as array
 function getActiveCONumbers(maxCONumber: number): number[] {
   return Array.from({ length: maxCONumber }, (_, i) => i + 1);
-}
-
-const DEFAULT_WEIGHTS = { ssa1: 1.5, cia1: 3, formative1: 2.5 };
-
-// Class-type specific default weights (matches AcademicControllerWeightsPage.tsx)
-const CLASS_TYPE_DEFAULT_WEIGHTS: Record<string, { ssa1: number; cia1: number; formative1: number }> = {
-  THEORY: { ssa1: 1.5, cia1: 3, formative1: 2.5 },
-  TCPR: { ssa1: 2, cia1: 2.5, formative1: 2 },
-  TCPL: { ssa1: 1, cia1: 2, formative1: 3 },
-  LAB: { ssa1: 1, cia1: 1, formative1: 1 },
-  PRACTICAL: { ssa1: 1, cia1: 1, formative1: 1 },
-  SPECIAL: { ssa1: 1.5, cia1: 3, formative1: 2.5 },
-  AUDIT: { ssa1: 1.5, cia1: 3, formative1: 2.5 },
-};
-
-function getClassTypeDefaultWeights(classType?: string | null): { ssa1: number; cia1: number; formative1: number } {
-  if (!classType) return DEFAULT_WEIGHTS;
-  const normalized = normalizeClassType(classType);
-  return CLASS_TYPE_DEFAULT_WEIGHTS[normalized] || DEFAULT_WEIGHTS;
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -441,18 +423,13 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     lab2: null,
   });
 
-  const configKey = useMemo(() => `co_attainment_cfg_${courseId}`, [courseId]);
-  const [isIqac, setIsIqac] = useState<boolean>(false);
-  const [weights, setWeights] = useState(() => ({
-    ssa1: DEFAULT_WEIGHTS.ssa1,
-    cia1: DEFAULT_WEIGHTS.cia1,
-    formative1: DEFAULT_WEIGHTS.formative1,
-  }));
+  const [weights, setWeights] = useState(() => getCycleOneWeightsFromInternal(initialClassType ?? null, null));
+  const [weightsSource, setWeightsSource] = useState<'default' | 'local' | 'server'>('default');
+  const [lastWeightsDebug, setLastWeightsDebug] = useState<string | null>(null);
 
   const [theoryCo5Weightage, setTheoryCo5Weightage] = useState<number>(DEFAULT_THEORY_CO5_WEIGHTAGE);
 
   const modelPublished = Boolean(modelEnabled && modelLock && (modelLock as any).is_published);
-  const effectiveTheoryCo5Weightage = modelPublished ? 30 : theoryCo5Weightage;
 
   // When class type changes, reset CO5 weightage to the default for THEORY.
   useEffect(() => {
@@ -460,166 +437,60 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     // Once MODEL is published, CO5 max becomes fixed at 30.
     setTheoryCo5Weightage(modelPublished ? 30 : DEFAULT_THEORY_CO5_WEIGHTAGE);
   }, [showModelCo5, modelPublished]);
-  const [weightsSource, setWeightsSource] = useState<'default' | 'local' | 'server'>('default');
-  const globalWeightsRef = React.useRef<Record<string, any> | null>(null);
-  const fetchWeightsRef = React.useRef<((classType?: string | null) => Promise<void>) | null>(null);
-  const [lastWeightsDebug, setLastWeightsDebug] = useState<string | null>(null);
-  const [lastWeightsFetchError, setLastWeightsFetchError] = useState<string | null>(null);
-  const [remoteWeightsCount, setRemoteWeightsCount] = useState<number | null>(null);
-  const [showRawMapping, setShowRawMapping] = useState(false);
   const [hideCOColumns, setHideCOColumns] = useState(false);
   const [cqiEntries, setCqiEntries] = useState<Record<number, string>>({});
-
-  // determine if current user is IQAC by reading persisted roles (set by getMe)
-  useEffect(() => {
-    try {
-      const rawRoles = localStorage.getItem('roles');
-      const rawPerms = localStorage.getItem('permissions');
-      const rolesArr = rawRoles ? JSON.parse(rawRoles) : [];
-      const permsArr = rawPerms ? JSON.parse(rawPerms) : [];
-      const upperRoles = Array.isArray(rolesArr) ? rolesArr.map((r: any) => String(r || '').toUpperCase()) : [];
-      const lowerPerms = Array.isArray(permsArr) ? permsArr.map((p: any) => String(p || '').toLowerCase()) : [];
-      const hasRole = upperRoles.includes('IQAC');
-      const hasPerm = lowerPerms.includes('obe.master.manage');
-      setIsIqac(hasRole || hasPerm);
-    } catch (e) {
-      setIsIqac(false);
-    }
-  }, []);
-
   useEffect(() => {
     let mounted = true;
+    (async () => {
+      const ct = classType;
+      if (!ct) {
+        const fallback = getCycleOneWeightsFromInternal(null, null);
+        if (!mounted) return;
+        setWeights(fallback);
+        setWeightsSource('default');
+        setLastWeightsDebug('Applied defaults (class type not detected).');
+        return;
+      }
 
-    const fetchAndApplyWeights = async (applyForClass?: string | null) => {
-      if (mounted) setLastWeightsDebug('Loading IQAC weights…');
+      setLastWeightsDebug('Loading Internal Mark Weightage mapping…');
 
-      // try server
       try {
         const remote = await fetchClassTypeWeights();
         if (!mounted) return;
-        if (remote && typeof remote === 'object') {
-          const mapping: any = { ...(remote as any) };
-          try { Object.defineProperty(mapping, '__source', { value: 'server', enumerable: false }); } catch {}
-          globalWeightsRef.current = mapping;
-          setRemoteWeightsCount(Object.keys(mapping || {}).length || 0);
-          setLastWeightsFetchError(null);
-          setLastWeightsDebug(`Server weights loaded (${Object.keys(mapping || {}).length} class-types)`);
-          const ct = applyForClass ?? classType;
-          if (ct) {
-            const k = normalizeClassType(ct);
-            const gw = mapping[k];
-            if (gw && typeof gw === 'object') {
-              const classDefaults = getClassTypeDefaultWeights(ct);
-              setWeights({
-                ssa1: Number.isFinite(Number(gw.ssa1)) ? Number(gw.ssa1) : classDefaults.ssa1,
-                cia1: Number.isFinite(Number(gw.cia1)) ? Number(gw.cia1) : classDefaults.cia1,
-                formative1: Number.isFinite(Number(gw.formative1)) ? Number(gw.formative1) : classDefaults.formative1,
-              });
-              setWeightsSource('server');
-              setLastWeightsDebug(`Applied server weights for ${k}`);
-              return;
-            } else {
-              setLastWeightsDebug(`Server weights loaded (${Object.keys(mapping || {}).length} keys) but no entry for ${k}`);
-            }
-          }
+        const key = normalizeClassType(ct);
+        const item = remote?.[key];
+        if (item && typeof item === 'object') {
+          setWeights(getCycleOneWeightsFromInternal(ct, item as any));
+          setWeightsSource('server');
+          setLastWeightsDebug(`Derived from Internal Mark Weightage (server) for ${key}.`);
+          return;
         }
-      } catch (e: any) {
-        const msg = String(e?.message || e || 'Unknown error');
-        setLastWeightsFetchError(msg);
-        setLastWeightsDebug(`Server fetch failed: ${msg}`);
+      } catch {
+        // continue to local fallback
       }
 
-      // fallback to localStorage mapping
       try {
-        const global = lsGet<any>('iqac_class_type_weights');
-        if (global && typeof global === 'object') {
-          const mapping: any = { ...(global as any) };
-          try { Object.defineProperty(mapping, '__source', { value: 'local', enumerable: false }); } catch {}
-          globalWeightsRef.current = mapping;
-          setRemoteWeightsCount(Object.keys(mapping || {}).length || 0);
-          const ct = applyForClass ?? classType;
-          if (ct) {
-            const k = normalizeClassType(ct);
-            const gw = mapping[k];
-            if (gw && typeof gw === 'object') {
-              const classDefaults = getClassTypeDefaultWeights(ct);
-              setWeights({
-                ssa1: Number.isFinite(Number(gw.ssa1)) ? Number(gw.ssa1) : classDefaults.ssa1,
-                cia1: Number.isFinite(Number(gw.cia1)) ? Number(gw.cia1) : classDefaults.cia1,
-                formative1: Number.isFinite(Number(gw.formative1)) ? Number(gw.formative1) : classDefaults.formative1,
-              });
-              setWeightsSource('local');
-              setLastWeightsDebug(`Applied local weights for ${k}`);
-              return;
-            } else {
-              setLastWeightsDebug(`Local weights loaded (${Object.keys(mapping || {}).length} keys) but no entry for ${k}`);
-            }
-          }
+        const local = lsGet<any>('iqac_class_type_weights');
+        if (!mounted) return;
+        const key = normalizeClassType(ct);
+        const item = local?.[key];
+        if (item && typeof item === 'object') {
+          setWeights(getCycleOneWeightsFromInternal(ct, item as any));
+          setWeightsSource('local');
+          setLastWeightsDebug(`Derived from Internal Mark Weightage (local) for ${key}.`);
+          return;
         }
-      } catch (e: any) {
-        const msg = String(e?.message || e || 'Unknown error');
-        setLastWeightsFetchError(msg);
-        setLastWeightsDebug(`Local weights read failed: ${msg}`);
+      } catch {
+        // continue to default fallback
       }
 
-      // Final fallback: use class-type specific defaults
-      const ct = applyForClass ?? classType;
-      if (ct) {
-        const classDefaults = getClassTypeDefaultWeights(ct);
-        setWeights(classDefaults);
-        setWeightsSource('default');
-        setLastWeightsDebug(`Applied class-type defaults for ${normalizeClassType(ct)}`);
-      } else {
-        setWeights(DEFAULT_WEIGHTS);
-        setWeightsSource('default');
-        setLastWeightsDebug('Applied general defaults (no class type detected)');
-      }
-    };
-
-    // initial attempt
-    fetchAndApplyWeights();
-
-    // expose for other effects by storing on ref (not necessary but keep closure semantics)
-    fetchWeightsRef.current = fetchAndApplyWeights;
-
+      if (!mounted) return;
+      setWeights(getCycleOneWeightsFromInternal(ct, null));
+      setWeightsSource('default');
+      setLastWeightsDebug(`Applied default internal-mark mapping for ${normalizeClassType(ct)}.`);
+    })();
     return () => { mounted = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classType]);
-
-  // Hard-refresh weights when teaching assignment selection changes
-  useEffect(() => {
-    try {
-      const fn = fetchWeightsRef.current;
-      if (typeof fn === 'function') fn();
-    } catch {
-      // ignore
-    }
-  }, [selectedTaId]);
-
-  // If classType changes and we already fetched a global mapping, apply it now
-  useEffect(() => {
-    try {
-      const global = globalWeightsRef.current;
-      if (classType && global && typeof global === 'object') {
-        const k = normalizeClassType(classType);
-        const gw = global[k];
-        if (gw && typeof gw === 'object') {
-          const classDefaults = getClassTypeDefaultWeights(classType);
-          setWeights({
-            ssa1: Number.isFinite(Number(gw.ssa1)) ? Number(gw.ssa1) : classDefaults.ssa1,
-            cia1: Number.isFinite(Number(gw.cia1)) ? Number(gw.cia1) : classDefaults.cia1,
-            formative1: Number.isFinite(Number(gw.formative1)) ? Number(gw.formative1) : classDefaults.formative1,
-          });
-          // prefer server marker if global came from server, else local
-          setWeightsSource((global as any)['__source'] === 'server' ? 'server' : 'local');
-          setLastWeightsDebug(`Applied cached mapping for ${k}`);
-          setLastWeightsFetchError(null);
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, [classType]);
+  }, [classType, selectedTaId]);
 
   useEffect(() => {
     let mounted = true;
@@ -775,10 +646,6 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       mounted = false;
     };
   }, [tas, selectedTaId, initialClassType]);
-
-  useEffect(() => {
-    lsSet(configKey, { weights });
-  }, [configKey, weights]);
 
   useEffect(() => {
     let mounted = true;
@@ -1368,7 +1235,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     // - TCPR:  model_tcpr_sheet_{courseId}_{taKey}
     // Legacy:  model_sheet_{courseId}
     const modelSheet = (() => {
-      if (!showModelCo5) return null;
+      if (!showModelCo5 && !isSpecialCourse) return null;
       const taKey = String(selectedTaId ?? 'none');
       const ct = normalizeClassType(classType);
 
@@ -1382,6 +1249,9 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       } else if (ct === 'TCPR') {
         candidates.push(`model_tcpr_sheet_${courseId}_${taKey}`);
         candidates.push(`model_tcpr_sheet_${courseId}_none`);
+      } else if (ct === 'SPECIAL') {
+        candidates.push(`model_theory_sheet_${courseId}_${taKey}`);
+        candidates.push(`model_theory_sheet_${courseId}_none`);
       }
 
       candidates.push(`model_sheet_${courseId}`);
@@ -1478,6 +1348,33 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       return { mark: clamp(co5, 0, max), max };
     };
 
+    const getSpecialModelTotal = (s: Student): { mark: number | null; max: number } => {
+      const sheetState = modelSheet && typeof modelSheet === 'object' ? modelSheet : null;
+      const max = 60;
+      if (!sheetState) return { mark: null, max };
+
+      const rowKeyById = `id:${String(s.id)}`;
+      const rowKeyByReg = s.reg_no ? `reg:${String(s.reg_no).trim()}` : '';
+      const row = (sheetState as any)[rowKeyById] || (rowKeyByReg ? (sheetState as any)[rowKeyByReg] : null) || null;
+      if (!row || typeof row !== 'object') return { mark: null, max };
+
+      const absent = Boolean((row as any).absent);
+      const absentKind = String((row as any).absentKind || 'AL').toUpperCase();
+      if (absent && absentKind === 'AL') return { mark: 0, max };
+
+      const q = (row as any).q && typeof (row as any).q === 'object' ? (row as any).q : row;
+      let sum = 0;
+      let hasAny = false;
+      for (const v of Object.values(q as Record<string, unknown>)) {
+        const n = toNumOrNull(v);
+        if (n == null) continue;
+        hasAny = true;
+        sum += n;
+      }
+      if (!hasAny) return { mark: null, max };
+      return { mark: clamp(sum, 0, max), max };
+    };
+
     const f1ById: Record<string, any> = published.f1 && typeof published.f1 === 'object' ? published.f1 : {};
     const f2ById: Record<string, any> = published.f2 && typeof published.f2 === 'object' ? published.f2 : {};
 
@@ -1509,6 +1406,8 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           .filter((q: any) => q.key)
       : cia2Questions;
     const cia2ById: Record<string, any> = cia2Snapshot?.rowsByStudentId && typeof cia2Snapshot.rowsByStudentId === 'object' ? cia2Snapshot.rowsByStudentId : {};
+    const cia1TotalMax = ciaQuestions.reduce((s0, q0) => s0 + (Number(q0?.max || 0) || 0), 0) || 60;
+    const cia2TotalMax = cia2QuestionsEff.reduce((s0, q0) => s0 + (Number(q0?.max || 0) || 0), 0) || 60;
 
     for (const s of students) {
       const total1 = (published.ssa1 && typeof published.ssa1 === 'object' ? published.ssa1[String(s.id)] : null) ?? null;
@@ -1545,9 +1444,11 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       const q = crow?.q && typeof crow.q === 'object' ? crow.q : {};
       let ciaCo1: number | null = null;
       let ciaCo2: number | null = null;
+      let cia1Total: number | null = null;
       if (!absent) {
         let c1 = 0;
         let c2 = 0;
+        let t1 = 0;
         let hasAny = false;
         ciaQuestions.forEach((qq, idx) => {
           const raw = q?.[qq.key];
@@ -1555,6 +1456,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           if (mark0 == null) return;
           hasAny = true;
           const mark = clamp(mark0, 0, Number(qq.max) || mark0);
+          t1 += mark;
           const w = effectiveCoWeightsForQuestion(ciaQuestions, idx);
           c1 += mark * w.co1;
           c2 += mark * w.co2;
@@ -1562,6 +1464,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         if (hasAny) {
           ciaCo1 = clamp(c1, 0, maxes.cia1.co1);
           ciaCo2 = clamp(c2, 0, maxes.cia1.co2);
+          cia1Total = clamp(t1, 0, cia1TotalMax);
         }
       }
 
@@ -1570,9 +1473,11 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       const q2 = c2row?.q && typeof c2row.q === 'object' ? c2row.q : {};
       let ciaCo3: number | null = null;
       let ciaCo4: number | null = null;
+      let cia2Total: number | null = null;
       if (!absent2) {
         let c3 = 0;
         let c4 = 0;
+        let t2 = 0;
         let hasAny2 = false;
         cia2QuestionsEff.forEach((qq, idx) => {
           const raw = q2?.[qq.key];
@@ -1580,6 +1485,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           if (mark0 == null) return;
           hasAny2 = true;
           const mark = clamp(mark0, 0, Number(qq.max) || mark0);
+          t2 += mark;
           const w = effectiveCoWeightsForQuestion34(cia2QuestionsEff, idx);
           c3 += mark * w.co3;
           c4 += mark * w.co4;
@@ -1587,31 +1493,41 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         if (hasAny2) {
           ciaCo3 = clamp(c3, 0, maxes.cia2.co3);
           ciaCo4 = clamp(c4, 0, maxes.cia2.co4);
+          cia2Total = clamp(t2, 0, cia2TotalMax);
         }
       }
 
       const model = showModelCo5 ? getModelCo5(s) : { mark: null, max: 0 };
+      const specialModel = isSpecialCourse && theoryEnabled.model ? getSpecialModelTotal(s) : { mark: null, max: 60 };
 
       out.set(s.id, {
         ssaCo1,
         ssaCo2,
         ssaCo3,
         ssaCo4,
+        ssaTotal1: toNumOrNull(total1),
+        ssaTotal2: toNumOrNull(total2),
         ciaCo1,
         ciaCo2,
         ciaCo3,
         ciaCo4,
+        cia1Total,
+        cia2Total,
+        cia1TotalMax,
+        cia2TotalMax,
         f1Co1,
         f1Co2,
         f2Co3,
         f2Co4,
         modelCo5: model.mark,
         modelCo5Max: model.max,
+        specialModelTotal: specialModel.mark,
+        specialModelTotalMax: specialModel.max,
       });
     }
 
     return out;
-  }, [published, publishedLab, publishedTcplLab, students, maxes, cia1Questions, isLabCourse, classType, courseId, selectedTaId, showModelCo5]);
+  }, [published, publishedLab, publishedTcplLab, students, maxes, cia1Questions, isLabCourse, classType, courseId, selectedTaId, showModelCo5, isSpecialCourse, theoryEnabled.model]);
 
   const tcplLabMaxes = useMemo(() => {
     if (!isTcplCourse) return null;
@@ -1635,6 +1551,16 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
   }, [isTcplCourse, publishedTcplLab]);
 
   const theoryCoMaxTotals = useMemo(() => {
+    if (isSpecialCourse) {
+      const co1 = theoryEnabled.cia1 || theoryEnabled.cia2 || theoryEnabled.model ? 10 : 0;
+      const co2 = theoryEnabled.cia1 || theoryEnabled.cia2 || theoryEnabled.model ? 10 : 0;
+      const co3 = theoryEnabled.ssa1 || theoryEnabled.ssa2 ? 20 : 0;
+      const co4 = 0;
+      const co5 = 0;
+      const total = co1 + co2 + co3;
+      return { f1MaxCo1: 0, f1MaxCo2: 0, f2MaxCo3: 0, f2MaxCo4: 0, co1, co2, co3, co4, co5, total };
+    }
+
     const f1MaxCo1 = isTcplCourse ? (tcplLabMaxes?.lab1?.a ?? maxes.f1.co1) : maxes.f1.co1;
     const f1MaxCo2 = isTcplCourse ? (tcplLabMaxes?.lab1?.b ?? maxes.f1.co2) : maxes.f1.co2;
     const f2MaxCo3 = isTcplCourse ? (tcplLabMaxes?.lab2?.a ?? maxes.f2.co3) : maxes.f2.co3;
@@ -1648,7 +1574,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
     const total = co1 + co2 + co3 + co4 + co5;
 
     return { f1MaxCo1, f1MaxCo2, f2MaxCo3, f2MaxCo4, co1, co2, co3, co4, co5, total };
-  }, [isTcplCourse, tcplLabMaxes, maxes, theoryEnabled, showModelCo5, theoryCo5Weightage]);
+  }, [isSpecialCourse, isTcplCourse, tcplLabMaxes, maxes, theoryEnabled, showModelCo5, theoryCo5Weightage]);
 
   const computedRows = useMemo(() => {
     if (isLabCourse) {
@@ -1751,6 +1677,112 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
           co5,
           co5Pct: pct(co5, mx.co5),
           co5_3pt: pt3(co5, mx.co5),
+          ...btl,
+          total,
+        };
+      });
+    }
+
+    if (isSpecialCourse) {
+      const co1MaxTotal = 10;
+      const co2MaxTotal = 10;
+      const co3MaxTotal = 20;
+      const co4MaxTotal = 0;
+      const co5MaxTotal = 0;
+
+      return students.map((s, idx) => {
+        const m = byStudentId.get(s.id);
+
+        const ssa1Raw = toNumOrNull(m?.ssaTotal1);
+        const ssa2Raw = toNumOrNull(m?.ssaTotal2);
+        const cia1Raw = toNumOrNull(m?.cia1Total);
+        const cia2Raw = toNumOrNull(m?.cia2Total);
+        const modelRaw = toNumOrNull(m?.specialModelTotal);
+
+        const ssa1Max = 10;
+        const ssa2Max = 10;
+        const cia1Max = Number(m?.cia1TotalMax || 60);
+        const cia2Max = Number(m?.cia2TotalMax || 60);
+        const modelMax = Number(m?.specialModelTotalMax || 60);
+
+        const co1Components: Array<{ mark: number | null; max: number; w: number }> = [];
+        const co2Components: Array<{ mark: number | null; max: number; w: number }> = [];
+        const co3Components: Array<{ mark: number | null; max: number; w: number }> = [];
+
+        if (theoryEnabled.cia1) {
+          co1Components.push({ mark: cia1Raw, max: cia1Max, w: 2.5 });
+          co2Components.push({ mark: cia1Raw, max: cia1Max, w: 2.5 });
+        }
+        if (theoryEnabled.cia2) {
+          co1Components.push({ mark: cia2Raw, max: cia2Max, w: 2.5 });
+          co2Components.push({ mark: cia2Raw, max: cia2Max, w: 2.5 });
+        }
+        if (theoryEnabled.model) {
+          co1Components.push({ mark: modelRaw, max: modelMax, w: 5 });
+          co2Components.push({ mark: modelRaw, max: modelMax, w: 5 });
+        }
+        if (theoryEnabled.ssa1) co3Components.push({ mark: ssa1Raw, max: ssa1Max, w: 10 });
+        if (theoryEnabled.ssa2) co3Components.push({ mark: ssa2Raw, max: ssa2Max, w: 10 });
+
+        const specialWeighted = (items: Array<{ mark: number | null; max: number; w: number }>, outOf: number): number | null => {
+          const active = items.filter((it) => Number(it.w) > 0);
+          if (!active.length || !outOf) return null;
+          const valid = active.filter((it) => it.mark != null && it.max > 0);
+          if (!valid.length) return null;
+          const totalW = valid.reduce((sum, it) => sum + it.w, 0);
+          if (!totalW) return null;
+          const earned = valid.reduce((sum, it) => sum + ((Number(it.mark) / it.max) * it.w), 0);
+          return clamp(earned, 0, outOf);
+        };
+
+        const co1 = specialWeighted(co1Components, co1MaxTotal);
+        const co2 = specialWeighted(co2Components, co2MaxTotal);
+        const co3 = specialWeighted(co3Components, co3MaxTotal);
+        const co4 = null;
+        const co5 = null;
+
+        const co1Pct = co1 == null || !co1MaxTotal ? null : round1((co1 / co1MaxTotal) * 100);
+        const co2Pct = co2 == null || !co2MaxTotal ? null : round1((co2 / co2MaxTotal) * 100);
+        const co3Pct = co3 == null || !co3MaxTotal ? null : round1((co3 / co3MaxTotal) * 100);
+        const co4Pct = null;
+        const co5Pct = null;
+
+        const co1_3pt = co1 == null || !co1MaxTotal ? null : round2((co1 / co1MaxTotal) * 3);
+        const co2_3pt = co2 == null || !co2MaxTotal ? null : round2((co2 / co2MaxTotal) * 3);
+        const co3_3pt = co3 == null || !co3MaxTotal ? null : round2((co3 / co3MaxTotal) * 3);
+        const co4_3pt = null;
+        const co5_3pt = null;
+
+        const totalCandidates: Array<{ enabled: boolean; v: number | null }> = [
+          { enabled: true, v: co1 },
+          { enabled: true, v: co2 },
+          { enabled: true, v: co3 },
+        ];
+        const enabledVals = totalCandidates.filter((it) => it.enabled).map((it) => it.v);
+        const total = enabledVals.length === 0 || enabledVals.some((v) => v == null)
+          ? null
+          : round2(enabledVals.reduce((sum, v) => sum + Number(v || 0), 0));
+
+        const btl = { btl1: null, btl2: null, btl3: null, btl4: null, btl5: null, btl6: null };
+
+        return {
+          sno: idx + 1,
+          ...s,
+          co1,
+          co2,
+          co3,
+          co4,
+          co5,
+          co1_pct: co1Pct,
+          co2_pct: co2Pct,
+          co3_pct: co3Pct,
+          co4_pct: co4Pct,
+          co5_pct: co5Pct,
+          co1_3pt,
+          co2_3pt,
+          co3_3pt,
+          co4_3pt,
+          co5_3pt,
           ...btl,
           total,
         };
@@ -1891,7 +1923,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
         total,
       };
     });
-  }, [students, byStudentId, maxes, weights, theoryEnabled, showModelCo5, theoryCo5Weightage, theoryCoMaxTotals, isLabCourse, labCoMaxes, publishedLab]);
+  }, [students, byStudentId, maxes, weights, theoryEnabled, showModelCo5, theoryCo5Weightage, theoryCoMaxTotals, isLabCourse, labCoMaxes, publishedLab, isSpecialCourse]);
 
   const summary = useMemo(() => {
     if (isLabCourse) {
@@ -1969,13 +2001,6 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       6: present[6] ? 10 : 0,
     } as Record<1 | 2 | 3 | 4 | 5 | 6, number>;
   }, [isLabCourse, publishedLab]);
-
-  const inputStyle: React.CSSProperties = {
-    padding: '8px 10px',
-    borderRadius: 10,
-    border: '1px solid #e5e7eb',
-    width: 90,
-  };
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
@@ -2120,7 +2145,7 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
 
             <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e9f0f7', padding: 12 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <div style={{ fontWeight: 800, color: '#0b3b57', marginBottom: 8 }}>Weights (R4:R6)</div>
+                <div style={{ fontWeight: 800, color: '#0b3b57', marginBottom: 8 }}>Derived Weights (Internal Mark Weightage)</div>
                 <div style={{ fontSize: 12, color: '#475569' }}>
                   Source: <b>{weightsSource === 'server' ? 'IQAC (server)' : weightsSource === 'local' ? 'IQAC (local)' : 'Defaults'}</b>
                 </div>
@@ -2128,59 +2153,13 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
               {lastWeightsDebug && (
                 <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>{lastWeightsDebug}</div>
               )}
-              {lastWeightsFetchError && (
-                <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>Weights load error: {lastWeightsFetchError}</div>
-              )}
-              {remoteWeightsCount != null && (
-                <div style={{ marginTop: 6, fontSize: 12, color: '#475569' }}>Known class-types on server/local: {remoteWeightsCount}</div>
-              )}
-              <div style={{ marginTop: 6 }}>
-                <button
-                  onClick={() => setShowRawMapping((s) => !s)}
-                  style={{ background: 'transparent', border: 'none', color: '#0b66a3', cursor: 'pointer', padding: 0, fontSize: 12 }}
-                >
-                  {showRawMapping ? 'Hide' : 'Show'} raw IQAC mapping
-                </button>
-              </div>
-              {showRawMapping && (
-                <pre style={{ marginTop: 8, maxHeight: 220, overflow: 'auto', background: '#0f1724', color: '#e6eef8', padding: 10, borderRadius: 8 }}>
-                  {JSON.stringify(globalWeightsRef.current || {}, null, 2).slice(0, 3200)}
-                </pre>
-              )}
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                  SSA1
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={weights.ssa1}
-                    onChange={(e) => setWeights((p) => ({ ...p, ssa1: Number(e.target.value) }))}
-                    disabled={!isIqac}
-                    style={inputStyle}
-                  />
-                </label>
-                <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                  CIA1
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={weights.cia1}
-                    onChange={(e) => setWeights((p) => ({ ...p, cia1: Number(e.target.value) }))}
-                    disabled={!isIqac}
-                    style={inputStyle}
-                  />
-                </label>
-                <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                  Formative1
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={weights.formative1}
-                    onChange={(e) => setWeights((p) => ({ ...p, formative1: Number(e.target.value) }))}
-                    disabled={!isIqac}
-                    style={inputStyle}
-                  />
-                </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(120px, 1fr))', gap: 8, marginTop: 8 }}>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>SSA1</div>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>CIA1</div>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>Formative1</div>
+                <div style={{ fontWeight: 700 }}>{weights.ssa1}</div>
+                <div style={{ fontWeight: 700 }}>{weights.cia1}</div>
+                <div style={{ fontWeight: 700 }}>{weights.formative1}</div>
               </div>
 
               <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
@@ -2188,95 +2167,11 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
               </div>
 
               <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-                Note: CIA1 CO marks are computed from the locally saved CIA1 question-wise sheet.
+                Note: These values are derived from Internal Mark Weightage in Academic Controller.
               </div>
             </div>
           </div>
         )}
-
-        {/* Weights Configuration - Show for all course types */}
-        <div style={{ marginTop: 12 }}>
-          <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e9f0f7', padding: 12 }}>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <div style={{ fontWeight: 800, color: '#0b3b57', marginBottom: 8 }}>Assessment Weights</div>
-              <div style={{ fontSize: 12, color: '#475569' }}>
-                Class Type: <b>{classType || 'Unknown'}</b> |
-                Source: <b>{weightsSource === 'server' ? 'IQAC (server)' : weightsSource === 'local' ? 'IQAC (local)' : 'Defaults'}</b>
-              </div>
-            </div>
-            {lastWeightsDebug && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>{lastWeightsDebug}</div>
-            )}
-            {lastWeightsFetchError && (
-              <div style={{ marginTop: 6, fontSize: 12, color: '#b91c1c' }}>Weights load error: {lastWeightsFetchError}</div>
-            )}
-            <div style={{ marginTop: 6 }}>
-              <button
-                onClick={() => setShowRawMapping((s) => !s)}
-                style={{ background: 'transparent', border: 'none', color: '#0b66a3', cursor: 'pointer', padding: 0, fontSize: 12 }}
-              >
-                {showRawMapping ? 'Hide' : 'Show'} raw IQAC mapping
-              </button>
-            </div>
-            {showRawMapping && (
-              <pre style={{ marginTop: 8, maxHeight: 220, overflow: 'auto', background: '#0f1724', color: '#e6eef8', padding: 10, borderRadius: 8 }}>
-                {JSON.stringify(globalWeightsRef.current || {}, null, 2).slice(0, 3200)}
-              </pre>
-            )}
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-              <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                SSA1 Weight
-                <input
-                  type="number"
-                  step="0.1"
-                  value={weights.ssa1}
-                  onChange={(e) => setWeights((p) => ({ ...p, ssa1: Number(e.target.value) }))}
-                  disabled={!isIqac}
-                  style={inputStyle}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                CIA1 Weight
-                <input
-                  type="number"
-                  step="0.1"
-                  value={weights.cia1}
-                  onChange={(e) => setWeights((p) => ({ ...p, cia1: Number(e.target.value) }))}
-                  disabled={!isIqac}
-                  style={inputStyle}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                Formative1 Weight
-                <input
-                  type="number"
-                  step="0.1"
-                  value={weights.formative1}
-                  onChange={(e) => setWeights((p) => ({ ...p, formative1: Number(e.target.value) }))}
-                  disabled={!isIqac}
-                  style={inputStyle}
-                />
-              </label>
-              {showModelCo5 && (
-                <label style={{ display: 'grid', gap: 6, fontSize: 12 }}>
-                  CO5 Weightage (MODEL)
-                  <input
-                    type="number"
-                    step="1"
-                    value={theoryCo5Weightage}
-                    onChange={(e) => setTheoryCo5Weightage(Number(e.target.value))}
-                    disabled={!isIqac}
-                    style={inputStyle}
-                  />
-                </label>
-              )}
-            </div>
-            <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-              These weights determine how SSA1, CIA1, and Formative1 assessments contribute to CO attainment calculations.
-              {!isIqac && <span style={{ color: '#059669', fontWeight: 600 }}> Values shown are appropriate defaults for {classType || 'this'} class type.</span>}
-            </div>
-          </div>
-        </div>
       </div>
 
       {rosterError && (

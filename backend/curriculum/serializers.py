@@ -116,6 +116,23 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         # Respect model-level protection; model.save will raise ValidationError if not allowed
         user = self.context['request'].user
         validated_data['created_by'] = instance.created_by or user
+
+        # Auto-populate enabled_assessments when switching to SPECIAL class type
+        # without explicitly providing assessments (prevents validation error).
+        new_ct = str(validated_data.get('class_type', instance.class_type) or '').upper()
+        if new_ct == 'SPECIAL':
+            ea = validated_data.get('enabled_assessments', None)
+            # If not provided in PATCH payload, check existing value on instance
+            if ea is None:
+                ea = instance.enabled_assessments
+            if not ea:
+                # Default to all SPECIAL assessment options
+                from curriculum.models import SPECIAL_ASSESSMENT_CHOICES
+                validated_data['enabled_assessments'] = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
+        elif 'class_type' in validated_data and new_ct != 'SPECIAL':
+            # Clear enabled_assessments when switching away from SPECIAL
+            validated_data.setdefault('enabled_assessments', [])
+
         # If a non-IQAC/HAA user edits, mark approval_status as PENDING and clear approver
         request = self.context['request']
         u = request.user

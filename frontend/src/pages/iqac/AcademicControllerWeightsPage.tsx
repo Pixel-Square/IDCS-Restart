@@ -2,7 +2,27 @@ import React, { useState, useEffect } from 'react';
 import CLASS_TYPES from '../../constants/classTypes';
 import { normalizeClassType } from '../../constants/classTypes';
 import { lsGet, lsSet } from '../../utils/localStorage';
-import { fetchSpecialCoursesList, saveSpecialCourseCoWeights, SpecialCourseItem } from '../../services/obe';
+import {
+  fetchClassTypeWeights,
+  upsertClassTypeWeights,
+  fetchSpecialExamConfig,
+} from '../../services/obe';
+import {
+  isLabCycleWeights,
+  getLabCycleWeightConfig,
+  DEFAULT_LAB_CYCLE_WEIGHTS,
+  labCycleTotalWeight,
+  isProjectWeights,
+  isProjectPrblWeights,
+  getProjectWeightConfig,
+  getProjectPrblWeightConfig,
+  DEFAULT_PROJECT_WEIGHTS,
+  DEFAULT_PROJECT_PRBL_WEIGHTS,
+  type LabCycleWeights,
+  type LabCycleCoWeight,
+  type ProjectWeights,
+  type ProjectPrblWeights,
+} from '../../utils/internalMarkWeights';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
 
@@ -21,14 +41,15 @@ const DEFAULT_INTERNAL_MARK_WEIGHTS_TCPL_21 = [
   3.0, 3.0, 3.0, 3.0, 7.0,
 ];
 
-const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'LAB', 'AUDIT', 'PRACTICAL', 'SPECIAL'] as const;
+const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'AUDIT'] as const;
+const STRUCTURED_WEIGHT_CLASS_TYPES = ['LAB', 'PRACTICAL', 'PROJECT'] as const;
 
 
 type WeightsRow = {
   ssa1: number | string;
   cia1: number | string;
   formative1: number | string;
-  internal_mark_weights: Array<number | string>;
+  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights;
 };
 
 const INTERNAL_CELL_PADDING = 6;
@@ -268,9 +289,15 @@ function buildDefaults(): Record<string, WeightsRow> {
             formDef = 1;
           }
 
-          // build internal weights: for theory-like classes we use a 17-value pattern
-          let internalWeights: Array<number | string> = [...DEFAULT_INTERNAL_MARK_WEIGHTS_17];
-          if (k === 'THEORY') {
+          // build internal weights: structured for LAB/PRACTICAL/PROJECT, array for others
+          let internalWeights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights = [...DEFAULT_INTERNAL_MARK_WEIGHTS_17];
+          if (k === 'LAB' || k === 'PRACTICAL') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS));
+          } else if (k === 'PRBL') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_PRBL_WEIGHTS));
+          } else if (k === 'PROJECT') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_WEIGHTS));
+          } else if (k === 'THEORY') {
             internalWeights = [...DEFAULT_INTERNAL_MARK_WEIGHTS_17];
           } else if (k === 'TCPL') {
             // CO1..CO4 => SSA/CIA/LAB/CIAExam repeated, ME COs => 3,3,3,3,7
@@ -309,7 +336,7 @@ function applyAny(src: any): Record<string, WeightsRow> {
   const defaults = buildDefaults();
   if (!src || typeof src !== 'object') return defaults;
   const out: Record<string, WeightsRow> = { ...defaults };
-  const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
+  const all = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct))), ...STRUCTURED_WEIGHT_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
 
   // Normalise a THEORY alias so any casing variant from the server is accepted.
   const theorySeed = src['THEORY'] ?? src['Theory'] ?? src['theory'] ?? null;
@@ -320,31 +347,53 @@ function applyAny(src: any): Record<string, WeightsRow> {
   for (const k of all) {
     const w = src[k] ?? src[String(k)] ?? src[String(k).toUpperCase()] ?? null;
     if (!w || typeof w !== 'object') continue;
-    const im = Array.isArray((w as any).internal_mark_weights) ? (w as any).internal_mark_weights : null;
+    const rawIm = (w as any).internal_mark_weights;
     const seedRow = {
       ssa1: (w as any).ssa1 ?? out[k].ssa1,
       cia1: (w as any).cia1 ?? out[k].cia1,
       formative1: (w as any).formative1 ?? out[k].formative1,
     };
+
+    // Structured weights for LAB/PRACTICAL/PROJECT: use as-is if valid
+    if ((k === 'LAB' || k === 'PRACTICAL') && isLabCycleWeights(rawIm)) {
+      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+      continue;
+    }
+    if (k === 'PROJECT' || k === 'PRBL') {
+      if (isProjectWeights(rawIm) || isProjectPrblWeights(rawIm)) {
+        out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+        continue;
+      }
+    }
+
+    // SPECIAL: structured exam weights from QP config – pass through as-is
+    if (k === 'SPECIAL' && rawIm && typeof rawIm === 'object' && (rawIm as any).type === 'special_exam_weights') {
+      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+      continue;
+    }
+
+    const im = Array.isArray(rawIm) ? rawIm : null;
     out[k] = {
       ssa1: seedRow.ssa1,
       cia1: seedRow.cia1,
       formative1: seedRow.formative1,
-      internal_mark_weights: normalizeInternalWeights(k, (im && im.length ? im : out[k].internal_mark_weights) as any, seedRow),
+      internal_mark_weights: normalizeInternalWeights(k, (im && im.length ? im : (Array.isArray(out[k].internal_mark_weights) ? out[k].internal_mark_weights : null)) as any, seedRow),
     };
   }
   return out;
 }
 
 export default function AcademicControllerWeightsPage() {
-  // --- sidebar state ---
-  const [activeSection, setActiveSection] = useState<'standard' | 'special'>('standard');
-
   const [weights, setWeights] = useState<Record<string, WeightsRow>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // ── SPECIAL (CSD) exam list ──
+  // Loaded dynamically from QP Config so adding/removing exams from QP Config
+  // is automatically reflected here without code changes.
+  const [specialExams, setSpecialExams] = useState<string[]>([]);
 
   useEffect(() => {
     setLoading(true);
@@ -354,9 +403,13 @@ export default function AcademicControllerWeightsPage() {
       // After our save pipeline, server is always the source of truth.
       try {
         const svc = await import('../../services/obe');
-        const remote = await svc.fetchClassTypeWeights();
+        const [remote, exams] = await Promise.all([
+          svc.fetchClassTypeWeights(),
+          fetchSpecialExamConfig().catch(() => [] as string[]),
+        ]);
         const applied = applyAny(remote);
         setWeights(applied);
+        setSpecialExams(exams);
         // Keep localStorage in sync with what the server returns so that
         // if the server is temporarily unreachable the last-good state is used.
         try { lsSet('iqac_class_type_weights', applied); } catch {}
@@ -364,6 +417,9 @@ export default function AcademicControllerWeightsPage() {
       } catch {
         // Server unreachable — fall through to localStorage / defaults.
       }
+
+      // Fetch exam list even if weights fell through
+      fetchSpecialExamConfig().then(setSpecialExams).catch(() => {});
 
       try {
         const saved = lsGet<any>('iqac_class_type_weights');
@@ -377,14 +433,25 @@ export default function AcademicControllerWeightsPage() {
     })().finally(() => setLoading(false));
   }, []);
 
-  const handleChange = (classType: string, field: string, value: string) => {
-    setWeights((prev: any) => ({
-      ...prev,
-      [classType]: {
-        ...prev[classType],
-        [field]: value,
-      },
-    }));
+  // ── handler: update a single SPECIAL exam weight in state ──
+  const handleSpecialWeightChange = (exam: string, value: string) => {
+    setWeights((prev) => {
+      const prevRow = prev['SPECIAL'] || { ssa1: 0, cia1: 0, formative1: 0 };
+      const im = (prevRow as any).internal_mark_weights;
+      const prevWeights: Record<string, number> =
+        im && typeof im === 'object' && im.type === 'special_exam_weights' && typeof im.weights === 'object'
+          ? { ...im.weights }
+          : { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
+      const n = Number(value);
+      prevWeights[exam] = Number.isFinite(n) ? n : 0;
+      return {
+        ...prev,
+        SPECIAL: {
+          ...prevRow,
+          internal_mark_weights: { type: 'special_exam_weights', weights: prevWeights },
+        } as unknown as WeightsRow,
+      };
+    });
   };
 
   const handleInternalWeightChange = (classType: string, index: number, value: string) => {
@@ -411,10 +478,42 @@ export default function AcademicControllerWeightsPage() {
     try {
       // normalize keys to use the canonical form (uppercase)
       const normalized: Record<string, any> = {};
-      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
+      const keysToSave = Array.from(new Set<string>([...CLASS_TYPES.map((ct) => normalizeClassType(typeof ct === "string" ? ct : (ct as any).value)), 'THEORY', ...INTERNAL_MARK_TABLE_CLASS_TYPES.map(ct => normalizeClassType(String(ct))), ...STRUCTURED_WEIGHT_CLASS_TYPES.map(ct => normalizeClassType(String(ct)))]));
 
       for (const k of keysToSave) {
         const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
+
+        // Structured weights for LAB/PRACTICAL/PROJECT: send as-is
+        if ((k === 'LAB' || k === 'PRACTICAL') && isLabCycleWeights(w?.internal_mark_weights)) {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+        if ((k === 'PROJECT' || k === 'PRBL') && (isProjectWeights(w?.internal_mark_weights) || isProjectPrblWeights(w?.internal_mark_weights))) {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+
+        // SPECIAL: structured exam weights – pass through as-is
+        if (k === 'SPECIAL' && w?.internal_mark_weights && typeof w.internal_mark_weights === 'object' && w.internal_mark_weights.type === 'special_exam_weights') {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+
         const normalizedIm = normalizeInternalWeights(
           k,
           Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : defaultInternalWeightsForClassType(k),
@@ -494,37 +593,9 @@ export default function AcademicControllerWeightsPage() {
         Set the weights for each class type. These weights are IQAC-controlled and are not editable by staff.
       </p>
 
-      {/* Sidebar layout */}
-      <div style={{ display: 'flex', gap: 0, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
-        {/* Sidebar */}
-        <div style={{ width: 180, flexShrink: 0, borderRight: '1px solid #e5e7eb', background: '#f8fafc', padding: '12px 0' }}>
-          {(['standard', 'special'] as const).map((key) => (
-            <button
-              key={key}
-              onClick={() => setActiveSection(key)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '10px 18px',
-                fontWeight: activeSection === key ? 800 : 500,
-                fontSize: 14,
-                background: activeSection === key ? '#ecfdf5' : 'transparent',
-                color: activeSection === key ? '#059669' : '#374151',
-                border: 'none',
-                borderLeft: activeSection === key ? '3px solid #10b981' : '3px solid transparent',
-                cursor: 'pointer',
-              }}
-            >
-              {key === 'standard' ? 'Standard' : 'Special Courses'}
-            </button>
-          ))}
-        </div>
-
-        {/* Content panel */}
-        <div style={{ flex: 1, padding: 24, minWidth: 0, overflowX: 'auto' }}>
-          {activeSection === 'standard' && (
-            <>
+      <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+        <div style={{ padding: 24 }}>
+          <>
       {loading ? (
         <div>Loading...</div>
       ) : (
@@ -534,48 +605,6 @@ export default function AcademicControllerWeightsPage() {
             handleSave();
           }}
         >
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>CO Attainment Weights</div>
-            <div style={{ color: '#6b7280', fontSize: 13 }}>Used in CO Attainment (SSA/CIA/Formative blend).</div>
-          </div>
-          <div style={{ overflowX: 'auto', marginBottom: 24 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ border: '1px solid #ccc', padding: 8 }}>Class Type</th>
-                  <th style={{ border: '1px solid #ccc', padding: 8 }}>SSA1</th>
-                  <th style={{ border: '1px solid #ccc', padding: 8 }}>CIA1</th>
-                  <th style={{ border: '1px solid #ccc', padding: 8 }}>Formative1</th>
-                </tr>
-              </thead>
-              <tbody>
-                {CLASS_TYPES.map((ctLabel) => {
-                  const key = normalizeClassType(typeof ctLabel === "string" ? ctLabel : (ctLabel as any).value);
-                  const label = typeof ctLabel === "string"
-                    ? String(ctLabel).charAt(0).toUpperCase() + String(ctLabel).slice(1)
-                    : (ctLabel as any).label;
-                  return (
-                    <tr key={key}>
-                      <td style={{ border: '1px solid #ccc', padding: 8 }}>{label}</td>
-                      <td style={{ border: '1px solid #ccc', padding: 8 }}>
-                        <input type="number" step="0.1" value={weights[key]?.ssa1 ?? ''} onChange={(e) => handleChange(key, 'ssa1', e.target.value)} required />
-                      </td>
-                      <td style={{ border: '1px solid #ccc', padding: 8 }}>
-                        <input type="number" step="0.1" value={weights[key]?.cia1 ?? ''} onChange={(e) => handleChange(key, 'cia1', e.target.value)} required />
-                      </td>
-                      <td style={{ border: '1px solid #ccc', padding: 8 }}>
-                            <input type="number" step="0.1" value={weights[key]?.formative1 ?? ''} onChange={(e) => handleChange(key, 'formative1', e.target.value)} required />
-                            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-                              {key === 'TCPL' ? 'Lab' : key === 'TCPR' ? 'Review' : 'Formative'}
-                            </div>
-                          </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Internal Mark Weightage</div>
             <div style={{ color: '#6b7280', fontSize: 13 }}>Inputs are mapped exactly to class-type exam assignments used in Internal Mark calculation.</div>
@@ -633,6 +662,266 @@ export default function AcademicControllerWeightsPage() {
             })}
           </div>
 
+          {/* ─── LAB / PRACTICAL Cycle-Based Weight Editor ─── */}
+          {(['LAB', 'PRACTICAL'] as const).map((ctKey) => {
+            const row = weights[ctKey];
+            const cfg = isLabCycleWeights(row?.internal_mark_weights) ? row.internal_mark_weights : getLabCycleWeightConfig(null);
+            const total = labCycleTotalWeight(cfg);
+            const updateLabWeight = (cycle: 'cycle1' | 'cycle2', coKey: string, field: 'exp' | 'cia', value: string) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS)) };
+                const prevCfg = isLabCycleWeights(prevRow.internal_mark_weights) ? prevRow.internal_mark_weights : getLabCycleWeightConfig(null);
+                const newCfg: LabCycleWeights = { ...prevCfg, [cycle]: { ...prevCfg[cycle] } };
+                const prevCoW = newCfg[cycle][coKey] || { exp: 0, cia: 0 };
+                const n = Number(value);
+                newCfg[cycle][coKey] = { ...prevCoW, [field]: Number.isFinite(n) ? n : 0 };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: newCfg } };
+              });
+            };
+            const addCo = (cycle: 'cycle1' | 'cycle2') => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS)) };
+                const prevCfg = isLabCycleWeights(prevRow.internal_mark_weights) ? prevRow.internal_mark_weights : getLabCycleWeightConfig(null);
+                const existing = Object.keys(prevCfg[cycle]).map(Number).filter(Number.isFinite);
+                const next = Math.max(0, ...existing) + 1;
+                if (next > 5) return prev;
+                const newCfg: LabCycleWeights = { ...prevCfg, [cycle]: { ...prevCfg[cycle], [String(next)]: { exp: 0, cia: 0 } } };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: newCfg } };
+              });
+            };
+            const removeCo = (cycle: 'cycle1' | 'cycle2', coKey: string) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS)) };
+                const prevCfg = isLabCycleWeights(prevRow.internal_mark_weights) ? prevRow.internal_mark_weights : getLabCycleWeightConfig(null);
+                const newCycle = { ...prevCfg[cycle] };
+                delete newCycle[coKey];
+                const newCfg: LabCycleWeights = { ...prevCfg, [cycle]: newCycle };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: newCfg } };
+              });
+            };
+            const renderCycle = (cycle: 'cycle1' | 'cycle2', label: string) => {
+              const cos = Object.entries(cfg[cycle] || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
+              const cycleExpTotal = cos.reduce((s, [, w]) => s + (w.exp || 0), 0);
+              const cycleCiaTotal = cos.reduce((s, [, w]) => s + (w.cia || 0), 0);
+              const cycleTotal = Math.round((cycleExpTotal + cycleCiaTotal) * 100) / 100;
+              return (
+                <div key={cycle} style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, color: '#374151' }}>{label} <span style={{ fontWeight: 400, color: '#6b7280' }}>— Total: {cycleTotal}</span></div>
+                  <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f1f5f9' }}>
+                        <th style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', minWidth: 60 }}>CO</th>
+                        <th style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', minWidth: 80 }}>Exp Weight</th>
+                        <th style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', minWidth: 80 }}>CIA Weight</th>
+                        <th style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', minWidth: 60 }}>Total</th>
+                        <th style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center', width: 36 }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cos.map(([coKey, w]) => (
+                        <tr key={coKey}>
+                          <td style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', fontWeight: 700 }}>CO{coKey}</td>
+                          <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                            <input type="number" step="0.5" min="0" value={w.exp} onChange={(e) => updateLabWeight(cycle, coKey, 'exp', e.target.value)} style={{ width: 64, textAlign: 'center' }} />
+                          </td>
+                          <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                            <input type="number" step="0.5" min="0" value={w.cia} onChange={(e) => updateLabWeight(cycle, coKey, 'cia', e.target.value)} style={{ width: 64, textAlign: 'center' }} />
+                          </td>
+                          <td style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center', fontWeight: 600, color: '#059669' }}>{Math.round(((w.exp || 0) + (w.cia || 0)) * 100) / 100}</td>
+                          <td style={{ border: '1px solid #d1d5db', padding: '2px 4px', textAlign: 'center' }}>
+                            <button type="button" onClick={() => removeCo(cycle, coKey)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 700, fontSize: 15 }} title="Remove CO">×</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <button type="button" onClick={() => addCo(cycle)} style={{ marginTop: 4, fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>+ Add CO</button>
+                </div>
+              );
+            };
+            return (
+              <div key={ctKey} style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>{displayClassTypeName(ctKey)}</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Configure per-CO experiment and CIA exam weights for each cycle. Grand total: <b style={{ color: '#059669' }}>{total}</b> (scaled to 100 in Internal Mark page).
+                </div>
+                {renderCycle('cycle1', 'Cycle 1 (CIA 1)')}
+                {renderCycle('cycle2', 'Cycle 2 (CIA 2)')}
+              </div>
+            );
+          })}
+
+          {/* ─── PROJECT Weight Editor ─── */}
+          {(() => {
+            const ctKey = 'PROJECT';
+            const row = weights[ctKey];
+            const rawIm = row?.internal_mark_weights;
+            const projCfg = isProjectWeights(rawIm) ? rawIm : getProjectWeightConfig(null);
+            const total = projCfg.review1.weight + projCfg.review2.weight;
+
+            const updateProjectField = (field: string, subField: 'weight' | 'max', value: string) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getProjectWeightConfig(null) };
+                const n = Number(value);
+                const v = Number.isFinite(n) ? n : 0;
+                const cfg = isProjectWeights(prevRow.internal_mark_weights) ? { ...prevRow.internal_mark_weights } : getProjectWeightConfig(null);
+                (cfg as any)[field] = { ...(cfg as any)[field], [subField]: v };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: cfg } };
+              });
+            };
+
+            const inputCell = (field: string, subField: 'weight' | 'max', val: number) => (
+              <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                <input type="number" step="1" min="0" value={val} onChange={(e) => updateProjectField(field, subField, e.target.value)} style={{ width: 64, textAlign: 'center' }} />
+              </td>
+            );
+
+            return (
+              <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>Project</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Total: <b style={{ color: '#059669' }}>{total}</b>
+                </div>
+                <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Component</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Max Marks</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>Review 1</td>{inputCell('review1', 'max', projCfg.review1.max)}{inputCell('review1', 'weight', projCfg.review1.weight)}</tr>
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>Review 2</td>{inputCell('review2', 'max', projCfg.review2.max)}{inputCell('review2', 'weight', projCfg.review2.weight)}</tr>
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {/* ─── PRBL Weight Editor ─── */}
+          {(() => {
+            const ctKey = 'PRBL';
+            const row = weights[ctKey];
+            const rawIm = row?.internal_mark_weights;
+            const prblCfg = isProjectPrblWeights(rawIm) ? rawIm : getProjectPrblWeightConfig(null);
+            const total = prblCfg.ssa1.weight + prblCfg.review1.weight + prblCfg.ssa2.weight + prblCfg.review2.weight + prblCfg.model.weight;
+            const totalOk = total === 60;
+
+            const updatePrblField = (field: string, subField: 'weight' | 'max', value: string) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getProjectPrblWeightConfig(null) };
+                const n = Number(value);
+                const v = Number.isFinite(n) ? n : 0;
+                const cfg = isProjectPrblWeights(prevRow.internal_mark_weights) ? { ...prevRow.internal_mark_weights } : getProjectPrblWeightConfig(null);
+                (cfg as any)[field] = { ...(cfg as any)[field], [subField]: v };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: cfg } };
+              });
+            };
+
+            const inputCell = (field: string, subField: 'weight' | 'max', val: number) => (
+              <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                <input type="number" step="1" min="0" value={val} onChange={(e) => updatePrblField(field, subField, e.target.value)} style={{ width: 64, textAlign: 'center' }} />
+              </td>
+            );
+
+            const cycleHeader = (label: string) => (
+              <tr style={{ background: '#eff6ff' }}>
+                <td colSpan={3} style={{ border: '1px solid #bfdbfe', padding: '4px 10px', fontWeight: 700, color: '#1d4ed8', fontSize: 12 }}>{label}</td>
+              </tr>
+            );
+
+            return (
+              <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>PRBL</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Configure per-exam weights for PRBL class-type. Grand total:{' '}
+                  <b style={{ color: totalOk ? '#059669' : '#d97706' }}>{total}</b>
+                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 60</span>}
+                </div>
+                <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Component</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Max Marks</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cycleHeader('Cycle 1')}
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>SSA 1</td>{inputCell('ssa1', 'max', prblCfg.ssa1.max)}{inputCell('ssa1', 'weight', prblCfg.ssa1.weight)}</tr>
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>Review 1</td>{inputCell('review1', 'max', prblCfg.review1.max)}{inputCell('review1', 'weight', prblCfg.review1.weight)}</tr>
+                    {cycleHeader('Cycle 2')}
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>SSA 2</td>{inputCell('ssa2', 'max', prblCfg.ssa2.max)}{inputCell('ssa2', 'weight', prblCfg.ssa2.weight)}</tr>
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>Review 2</td>{inputCell('review2', 'max', prblCfg.review2.max)}{inputCell('review2', 'weight', prblCfg.review2.weight)}</tr>
+                    {cycleHeader('Cycle 3')}
+                    <tr><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 }}>Review 3</td>{inputCell('model', 'max', prblCfg.model.max)}{inputCell('model', 'weight', prblCfg.model.weight)}</tr>
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {/* ─── SPECIAL (CSD) Exam Weights Editor ─── */}
+          {(() => {
+            const spRow = weights['SPECIAL'];
+            const spIm = (spRow as any)?.internal_mark_weights;
+            const spStoredWeights: Record<string, number> =
+              spIm && typeof spIm === 'object' && spIm.type === 'special_exam_weights' && typeof spIm.weights === 'object'
+                ? spIm.weights
+                : { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
+            const examsToShow = specialExams.length > 0 ? specialExams : Object.keys(spStoredWeights);
+            const spTotal = examsToShow.reduce((s, ex) => {
+              const v = Number(spStoredWeights[ex]);
+              return s + (Number.isFinite(v) ? v : 0);
+            }, 0);
+            return (
+              <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>Special (CSD)</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Per-exam weights for SPECIAL class-type (CSD QP). Exams are derived from the QP Config.
+                  Total: <b style={{ color: spTotal === 40 ? '#059669' : '#b45309' }}>{Math.round(spTotal * 100) / 100}</b>
+                  {spTotal !== 40 && <span style={{ color: '#b45309', marginLeft: 6, fontSize: 11 }}>(expected 40)</span>}
+                </div>
+                {examsToShow.length === 0 ? (
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>
+                    No exams configured. Go to <b>QP Config → SPECIAL</b> to set up exam patterns first.
+                  </div>
+                ) : (
+                  <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f1f5f9' }}>
+                        {examsToShow.map((ex) => (
+                          <th key={ex} style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', minWidth: 80, fontWeight: 700 }}>{ex}</th>
+                        ))}
+                        <th style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#059669' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        {examsToShow.map((ex) => (
+                          <td key={ex} style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={spStoredWeights[ex] ?? ''}
+                              onChange={(e) => handleSpecialWeightChange(ex, e.target.value)}
+                              style={{ width: 72, textAlign: 'center' }}
+                            />
+                          </td>
+                        ))}
+                        <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: spTotal === 40 ? '#059669' : '#b45309' }}>
+                          {Math.round(spTotal * 100) / 100}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })()}
+
           <button
             type="submit"
             disabled={saving}
@@ -653,181 +942,10 @@ export default function AcademicControllerWeightsPage() {
           {success && <div style={{ color: 'green', marginTop: 12 }}>{success}</div>}
         </form>
       )}
-            </>
-          )}
-
-          {activeSection === 'special' && (
-            <SpecialCoWeightsPanel />
-          )}
+          </>
         </div>
       </div>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Special Courses CO Weights Panel
-// ---------------------------------------------------------------------------
-
-const CO_KEYS = ['co1', 'co2', 'co3', 'co4', 'co5'] as const;
-
-function SpecialCoWeightsPanel() {
-  const [courses, setCourses] = useState<SpecialCourseItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // local edits: taId -> co weights
-  const [edits, setEdits] = useState<Record<number, Record<string, string>>>({});
-  const [savingId, setSavingId] = useState<number | null>(null);
-  const [saveMsg, setSaveMsg] = useState<Record<number, string>>({});
-
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchSpecialCoursesList()
-      .then((list) => {
-        setCourses(list);
-        // Seed edits from existing weights
-        const initial: Record<number, Record<string, string>> = {};
-        for (const c of list) {
-          const row: Record<string, string> = {};
-          for (const k of CO_KEYS) {
-            row[k] = c.co_weights?.[k] != null ? String(c.co_weights[k]) : '';
-          }
-          initial[c.id] = row;
-        }
-        setEdits(initial);
-      })
-      .catch((e: any) => setError(e?.message || 'Failed to load special courses'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleChange = (taId: number, co: string, value: string) => {
-    setEdits((prev) => ({
-      ...prev,
-      [taId]: { ...(prev[taId] || {}), [co]: value },
-    }));
-  };
-
-  const handleSave = async (taId: number) => {
-    setSavingId(taId);
-    setSaveMsg((p) => ({ ...p, [taId]: '' }));
-    try {
-      const row = edits[taId] || {};
-      const weights: Record<string, number> = {};
-      for (const k of CO_KEYS) {
-        const v = Number(row[k]);
-        if (Number.isFinite(v)) weights[k] = v;
-      }
-      await saveSpecialCourseCoWeights(taId, weights);
-      setSaveMsg((p) => ({ ...p, [taId]: 'Saved' }));
-      // Update local courses list
-      setCourses((prev) => prev.map((c) => c.id === taId ? { ...c, co_weights: weights } : c));
-    } catch (e: any) {
-      setSaveMsg((p) => ({ ...p, [taId]: `Error: ${e?.message || 'Failed'}` }));
-    } finally {
-      setSavingId(null);
-    }
-  };
-
-  if (loading) return <div style={{ padding: 20, color: '#6b7280' }}>Loading special courses…</div>;
-  if (error) return <div style={{ padding: 12, color: '#b91c1c', background: '#fef2f2', borderRadius: 8 }}>{error}</div>;
-  if (!courses.length) return (
-    <div style={{ padding: 20, color: '#6b7280', textAlign: 'center' }}>
-      No active SPECIAL class-type courses found.
-    </div>
-  );
-
-  return (
-    <div>
-      <div style={{ fontWeight: 800, marginBottom: 6, fontSize: 15 }}>Special Courses — CO Weights</div>
-      <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 18 }}>
-        Set CO attainment weights for each SPECIAL course. These define how much each CO contributes to the internal mark calculation.
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: '#f1f5f9' }}>
-              <th style={thStyle}>Course</th>
-              <th style={thStyle}>Section</th>
-              <th style={thStyle}>Department</th>
-              <th style={thStyle}>Staff</th>
-              <th style={thStyle}>Year</th>
-              {CO_KEYS.map((k) => (
-                <th key={k} style={{ ...thStyle, textAlign: 'center', minWidth: 72 }}>
-                  {k.toUpperCase()}
-                </th>
-              ))}
-              <th style={thStyle}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {courses.map((course) => {
-              const row = edits[course.id] || {};
-              const isSaving = savingId === course.id;
-              const msg = saveMsg[course.id] || '';
-              return (
-                <tr key={course.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={tdStyle}>
-                    <div style={{ fontWeight: 700 }}>{course.subject_code}</div>
-                    {course.subject_name && (
-                      <div style={{ fontSize: 11, color: '#64748b' }}>{course.subject_name}</div>
-                    )}
-                  </td>
-                  <td style={tdStyle}>{course.section_name || '—'}</td>
-                  <td style={tdStyle}>{course.department || '—'}</td>
-                  <td style={tdStyle}>{course.staff_name || '—'}</td>
-                  <td style={tdStyle}>{course.academic_year || '—'}</td>
-                  {CO_KEYS.map((k) => (
-                    <td key={k} style={{ ...tdStyle, textAlign: 'center' }}>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={row[k] ?? ''}
-                        onChange={(e) => handleChange(course.id, k, e.target.value)}
-                        className="obe-input"
-                        style={{ width: 64, textAlign: 'center' }}
-                      />
-                    </td>
-                  ))}
-                  <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button
-                      className="obe-btn obe-btn-success"
-                      style={{ padding: '5px 14px', fontSize: 13 }}
-                      disabled={isSaving}
-                      onClick={() => handleSave(course.id)}
-                    >
-                      {isSaving ? 'Saving…' : 'Save'}
-                    </button>
-                    {msg && (
-                      <span style={{ marginLeft: 8, fontSize: 12, color: msg.startsWith('Error') ? '#b91c1c' : '#059669' }}>
-                        {msg}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-const thStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  textAlign: 'left',
-  fontWeight: 700,
-  color: '#475569',
-  fontSize: 12,
-  whiteSpace: 'nowrap',
-  borderBottom: '2px solid #e2e8f0',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  verticalAlign: 'middle',
-  borderBottom: '1px solid #f1f5f9',
-};
 

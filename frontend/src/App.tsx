@@ -56,6 +56,8 @@ import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
+import AcademicCalendarAdmin from './pages/academicCalendar/AcademicCalendarAdmin';
+import AcademicCalendarView from './pages/academicCalendar/AcademicCalendarView';
 import BrandingLayout from './pages/branding/BrandingLayout';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import HodEventsListPage from './pages/hod/events/HodEventsListPage';
@@ -371,6 +373,14 @@ export default function App() {
                 <Route
                   path="/iqac/calendar"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarPage mode="iqac" />} />}
+                />
+                <Route
+                  path="/iqac/calendar/admin"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarAdmin />} />}
+                />
+                <Route
+                  path="/iqac/calendar/admin/view/:id"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarView />} />}
                 />
                 <Route
                   path="/hod/calendar"

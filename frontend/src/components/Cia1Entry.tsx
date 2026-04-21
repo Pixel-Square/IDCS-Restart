@@ -2536,10 +2536,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     className="obe-btn obe-btn-success"
-                    disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
+                    disabled={!subjectId || markManagerBusy}
                     onClick={() => {
-                      if (markManagerLocked && !editRequestsEnabled) return;
-                      setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
+                      setMarkManagerModal({ mode: markManagerLocked && markManagerEditRequestsEnabled ? 'request' : 'confirm' });
                     }}
                   >
                     {markManagerLocked ? 'Edit' : 'Save'}

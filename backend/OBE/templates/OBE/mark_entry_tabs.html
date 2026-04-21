@@ -34,11 +34,12 @@
     <a class="tab {% if tab == 'cia1' %}active{% endif %}" href="?tab=cia1">CIA1</a>
     <a class="tab {% if tab == 'ssa2' %}active{% endif %}" href="?tab=ssa2">SSA2</a>
     <a class="tab {% if tab == 'cia2' %}active{% endif %}" href="?tab=cia2">CIA2</a>
+    <a class="tab {% if tab == 'project' %}active{% endif %}" href="?tab=project">Project Marks</a>
     <a class="tab {% if tab == 'model' %}active{% endif %}" href="?tab=model">MODEL</a>
   </div>
 
   {% if saved %}
-    <div class="success">CIA1 marks saved.</div>
+    <div class="success">{{ tab|upper }} marks saved.</div>
   {% endif %}
 
   {% if errors %}
@@ -171,6 +172,55 @@
         </div>
       </div>
       <div style="margin-top:6px">{% include 'OBE/partials/students_table.html' %}</div>
+    </div>
+  {% elif tab == 'project' %}
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div>
+          <h4 style="margin: 0 0 8px;">Project Marks</h4>
+          <div class="muted" style="margin-bottom: 0;">Dedicated backend section for pure Project class type marks</div>
+        </div>
+      </div>
+
+      <form id="project-form" method="post" action="?tab=project">
+        {% csrf_token %}
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 160px;">Reg No</th>
+              <th>Student</th>
+              <th style="width: 180px;">Project Mark</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in project_rows %}
+              <tr>
+                <td>{{ row.student.reg_no }}</td>
+                <td>{{ row.student.user.get_full_name|default:row.student.user.username }}</td>
+                <td>
+                  <input
+                    type="number"
+                    name="project_mark_{{ row.student.id }}"
+                    step="0.01"
+                    min="0"
+                    value="{% if row.mark != None %}{{ row.mark }}{% endif %}"
+                    placeholder="0"
+                  />
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="3" class="muted">No students found.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div style="margin-top: 14px; display: flex; gap: 10px; align-items: center;">
+          <button class="btn" type="submit">Save Project Marks</button>
+          <span class="muted" style="font-size: 12px;">Blank inputs will clear stored marks.</span>
+        </div>
+      </form>
     </div>
   {% elif tab == 'model' %}
     <div class="card">

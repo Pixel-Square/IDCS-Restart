@@ -169,12 +169,22 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   // One-time edit state for name using a single source of truth for UI sync.
   const [isEditingName, setIsEditingName] = useState(false);
-  const [profile, setProfile] = useState({ name: '', first_name: '', last_name: '', email: '', nameEdited: false });
+  const [profile, setProfile] = useState({
+    name: '',
+    first_name: '',
+    last_name: '',
+    professional_email: '',
+    personal_email: '',
+    nameEdited: false,
+  });
   const [nameEmailEditError, setNameEmailEditError] = useState<string | null>(null);
   const [nameEmailSaving, setNameEmailSaving] = useState(false);
-  const [emailEditing, setEmailEditing] = useState(false);
-  const [emailSaving, setEmailSaving] = useState(false);
-  const [emailEditError, setEmailEditError] = useState<string | null>(null);
+  const [professionalEmailEditing, setProfessionalEmailEditing] = useState(false);
+  const [professionalEmailSaving, setProfessionalEmailSaving] = useState(false);
+  const [professionalEmailError, setProfessionalEmailError] = useState<string | null>(null);
+  const [personalEmailEditing, setPersonalEmailEditing] = useState(false);
+  const [personalEmailSaving, setPersonalEmailSaving] = useState(false);
+  const [personalEmailError, setPersonalEmailError] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
@@ -332,7 +342,8 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       name: getDisplayName(user),
       first_name: String(user?.first_name || ''),
       last_name: String(user?.last_name || ''),
-      email: String(user?.email || ''),
+      professional_email: String(user?.email || ''),
+      personal_email: String((user as any)?.profile?.personal_email || ''),
       nameEdited: edited,
     });
     if (edited) setIsEditingName(false);
@@ -690,7 +701,8 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         name: getDisplayName(normalized),
         first_name: String(normalized.first_name || ''),
         last_name: String(normalized.last_name || ''),
-        email: String(normalized.email || ''),
+        professional_email: String(normalized.email || ''),
+        personal_email: String((normalized as any)?.profile?.personal_email || ''),
         nameEdited: Boolean((normalized as any)?.profileEdited ?? (normalized as any)?.name_email_edited),
       });
       setIsEditingName(false);
@@ -701,22 +713,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
-  async function handleSaveEmail() {
-    setEmailEditError(null);
-    const next = String((profile.email || '')).trim().toLowerCase();
+  async function handleSaveProfessionalEmail() {
+    setProfessionalEmailError(null);
+    const next = String((profile.professional_email || '')).trim().toLowerCase();
     if (!next) {
-      setEmailEditError('Email cannot be empty.');
+      setProfessionalEmailError('Professional email cannot be empty.');
       return;
     }
-    // simple validation
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRe.test(next)) {
-      setEmailEditError('Enter a valid email address.');
+      setProfessionalEmailError('Enter a valid professional email address.');
       return;
     }
 
     try {
-      setEmailSaving(true);
+      setProfessionalEmailSaving(true);
       const response = await fetchWithAuth('/api/accounts/profile/update/', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -724,16 +735,49 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to update email');
+        throw new Error(data.detail || 'Failed to update professional email');
       }
       const updated = await getMe();
       applyUserUpdate(updated);
-      setProfile((p) => ({ ...p, email: String(updated.email || '') }));
-      setEmailEditing(false);
+      setProfile((p) => ({ ...p, professional_email: String(updated.email || '') }));
+      setProfessionalEmailEditing(false);
     } catch (e: any) {
-      setEmailEditError(String(e?.message || e || 'Failed to update email'));
+      setProfessionalEmailError(String(e?.message || e || 'Failed to update professional email'));
     } finally {
-      setEmailSaving(false);
+      setProfessionalEmailSaving(false);
+    }
+  }
+
+  async function handleSavePersonalEmail() {
+    setPersonalEmailError(null);
+    const next = String((profile.personal_email || '')).trim().toLowerCase();
+    if (next) {
+      const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRe.test(next)) {
+        setPersonalEmailError('Enter a valid personal email address.');
+        return;
+      }
+    }
+
+    try {
+      setPersonalEmailSaving(true);
+      const response = await fetchWithAuth('/api/accounts/profile/update/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personal_email: next }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || 'Failed to update personal email');
+      }
+      const updated = await getMe();
+      applyUserUpdate(updated);
+      setProfile((p) => ({ ...p, personal_email: String((updated as any)?.profile?.personal_email || '') }));
+      setPersonalEmailEditing(false);
+    } catch (e: any) {
+      setPersonalEmailError(String(e?.message || e || 'Failed to update personal email'));
+    } finally {
+      setPersonalEmailSaving(false);
     }
   }
 
@@ -750,10 +794,16 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setNameEmailEditError(null);
   }
 
-  function cancelEditingEmail() {
-    setProfile((prev) => ({ ...prev, email: String(user?.email || '') }));
-    setEmailEditing(false);
-    setEmailEditError(null);
+  function cancelEditingProfessionalEmail() {
+    setProfile((prev) => ({ ...prev, professional_email: String(user?.email || '') }));
+    setProfessionalEmailEditing(false);
+    setProfessionalEmailError(null);
+  }
+
+  function cancelEditingPersonalEmail() {
+    setProfile((prev) => ({ ...prev, personal_email: String((user as any)?.profile?.personal_email || '') }));
+    setPersonalEmailEditing(false);
+    setPersonalEmailError(null);
   }
 
   function handleAvatarEditClick() {
@@ -1174,47 +1224,94 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   <Mail className="w-5 h-5 text-emerald-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
+                  <div className="text-sm font-semibold text-gray-500 mb-3">Email</div>
+
+                  <div className="space-y-4">
                     <div>
-                      <button
-                        onClick={() => { setEmailEditing(true); setEmailEditError(null); }}
-                        className="text-xs text-blue-600 hover:text-blue-700"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-semibold text-gray-500">Professional Mail</div>
+                        <button
+                          onClick={() => { setProfessionalEmailEditing(true); setProfessionalEmailError(null); }}
+                          className="text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          Edit
+                        </button>
+                      </div>
+
+                      {professionalEmailEditing ? (
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="email"
+                            value={profile.professional_email || ''}
+                            onChange={(e) => setProfile((p) => ({ ...p, professional_email: e.target.value }))}
+                            className="w-full px-3 py-2 border rounded text-sm"
+                            disabled={professionalEmailSaving}
+                          />
+                          <button
+                            onClick={handleSaveProfessionalEmail}
+                            disabled={professionalEmailSaving}
+                            className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                          >
+                            {professionalEmailSaving ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            onClick={cancelEditingProfessionalEmail}
+                            disabled={professionalEmailSaving}
+                            className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-gray-900 font-medium truncate mt-2">{profile.professional_email || '—'}</div>
+                      )}
+
+                      {professionalEmailError && <div className="text-xs text-red-600 mt-2">{professionalEmailError}</div>}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-semibold text-gray-500">Personal Mail</div>
+                        <button
+                          onClick={() => { setPersonalEmailEditing(true); setPersonalEmailError(null); }}
+                          className="text-xs text-blue-600 hover:text-blue-700"
+                        >
+                          Edit
+                        </button>
+                      </div>
+
+                      {personalEmailEditing ? (
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="email"
+                            value={profile.personal_email || ''}
+                            onChange={(e) => setProfile((p) => ({ ...p, personal_email: e.target.value }))}
+                            className="w-full px-3 py-2 border rounded text-sm"
+                            disabled={personalEmailSaving}
+                            placeholder="Optional"
+                          />
+                          <button
+                            onClick={handleSavePersonalEmail}
+                            disabled={personalEmailSaving}
+                            className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                          >
+                            {personalEmailSaving ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            onClick={cancelEditingPersonalEmail}
+                            disabled={personalEmailSaving}
+                            className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-gray-900 font-medium truncate mt-2">{profile.personal_email || '—'}</div>
+                      )}
+
+                      {personalEmailError && <div className="text-xs text-red-600 mt-2">{personalEmailError}</div>}
                     </div>
                   </div>
-
-                  {emailEditing ? (
-                    <div className="mt-2 flex items-center gap-2">
-                      <input
-                        type="email"
-                        value={profile.email || ''}
-                        onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
-                        className="w-full px-3 py-2 border rounded text-sm"
-                        disabled={emailSaving}
-                      />
-                      <button
-                        onClick={handleSaveEmail}
-                        disabled={emailSaving}
-                        className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
-                      >
-                        {emailSaving ? 'Saving...' : 'Save'}
-                      </button>
-                      <button
-                        onClick={cancelEditingEmail}
-                        disabled={emailSaving}
-                        className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="text-gray-900 font-medium truncate mt-2">{profile.email || '—'}</div>
-                  )}
-
-                  {emailEditError && <div className="text-xs text-red-600 mt-2">{emailEditError}</div>}
                 </div>
               </div>
             </div>

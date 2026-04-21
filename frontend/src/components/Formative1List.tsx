@@ -2032,7 +2032,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       Total
                     </th>
                     <th style={cellTh} colSpan={4}>
-                      CIA 1
+                      {assessmentKey === 'formative2' ? 'CIA 2' : 'CIA 1'}
                     </th>
                     {visibleBtlIndices.length ? (
                       <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>

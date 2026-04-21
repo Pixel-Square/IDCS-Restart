@@ -65,5 +65,19 @@ export function registerNoKeys(value: unknown): string[] {
   if (norm.length > 8) keys.push(norm.slice(-8));
   if (norm.length > 10) keys.push(norm.slice(-10));
 
+  const digitsOnly = norm.replace(/\D+/g, '');
+  if (digitsOnly && digitsOnly !== norm) keys.push(digitsOnly);
+  if (digitsOnly.length > 8) keys.push(digitsOnly.slice(-8));
+  if (digitsOnly.length > 7) keys.push(digitsOnly.slice(-7));
+
+  // Extra tolerance: many sheets/rosters use shortened register suffixes.
+  // Add a range of suffix keys so full-vs-short register numbers still match.
+  const suffixMin = 6;
+  const suffixMax = 12;
+  for (let len = suffixMin; len <= suffixMax; len++) {
+    if (norm.length > len) keys.push(norm.slice(-len));
+    if (digitsOnly.length > len) keys.push(digitsOnly.slice(-len));
+  }
+
   return Array.from(new Set(keys));
 }

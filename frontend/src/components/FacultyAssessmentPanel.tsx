@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as OBE from '../services/obe';
 
-const ALL_KEYS = ['ssa1', 'formative1', 'ssa2', 'formative2', 'cia1', 'cia2'] as const;
+const ALL_KEYS = ['ssa1', 'formative1', 'ssa2', 'formative2', 'cia1', 'cia2', 'model'] as const;
 
 type Props = { teachingAssignmentId?: number | null; onSaved?: (arr: string[]) => void; onClose?: () => void };
 

@@ -30,6 +30,26 @@ import fetchWithAuth from '../services/fetchAuth';
 import { fetchDeptRow, fetchDeptRows, fetchMasters } from '../services/curriculum';
 import { lsGet, lsSet } from '../utils/localStorage';
 import { normalizeClassType, normalizeObeClassType } from '../constants/classTypes';
+import {
+  LabCycleWeights,
+  LabCycleCoWeight,
+  isLabCycleWeights,
+  getLabCycleWeightConfig,
+  labCycleTotalWeight,
+  labCycleCoKeys,
+  labCycleSchemaWeights,
+  DEFAULT_LAB_CYCLE_WEIGHTS,
+  isProjectWeights,
+  isProjectPrblWeights,
+  getProjectWeightConfig,
+  getProjectPrblWeightConfig,
+  ProjectWeights,
+  ProjectPrblWeights,
+  isSpecialExamWeights,
+  getSpecialExamWeightConfig,
+  SpecialExamWeights,
+  DEFAULT_SPECIAL_EXAM_WEIGHTS,
+} from '../utils/internalMarkWeights';
 
 type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null; questionPaperType?: string | null };
 
@@ -377,7 +397,7 @@ type InternalSchema = {
   labels: string[];
 };
 
-function buildInternalSchema(classType: string | null, enabledSet: Set<string>, isPrbl?: boolean, isQp1Final?: boolean): InternalSchema {
+function buildInternalSchema(classType: string | null, enabledSet: Set<string>, isPrbl?: boolean, isQp1Final?: boolean, labCycleConfig?: LabCycleWeights | null): InternalSchema {
   const ct = normalizeObeClassType(classType);
   const allHeader = DEFAULT_INTERNAL_MAPPING.header;
   const allCycles = DEFAULT_INTERNAL_MAPPING.cycles;
@@ -457,32 +477,34 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
     };
   }
 
-  if (ct === 'LAB') {
-    const modelEnabled = enabledSet.has('model');
-    // LAB uses CIA 1 LAB, CIA 2 LAB and optional MODEL LAB (no SSA/FA).
-    visible = modelEnabled ? [1, 4, 7, 10, 16] : [1, 4, 7, 10];
-    const header = modelEnabled ? ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'] : ['CO1', 'CO2', 'CO3', 'CO4'];
-    const cyc = modelEnabled ? ['CIA 1 LAB', 'CIA 1 LAB', 'CIA 2 LAB', 'CIA 2 LAB', 'MODEL LAB'] : ['CIA 1 LAB', 'CIA 1 LAB', 'CIA 2 LAB', 'CIA 2 LAB'];
-    const lab = modelEnabled ? ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2', 'ME-CO5'] : ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2'];
-    return { visible, header, cycles: cyc, labels: lab };
-  }
-
-  if (ct === 'PRACTICAL') {
-    // PRACTICAL keeps CIA + MODEL behavior.
-    visible = [1, 4, 7, 10, 16];
-    const header = ['CO1', 'CO2', 'CO3', 'CO4', 'ME'];
-    const cyc = ['CIA 1', 'CIA 1', 'CIA 2', 'CIA 2', 'MODEL'];
-    const lab = ['CO1-CIA1', 'CO2-CIA1', 'CO3-CIA2', 'CO4-CIA2', 'ME-CO5'];
-    return { visible, header, cycles: cyc, labels: lab };
+  if (ct === 'LAB' || ct === 'PRACTICAL') {
+    const cfg = labCycleConfig || DEFAULT_LAB_CYCLE_WEIGHTS;
+    const c1Keys = labCycleCoKeys(cfg.cycle1);
+    const c2Keys = labCycleCoKeys(cfg.cycle2);
+    const colCount = c1Keys.length + c2Keys.length;
+    const vis = Array.from({ length: colCount }, (_, i) => i);
+    const header = [
+      ...c1Keys.map((k) => `CO${k}`),
+      ...c2Keys.map((k) => `CO${k}`),
+    ];
+    const cyc = [
+      ...c1Keys.map(() => 'Cycle 1'),
+      ...c2Keys.map(() => 'Cycle 2'),
+    ];
+    const lab = [
+      ...c1Keys.map((k) => `CO${k}-C1`),
+      ...c2Keys.map((k) => `CO${k}-C2`),
+    ];
+    return { visible: vis, header, cycles: cyc, labels: lab };
   }
 
   if (ct === 'PROJECT') {
     if (isPrbl) {
-      // PRBL: Cycle1(SSA1+Review1)=15, Cycle2(SSA2+Review2)=15, Cycle3(Model)=30 → 60
+      // PRBL: Cycle1(SSA1+Review1)=15, Cycle2(SSA2+Review2)=15, Cycle3(Review3)=30 → 60
       visible = [0, 2, 3, 8, 16];  // indices into 17-slot partsFull (co1Ssa, co1Fa, co2Ssa, co3Fa, meCo1)
-      const header = ['SSA 1', 'Review 1', 'SSA 2', 'Review 2', 'Model'];
+      const header = ['SSA 1', 'Review 1', 'SSA 2', 'Review 2', 'Review 3'];
       const cyc = ['Cycle 1', 'Cycle 1', 'Cycle 2', 'Cycle 2', 'Cycle 3'];
-      const lab = ['SSA1', 'REVIEW1', 'SSA2', 'REVIEW2', 'MODEL'];
+      const lab = ['SSA1', 'REVIEW1', 'SSA2', 'REVIEW2', 'REVIEW3'];
       return { visible, header, cycles: cyc, labels: lab };
     }
     // PROJECT uses only Review 1 and Review 2, each out of 50 (total /100).
@@ -493,19 +515,25 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
     return { visible, header, cycles: cyc, labels: lab };
   }
 
-  if (ct === 'SPECIAL' && enabledSet.size) {
-    // SPECIAL has only the enabled subset of SSA/CIA/Formative and no MODEL.
-    const allowed: number[] = [];
-    const pushIf = (cond: boolean, idxs: number[]) => {
-      if (cond) for (const i of idxs) allowed.push(i);
+  if (ct === 'SPECIAL') {
+    // SPECIAL uses exam-level columns: SSA1, SSA2, CIA1, CIA2, MODEL
+    // Each scaled to its configured weight (e.g. 10, 10, 5, 5, 10 = 40).
+    const exams: string[] = [];
+    const pushExam = (key: string) => {
+      if (!enabledSet.size || enabledSet.has(key.toLowerCase())) exams.push(key);
     };
-    pushIf(enabledSet.has('ssa1'), [0, 3]);
-    pushIf(enabledSet.has('cia1'), [1, 4]);
-    pushIf(enabledSet.has('formative1'), [2, 5]);
-    pushIf(enabledSet.has('ssa2'), [6, 9]);
-    pushIf(enabledSet.has('cia2'), [7, 10]);
-    pushIf(enabledSet.has('formative2'), [8, 11]);
-    visible = allowed;
+    pushExam('SSA1');
+    pushExam('SSA2');
+    pushExam('CIA1');
+    pushExam('CIA2');
+    pushExam('MODEL');
+    const vis = Array.from({ length: exams.length }, (_, i) => i);
+    return {
+      visible: vis,
+      header: exams,
+      cycles: exams.map((e) => e.startsWith('SSA') ? 'SSA' : e.startsWith('CIA') ? 'CIA' : 'MODEL'),
+      labels: exams,
+    };
   }
 
   const header = visible.map((i) => allHeader[i]);
@@ -633,6 +661,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const [weights, setWeights] = useState<{ ssa1: number; cia1: number; formative1: number }>({ ssa1: 1.5, cia1: 3, formative1: 2.5 });
   const [internalMarkWeights, setInternalMarkWeights] = useState<number[]>([...DEFAULT_INTERNAL_MAPPING.weights]);
+  const [labCycleWeightsCfg, setLabCycleWeightsCfg] = useState<LabCycleWeights | null>(null);
+  const [projectWeightsCfg, setProjectWeightsCfg] = useState<ProjectWeights | ProjectPrblWeights | null>(null);
+  const [specialExamWeightsCfg, setSpecialExamWeightsCfg] = useState<SpecialExamWeights | null>(null);
 
   const [published, setPublished] = useState<{ ssa1: Record<string, any>; ssa2: Record<string, any>; f1: Record<string, any>; f2: Record<string, any>; cia1: any | null; cia2: any | null }>({
     ssa1: {},
@@ -835,6 +866,29 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           setWeights({ ssa1: ssa1W, cia1: cia1W, formative1: fa1W });
 
           const im = (w as any).internal_mark_weights;
+
+          // ── Structured weight formats (LAB cycles, PROJECT reviews) ──
+          if (isLabCycleWeights(im)) {
+            setLabCycleWeightsCfg(getLabCycleWeightConfig(im));
+            setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]); // placeholder
+            return true;
+          }
+          if (isProjectWeights(im)) {
+            setProjectWeightsCfg(getProjectWeightConfig(im));
+            setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
+            return true;
+          }
+          if (isProjectPrblWeights(im)) {
+            setProjectWeightsCfg(getProjectPrblWeightConfig(im));
+            setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
+            return true;
+          }
+          if (isSpecialExamWeights(im)) {
+            setSpecialExamWeightsCfg(getSpecialExamWeightConfig(im));
+            setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
+            return true;
+          }
+
           if (Array.isArray(im) && im.length) {
             let arr = im.map((x: any) => {
               const n = Number(x);
@@ -912,10 +966,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         };
 
         // Prefer server; fallback to localStorage (used when server save isn't available)
+        // For PRBL courses use the 'PRBL' key specifically; otherwise use effectiveClassType.
+        const weightKey = isPrbl ? 'PRBL' : ct;
         try {
           const remote = await fetchClassTypeWeights();
           if (!mounted) return;
-          const wRemote = (remote && (remote as any)[ct]) || null;
+          const wRemote = (remote && (remote as any)[weightKey]) || null;
           if (applyWeights(wRemote)) return;
         } catch {
           // ignore
@@ -923,7 +979,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
         try {
           const local = lsGet<any>('iqac_class_type_weights');
-          const wLocal = (local && (local as any)[ct]) || null;
+          const wLocal = (local && (local as any)[weightKey]) || null;
           if (applyWeights(wLocal)) return;
         } catch {
           // ignore
@@ -933,7 +989,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
     })();
     return () => { mounted = false; };
-  }, [effectiveClassType]);
+  }, [effectiveClassType, isPrbl]);
 
   useEffect(() => {
     let mounted = true;
@@ -1352,25 +1408,57 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return () => { mounted = false; };
   }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter, qpTypeNorm]);
 
-  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet, isPrbl, isQp1Final), [effectiveClassType, enabledSet, isPrbl, isQp1Final]);
+  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet, isPrbl, isQp1Final, labCycleWeightsCfg), [effectiveClassType, enabledSet, isPrbl, isQp1Final, labCycleWeightsCfg]);
 
   // QP1 FINAL YEAR fixed weights: CO1(2+4+3)=9, CO2(1+2+2+1+2+2)=10, CO3(2+4+3)=9, ME(4+4+4)=12.  Total=40.
   const QP1FINAL_WEIGHTS = [2, 4, 3, 1, 2, 2, 1, 2, 2, 2, 4, 3, 4, 4, 4];
 
   const effMapping = useMemo(() => {
+    const ct = effectiveClassType;
+
+    // LAB / PRACTICAL: use structured cycle weights
+    if (ct === 'LAB' || ct === 'PRACTICAL') {
+      const cfg = labCycleWeightsCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
+      const weights = labCycleSchemaWeights(cfg);
+      return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+    }
+
+    // PROJECT: use structured project weights
+    if (ct === 'PROJECT') {
+      if (isProjectPrblWeights(projectWeightsCfg)) {
+        const p = projectWeightsCfg;
+        const weights = [p.ssa1.weight, p.review1.weight, p.ssa2.weight, p.review2.weight, p.model.weight];
+        return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+      }
+      if (isProjectWeights(projectWeightsCfg)) {
+        const p = projectWeightsCfg;
+        const weights = [p.review1.weight, p.review2.weight];
+        return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+      }
+      // Fallback to hardcoded
+      const weights = isPrbl ? [3, 12, 3, 12, 30] : [50, 50];
+      return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+    }
+
+    // SPECIAL: use structured per-exam weights
+    if (ct === 'SPECIAL') {
+      const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
+      const wMap = cfg.weights;
+      const weights = schema.header.map((h) => Number(wMap[h]) || 0);
+      return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+    }
+
     // TCPL uses 21 weight slots; all other class types use 17.
-    const isTcplScheme = effectiveClassType === 'TCPL';
+    const isTcplScheme = ct === 'TCPL';
     const maxSlot = isTcplScheme ? 21 : DEFAULT_INTERNAL_MAPPING.weights.length;
     const weightsArr = Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights;
     const weightsAll = weightsArr.slice(0, maxSlot);
     while (weightsAll.length < maxSlot) weightsAll.push(0);
     const weights = isQp1Final
       ? QP1FINAL_WEIGHTS
-      : effectiveClassType === 'PROJECT'
-        ? (isPrbl ? [3, 12, 3, 12, 30] : [50, 50])
-        : schema.visible.map((i) => weightsAll[i] ?? 0);
+      : schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final]);
+  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -1703,6 +1791,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const isTcplCourse = ct === 'TCPL';
     const projectReviewMax = ct === 'PROJECT' && !isPrbl ? 50 : 15;
 
+    // Resolve project weight config for dynamic PROJECT computation
+    const projCfg = isProjectWeights(projectWeightsCfg) ? projectWeightsCfg : null;
+    const prblCfg = isProjectPrblWeights(projectWeightsCfg) ? projectWeightsCfg : null;
+
     const maxes = {
       ssa1: {
         co1: Number.isFinite(ssa1Co1) ? Math.max(0, ssa1Co1) : 10,
@@ -1917,138 +2009,200 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       return clamp((mark / max) * outOf, 0, outOf);
     };
 
-    // LAB/PRACTICAL: compute from lab-style sheets only
+    // LAB/PRACTICAL: compute from lab-style cycle-based sheets
     if (ct === 'LAB' || ct === 'PRACTICAL') {
-      const HALF = 30 / 2;
-      const readCoPair = (snapshot: any | null, coA: number, coB: number | null) => {
+      const labCfg = labCycleWeightsCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
+      const c1CoKeys = labCycleCoKeys(labCfg.cycle1);
+      const c2CoKeys = labCycleCoKeys(labCfg.cycle2);
+      const CIA_EXAM_MAX = 30; // standard CIA exam maximum
+
+      /**
+       * Read a single cycle from a published lab sheet snapshot.
+       * Returns a `get(studentId)` function that gives per-CO scaled marks.
+       */
+      const readLabCycle = (
+        snapshot: any | null,
+        cycleConfig: Record<string, LabCycleCoWeight>,
+      ) => {
         const sheet = snapshot?.sheet && typeof snapshot.sheet === 'object' ? snapshot.sheet : {};
         const rowsByStudentId = sheet?.rowsByStudentId && typeof sheet.rowsByStudentId === 'object' ? sheet.rowsByStudentId : {};
         const cfgs = sheet?.coConfigs && typeof sheet.coConfigs === 'object' ? (sheet.coConfigs as any) : null;
-        const cfgA = cfgs ? cfgs[String(coA)] : null;
-        const cfgB = coB != null && cfgs ? cfgs[String(coB)] : null;
-        const legacyExpCountA = clamp(Number(sheet?.expCountA ?? 0), 0, 12);
-        const legacyExpCountB = clamp(Number(sheet?.expCountB ?? 0), 0, 12);
-        const legacyCoAEnabled = Boolean(sheet?.coAEnabled !== false);
-        const legacyCoBEnabled = coB != null ? Boolean(sheet?.coBEnabled !== false) : false;
-
-        const coAEnabled = cfgA ? Boolean(cfgA.enabled) : legacyCoAEnabled;
-        const coBEnabled = coB != null ? (cfgB ? Boolean(cfgB.enabled) : legacyCoBEnabled) : false;
-
-        const expCountA = cfgA ? clamp(Number(cfgA.expCount ?? 0), 0, 12) : legacyExpCountA;
-        const expCountB = coB != null ? (cfgB ? clamp(Number(cfgB.expCount ?? 0), 0, 12) : legacyExpCountB) : 0;
-
-        const expMaxA = cfgA && Number.isFinite(Number(cfgA.expMax)) ? Number(cfgA.expMax)
-          : Number.isFinite(Number(sheet?.expMaxA)) ? Number(sheet.expMaxA) : 25;
-        const expMaxB = coB != null
-          ? (cfgB && Number.isFinite(Number(cfgB.expMax)) ? Number(cfgB.expMax)
-            : Number.isFinite(Number((sheet as any)?.expMaxB)) ? Number((sheet as any).expMaxB) : 25)
-          : 0;
-
         const ciaEnabled = Boolean((sheet as any)?.ciaExamEnabled !== false);
-        const CO_MAX_A = expMaxA + (ciaEnabled ? HALF : 0);
-        const CO_MAX_B = coB != null ? expMaxB + (ciaEnabled ? HALF : 0) : 0;
+        const ciaMax = Number((sheet as any)?.ciaExamMax) || CIA_EXAM_MAX;
 
-        const normalizeMarksArray = (raw: any) => {
-          if (!Array.isArray(raw)) return [] as Array<number | null>;
-          return raw.map((x) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
+        const coKeys = Object.keys(cycleConfig).sort((a, b) => Number(a) - Number(b));
+
+        // Build per-CO sheet config
+        const coInfoList = coKeys.map((coKey) => {
+          const coNum = Number(coKey);
+          const cfg = cfgs ? cfgs[String(coNum)] : null;
+          // Legacy fields for the first 2 COs (coA/coB pattern)
+          const legacyIdx = coKeys.indexOf(coKey);
+          const legacySuffix = legacyIdx === 0 ? 'A' : legacyIdx === 1 ? 'B' : null;
+          const enabled = cfg ? Boolean(cfg.enabled) : (legacySuffix ? Boolean((sheet as any)?.[`co${legacySuffix}Enabled`] !== false) : true);
+          const expCount = cfg ? clamp(Number(cfg.expCount ?? 0), 0, 12) : (legacySuffix ? clamp(Number((sheet as any)?.[`expCount${legacySuffix}`] ?? 0), 0, 12) : 0);
+          const expMax = cfg && Number.isFinite(Number(cfg.expMax)) ? Number(cfg.expMax)
+            : (legacySuffix && Number.isFinite(Number((sheet as any)?.[`expMax${legacySuffix}`])) ? Number((sheet as any)[`expMax${legacySuffix}`]) : 25);
+          const wCfg = cycleConfig[coKey] || { exp: 0, cia: 0 };
+          return { coKey, coNum, enabled, expCount, expMax, expWeight: wCfg.exp, ciaWeight: wCfg.cia, legacySuffix };
+        });
+
+        const normalizeMarksArray = (raw: any): Array<number | null> => {
+          if (!Array.isArray(raw)) return [];
+          return raw.map((x: any) => (typeof x === 'number' && Number.isFinite(x) ? x : null));
         };
-        const avgMarks = (arr: Array<number | null>) => {
-          const nums = (arr || []).filter((x) => typeof x === 'number' && Number.isFinite(x)) as number[];
+        const avgMarks = (arr: Array<number | null>): number | null => {
+          const nums = arr.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
           if (!nums.length) return null;
           return nums.reduce((s, n) => s + n, 0) / nums.length;
         };
 
-        const get = (sid: number) => {
+        const get = (sid: number): Record<string, number | null> => {
           const row = rowsByStudentId[String(sid)] || {};
           const marksByCo = (row as any)?.marksByCo && typeof (row as any).marksByCo === 'object' ? (row as any).marksByCo : {};
-          const rawA = marksByCo?.[String(coA)] ?? (row as any)?.marksA;
-          const rawB = coB != null ? (marksByCo?.[String(coB)] ?? (row as any)?.marksB) : [];
-
-          const marksA = normalizeMarksArray(rawA).slice(0, coAEnabled ? expCountA : 0);
-          const marksB = normalizeMarksArray(rawB).slice(0, coBEnabled ? expCountB : 0);
-          const avgA = avgMarks(marksA);
-          const avgB = avgMarks(marksB);
           const ciaExamRaw = (row as any)?.ciaExam;
           const ciaExamNum = typeof ciaExamRaw === 'number' && Number.isFinite(ciaExamRaw) ? ciaExamRaw : null;
-          const pairEnabled = coB != null && coBEnabled;
-          const ciaDivisor = ciaEnabled ? (pairEnabled ? 2 : 1) : 1;
-          const ciaShare = ciaEnabled ? (ciaExamNum ?? 0) / ciaDivisor : 0;
-          const ciaShareMax = ciaEnabled ? 30 / ciaDivisor : 0;
-          const expTotalA = Math.max(0, expMaxA);
-          const expTotalB = Math.max(0, expMaxB);
-          const totalA = expTotalA + (coAEnabled ? ciaShareMax : 0);
-          const totalB = expTotalB + (pairEnabled ? ciaShareMax : 0);
-          const hasAny = avgA != null || avgB != null || ciaExamNum != null;
 
-          const a = !hasAny || !coAEnabled ? null : (avgA ?? 0) + ciaShare;
-          const b = !hasAny || !pairEnabled ? null : (avgB ?? 0) + ciaShare;
+          const result: Record<string, number | null> = {};
+          let hasAny = false;
 
-          return {
-            a: a == null ? null : clamp(a, 0, totalA),
-            b: b == null ? null : clamp(b, 0, totalB),
-          };
+          for (const ci of coInfoList) {
+            if (!ci.enabled) { result[ci.coKey] = null; continue; }
+
+            // Get experiment marks — prefer marksByCo, fall back to legacy marksA/marksB
+            const rawMarks = marksByCo?.[String(ci.coNum)]
+              ?? (ci.legacySuffix === 'A' ? (row as any)?.marksA : null)
+              ?? (ci.legacySuffix === 'B' ? (row as any)?.marksB : null)
+              ?? [];
+            const marks = normalizeMarksArray(rawMarks).slice(0, ci.expCount);
+            const avg = avgMarks(marks);
+
+            // Experiment: scale avg to configured exp weight
+            const expScaled = avg != null && ci.expMax > 0
+              ? (avg / ci.expMax) * ci.expWeight
+              : (avg != null ? 0 : 0);
+
+            // CIA exam: proportional share based on configured CIA weight
+            const ciaScaled = ciaEnabled && ciaExamNum != null && ciaMax > 0
+              ? (ciaExamNum / ciaMax) * ci.ciaWeight
+              : 0;
+
+            if (avg != null || ciaExamNum != null) hasAny = true;
+            const coTotal = expScaled + ciaScaled;
+            result[ci.coKey] = hasAny ? clamp(coTotal, 0, ci.expWeight + ci.ciaWeight) : null;
+          }
+
+          // If no marks at all for this student, set all to null
+          if (!hasAny) {
+            for (const k of coKeys) result[k] = null;
+          }
+
+          return result;
         };
 
-        return { get, CO_MAX_A: 2, CO_MAX_B: 2 };
+        return { coKeys, get };
       };
 
-      const c1 = readCoPair(publishedLab.cia1, 1, 2);
-      const c2 = readCoPair(publishedLab.cia2, 3, 4);
-      const m5 = readCoPair(publishedLab.model, 5, null);
-
-      const scale = (mark: number | null, max: number, outOf: number) => {
-        if (mark == null) return null;
-        if (!max || !Number.isFinite(max)) return null;
-        return clamp((mark / max) * outOf, 0, outOf);
-      };
+      const cycle1Reader = readLabCycle(publishedLab.cia1, labCfg.cycle1);
+      const cycle2Reader = readLabCycle(publishedLab.cia2, labCfg.cycle2);
 
       return students.map((s, idx) => {
-        const r1 = c1.get(s.id);
-        const r2 = c2.get(s.id);
-        const r5 = m5.get(s.id);
+        const c1Marks = cycle1Reader.get(s.id);
+        const c2Marks = cycle2Reader.get(s.id);
 
-        const co1Ssa = null;
-        const co1Cia = scale(r1.a, c1.CO_MAX_A, wCo1Cia);
-        const co1Fa = null;
-        const co2Ssa = null;
-        const co2Cia = scale(r1.b, c1.CO_MAX_B, wCo2Cia);
-        const co2Fa = null;
-
-        const co3Ssa = null;
-        const co3Cia = scale(r2.a, c2.CO_MAX_A, wCo3Cia);
-        const co3Fa = null;
-        const co4Ssa = null;
-        const co4Cia = scale(r2.b, c2.CO_MAX_B, wCo4Cia);
-        const co4Fa = null;
-
-        const model = getModelCoMarks(s);
-        const meCo1 = scale(model.co1, model.max.co1, wMeCo1);
-        const meCo2 = scale(model.co2, model.max.co2, wMeCo2);
-        const meCo3 = scale(model.co3, model.max.co3, wMeCo3);
-        const meCo4 = scale(model.co4, model.max.co4, wMeCo4);
-        const meCo5 = scale(model.co5, model.max.co5, wMeCo5);
-
-        const partsFull = [
-          co1Ssa,
-          co1Cia,
-          co1Fa,
-          co2Ssa,
-          co2Cia,
-          co2Fa,
-          co3Ssa,
-          co3Cia,
-          co3Fa,
-          co4Ssa,
-          co4Cia,
-          co4Fa,
-          meCo1,
-          meCo2,
-          meCo3,
-          meCo4,
-          meCo5,
+        // Build parts in schema column order: [cycle1 COs..., cycle2 COs...]
+        const parts: Array<number | null> = [
+          ...c1CoKeys.map((k) => {
+            const v = c1Marks[k];
+            return v != null ? round2(v) : null;
+          }),
+          ...c2CoKeys.map((k) => {
+            const v = c2Marks[k];
+            return v != null ? round2(v) : null;
+          }),
         ];
 
-        const parts = effMapping.visible.map((i) => partsFull[i]);
+        const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
+        const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+        const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
+
+        return {
+          sno: idx + 1,
+          ...s,
+          cells: parts,
+          total,
+          pct,
+        };
+      });
+    }
+
+    // ── SPECIAL: exam-level columns (SSA1, SSA2, CIA1, CIA2, MODEL) ────
+    if (ct === 'SPECIAL') {
+      const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
+      const wMap = cfg.weights;
+      // Derive max marks for each exam from QP patterns or defaults
+      const ssaMaxFromPattern = (pattern: IqacPattern | null) => {
+        if (pattern?.marks?.length) return pattern.marks.reduce((s, m) => s + Number(m || 0), 0);
+        return 10;
+      };
+      const ciaMaxFromQuestions = (qs: Array<{ max: number }>) => {
+        return qs.reduce((s, q) => s + (q.max || 0), 0) || 60;
+      };
+      const ssa1Max = ssaMaxFromPattern(iqacCiaPattern?.cia1 ? null : null) || 10;
+      const ssa2Max = ssa1Max;
+      const cia1Max = ciaMaxFromQuestions(cia1Questions);
+      const cia2Max = ciaMaxFromQuestions(cia2Questions);
+      // MODEL max from published model pattern
+      const modelMax = iqacModelPattern?.marks?.length
+        ? iqacModelPattern.marks.reduce((s, m) => s + Number(m || 0), 0)
+        : 60;
+
+      return students.map((s, idx) => {
+        const sid = String(s.id);
+        const ssa1Total = toNumOrNull(published.ssa1[sid]);
+        const ssa2Total = toNumOrNull(published.ssa2[sid]);
+
+        // CIA totals: sum of per-question marks from the published sheet
+        const getCiaTotal = (byId: Record<string, any>) => {
+          const row = byId[sid] || {};
+          if (Boolean((row as any)?.absent)) return null;
+          const q = (row as any)?.q && typeof (row as any).q === 'object' ? (row as any).q : {};
+          let sum = 0;
+          let hasAny = false;
+          for (const val of Object.values(q)) {
+            const n = toNumOrNull(val);
+            if (n != null) { sum += n; hasAny = true; }
+          }
+          return hasAny ? sum : null;
+        };
+        const cia1Total = getCiaTotal(cia1ById);
+        const cia2Total = getCiaTotal(cia2ById);
+
+        // MODEL total: sum of all CO marks
+        const model = getModelCoMarks(s);
+        let modelTotal: number | null = null;
+        const mKeys = ['co1', 'co2', 'co3', 'co4', 'co5'] as const;
+        let mHas = false;
+        let mSum = 0;
+        for (const k of mKeys) {
+          const v = toNumOrNull((model as any)[k]);
+          if (v != null) { mSum += v; mHas = true; }
+        }
+        if (mHas) modelTotal = mSum;
+
+        // Build parts array matching schema column order (SSA1, SSA2, CIA1, CIA2, MODEL)
+        const examMap: Record<string, number | null> = {
+          SSA1: ssa1Total != null ? scale(ssa1Total, ssa1Max, Number(wMap.SSA1 || 0)) : null,
+          SSA2: ssa2Total != null ? scale(ssa2Total, ssa2Max, Number(wMap.SSA2 || 0)) : null,
+          CIA1: cia1Total != null ? scale(cia1Total, cia1Max, Number(wMap.CIA1 || 0)) : null,
+          CIA2: cia2Total != null ? scale(cia2Total, cia2Max, Number(wMap.CIA2 || 0)) : null,
+          MODEL: modelTotal != null ? scale(modelTotal, modelMax, Number(wMap.MODEL || 0)) : null,
+        };
+        const parts = schema.header.map((h) => {
+          const v = examMap[h];
+          return v != null ? round2(v) : null;
+        });
+
         const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
         const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
         const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
@@ -2302,13 +2456,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       };
 
       const review1Co1 = ct === 'PROJECT'
-        ? (isPrbl ? scale(review1Total, 50, 3) : (review1Total == null ? null : clamp(review1Total, 0, 50)))
+        ? (isPrbl ? scale(review1Total, prblCfg?.review1.max ?? 50, prblCfg?.review1.weight ?? 12) : (review1Total == null ? null : clamp(review1Total, 0, projCfg?.review1.max ?? 50)))
         : getR1Co1();
       const review1Co2 = ct === 'PROJECT'
         ? null
         : getR1Co2();
       const review2Co3 = ct === 'PROJECT'
-        ? (isPrbl ? scale(review2Total, 50, 3) : (review2Total == null ? null : clamp(review2Total, 0, 50)))
+        ? (isPrbl ? scale(review2Total, prblCfg?.review2.max ?? 50, prblCfg?.review2.weight ?? 12) : (review2Total == null ? null : clamp(review2Total, 0, projCfg?.review2.max ?? 50)))
         : getR2Co3();
       const review2Co4 = ct === 'PROJECT'
         ? null
@@ -2454,16 +2608,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
 
       // CO1/CO2 split into SSA/CIA/FA columns.
-      const co1Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa1Total, 20, 3) : null) : scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
+      const co1Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa1Total, prblCfg?.ssa1.max ?? 20, prblCfg?.ssa1.weight ?? 3) : null) : scale(ssa1Co1Mark, maxes.ssa1.co1, wCo1Ssa);
       const co1Cia = ct === 'PROJECT' ? null : scale(ciaCo1, maxes.cia1.co1, wCo1Cia);
       const co1Fa = (ct === 'TCPR' || ct === 'PROJECT')
-        ? (isPrbl ? scale(review1Total, 50, 12) : scale(review1Co1, maxes.review1.co1, wCo1Fa))
+        ? (isPrbl ? scale(review1Total, prblCfg?.review1.max ?? 50, prblCfg?.review1.weight ?? 12) : scale(review1Co1, maxes.review1.co1, wCo1Fa))
         : ct === 'TCPL'
           ? scale(tcplLab1Co1, tcplLab1?.CO_MAX_A ?? 2, wCo1Fa)
           : scale(f1Co1, maxes.f1.co1, wCo1Fa);
       // TCPL CIA Exam: raw mark out of 30, one per lab sheet (CO1&CO2 share lab1, CO3&CO4 share lab2).
       const co1CiaExam = ct === 'TCPL' ? scale(tcplCiaExam1, 30, wCo1CiaExam) : null;
-      const co2Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa2Total, 20, 3) : null) : scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
+      const co2Ssa = ct === 'PROJECT' ? (isPrbl ? scale(ssa2Total, prblCfg?.ssa2.max ?? 20, prblCfg?.ssa2.weight ?? 3) : null) : scale(ssa1Co2Mark, maxes.ssa1.co2, wCo2Ssa);
       const co2Cia = ct === 'PROJECT' ? null : scale(ciaCo2, maxes.cia1.co2, wCo2Cia);
       const co2Fa = (ct === 'TCPR' || ct === 'PROJECT')
         ? scale(review1Co2, maxes.review1.co2, wCo2Fa)
@@ -2475,7 +2629,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const co3Ssa = ct === 'PROJECT' ? null : scale(ssa2Co3Mark, maxes.ssa2.co3, wCo3Ssa);
       const co3Cia = ct === 'PROJECT' ? null : scale(ciaCo3, maxes.cia2.co3, wCo3Cia);
       const co3Fa = (ct === 'TCPR' || ct === 'PROJECT')
-        ? (isPrbl ? scale(review2Total, 50, 12) : scale(review2Co3, maxes.review2.co3, wCo3Fa))
+        ? (isPrbl ? scale(review2Total, prblCfg?.review2.max ?? 50, prblCfg?.review2.weight ?? 12) : scale(review2Co3, maxes.review2.co3, wCo3Fa))
         : ct === 'TCPL'
           ? scale(tcplLab2Co3, tcplLab2?.CO_MAX_A ?? 2, wCo3Fa)
           : scale(f2Co3, maxes.f2.co3, wCo3Fa);
@@ -2495,7 +2649,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const meCo2 = ct === 'PROJECT' ? null : scale(model.co2, model.max.co2, wMeCo2);
       const meCo3 = ct === 'PROJECT' ? null : scale(model.co3, model.max.co3, wMeCo3);
       const meCo4 = ct === 'PROJECT' ? null : scale(model.co4, model.max.co4, wMeCo4);
-      const meCo5 = ct === 'PROJECT' ? (isPrbl ? scale(prblModelTotal, 50, 30) : null) : scale(model.co5, model.max.co5, wMeCo5);
+      const meCo5 = ct === 'PROJECT' ? (isPrbl ? scale(prblModelTotal, prblCfg?.model.max ?? 50, prblCfg?.model.weight ?? 30) : null) : scale(model.co5, model.max.co5, wMeCo5);
 
       // TCPL uses 21-slot partsFull (SSA/CIA/LAB/CIAExam per CO + ME×5).
       // All other class types use the standard 17-slot layout.
@@ -2537,7 +2691,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         pct,
       };
     });
-  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, scaledMax, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits]);
+  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, scaledMax, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg]);
 
   const header = displayCols.map((c) => c.header);
   const cycles = displayCols.map((c) => c.cycle);

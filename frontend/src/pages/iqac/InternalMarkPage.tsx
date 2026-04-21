@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { normalizeClassType } from '../../constants/classTypes';
+import { normalizeClassType, normalizeObeClassType } from '../../constants/classTypes';
 import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
-import { fetchInternalMarkMapping, upsertInternalMarkMapping } from '../../services/obe';
+import { fetchClassTypeWeights, fetchInternalMarkMapping, upsertClassTypeWeights, upsertInternalMarkMapping } from '../../services/obe';
 import fetchWithAuth from '../../services/fetchAuth';
 
 type CqiPublishedData = {
@@ -21,6 +21,12 @@ export default function InternalMarkPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [mapping, setMapping] = useState<Record<string, any> | null>(null);
   const [classType, setClassType] = useState<string | null>(null);
+
+  // SPECIAL exam-level weights state
+  const SPECIAL_EXAMS = ['SSA1', 'SSA2', 'CIA1', 'CIA2', 'MODEL'] as const;
+  const DEFAULT_SPECIAL_WEIGHTS: Record<string, number> = { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
+  const [specialWeights, setSpecialWeights] = useState<Record<string, number>>({ ...DEFAULT_SPECIAL_WEIGHTS });
+  const [specialLoaded, setSpecialLoaded] = useState(false);
 
   // Slider tab state
   const [activeTab, setActiveTab] = useState<'actual' | 'after-cqi'>('actual');
@@ -119,6 +125,32 @@ export default function InternalMarkPage(): JSX.Element {
     };
   }, [subjectId]);
 
+  // Fetch SPECIAL exam weights from ClassTypeWeights when class_type is SPECIAL
+  const isSpecial = normalizeObeClassType(classType) === 'SPECIAL';
+  useEffect(() => {
+    if (!isSpecial) return;
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const all = await fetchClassTypeWeights();
+        if (!mounted) return;
+        const sp = all?.SPECIAL;
+        const im = sp?.internal_mark_weights;
+        if (im && typeof im === 'object' && (im as any).type === 'special_exam_weights' && (im as any).weights) {
+          const w = (im as any).weights as Record<string, number>;
+          setSpecialWeights({ ...DEFAULT_SPECIAL_WEIGHTS, ...w });
+        }
+        setSpecialLoaded(true);
+      } catch {
+        if (mounted) setSpecialLoaded(true);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [isSpecial]);
+
   const ensureDefault = () => {
     if (mapping) return normalizeMapping(mapping);
     setMapping(DEFAULTS);
@@ -193,11 +225,21 @@ export default function InternalMarkPage(): JSX.Element {
     setSaving(true);
     setError(null);
     try {
-      const payload = normalizeMapping(mapping ?? ensureDefault());
-      await upsertInternalMarkMapping(subjectId, payload);
-      // notify other parts of app
-      try { window.dispatchEvent(new CustomEvent('internal-mark:updated', { detail: { subjectId } })); } catch {}
-      navigate(-1);
+      if (isSpecial) {
+        // Save SPECIAL exam weights to ClassTypeWeights
+        await upsertClassTypeWeights({
+          SPECIAL: {
+            internal_mark_weights: { type: 'special_exam_weights', weights: { ...specialWeights } },
+          },
+        });
+        try { window.dispatchEvent(new CustomEvent('internal-mark:updated', { detail: { subjectId } })); } catch {}
+        navigate(-1);
+      } else {
+        const payload = normalizeMapping(mapping ?? ensureDefault());
+        await upsertInternalMarkMapping(subjectId, payload);
+        try { window.dispatchEvent(new CustomEvent('internal-mark:updated', { detail: { subjectId } })); } catch {}
+        navigate(-1);
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -206,6 +248,75 @@ export default function InternalMarkPage(): JSX.Element {
   };
 
   if (loading) return <div style={{ padding: 18 }}>Loading…</div>;
+
+  // ── SPECIAL: exam-level weights (SSA1, SSA2, CIA1, CIA2, MODEL) ──────
+  if (isSpecial) {
+    const spTotal = SPECIAL_EXAMS.reduce((s, k) => s + (Number(specialWeights[k]) || 0), 0);
+    return (
+      <main style={{ padding: 18 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h2 style={{ margin: 0 }}>Internal Mark Weights — {subjectId} (Special)</h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="obe-btn" onClick={() => navigate(-1)}>Back</button>
+            <button className="obe-btn obe-btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>
+          Special courses use exam-level weights. Each exam is scaled to its configured weight.
+          Total must equal 40.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {SPECIAL_EXAMS.map((e) => (
+                  <th key={e} style={{ border: '1px solid #d1d5db', padding: '10px 18px', background: '#f3f4f6', fontWeight: 700, fontSize: 14 }}>{e}</th>
+                ))}
+                <th style={{ border: '1px solid #d1d5db', padding: '10px 18px', background: '#e0e7ff', fontWeight: 700, fontSize: 14, color: '#1d4ed8' }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                {SPECIAL_EXAMS.map((e) => (
+                  <td key={e} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={specialWeights[e] ?? 0}
+                      onChange={(ev) => {
+                        const n = ev.target.value === '' ? 0 : Number(ev.target.value);
+                        setSpecialWeights((prev) => ({ ...prev, [e]: Number.isFinite(n) ? n : 0 }));
+                      }}
+                      style={{ width: 80, padding: 8, fontSize: 14, textAlign: 'center' }}
+                    />
+                  </td>
+                ))}
+                <td style={{
+                  border: '1px solid #e5e7eb',
+                  padding: '10px 18px',
+                  background: spTotal === 40 ? '#dcfce7' : '#fef9c3',
+                  textAlign: 'center',
+                  fontWeight: 700,
+                  fontSize: 16,
+                  color: spTotal === 40 ? '#166534' : '#854d0e',
+                }}>
+                  {spTotal}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {spTotal !== 40 && (
+          <div style={{ marginTop: 10, color: '#854d0e', fontSize: 13, background: '#fef9c3', padding: '8px 14px', borderRadius: 6, border: '1px solid #fde047', display: 'inline-block' }}>
+            Total is {spTotal}. Expected: 40.
+          </div>
+        )}
+        {error ? <div style={{ color: 'red', marginTop: 12 }}>{error}</div> : null}
+      </main>
+    );
+  }
 
   const m = normalizeMapping(mapping ?? ensureDefault());
   const headers: string[] = m.header;

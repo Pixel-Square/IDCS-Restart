@@ -763,6 +763,7 @@ class StaffProfile(models.Model):
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
     date_of_join = models.DateField(null=True, blank=True, help_text='Date of joining')
+    personal_email = models.EmailField(max_length=254, blank=True, default='')
     status = models.CharField(max_length=16, choices=STAFF_STATUS_CHOICES, default='ACTIVE')
 
     # Optional mobile number for OTP verification (kept on profile as requested)
@@ -838,10 +839,21 @@ class StaffProfile(models.Model):
                 if StaffProfile.objects.filter(staff_id=self.staff_id).exclude(pk=self.pk).exists():
                     raise ValidationError({'staff_id': 'This staff ID is already in use.'})
 
-        # run full clean to enforce validations (skip for partial updates to avoid
-        # validating unrelated fields like staff_id regex when only rfid_uid changes)
+        # run full clean to enforce validations. For existing legacy records with
+        # unchanged staff_id values, avoid re-validating staff_id format so updates
+        # to unrelated fields (designation/status/etc.) can still be saved.
         if not kwargs.get('update_fields'):
-            self.full_clean()
+            if self.pk:
+                try:
+                    old = StaffProfile.objects.get(pk=self.pk)
+                except StaffProfile.DoesNotExist:
+                    old = None
+                if old and old.staff_id == self.staff_id:
+                    self.full_clean(exclude=['staff_id'])
+                else:
+                    self.full_clean()
+            else:
+                self.full_clean()
         super().save(*args, **kwargs)
 
 

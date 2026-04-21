@@ -138,6 +138,7 @@ SPECIAL_ASSESSMENT_CHOICES = (
     ('formative2', 'Formative2'),
     ('cia1', 'CIA1'),
     ('cia2', 'CIA2'),
+    ('model', 'Model'),
 )
 
 

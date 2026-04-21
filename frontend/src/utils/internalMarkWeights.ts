@@ -138,3 +138,157 @@ export function getCycleOneWeightsFromInternal(
     formative1: slots.fa + slots.ciaExam,
   };
 }
+
+// ─── LAB Cycle Weights (structured format) ────────────────────────────────
+
+export type LabCycleCoWeight = { exp: number; cia: number };
+
+export type LabCycleWeights = {
+  type: 'lab_cycles';
+  cycle1: Record<string, LabCycleCoWeight>;
+  cycle2: Record<string, LabCycleCoWeight>;
+};
+
+export const DEFAULT_LAB_CYCLE_WEIGHTS: LabCycleWeights = {
+  type: 'lab_cycles',
+  cycle1: {
+    '1': { exp: 9, cia: 3 },
+    '2': { exp: 9, cia: 3 },
+    '3': { exp: 4.5, cia: 1.5 },
+  },
+  cycle2: {
+    '3': { exp: 4.5, cia: 1.5 },
+    '4': { exp: 9, cia: 3 },
+    '5': { exp: 9, cia: 3 },
+  },
+};
+
+export function isLabCycleWeights(w: any): w is LabCycleWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'lab_cycles';
+}
+
+export function getLabCycleWeightConfig(raw: any): LabCycleWeights {
+  if (isLabCycleWeights(raw)) {
+    return {
+      type: 'lab_cycles',
+      cycle1: { ...raw.cycle1 },
+      cycle2: { ...raw.cycle2 },
+    };
+  }
+  return JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS));
+}
+
+/** Total weight across both cycles (default: 60). */
+export function labCycleTotalWeight(cfg: LabCycleWeights): number {
+  let total = 0;
+  for (const w of Object.values(cfg.cycle1 || {})) total += (w.exp || 0) + (w.cia || 0);
+  for (const w of Object.values(cfg.cycle2 || {})) total += (w.exp || 0) + (w.cia || 0);
+  return Math.round(total * 100) / 100;
+}
+
+/** Per-CO total weight across both cycles. */
+export function labCoTotalWeight(cfg: LabCycleWeights, coNum: number): number {
+  const k = String(coNum);
+  let total = 0;
+  const c1 = cfg.cycle1?.[k];
+  if (c1) total += (c1.exp || 0) + (c1.cia || 0);
+  const c2 = cfg.cycle2?.[k];
+  if (c2) total += (c2.exp || 0) + (c2.cia || 0);
+  return Math.round(total * 100) / 100;
+}
+
+/** Ordered CO keys for a single cycle. */
+export function labCycleCoKeys(cycle: Record<string, LabCycleCoWeight> | undefined): string[] {
+  if (!cycle || typeof cycle !== 'object') return [];
+  return Object.keys(cycle).sort((a, b) => Number(a) - Number(b));
+}
+
+/**
+ * Build flat weights array matching the schema column order for display.
+ * Order: [cycle1 COs sorted...] [cycle2 COs sorted...]
+ */
+export function labCycleSchemaWeights(cfg: LabCycleWeights): number[] {
+  const c1Keys = labCycleCoKeys(cfg.cycle1);
+  const c2Keys = labCycleCoKeys(cfg.cycle2);
+  return [
+    ...c1Keys.map((k) => {
+      const w = cfg.cycle1[k];
+      return Math.round(((w?.exp || 0) + (w?.cia || 0)) * 100) / 100;
+    }),
+    ...c2Keys.map((k) => {
+      const w = cfg.cycle2[k];
+      return Math.round(((w?.exp || 0) + (w?.cia || 0)) * 100) / 100;
+    }),
+  ];
+}
+
+// ─── PROJECT Weights (structured format) ──────────────────────────────────
+
+export type ProjectWeights = {
+  type: 'project_reviews';
+  review1: { weight: number; max: number };
+  review2: { weight: number; max: number };
+};
+
+export type ProjectPrblWeights = {
+  type: 'project_prbl';
+  ssa1: { weight: number; max: number };
+  review1: { weight: number; max: number };
+  ssa2: { weight: number; max: number };
+  review2: { weight: number; max: number };
+  model: { weight: number; max: number };
+};
+
+export const DEFAULT_PROJECT_WEIGHTS: ProjectWeights = {
+  type: 'project_reviews',
+  review1: { weight: 50, max: 50 },
+  review2: { weight: 50, max: 50 },
+};
+
+export const DEFAULT_PROJECT_PRBL_WEIGHTS: ProjectPrblWeights = {
+  type: 'project_prbl',
+  ssa1: { weight: 3, max: 20 },
+  review1: { weight: 12, max: 50 },
+  ssa2: { weight: 3, max: 20 },
+  review2: { weight: 12, max: 50 },
+  model: { weight: 30, max: 100 },
+};
+
+export function isProjectWeights(w: any): w is ProjectWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'project_reviews';
+}
+
+export function isProjectPrblWeights(w: any): w is ProjectPrblWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'project_prbl';
+}
+
+export function getProjectWeightConfig(raw: any): ProjectWeights {
+  if (isProjectWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_PROJECT_WEIGHTS));
+}
+
+export function getProjectPrblWeightConfig(raw: any): ProjectPrblWeights {
+  if (isProjectPrblWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_PROJECT_PRBL_WEIGHTS));
+}
+
+// ─── SPECIAL Exam Weights (structured format) ────────────────────────────
+
+export type SpecialExamWeights = {
+  type: 'special_exam_weights';
+  weights: Record<string, number>;
+};
+
+export const DEFAULT_SPECIAL_EXAM_WEIGHTS: SpecialExamWeights = {
+  type: 'special_exam_weights',
+  weights: { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 },
+};
+
+export function isSpecialExamWeights(w: any): w is SpecialExamWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'special_exam_weights';
+}
+
+export function getSpecialExamWeightConfig(raw: any): SpecialExamWeights {
+  if (isSpecialExamWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_SPECIAL_EXAM_WEIGHTS));
+}

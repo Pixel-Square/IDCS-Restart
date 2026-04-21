@@ -229,7 +229,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
 
           {activeTab !== 'lca_instructions' ? (
             <fieldset disabled={true} style={{ border: 0, padding: 0, margin: 0 }}>
-              {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} enabledAssessments={enabledAssessments} />}
+              {activeTab === 'co_attainment' && <COAttainmentPage courseId={code} enabledAssessments={enabledAssessments} classType={classType} />}
               {activeTab === 'cqi' && <CQIPage courseId={code} />}
             </fieldset>
           ) : null}

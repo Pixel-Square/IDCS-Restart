@@ -286,6 +286,9 @@ export default function SpecialExamConfigurator({ teachingAssignmentId, exam, cl
                               {CO_OPTIONS.map((o) => (
                                 <option key={String(o.value)} value={String(o.value)}>{o.label}</option>
                               ))}
+                              {classType === 'THEORY' && questionPaperType === 'QP2' && (
+                                <option value="1&2&3&4&5">All (1-5)</option>
+                              )}
                             </select>
                           </td>
                           <td style={{ padding: '6px', textAlign: 'center' }}>

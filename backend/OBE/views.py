@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 import logging
 import re
 
@@ -35,7 +36,7 @@ def mark_entry_tabs(request, subject_id):
     if not students.exists():
         students = StudentProfile.objects.select_related('user', 'section').all().order_by('user__last_name', 'user__first_name', 'user__username')
 
-    from .models import Cia1Mark
+    from .models import Cia1Mark, ProjectMark
 
     ta_id = _parse_int(request.GET.get('teaching_assignment_id') or request.POST.get('teaching_assignment_id'))
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
@@ -43,15 +44,18 @@ def mark_entry_tabs(request, subject_id):
 
     errors: list[str] = []
 
-    if request.method == 'POST' and tab == 'cia1':
+    if request.method == 'POST' and tab in {'cia1', 'project'}:
+        is_project_tab = tab == 'project'
+        mark_model = ProjectMark if is_project_tab else Cia1Mark
+        input_prefix = 'project_mark_' if is_project_tab else 'mark_'
         with transaction.atomic():
             for s in students:
-                key = f'mark_{s.id}'
+                key = f'{input_prefix}{s.id}'
                 raw = (request.POST.get(key) or '').strip()
 
                 if raw == '':
                     # Blank => clear stored mark
-                    _delete_scoped_mark(Cia1Mark, subject=subject, student=s, teaching_assignment=ta)
+                    _delete_scoped_mark(mark_model, subject=subject, student=s, teaching_assignment=ta)
                     continue
 
                 try:
@@ -61,7 +65,7 @@ def mark_entry_tabs(request, subject_id):
                     continue
 
                 _upsert_scoped_mark(
-                    Cia1Mark,
+                    mark_model,
                     subject=subject,
                     student=s,
                     teaching_assignment=ta,
@@ -69,7 +73,7 @@ def mark_entry_tabs(request, subject_id):
                 )
 
         if not errors:
-            return redirect(f"{request.path}?tab=cia1&saved=1")
+            return redirect(f"{request.path}?tab={tab}&saved=1")
 
     try:
         rows = _filter_marks_queryset_for_teaching_assignment(
@@ -85,12 +89,47 @@ def mark_entry_tabs(request, subject_id):
         marks = {}
     cia1_rows = [{'student': s, 'mark': marks.get(s.id)} for s in students]
 
+    try:
+        p_rows = _filter_marks_queryset_for_teaching_assignment(
+            ProjectMark.objects.filter(subject=subject, student__in=students),
+            ta,
+            strict_scope=strict_scope,
+        )
+        project_marks = {
+            m.student_id: m.mark
+            for m in p_rows
+        }
+    except OperationalError:
+        project_marks = {}
+
+    if not project_marks:
+        try:
+            _backfill_project_marks_from_lab_published(
+                subject=subject,
+                teaching_assignment=ta,
+                strict_scope=strict_scope,
+            )
+            p_rows = _filter_marks_queryset_for_teaching_assignment(
+                ProjectMark.objects.filter(subject=subject, student__in=students),
+                ta,
+                strict_scope=strict_scope,
+            )
+            project_marks = {
+                m.student_id: m.mark
+                for m in p_rows
+            }
+        except Exception:
+            pass
+
+    project_rows = [{'student': s, 'mark': project_marks.get(s.id)} for s in students]
+
     context = {
         'subject': subject,
         'students': students,
         'tab': tab,
         'saved': saved,
         'cia1_rows': cia1_rows,
+        'project_rows': project_rows,
         'errors': errors,
     }
     return render(request, 'OBE/mark_entry_tabs.html', context)
@@ -615,10 +654,53 @@ def _delete_scoped_obe_json_rows(model, *, subject, teaching_assignment=None, st
 
     if teaching_assignment is not None:
         deleted = int(qs.filter(teaching_assignment=teaching_assignment).delete()[0] or 0)
-        if deleted or strict_scope:
+        if strict_scope:
             return deleted
+        deleted += int(qs.filter(teaching_assignment__isnull=True).delete()[0] or 0)
+        return deleted
 
     return int(qs.filter(teaching_assignment__isnull=True).delete()[0] or 0)
+
+
+def _delete_marks_rows_for_reset(qs, *, ta=None, strict_scope: bool = False) -> int:
+    """Delete mark rows for reset, including legacy fallback rows when non-strict.
+
+    Reset must be deterministic: once reset succeeds, no TA/legacy fallback should
+    repopulate marks for the same subject+assessment on refresh.
+    """
+    model = getattr(qs, 'model', None)
+    has_ta_field = bool(model) and any(getattr(f, 'name', '') == 'teaching_assignment' for f in model._meta.get_fields())
+    has_ta_db_column = False
+    if has_ta_field and model is not None:
+        try:
+            has_ta_db_column = _db_table_has_column(model._meta.db_table, 'teaching_assignment_id')
+        except Exception:
+            has_ta_db_column = False
+
+    if has_ta_field and has_ta_db_column:
+        if ta is not None:
+            deleted = int(qs.filter(teaching_assignment=ta).delete()[0] or 0)
+            if strict_scope:
+                return deleted
+            deleted += int(qs.filter(teaching_assignment__isnull=True).delete()[0] or 0)
+            return deleted
+        return int(qs.filter(teaching_assignment__isnull=True).delete()[0] or 0)
+
+    if has_ta_field and not has_ta_db_column:
+        if ta is None:
+            return int(qs.delete()[0] or 0)
+        student_ids = _get_teaching_assignment_student_ids(ta)
+        if not student_ids:
+            return int(qs.delete()[0] or 0)
+        return int(qs.filter(student_id__in=student_ids).delete()[0] or 0)
+
+    if ta is None:
+        return int(qs.delete()[0] or 0)
+
+    student_ids = _get_teaching_assignment_student_ids(ta)
+    if not student_ids:
+        return int(qs.delete()[0] or 0)
+    return int(qs.filter(student_id__in=student_ids).delete()[0] or 0)
 
 
 def _get_cia_questions_for_export(*, subject, assessment_key: str, teaching_assignment=None, strict_scope: bool = False, class_type: str = '', question_paper_type: str = '') -> list[dict]:
@@ -1801,17 +1883,23 @@ _TCPL_DEFAULT_21 = [
 _THEORY_DEFAULT_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0]
 
 
-def _normalise_class_type_weights_array(class_type: str, arr) -> list:
-    """Return a properly-sized list of floats for the given class_type.
+def _normalise_class_type_weights_array(class_type: str, arr):
+    """Return a properly-sized list of floats (or a structured dict for LAB/PROJECT).
 
     * TCPL expects 21 slots – old 17-slot arrays are automatically upgraded by
       inserting a 0.0 CIA-Exam slot after every CO's LAB position.
+    * LAB/PRACTICAL/PROJECT may use a structured dict format (type: lab_cycles / project_reviews / project_prbl)
+      – these are passed through as-is.
     * All other class types expect 17 slots.
-    * If ``arr`` is None / not a list the canonical defaults are returned.
+    * If ``arr`` is None / not a list/dict the canonical defaults are returned.
     """
     ct = str(class_type or '').strip().upper()
     expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
     defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
+
+    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL – pass through as-is
+    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights'):
+        return arr
 
     if not isinstance(arr, list):
         return list(defaults)
@@ -1871,9 +1959,14 @@ def class_type_weights_list(request):
             'ssa1': float(o.ssa1) if o.ssa1 is not None else None,
             'cia1': float(o.cia1) if o.cia1 is not None else None,
             'formative1': float(o.formative1) if o.formative1 is not None else None,
-            # Always serve the canonically-sized array (upgrades legacy 17-slot TCPL rows).
-            'internal_mark_weights': _normalise_class_type_weights_array(
-                ct, o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None
+            # Return structured dicts as-is; arrays get canonically-sized (upgrades legacy 17-slot TCPL rows).
+            'internal_mark_weights': (
+                o.internal_mark_weights
+                if isinstance(getattr(o, 'internal_mark_weights', None), dict)
+                   and o.internal_mark_weights.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl')
+                else _normalise_class_type_weights_array(
+                    ct, o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None
+                )
             ),
             'updated_at': (o.updated_at.isoformat() if getattr(o, 'updated_at', None) else None),
             'updated_by': o.updated_by,
@@ -2236,7 +2329,10 @@ def class_type_weights_upsert(request):
             im = None
             try:
                 im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
-                if isinstance(im_raw, list):
+                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL – store as-is
+                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights'):
+                    im = im_raw
+                elif isinstance(im_raw, list):
                     im = []
                     for x in im_raw:
                         try:
@@ -2286,11 +2382,19 @@ def class_type_weights_upsert(request):
                     internal_mark_weights=im if im is not None else existing_im,
                     updated_by=user_id,
                 )
+            im_val = getattr(obj, 'internal_mark_weights', None)
+            # Return structured dicts as-is; arrays as lists; fallback to empty list
+            if isinstance(im_val, dict) and im_val.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl'):
+                im_out = im_val
+            elif isinstance(im_val, list):
+                im_out = im_val
+            else:
+                im_out = []
             out[ct] = {
                 'ssa1': float(obj.ssa1),
                 'cia1': float(obj.cia1),
                 'formative1': float(obj.formative1),
-                'internal_mark_weights': (obj.internal_mark_weights if isinstance(getattr(obj, 'internal_mark_weights', None), list) else []),
+                'internal_mark_weights': im_out,
             }
 
     return Response({'results': out})
@@ -2314,7 +2418,7 @@ def qp_pattern_get(request):
 
     qp = _get_query_params(request)
     class_type = str(qp.get('class_type') or '').strip().upper()
-    question_paper_type = str(qp.get('question_paper_type') or '').strip().upper()
+    question_paper_type = _normalize_qp_type_key(qp.get('question_paper_type'))
     exam = str(qp.get('exam') or '').strip().upper()
 
     if not class_type:
@@ -2322,8 +2426,6 @@ def qp_pattern_get(request):
     if exam not in {'CIA', 'CIA1', 'CIA2', 'MODEL', 'SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2'}:
         return Response({'detail': 'exam must be CIA, CIA1, CIA2, MODEL, SSA1, SSA2, FORMATIVE1, or FORMATIVE2'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if question_paper_type not in {'QP1', 'QP2'}:
-        question_paper_type = ''
     qp_type_val = question_paper_type if question_paper_type else None
 
     obj = ObeQpPatternConfig.objects.filter(class_type=class_type, question_paper_type=qp_type_val, exam=exam).first()
@@ -2373,7 +2475,7 @@ def qp_pattern_upsert(request):
 
     data = request.data if isinstance(request.data, dict) else {}
     class_type = str(data.get('class_type') or '').strip().upper()
-    question_paper_type = str(data.get('question_paper_type') or '').strip().upper()
+    question_paper_type = _normalize_qp_type_key(data.get('question_paper_type'))
     exam = str(data.get('exam') or '').strip().upper()
     pattern_raw = data.get('pattern')
 
@@ -2382,8 +2484,6 @@ def qp_pattern_upsert(request):
     if exam not in {'CIA', 'CIA1', 'CIA2', 'MODEL', 'SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2'}:
         return Response({'detail': 'exam must be CIA, CIA1, CIA2, MODEL, SSA1, SSA2, FORMATIVE1, or FORMATIVE2'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if question_paper_type not in {'QP1', 'QP2'}:
-        question_paper_type = ''
     qp_type_val = question_paper_type if question_paper_type else None
 
     # Accept legacy list-only shape OR new object shape with CO mapping.
@@ -2421,7 +2521,7 @@ def qp_pattern_upsert(request):
             # Allow numbers (1..n), or a small set of split markers.
             if isinstance(x, str):
                 s = x.strip()
-                if s in {'both', '1&2', '3&4'}:
+                if s in {'both', '1&2', '3&4', '1&2&3&4&5'}:
                     cleaned_cos.append(s)
                     continue
                 try:
@@ -2468,6 +2568,11 @@ def _normalize_exam_key(s) -> str:
     return e
 
 
+def _normalize_qp_type_key(value) -> str:
+    qp = str(value or '').strip().upper().replace(' ', '')
+    return qp if qp in {'QP1', 'QP2'} else ''
+
+
 def _validate_qp_pattern_payload(pattern_raw):
     """Shared validator for QP pattern payloads.
 
@@ -2510,7 +2615,7 @@ def _validate_qp_pattern_payload(pattern_raw):
         for x in cos_raw:
             if isinstance(x, str):
                 s = x.strip()
-                if s in {'both', '1&2', '3&4'}:
+                if s in {'both', '1&2', '3&4', '1&2&3&4&5'}:
                     cleaned_cos.append(s)
                     continue
                 try:
@@ -2591,7 +2696,7 @@ def iqac_batch_qp_pattern_get(request):
     qp = _get_query_params(request)
     batch_id = _parse_int(qp.get('batch_id'))
     class_type = str(qp.get('class_type') or '').strip().upper()
-    question_paper_type = str(qp.get('question_paper_type') or '').strip().upper()
+    question_paper_type = _normalize_qp_type_key(qp.get('question_paper_type'))
     exam = _normalize_exam_key(qp.get('exam'))
 
     if not batch_id:
@@ -2601,8 +2706,6 @@ def iqac_batch_qp_pattern_get(request):
     if not exam:
         return Response({'detail': 'exam is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if question_paper_type not in {'QP1', 'QP2'}:
-        question_paper_type = ''
     qp_type_val = question_paper_type if question_paper_type else None
 
     obj = ObeBatchQpPatternOverride.objects.filter(batch_id=batch_id, class_type=class_type, question_paper_type=qp_type_val, exam=exam).first()
@@ -2664,7 +2767,7 @@ def iqac_batch_qp_pattern_upsert(request):
     data = request.data if isinstance(request.data, dict) else {}
     batch_id = _parse_int(data.get('batch_id'))
     class_type = str(data.get('class_type') or '').strip().upper()
-    question_paper_type = str(data.get('question_paper_type') or '').strip().upper()
+    question_paper_type = _normalize_qp_type_key(data.get('question_paper_type'))
     exam = _normalize_exam_key(data.get('exam'))
     pattern_raw = data.get('pattern')
 
@@ -2675,8 +2778,6 @@ def iqac_batch_qp_pattern_upsert(request):
     if not exam:
         return Response({'detail': 'exam is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if question_paper_type not in {'QP1', 'QP2'}:
-        question_paper_type = ''
     qp_type_val = question_paper_type if question_paper_type else None
 
     if not Batch.objects.filter(id=batch_id).exists():
@@ -2775,7 +2876,7 @@ def internal_mark_mapping_upsert(request, subject_id: str):
 def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_notification: bool = False) -> dict:
     from .models import AssessmentDraft
     from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet
-    from .models import Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark
+    from .models import Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark, ProjectMark
     from .models import ObeMarkTableLock
 
     deleted = {
@@ -2800,9 +2901,20 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
 
         try:
             if assessment_key == 'ssa1':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Ssa1Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
             elif assessment_key == 'review1':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Review1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                review1_qs = Review1Mark.objects.filter(subject=subject)
+                if student_ids:
+                    review1_qs = review1_qs.filter(student_id__in=student_ids)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    review1_qs,
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2810,10 +2922,25 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     strict_scope=strict_scope,
                     assessment='review1',
                 )
+                project_qs = ProjectMark.objects.filter(subject=subject)
+                if student_ids:
+                    project_qs = project_qs.filter(student_id__in=student_ids)
+                deleted['published'] += int(project_qs.delete()[0] or 0)
             elif assessment_key == 'ssa2':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Ssa2Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
             elif assessment_key == 'review2':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Review2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                review2_qs = Review2Mark.objects.filter(subject=subject)
+                if student_ids:
+                    review2_qs = review2_qs.filter(student_id__in=student_ids)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    review2_qs,
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2821,8 +2948,16 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     strict_scope=strict_scope,
                     assessment='review2',
                 )
+                project_qs = ProjectMark.objects.filter(subject=subject)
+                if student_ids:
+                    project_qs = project_qs.filter(student_id__in=student_ids)
+                deleted['published'] += int(project_qs.delete()[0] or 0)
             elif assessment_key == 'formative1':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Formative1Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2831,7 +2966,11 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     assessment='formative1',
                 )
             elif assessment_key == 'formative2':
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Formative2Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2846,7 +2985,11 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     teaching_assignment=ta,
                     strict_scope=strict_scope,
                 )
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Cia1Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2861,7 +3004,11 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     teaching_assignment=ta,
                     strict_scope=strict_scope,
                 )
-                deleted['published'] += int(_filter_marks_queryset_for_teaching_assignment(Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids), ta, strict_scope=strict_scope).delete()[0] or 0)
+                deleted['published'] += _delete_marks_rows_for_reset(
+                    Cia2Mark.objects.filter(subject=subject, student_id__in=student_ids),
+                    ta=ta,
+                    strict_scope=strict_scope,
+                )
                 deleted['published'] += _delete_scoped_obe_json_rows(
                     LabPublishedSheet,
                     subject=subject,
@@ -2871,11 +3018,21 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                 )
             elif assessment_key == 'model':
                 try:
-                    from .models import ModelPublishedSheet
+                    from .models import ModelPublishedSheet, ModelExamMark, ModelExamCOMark
                     deleted['published'] += _delete_scoped_obe_json_rows(
                         ModelPublishedSheet,
                         subject=subject,
                         teaching_assignment=ta,
+                        strict_scope=strict_scope,
+                    )
+                    deleted['published'] += _delete_marks_rows_for_reset(
+                        ModelExamMark.objects.filter(subject=subject, student_id__in=student_ids),
+                        ta=ta,
+                        strict_scope=strict_scope,
+                    )
+                    deleted['published'] += _delete_marks_rows_for_reset(
+                        ModelExamCOMark.objects.filter(subject=subject, student_id__in=student_ids),
+                        ta=ta,
                         strict_scope=strict_scope,
                     )
                 except Exception:
@@ -2909,6 +3066,40 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
     return deleted
 
 
+def _normalize_reset_assessment_key(value: str) -> str:
+    raw = str(value or '').strip().lower()
+    if not raw:
+        return ''
+
+    token = re.sub(r'[^a-z0-9]+', '', raw)
+    aliases = {
+        'ssa1': 'ssa1',
+        'asmt1': 'ssa1',
+        'assessment1': 'ssa1',
+        'review1': 'review1',
+        'reviewone': 'review1',
+        'ssa2': 'ssa2',
+        'asmt2': 'ssa2',
+        'assessment2': 'ssa2',
+        'review2': 'review2',
+        'reviewtwo': 'review2',
+        'cia1': 'cia1',
+        'cycle1': 'cia1',
+        'cia2': 'cia2',
+        'cycle2': 'cia2',
+        'formative1': 'formative1',
+        'fa1': 'formative1',
+        'formative2': 'formative2',
+        'fa2': 'formative2',
+        'model': 'model',
+        'modelexam': 'model',
+        'cdap': 'cdap',
+        'articulation': 'articulation',
+        'lca': 'lca',
+    }
+    return aliases.get(token, raw)
+
+
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -2929,7 +3120,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
     if auth:
         return auth
 
-    assessment_key = str(assessment or '').strip().lower()
+    assessment_key = _normalize_reset_assessment_key(assessment)
     if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2963,14 +3154,14 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
 def faculty_reset_assessment(request, assessment: str, subject_id: str):
     """Faculty reset for CIA marks in own scoped teaching assignment.
 
-    Supports only: cia1, cia2.
+    Supports: ssa1, ssa2, cia1, cia2, review1, review2, formative1, formative2, model.
     """
     staff_profile, err = _faculty_only(request)
     if err:
         return err
 
-    assessment_key = str(assessment or '').strip().lower()
-    if assessment_key not in {'cia1', 'cia2'}:
+    assessment_key = _normalize_reset_assessment_key(assessment)
+    if assessment_key not in {'ssa1', 'ssa2', 'cia1', 'cia2', 'review1', 'review2', 'formative1', 'formative2', 'model'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -3060,6 +3251,30 @@ def _normalize_obe_class_type(value) -> str:
     if compact == 'SPECIAL':
         return 'SPECIAL'
     return raw or 'THEORY'
+
+
+def _resolve_teaching_assignment_class_type(teaching_assignment) -> str:
+    if teaching_assignment is None:
+        return 'THEORY'
+
+    try:
+        row = getattr(teaching_assignment, 'curriculum_row', None)
+        if row is not None:
+            class_type = getattr(row, 'class_type', None) or getattr(getattr(row, 'master', None), 'class_type', None)
+            if class_type:
+                return _normalize_obe_class_type(class_type)
+    except Exception:
+        pass
+
+    try:
+        elective_subject = getattr(teaching_assignment, 'elective_subject', None)
+        class_type = getattr(elective_subject, 'class_type', None) if elective_subject is not None else None
+        if class_type:
+            return _normalize_obe_class_type(class_type)
+    except Exception:
+        pass
+
+    return 'THEORY'
 
 
 def _resolve_staff_teaching_assignment(request, subject_code: str, teaching_assignment_id: int | None = None):
@@ -4193,6 +4408,26 @@ def assessment_draft(request, assessment: str, subject_id: str):
 
     from .models import AssessmentDraft
 
+    def _looks_like_lab_sheet_payload(payload):
+        if not isinstance(payload, dict):
+            return False
+        sheet = payload.get('sheet') if isinstance(payload.get('sheet'), dict) else payload
+        if not isinstance(sheet, dict):
+            return False
+        rows = sheet.get('rowsByStudentId')
+        if not isinstance(rows, dict):
+            return False
+        if isinstance(sheet.get('coConfigs'), dict):
+            return True
+        for row in rows.values():
+            if not isinstance(row, dict):
+                continue
+            if isinstance(row.get('marksByCo'), dict):
+                return True
+            if isinstance(row.get('marksA'), list) or isinstance(row.get('marksB'), list):
+                return True
+        return False
+
     if request.method == 'PUT':
         gate = _enforce_mark_entry_window(request, subject=subject, assessment_key=assessment, teaching_assignment_id=ta_id)
         if gate is not None:
@@ -4212,6 +4447,21 @@ def assessment_draft(request, assessment: str, subject_id: str):
             assessment=assessment,
             defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
         )
+
+        # Keep dedicated LabExamMark rows in sync for lab-style sheets on each save,
+        # so DB/Admin portal reflects student marks immediately (not only after publish).
+        if assessment in {'cia1', 'cia2', 'model', 'formative1', 'formative2', 'review1', 'review2'} and _looks_like_lab_sheet_payload(data):
+            try:
+                from .services.exam_mark_persistence import persist_lab_exam_marks
+                persist_lab_exam_marks(
+                    subject=subject,
+                    teaching_assignment=ta,
+                    assessment=assessment,
+                    data=data,
+                )
+            except Exception:
+                # Never fail draft save because of mirror-sync issues.
+                pass
         return Response({'status': 'draft_saved'})
 
     draft = _get_scoped_obe_json_row(
@@ -4499,9 +4749,10 @@ def review1_publish(request, subject_id: str):
     if not isinstance(rows, list):
         return Response({'detail': 'Invalid rows.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from .models import Review1Mark
+    from .models import Review1Mark, ProjectMark
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    is_project_course = _resolve_teaching_assignment_class_type(ta) == 'PROJECT'
 
     errors: list[str] = []
     with transaction.atomic():
@@ -4521,6 +4772,8 @@ def review1_publish(request, subject_id: str):
 
             if mark is None:
                 _delete_scoped_mark(Review1Mark, subject=subject, student=student, teaching_assignment=ta)
+                if is_project_course:
+                    _delete_scoped_mark(ProjectMark, subject=subject, student=student, teaching_assignment=ta)
             else:
                 _upsert_scoped_mark(
                     Review1Mark,
@@ -4529,6 +4782,14 @@ def review1_publish(request, subject_id: str):
                     teaching_assignment=ta,
                     mark_defaults={'mark': mark},
                 )
+                if is_project_course:
+                    _upsert_scoped_mark(
+                        ProjectMark,
+                        subject=subject,
+                        student=student,
+                        teaching_assignment=ta,
+                        mark_defaults={'mark': mark},
+                    )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -4719,9 +4980,10 @@ def review2_publish(request, subject_id: str):
     if not isinstance(rows, list):
         return Response({'detail': 'Invalid rows.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from .models import Review2Mark
+    from .models import Review2Mark, ProjectMark
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    is_project_course = _resolve_teaching_assignment_class_type(ta) == 'PROJECT'
 
     errors: list[str] = []
     with transaction.atomic():
@@ -4741,6 +5003,8 @@ def review2_publish(request, subject_id: str):
 
             if mark is None:
                 _delete_scoped_mark(Review2Mark, subject=subject, student=student, teaching_assignment=ta)
+                if is_project_course:
+                    _delete_scoped_mark(ProjectMark, subject=subject, student=student, teaching_assignment=ta)
             else:
                 _upsert_scoped_mark(
                     Review2Mark,
@@ -4749,6 +5013,14 @@ def review2_publish(request, subject_id: str):
                     teaching_assignment=ta,
                     mark_defaults={'mark': mark},
                 )
+                if is_project_course:
+                    _upsert_scoped_mark(
+                        ProjectMark,
+                        subject=subject,
+                        student=student,
+                        teaching_assignment=ta,
+                        mark_defaults={'mark': mark},
+                    )
 
     if errors:
         return Response({'detail': 'Validation error.', 'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
@@ -5146,6 +5418,238 @@ def model_published_sheet(request, subject_id: str):
     return Response({'subject': {'code': subject.code, 'name': subject.name}, 'data': row.data if row else None})
 
 
+def _resolve_model_student_id_from_row(*, row_key, row_payload):
+    sid_raw = (row_payload or {}).get('studentId') if isinstance(row_payload, dict) else None
+    try:
+        sid = int(sid_raw)
+        if sid > 0:
+            return sid
+    except Exception:
+        pass
+
+    key = str(row_key or '').strip()
+    if key.isdigit():
+        try:
+            sid = int(key)
+            return sid if sid > 0 else None
+        except Exception:
+            return None
+
+    if key.startswith('id:'):
+        try:
+            sid = int(key.split(':', 1)[1])
+            return sid if sid > 0 else None
+        except Exception:
+            return None
+
+    if key.startswith('reg:'):
+        reg = str(key.split(':', 1)[1]).strip()
+        if not reg:
+            return None
+        student = StudentProfile.objects.filter(reg_no=reg).only('id').first()
+        return int(student.id) if student else None
+
+    return None
+
+
+def _extract_model_totals_from_payload(data: dict):
+    if not isinstance(data, dict):
+        return {}
+
+    class_type = str(data.get('classType') or '').strip().upper()
+    if class_type in {'TCPL', 'TCPR'}:
+        is_tcpl_like = True
+    elif class_type in {'THEORY', 'LAB', 'PRACTICAL'}:
+        is_tcpl_like = False
+    else:
+        raw_tcpl = data.get('tcplLikeKind')
+        if isinstance(raw_tcpl, bool):
+            is_tcpl_like = raw_tcpl
+        else:
+            tcpl_key = str(raw_tcpl or '').strip().upper()
+            is_tcpl_like = tcpl_key in {'1', 'TRUE', 'YES', 'TCPL', 'TCPR'}
+
+    primary_key = 'tcplSheet' if is_tcpl_like else 'theorySheet'
+    fallback_key = 'theorySheet' if is_tcpl_like else 'tcplSheet'
+
+    rows_by = data.get(primary_key, {})
+    if not isinstance(rows_by, dict) or not rows_by:
+        alt = data.get(fallback_key, {})
+        rows_by = alt if isinstance(alt, dict) else {}
+
+    totals_by_sid = {}
+    for row_key, row in rows_by.items():
+        if not isinstance(row, dict):
+            continue
+
+        sid = _resolve_model_student_id_from_row(row_key=row_key, row_payload=row)
+        if not sid:
+            continue
+
+        absent = bool(row.get('absent'))
+        absent_kind = str(row.get('absentKind') or 'AL').strip().upper()
+        if absent and absent_kind == 'AL':
+            totals_by_sid[sid] = Decimal('0')
+            continue
+
+        total = Decimal('0')
+        q_obj = row.get('q', {})
+        if isinstance(q_obj, dict):
+            for val in q_obj.values():
+                dec = _coerce_decimal_or_none(val)
+                if dec is not None:
+                    total += dec
+
+        lab_dec = _coerce_decimal_or_none(row.get('lab'))
+        if lab_dec is not None:
+            total += lab_dec
+
+        totals_by_sid[sid] = total
+
+    return totals_by_sid
+
+
+def _extract_project_totals_from_lab_payload(data: dict) -> dict[int, Decimal]:
+    if not isinstance(data, dict):
+        return {}
+
+    payload = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+    if not isinstance(payload, dict):
+        return {}
+
+    rows_by = payload.get('rowsByStudentId', {})
+    if not isinstance(rows_by, dict):
+        return {}
+
+    totals_by_sid: dict[int, Decimal] = {}
+    for sid_key, row in rows_by.items():
+        if not isinstance(row, dict):
+            continue
+
+        sid = None
+        try:
+            sid = int(sid_key)
+        except Exception:
+            sid_raw = row.get('studentId')
+            try:
+                sid = int(sid_raw)
+            except Exception:
+                sid = None
+        if not sid:
+            continue
+
+        if bool(row.get('absent')):
+            totals_by_sid[sid] = Decimal('0')
+            continue
+
+        mark_total = None
+
+        review_component_marks = row.get('reviewComponentMarks', {})
+        if isinstance(review_component_marks, dict) and review_component_marks:
+            total = Decimal('0')
+            has_value = False
+            for value in review_component_marks.values():
+                dec = _coerce_decimal_or_none(value)
+                if dec is None:
+                    continue
+                total += dec
+                has_value = True
+            if has_value:
+                mark_total = total
+
+        if mark_total is None:
+            caa_by_co = row.get('caaExamByCo', {})
+            if isinstance(caa_by_co, dict) and caa_by_co:
+                total = Decimal('0')
+                has_value = False
+                for value in caa_by_co.values():
+                    dec = _coerce_decimal_or_none(value)
+                    if dec is None:
+                        continue
+                    total += dec
+                    has_value = True
+                if has_value:
+                    mark_total = total
+
+        if mark_total is None:
+            mark_total = _coerce_decimal_or_none(row.get('ciaExam'))
+
+        if mark_total is None:
+            mark_total = _coerce_decimal_or_none(row.get('total'))
+
+        if mark_total is None:
+            continue
+
+        totals_by_sid[sid] = mark_total
+
+    return totals_by_sid
+
+
+def _sync_project_marks_from_totals(*, subject, teaching_assignment, totals_by_sid: dict[int, Decimal]) -> int:
+    from .models import ProjectMark
+
+    if not isinstance(totals_by_sid, dict) or not totals_by_sid:
+        return 0
+
+    updated = 0
+    with transaction.atomic():
+        for sid, mark in totals_by_sid.items():
+            try:
+                sid_int = int(sid)
+            except Exception:
+                continue
+            student = StudentProfile.objects.filter(id=sid_int).first()
+            if not student:
+                continue
+            _upsert_scoped_mark(
+                ProjectMark,
+                subject=subject,
+                student=student,
+                teaching_assignment=teaching_assignment,
+                mark_defaults={'mark': mark},
+            )
+            updated += 1
+
+    return updated
+
+
+def _backfill_project_marks_from_lab_published(*, subject, teaching_assignment=None, strict_scope: bool = False) -> int:
+    from .models import LabPublishedSheet
+
+    candidates = []
+    for assessment in ('review1', 'review2'):
+        row = _get_scoped_obe_json_row(
+            LabPublishedSheet,
+            subject=subject,
+            teaching_assignment=teaching_assignment,
+            strict_scope=strict_scope,
+            assessment=assessment,
+        )
+        if row is not None:
+            candidates.append(row)
+
+    def _sort_key(item):
+        updated_at = getattr(item, 'updated_at', None)
+        return (updated_at or timezone.make_aware(datetime.min), int(getattr(item, 'pk', 0) or 0))
+
+    candidates.sort(key=_sort_key, reverse=True)
+
+    for row in candidates:
+        data = row.data if isinstance(getattr(row, 'data', None), dict) else None
+        if not isinstance(data, dict):
+            continue
+        totals_by_sid = _extract_project_totals_from_lab_payload(data)
+        if not totals_by_sid:
+            continue
+        return _sync_project_marks_from_totals(
+            subject=subject,
+            teaching_assignment=teaching_assignment,
+            totals_by_sid=totals_by_sid,
+        )
+
+    return 0
+
+
 @api_view(['POST'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -5186,60 +5690,78 @@ def model_publish_sheet(request, subject_id: str):
         defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
     )
     
-    # NEW LOGIC: Store calculated CO entries to the explicit DB tables if passed by the frontend
-    co_marks_array = body.get('coMarks', [])
-    if isinstance(co_marks_array, list) and len(co_marks_array) > 0:
-        with transaction.atomic():
-            for student_item in co_marks_array:
+    co_marks_array = body.get('coMarks', data.get('coMarks', []))
+    totals_by_sid = {}
+    co_breakdown_by_sid = {}
+    delete_sid = set()
+
+    if isinstance(co_marks_array, list):
+        for student_item in co_marks_array:
+            if not isinstance(student_item, dict):
+                continue
+            try:
+                sid = int(student_item.get('studentId'))
+            except (ValueError, TypeError):
+                continue
+            if sid <= 0:
+                continue
+
+            total_dec = _coerce_decimal_or_none(student_item.get('total'))
+            if total_dec is None:
+                delete_sid.add(sid)
+                continue
+
+            totals_by_sid[sid] = total_dec
+            co_payload = student_item.get('coBreakdown')
+            if isinstance(co_payload, dict):
+                co_breakdown_by_sid[sid] = co_payload
+
+    if not totals_by_sid:
+        totals_by_sid = _extract_model_totals_from_payload(data)
+
+    with transaction.atomic():
+        for sid in delete_sid:
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+            ModelExamMark.objects.filter(subject=subject, student=student, teaching_assignment=ta).delete()
+
+        for sid, total_dec in totals_by_sid.items():
+            student = StudentProfile.objects.filter(id=sid).first()
+            if not student:
+                continue
+
+            mark_parent, _ = ModelExamMark.objects.update_or_create(
+                subject=subject,
+                student=student,
+                teaching_assignment=ta,
+                defaults={'total_mark': total_dec},
+            )
+
+            co_payload = co_breakdown_by_sid.get(sid)
+            ModelExamCOMark.objects.filter(model_exam_mark=mark_parent).delete()
+            if not isinstance(co_payload, dict):
+                continue
+
+            for c_k, c_data in sorted(co_payload.items(), key=lambda kv: str(kv[0])):
+                c_num_str = str(c_k).replace('co', '').strip()
                 try:
-                    sid = int(student_item.get('studentId'))
-                except (ValueError, TypeError):
+                    c_num = int(c_num_str)
+                except Exception:
                     continue
-                
-                student = StudentProfile.objects.filter(id=sid).first()
-                if not student:
+                if c_num <= 0:
                     continue
-                    
-                total_mark = student_item.get('total')
-                total_dec = _coerce_decimal_or_none(total_mark)
-                
-                if total_dec is None:
-                    # Missing or absent entirely, wipe clean logic
-                    mark_parent = ModelExamMark.objects.filter(subject=subject, student=student, teaching_assignment=ta).first()
-                    if mark_parent:
-                        mark_parent.delete()
-                    continue
-                
-                # Fetch or create the parent record
-                mark_parent, _ = ModelExamMark.objects.update_or_create(
-                    subject=subject,
-                    student=student,
-                    teaching_assignment=ta,
-                    defaults={'total_mark': total_dec}
+
+                c_obj = c_data if isinstance(c_data, dict) else {}
+                c_val = _coerce_decimal_or_none(c_obj.get('mark'))
+                c_pct = _coerce_decimal_or_none(c_obj.get('percentage'))
+
+                ModelExamCOMark.objects.create(
+                    model_exam_mark=mark_parent,
+                    co_num=c_num,
+                    mark=c_val,
+                    percentage=c_pct,
                 )
-                
-                # Update the child CO marks dynamically depending on what the frontend mapped
-                co_breakdown = student_item.get('coBreakdown', {})
-                if isinstance(co_breakdown, dict):
-                    co_keys = sorted(co_breakdown.keys())
-                    # Clear out outdated dynamic sub-records first safely
-                    ModelExamCOMark.objects.filter(model_exam_mark=mark_parent).delete()
-                    for c_k in co_keys:
-                        c_num_str = c_k.replace('co', '')
-                        try:
-                            c_num = int(c_num_str)
-                            c_data = co_breakdown[c_k]
-                            c_val = _coerce_decimal_or_none(c_data.get('mark'))
-                            c_pct = _coerce_decimal_or_none(c_data.get('percentage'))
-                            
-                            ModelExamCOMark.objects.create(
-                                model_exam_mark=mark_parent,
-                                co_num=c_num,
-                                mark=c_val,
-                                percentage=c_pct
-                            )
-                        except (ValueError, TypeError, KeyError):
-                            pass
 
     try:
         _touch_lock_after_publish(
@@ -6254,17 +6776,49 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
     if data is None or not isinstance(data, dict):
         return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from .models import LabPublishedSheet
+    from .models import AssessmentDraft, LabPublishedSheet
+    from .services.exam_mark_persistence import persist_lab_exam_marks
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
 
-    _upsert_scoped_obe_json_row(
-        LabPublishedSheet,
-        subject=subject,
-        teaching_assignment=ta,
-        assessment=assessment,
-        defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
-    )
+    with transaction.atomic():
+        _upsert_scoped_obe_json_row(
+            LabPublishedSheet,
+            subject=subject,
+            teaching_assignment=ta,
+            assessment=assessment,
+            defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
+        )
+
+        # Keep draft aligned with the just-published payload so refresh/reload
+        # never falls back to stale or empty draft state.
+        _upsert_scoped_obe_json_row(
+            AssessmentDraft,
+            subject=subject,
+            teaching_assignment=ta,
+            assessment=assessment,
+            defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
+        )
+
+        # Persist dedicated per-student rows for DB/reporting visibility.
+        persist_lab_exam_marks(
+            subject=subject,
+            teaching_assignment=ta,
+            assessment=assessment,
+            data=data,
+        )
+
+    if assessment in ('review1', 'review2'):
+        try:
+            totals_by_sid = _extract_project_totals_from_lab_payload(data)
+            if totals_by_sid:
+                _sync_project_marks_from_totals(
+                    subject=subject,
+                    teaching_assignment=ta,
+                    totals_by_sid=totals_by_sid,
+                )
+        except Exception:
+            pass
 
     try:
         _touch_lock_after_publish(
@@ -7675,6 +8229,11 @@ def edit_window(request, assessment: str, subject_id: str):
     academic_year = info.get('academic_year')
     ta = info.get('teaching_assignment')
     now = timezone.now()
+    user = getattr(request, 'user', None)
+
+    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
+    unlimited_publish = not master_cfg.get('edit_requests_enabled', True)
 
     allowed_by_approval = False
     approval_until = None
@@ -7697,12 +8256,16 @@ def edit_window(request, assessment: str, subject_id: str):
             allowed_by_approval = True
             approval_until = getattr(approval, 'approved_until', None)
 
+    allowed = bool(allowed_by_approval or unlimited_publish or _has_obe_master_permission(user))
+
     return Response(
         {
             'assessment': assessment_key,
             'subject_code': subject_code,
             'scope': scope,
             'allowed_by_approval': bool(allowed_by_approval),
+            'allowed': bool(allowed),
+            'allowed_by_unlimited': bool(unlimited_publish),
             'approval_until': approval_until.isoformat() if approval_until else None,
             'now': now.isoformat() if now else None,
             'academic_year': {
@@ -7743,6 +8306,10 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
     gate = _enforce_assessment_enabled_for_course(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
     if gate is not None:
         return gate
+
+    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
+    unlimited_publish = not master_cfg.get('edit_requests_enabled', True)
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
@@ -7788,6 +8355,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
                     'mark_manager_unlocked_until': None,
                     'entry_open': True,
                     'mark_manager_editable': True,
+                    'unlimited_publish': bool(unlimited_publish),
                 }
             )
 
@@ -7812,6 +8380,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
                 'mark_manager_unlocked_until': None,
                 'entry_open': False,
                 'mark_manager_editable': True,
+                'unlimited_publish': bool(unlimited_publish),
             }
         )
 
@@ -7831,7 +8400,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
     mark_manager_editable = not bool(getattr(lock, 'mark_manager_locked', False))
 
     # IQAC / OBE master users should not be blocked by lock rows; present the table as open.
-    if _has_obe_master_permission(getattr(request, 'user', None)):
+    if _has_obe_master_permission(getattr(request, 'user', None)) or unlimited_publish:
         entry_open = True
         mark_manager_editable = True
 
@@ -7856,6 +8425,7 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
             'mark_manager_unlocked_until': getattr(lock, 'mark_manager_unlocked_until', None).isoformat() if getattr(lock, 'mark_manager_unlocked_until', None) else None,
             'entry_open': bool(entry_open),
             'mark_manager_editable': bool(mark_manager_editable),
+            'unlimited_publish': bool(unlimited_publish),
             'updated_at': getattr(lock, 'updated_at', None).isoformat() if getattr(lock, 'updated_at', None) else None,
         }
     )
@@ -10059,3 +10629,247 @@ def dismiss_reset_notifications(request):
     ).update(is_read=True, read_at=timezone.now())
 
     return Response({'status': 'ok', 'marked_read': updated})
+
+
+# ---------------------------------------------------------------------------
+# IQAC – Special Courses list (for CO Weights panel)
+# ---------------------------------------------------------------------------
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([AllowAny])
+def iqac_special_courses_list(request):
+    """Return all active teaching-assignments whose curriculum row has class_type = SPECIAL.
+
+    The frontend SpecialCoWeightsPanel expects a list of objects with:
+      id, subject_code, subject_name, section_name, academic_year, department,
+      staff_name, co_weights
+    """
+    from academics.models import TeachingAssignment, AcademicYear
+    from curriculum.models import CurriculumDepartment
+    from .models import SpecialCourseCoWeights
+
+    # Fetch active teaching assignments linked to SPECIAL curriculum rows
+    qs = (
+        TeachingAssignment.objects
+        .filter(is_active=True, curriculum_row__isnull=False, curriculum_row__class_type='SPECIAL')
+        .select_related(
+            'curriculum_row', 'curriculum_row__department',
+            'section', 'section__batch',
+            'academic_year', 'staff', 'staff__user',
+        )
+        .order_by('-academic_year__name', 'curriculum_row__course_code')
+    )
+
+    # Pre-fetch CO weights
+    ta_ids = [ta.id for ta in qs]
+    co_weights_map = {}
+    if ta_ids:
+        for scw in SpecialCourseCoWeights.objects.filter(teaching_assignment_id__in=ta_ids):
+            co_weights_map[scw.teaching_assignment_id] = scw.weights or {}
+
+    results = []
+    for ta in qs:
+        cr = ta.curriculum_row
+        sec = ta.section
+        staff = ta.staff
+        ay = ta.academic_year
+
+        results.append({
+            'id': ta.id,
+            'subject_code': cr.course_code or '',
+            'subject_name': cr.course_name or '',
+            'section_name': f"{sec.batch.name if sec and sec.batch else ''} {getattr(sec, 'name', '')}".strip() if sec else '',
+            'academic_year': str(ay) if ay else '',
+            'department': cr.department.code if cr.department else '',
+            'staff_name': staff.user.get_full_name() if staff and staff.user else (str(staff) if staff else ''),
+            'co_weights': co_weights_map.get(ta.id, {}),
+        })
+
+    return Response({'results': results})
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# IQAC Special Exam Config — manage which exams are enabled for SPECIAL
+# ═══════════════════════════════════════════════════════════════════════
+
+# Cycle definitions for each assessment group
+_SPECIAL_EXAM_CYCLES = {
+    'SSA': ['SSA1', 'SSA2'],
+    'FA': ['FORMATIVE1', 'FORMATIVE2'],
+    'CIA': ['CIA1', 'CIA2'],
+    'MODEL': ['MODEL'],
+}
+
+# All valid SPECIAL exam keys
+_ALL_SPECIAL_EXAM_KEYS = {'SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL'}
+
+# Canonical display order for exam keys
+_SPECIAL_EXAM_ORDER = ['SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL']
+_SPECIAL_EXAM_ORDER_MAP = {k: i for i, k in enumerate(_SPECIAL_EXAM_ORDER)}
+
+def _sort_special_exams(exams):
+    """Sort exam keys in canonical cycle order (SSA1, SSA2, FA1, FA2, CIA1, CIA2, MODEL)."""
+    return sorted(exams, key=lambda e: _SPECIAL_EXAM_ORDER_MAP.get(e, 99))
+
+# Map exam keys → enabled_assessments keys
+_EXAM_TO_EA_KEY = {
+    'SSA1': 'ssa1',
+    'SSA2': 'ssa2',
+    'FORMATIVE1': 'formative1',
+    'FORMATIVE2': 'formative2',
+    'CIA1': 'cia1',
+    'CIA2': 'cia2',
+    'MODEL': 'model',
+}
+
+
+def _propagate_special_enabled_assessments(ea_keys: list):
+    """Update enabled_assessments on all SPECIAL CurriculumMaster and CurriculumDepartment rows."""
+    from curriculum.models import CurriculumMaster, CurriculumDepartment
+    try:
+        CurriculumMaster.objects.filter(
+            class_type__iexact='SPECIAL',
+        ).update(enabled_assessments=ea_keys)
+        CurriculumDepartment.objects.filter(
+            class_type__iexact='SPECIAL',
+        ).update(enabled_assessments=ea_keys)
+    except Exception:
+        pass
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_special_exam_config(request):
+    """GET/POST: manage which exams are enabled for SPECIAL class type.
+
+    GET ?question_paper_type=CSD
+        → { exams: ['SSA1', 'CIA1', ...] }
+
+    POST { question_paper_type?: 'CSD', action: 'add'|'remove', exam_group: 'SSA'|'CIA'|'FA'|'MODEL' }
+        → auto-resolves cycle (SSA→SSA1 or SSA2) and updates config.
+        → also propagates to curriculum enabled_assessments.
+
+    POST { question_paper_type?: 'CSD', action: 'set', exams: ['SSA1', 'CIA1', ...] }
+        → directly set the full list.
+    """
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+
+    from .models import ObeQpPatternConfig
+
+    qp_raw = str(request.GET.get('question_paper_type', '') or request.data.get('question_paper_type', '') or '').strip().upper()
+    # For SPECIAL, patterns are stored with question_paper_type=NULL (CSD normalizes to empty)
+    qp_type_val = None
+
+    def _get_current_exams():
+        """Return sorted list of exam keys that have ObeQpPatternConfig rows for SPECIAL."""
+        rows = ObeQpPatternConfig.objects.filter(
+            class_type='SPECIAL',
+            question_paper_type=qp_type_val,
+        ).values_list('exam', flat=True)
+        return _sort_special_exams(set(e.upper() for e in rows if str(e or '').upper() in _ALL_SPECIAL_EXAM_KEYS))
+
+    if request.method == 'GET':
+        return Response({'exams': _get_current_exams()})
+
+    # POST
+    data = request.data if isinstance(request.data, dict) else {}
+    action = str(data.get('action', '')).strip().lower()
+    user_id = getattr(getattr(request, 'user', None), 'id', None)
+
+    if action == 'set':
+        # Directly set full exam list
+        raw_exams = data.get('exams', [])
+        if not isinstance(raw_exams, list):
+            return Response({'detail': 'exams must be a list'}, status=400)
+        new_exams = _sort_special_exams(set(
+            e.upper() for e in [str(x or '').strip() for x in raw_exams]
+            if e.upper() in _ALL_SPECIAL_EXAM_KEYS
+        ))
+
+        current = set(_get_current_exams())
+        to_add = set(new_exams) - current
+        to_remove = current - set(new_exams)
+
+        # Remove deleted exams
+        if to_remove:
+            ObeQpPatternConfig.objects.filter(
+                class_type='SPECIAL',
+                question_paper_type=qp_type_val,
+                exam__in=to_remove,
+            ).delete()
+
+        # Add new exams with empty patterns
+        for ex in to_add:
+            ObeQpPatternConfig.objects.update_or_create(
+                class_type='SPECIAL',
+                question_paper_type=qp_type_val,
+                exam=ex,
+                defaults={'pattern': {'marks': [], 'cos': []}, 'updated_by': user_id},
+            )
+
+        # Propagate to curriculum rows
+        ea_keys = [_EXAM_TO_EA_KEY[e] for e in new_exams if e in _EXAM_TO_EA_KEY]
+        _propagate_special_enabled_assessments(ea_keys)
+
+        return Response({'exams': new_exams, 'enabled_assessments': ea_keys})
+
+    elif action in ('add', 'remove'):
+        exam_group = str(data.get('exam_group', '')).strip().upper()
+        if exam_group not in _SPECIAL_EXAM_CYCLES:
+            return Response({'detail': f"exam_group must be one of: {', '.join(_SPECIAL_EXAM_CYCLES.keys())}"}, status=400)
+
+        current = _get_current_exams()
+        current_set = set(current)
+        cycle = _SPECIAL_EXAM_CYCLES[exam_group]
+
+        if action == 'add':
+            # Find the next exam in the cycle that isn't already present
+            target = None
+            for ex in cycle:
+                if ex not in current_set:
+                    target = ex
+                    break
+            if target is None:
+                return Response({'detail': f"All {exam_group} exams are already configured."}, status=400)
+
+            ObeQpPatternConfig.objects.update_or_create(
+                class_type='SPECIAL',
+                question_paper_type=qp_type_val,
+                exam=target,
+                defaults={'pattern': {'marks': [], 'cos': []}, 'updated_by': user_id},
+            )
+            new_exams = _sort_special_exams(current_set | {target})
+
+        else:  # remove
+            # Find the highest cycle exam in the group that exists
+            target = None
+            for ex in reversed(cycle):
+                if ex in current_set:
+                    target = ex
+                    break
+            if target is None:
+                return Response({'detail': f"No {exam_group} exams to remove."}, status=400)
+
+            ObeQpPatternConfig.objects.filter(
+                class_type='SPECIAL',
+                question_paper_type=qp_type_val,
+                exam=target,
+            ).delete()
+            new_exams = _sort_special_exams(current_set - {target})
+
+        # Propagate to curriculum rows
+        ea_keys = [_EXAM_TO_EA_KEY[e] for e in new_exams if e in _EXAM_TO_EA_KEY]
+        _propagate_special_enabled_assessments(ea_keys)
+
+        return Response({
+            'exams': new_exams,
+            'added': target if action == 'add' else None,
+            'removed': target if action == 'remove' else None,
+            'enabled_assessments': ea_keys,
+        })
+
+    else:
+        return Response({'detail': "action must be 'add', 'remove', or 'set'"}, status=400)

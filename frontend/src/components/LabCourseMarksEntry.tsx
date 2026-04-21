@@ -5,6 +5,7 @@ import { lsGet, lsSet } from '../utils/localStorage';
 import { fetchTeachingAssignmentRoster } from '../services/roster';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
 import {
+  fetchClassTypeWeights,
   confirmMarkManagerLock,
   createEditRequest,
   createPublishRequest,
@@ -31,6 +32,14 @@ import { isLabClassType, normalizeObeClassType } from '../constants/classTypes';
 import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo, registerNoKeys } from '../utils/excelImport';
+import {
+  getInternalMarkWeightSlotsForCo,
+  isLabCycleWeights,
+  getLabCycleWeightConfig,
+  labCycleCoKeys,
+  DEFAULT_LAB_CYCLE_WEIGHTS,
+  LabCycleWeights,
+} from '../utils/internalMarkWeights';
 
 const LAB_CO_MAX_OVERRIDE = { co1: 42, co2: 42, co3: 58, co4: 42, co5: 42 };
 const TCPL_REVIEW_EXPERIMENT_WEIGHT: Record<number, number> = { 1: 9, 2: 9, 3: 4.5 };
@@ -325,6 +334,8 @@ export default function LabCourseMarksEntry({
   pureLabCycle3,
   classType: classTypeProp,
 }: Props) {
+  const [classTypeWeightsMap, setClassTypeWeightsMap] = useState<Record<string, any> | null>(null);
+
   const [students, setStudents] = useState<Student[]>([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [rosterError, setRosterError] = useState<string | null>(null);
@@ -561,6 +572,82 @@ export default function LabCourseMarksEntry({
   const isPureLab = Boolean(pureLab) || normalizedClassType === 'PURE_LAB';
   // Cycle 3 (MODEL): records only – no CIA input, weight → 10
   const isPureLabRecord = isPureLab && Boolean(pureLabCycle3);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const remote = await fetchClassTypeWeights();
+        if (!mounted) return;
+        setClassTypeWeightsMap(remote && typeof remote === 'object' ? remote : {});
+      } catch {
+        if (mounted) setClassTypeWeightsMap({});
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const currentClassTypeWeight = useMemo(() => {
+    const all = classTypeWeightsMap && typeof classTypeWeightsMap === 'object' ? classTypeWeightsMap : null;
+    if (!all) return null;
+    return (all as any)[String(normalizedClassType || '').toUpperCase()] || (all as any).THEORY || null;
+  }, [classTypeWeightsMap, normalizedClassType]);
+
+  // Try to extract structured LabCycleWeights from the server config
+  const labCycleConfig = useMemo((): LabCycleWeights | null => {
+    const im = (currentClassTypeWeight as any)?.internal_mark_weights;
+    if (isLabCycleWeights(im)) return getLabCycleWeightConfig(im);
+    return null;
+  }, [currentClassTypeWeight]);
+
+  const strictLabExpWeightByCo = useMemo(() => {
+    // If structured lab cycle weights are configured, extract per-CO exp weights
+    if (labCycleConfig) {
+      const out: Record<number, number> = {};
+      for (const [k, w] of Object.entries(labCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
+      for (const [k, w] of Object.entries(labCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
+      return out;
+    }
+    // Fallback to flat array format
+    const out: Record<number, number> = { ...LAB_EXPERIMENT_WEIGHT_BY_CO };
+    for (const coNum of [1, 2, 3, 4, 5]) {
+      const slots = getInternalMarkWeightSlotsForCo(normalizedClassType, currentClassTypeWeight as any, coNum);
+      const slotWeight = assessmentKey === 'model' ? Number(slots?.me ?? 0) : Number(slots?.cia ?? 0);
+      if (Number.isFinite(slotWeight) && slotWeight > 0) out[coNum] = slotWeight;
+    }
+    return out;
+  }, [normalizedClassType, currentClassTypeWeight, assessmentKey, labCycleConfig]);
+
+  /** Per-CO CIA weights for proportional CIA exam distribution. */
+  const strictLabCiaWeightByCo = useMemo((): Record<number, number> => {
+    if (labCycleConfig) {
+      const out: Record<number, number> = {};
+      for (const [k, w] of Object.entries(labCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
+      for (const [k, w] of Object.entries(labCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
+      return out;
+    }
+    // Default: even distribution (legacy behavior)
+    return { 1: 3, 2: 3, 3: 3, 4: 3, 5: 3 };
+  }, [labCycleConfig]);
+
+  const tcplInternalLabWeight = useMemo(() => {
+    const slots = getInternalMarkWeightSlotsForCo('TCPL', currentClassTypeWeight as any, 1);
+    const n = Number(slots?.fa ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : TCPL_INTERNAL_LAB_WEIGHT;
+  }, [currentClassTypeWeight]);
+
+  const tcplInternalCiaExamWeight = useMemo(() => {
+    const slots = getInternalMarkWeightSlotsForCo('TCPL', currentClassTypeWeight as any, 1);
+    const n = Number(slots?.ciaExam ?? 0);
+    return Number.isFinite(n) && n > 0 ? n : TCPL_INTERNAL_CIA_EXAM_WEIGHT;
+  }, [currentClassTypeWeight]);
+
+  const tcplInternalCoMax = useMemo(
+    () => round1(tcplInternalLabWeight + tcplInternalCiaExamWeight),
+    [tcplInternalLabWeight, tcplInternalCiaExamWeight],
+  );
 
   // Load master config for term label
   useEffect(() => {
@@ -906,14 +993,15 @@ export default function LabCourseMarksEntry({
 
   // Mark Manager workflow:
   // - Editable before first confirmation.
-  // - After confirmation, stays locked unless IQAC approves.
-  // - Unlock only once per approval window (tracked by publishWindow.approval_until).
+  // - After confirmation, published lock row is source-of-truth when edit requests are enabled.
+  // - Approval can temporarily unlock Mark Manager; otherwise do not auto-relock locally.
+  //   (auto-relock causes Edit flicker in unlimited/pre-publish flows).
   useEffect(() => {
     if (!subjectId) return;
     const hasConfirmed = Boolean(draft.sheet.markManagerSnapshot);
     if (!hasConfirmed) return;
 
-    if (isPublished && markLock?.exists) {
+    if (isPublished && markLock?.exists && markManagerEditRequestsEnabled) {
       const nextLocked = Boolean(markLock?.mark_manager_locked);
       if (Boolean(draft.sheet.markManagerLocked) !== nextLocked) {
         setDraft((p) => ({
@@ -937,19 +1025,12 @@ export default function LabCourseMarksEntry({
       }
       return;
     }
-
-    // Approval not active -> lock if it was unlocked
-    if (!draft.sheet.markManagerLocked) {
-      setDraft((p) => ({
-        ...p,
-        sheet: { ...p.sheet, markManagerLocked: true },
-      }));
-    }
   }, [
     subjectId,
     isPublished,
     markLock?.exists,
     markLock?.mark_manager_locked,
+    markManagerEditRequestsEnabled,
     markManagerEditWindow?.allowed_by_approval,
     markManagerEditWindow?.approval_until,
     draft.sheet.markManagerLocked,
@@ -1109,18 +1190,25 @@ export default function LabCourseMarksEntry({
         const sumByCo = Object.values(ciaByCo).reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
         return clampNumber(sumByCo, 0, ciaExamMaxEffective);
       })();
-      const ciaMaxPerCo = ciaExamEnabled ? ciaExamMaxEffective / enabledCoCount : 0;
-      const ciaPerCo = ciaExamEnabled ? ciaTotal / enabledCoCount : 0;
 
-      const values = marksForEnabledCos.map((m) => {
+      // Proportional CIA distribution based on configured CIA weights per CO
+      const enabledCiaWeights = marksForEnabledCos.map((m) => Number(strictLabCiaWeightByCo[m.coNumber] || 0));
+      const totalCiaWeight = enabledCiaWeights.reduce((s, w) => s + w, 0);
+
+      const values = marksForEnabledCos.map((m, mIdx) => {
         const totalObtained = sumMarks(m.marks);
         const totalMax = Math.max(0, m.expCount) * Math.max(0, m.expMax);
-        const expWeight = Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0);
-        const ciaContribution = ciaExamEnabled ? normalizedContribution(ciaPerCo, ciaMaxPerCo, ciaMaxPerCo) : 0;
+        const expWeight = Number(strictLabExpWeightByCo[m.coNumber] || 0);
+        const ciaWeight = enabledCiaWeights[mIdx] || 0;
+
+        // CIA contribution: proportional share based on configured CIA weight
+        const ciaContribution = ciaExamEnabled && ciaExamMaxEffective > 0 && ciaWeight > 0
+          ? normalizedContribution(ciaTotal, ciaExamMaxEffective, ciaWeight)
+          : 0;
         const expContribution = normalizedContribution(totalObtained, totalMax, expWeight);
         const hasAnyCoMark = totalObtained > 0 || ciaContribution > 0;
         const mark = hasAnyCoMark ? round1(expContribution + ciaContribution) : null;
-        const coMax = round1(expWeight + (ciaExamEnabled ? ciaMaxPerCo : 0));
+        const coMax = round1(expWeight + ciaWeight);
         return { coNumber: m.coNumber, mark, coMax };
       });
 
@@ -1150,11 +1238,11 @@ export default function LabCourseMarksEntry({
       let hasAnyTcplMarks = false;
       const values = marksForEnabledCos.map((m) => {
         const avgMark = avgMarks(m.marks);
-        const expContribution = avgMark == null ? 0 : normalizedContribution(avgMark, Math.max(0, m.expMax), TCPL_INTERNAL_LAB_WEIGHT);
-        const ciaContribution = ciaExamEnabled ? normalizedContribution(ciaPerCo, ciaMaxPerCo, TCPL_INTERNAL_CIA_EXAM_WEIGHT) : 0;
+        const expContribution = avgMark == null ? 0 : normalizedContribution(avgMark, Math.max(0, m.expMax), tcplInternalLabWeight);
+        const ciaContribution = ciaExamEnabled ? normalizedContribution(ciaPerCo, ciaMaxPerCo, tcplInternalCiaExamWeight) : 0;
         const hasAnyCoMark = avgMark != null || ciaTotal > 0;
         const mark = hasAnyCoMark ? round1(expContribution + ciaContribution) : null;
-        const coMax = round1(TCPL_INTERNAL_LAB_WEIGHT + (ciaExamEnabled ? TCPL_INTERNAL_CIA_EXAM_WEIGHT : 0));
+        const coMax = round1(tcplInternalLabWeight + (ciaExamEnabled ? tcplInternalCiaExamWeight : 0));
         if (mark != null) {
           hasAnyTcplMarks = true;
           finalTotal += mark;
@@ -2298,6 +2386,8 @@ export default function LabCourseMarksEntry({
       const data = (resp as any)?.data ?? null;
       if (data && typeof data === 'object') {
         setPublishedViewSnapshot(data as LabDraftPayload);
+      } else {
+        setPublishedViewSnapshot(null);
       }
     } catch (e: any) {
       if (showLoading) setPublishedViewError(e?.message || 'Failed to load published marks');
@@ -2314,6 +2404,16 @@ export default function LabCourseMarksEntry({
     }
     refreshPublishedSnapshot(false);
   }, [subjectId, assessmentKey, markLock?.exists, markLock?.is_published]);
+
+  useEffect(() => {
+    // After refresh in published+locked mode, draft may be stale/empty if the latest edits
+    // were published before an autosave. Rehydrate visible rows from published snapshot.
+    if (!isPublished) return;
+    if (entryOpen) return;
+    if (!publishedViewSnapshot || !(publishedViewSnapshot as any).sheet) return;
+    setDraft(publishedViewSnapshot);
+    draftLoadedRef.current = true;
+  }, [isPublished, entryOpen, publishedViewSnapshot]);
 
   const prevEntryOpenRef = React.useRef<boolean | null>(null);
   useEffect(() => {
@@ -2337,18 +2437,11 @@ export default function LabCourseMarksEntry({
         const d = (resp as any)?.draft ?? null;
         if (!mounted) return;
         if (d && typeof d === 'object' && (d as any).sheet) {
-          // Check if draft has actual marks
-          const rows = (d as any).sheet?.rowsByStudentId;
-          const hasMarks = rows && Object.values(rows).some((row: any) =>
-            row?.marksA?.some((v: any) => v !== '' && v != null) ||
-            row?.marksB?.some((v: any) => v !== '' && v != null) ||
-            (row?.ciaExam !== '' && row?.ciaExam != null)
-          );
-          if (hasMarks) {
-            setDraft(d as LabDraftPayload);
-            draftLoadedRef.current = true;
-            return;
-          }
+          // A saved draft (including an intentionally reset/empty draft)
+          // must take precedence over published snapshot when entry is reopened.
+          setDraft(d as LabDraftPayload);
+          draftLoadedRef.current = true;
+          return;
         }
       } catch {
         // ignore and fall back
@@ -2898,97 +2991,95 @@ export default function LabCourseMarksEntry({
         for (const k of registerNoKeys(st.reg_no)) studentByReg.set(k, st);
       }
 
+      const rowsByStudentId: Record<string, LabRowState> = { ...(draft.sheet.rowsByStudentId || {}) };
       let matched = 0;
-      setDraft((p) => {
-        const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
 
-        for (let r = 1; r < rows.length; r++) {
-          const line = rows[r] || [];
-          const regKeys = registerNoKeys(line[regIdx]);
-          if (!regKeys.length) continue;
-          let student: Student | undefined;
-          for (const k of regKeys) {
-            const s = studentByReg.get(k);
-            if (s) {
-              student = s;
-              break;
-            }
+      for (let r = 1; r < rows.length; r++) {
+        const line = rows[r] || [];
+        const regKeys = registerNoKeys(line[regIdx]);
+        if (!regKeys.length) continue;
+        let student: Student | undefined;
+        for (const k of regKeys) {
+          const s = studentByReg.get(k);
+          if (s) {
+            student = s;
+            break;
           }
-          if (!student) continue;
+        }
+        if (!student) continue;
 
-          const sid = String(student.id);
-          const existing = rowsByStudentId[sid] || {
-            studentId: student.id,
-            marksA: [],
-            marksB: [],
-            marksByCo: {},
-            caaExamByCo: {},
-            ciaExamByCo: {},
-            ciaExam: '',
-          };
+        const sid = String(student.id);
+        const existing = rowsByStudentId[sid] || {
+          studentId: student.id,
+          marksA: [],
+          marksB: [],
+          marksByCo: {},
+          caaExamByCo: {},
+          ciaExamByCo: {},
+          ciaExam: '',
+        };
 
-          const marksByCo: Record<string, Array<number | ''>> = {
-            ...(((existing as any).marksByCo && typeof (existing as any).marksByCo === 'object') ? (existing as any).marksByCo : {}),
-          };
+        const marksByCo: Record<string, Array<number | ''>> = {
+          ...(((existing as any).marksByCo && typeof (existing as any).marksByCo === 'object') ? (existing as any).marksByCo : {}),
+        };
 
-          for (const m of enabledCoMetas) {
-            const coKey = String(m.coNumber);
-            marksByCo[coKey] = normalizeMarksArray(marksByCo[coKey], m.expCount);
-          }
-
-          for (const c of expCols) {
-            if (c.idx == null) continue;
-            const n = parseFinite(line[c.idx]);
-            const coKey = String(c.coNumber);
-            const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
-            arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
-            marksByCo[coKey] = arr;
-          }
-
-          const nextRow: LabRowState = {
-            ...(existing as any),
-            studentId: student.id,
-            marksByCo,
-          };
-
-          if (coANum != null) nextRow.marksA = normalizeMarksArray(marksByCo[String(coANum)], expCountA);
-          if (coBNum != null) nextRow.marksB = normalizeMarksArray(marksByCo[String(coBNum)], expCountB);
-
-          if (absentUiEnabled && absentIdx != null) {
-            const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
-            if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
-              nextRow.absent = false;
-              nextRow.absentKind = undefined;
-            } else {
-              nextRow.absent = true;
-              nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
-            }
-          }
-
-          if (ciaExamEnabled) {
-            if (usesLegacyTcplProfile) {
-              const caaExamByCo: Record<string, number | ''> = {
-                ...normalizeCaaByCo((existing as any).caaExamByCo),
-              };
-              for (const c of caaCols) {
-                if (c.idx == null) continue;
-                const n = parseFinite(line[c.idx]);
-                const rawMax = Number(TCPL_REVIEW_CAA_RAW_MAX[c.coNumber] || 0);
-                caaExamByCo[String(c.coNumber)] = n == null ? '' : clampInt(n, 0, rawMax);
-              }
-              nextRow.caaExamByCo = caaExamByCo;
-            } else if (ciaIdx != null) {
-              const n = parseFinite(line[ciaIdx]);
-              nextRow.ciaExam = n == null ? '' : clampInt(n, 0, ciaExamMaxEffective);
-            }
-          }
-
-          rowsByStudentId[sid] = nextRow;
-          matched += 1;
+        for (const m of enabledCoMetas) {
+          const coKey = String(m.coNumber);
+          marksByCo[coKey] = normalizeMarksArray(marksByCo[coKey], m.expCount);
         }
 
-        return { ...p, sheet: { ...p.sheet, rowsByStudentId } };
-      });
+        for (const c of expCols) {
+          if (c.idx == null) continue;
+          const n = parseFinite(line[c.idx]);
+          const coKey = String(c.coNumber);
+          const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
+          arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
+          marksByCo[coKey] = arr;
+        }
+
+        const nextRow: LabRowState = {
+          ...(existing as any),
+          studentId: student.id,
+          marksByCo,
+        };
+
+        if (coANum != null) nextRow.marksA = normalizeMarksArray(marksByCo[String(coANum)], expCountA);
+        if (coBNum != null) nextRow.marksB = normalizeMarksArray(marksByCo[String(coBNum)], expCountB);
+
+        if (absentUiEnabled && absentIdx != null) {
+          const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
+          if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
+            nextRow.absent = false;
+            nextRow.absentKind = undefined;
+          } else {
+            nextRow.absent = true;
+            nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
+          }
+        }
+
+        if (ciaExamEnabled) {
+          if (usesLegacyTcplProfile) {
+            const caaExamByCo: Record<string, number | ''> = {
+              ...normalizeCaaByCo((existing as any).caaExamByCo),
+            };
+            for (const c of caaCols) {
+              if (c.idx == null) continue;
+              const n = parseFinite(line[c.idx]);
+              const rawMax = Number(TCPL_REVIEW_CAA_RAW_MAX[c.coNumber] || 0);
+              caaExamByCo[String(c.coNumber)] = n == null ? '' : clampInt(n, 0, rawMax);
+            }
+            nextRow.caaExamByCo = caaExamByCo;
+          } else if (ciaIdx != null) {
+            const n = parseFinite(line[ciaIdx]);
+            nextRow.ciaExam = n == null ? '' : clampInt(n, 0, ciaExamMaxEffective);
+          }
+        }
+
+        rowsByStudentId[sid] = nextRow;
+        matched += 1;
+      }
+
+      setDraft((p) => ({ ...p, sheet: { ...p.sheet, rowsByStudentId } }));
 
       if (!matched) {
         alert('No matching students found in the imported file.');
@@ -3087,12 +3178,15 @@ export default function LabCourseMarksEntry({
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <button
-                onClick={() => {
-                  if (markManagerLocked && !markManagerEditRequestsEnabled) {
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (markManagerLocked && (!isPublished || !markManagerEditRequestsEnabled)) {
+                    setDraft((p) => ({ ...p, sheet: { ...p.sheet, markManagerLocked: false } }));
                     return;
                   }
                   if (markManagerLocked) {
-                    setMarkManagerModal({ mode: 'request' });
+                    window.setTimeout(() => setMarkManagerModal({ mode: 'request' }), 0);
                     return;
                   }
 
@@ -3112,10 +3206,10 @@ export default function LabCourseMarksEntry({
                     }
                   }
 
-                  setMarkManagerModal({ mode: 'confirm' });
+                  window.setTimeout(() => setMarkManagerModal({ mode: 'confirm' }), 0);
                 }}
                 className="obe-btn obe-btn-success"
-                disabled={!subjectId || markManagerBusy || (markManagerLocked && !markManagerEditRequestsEnabled)}
+                disabled={!subjectId || markManagerBusy}
                 style={markManagerBusy ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
               >
                 {markManagerLocked ? 'Edit' : 'Save'}
@@ -3596,11 +3690,11 @@ export default function LabCourseMarksEntry({
                         ? (isPureLabRecord ? PURE_LAB_RECORD_WEIGHT : PURE_LAB_CYCLE_MAX)
                         : isStrictLabMode
                         ? round1(
-                            Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
-                              (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
+                            Number(strictLabExpWeightByCo[m.coNumber] || 0) +
+                              Number(strictLabCiaWeightByCo[m.coNumber] || 0),
                           )
                         : (() => {
-                            if (usesLegacyTcplProfile && isTcpl) return round1(TCPL_INTERNAL_CO_MAX);
+                            if (usesLegacyTcplProfile && isTcpl) return round1(tcplInternalCoMax);
                             const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
                             const labOverrideVal = (LAB_CO_MAX_OVERRIDE as any)[`co${m.coNumber}`];
                             const perExpMaxes = Array.from({ length: clampInt(Number(m.expCount ?? 0), 0, 12) }).map(() => clampInt(Number(m.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100));
@@ -4649,11 +4743,11 @@ export default function LabCourseMarksEntry({
                           ? (isPureLabRecord ? PURE_LAB_RECORD_WEIGHT : PURE_LAB_CYCLE_MAX)
                           : isStrictLabMode
                           ? round1(
-                              Number(LAB_EXPERIMENT_WEIGHT_BY_CO[m.coNumber] || 0) +
-                                (ciaExamEnabled && enabledCoMetas.length ? ciaExamMaxEffective / enabledCoMetas.length : 0),
+                              Number(strictLabExpWeightByCo[m.coNumber] || 0) +
+                                Number(strictLabCiaWeightByCo[m.coNumber] || 0),
                             )
                           : (() => {
-                              if (usesLegacyTcplProfile && isTcpl) return round1(TCPL_INTERNAL_CO_MAX);
+                              if (usesLegacyTcplProfile && isTcpl) return round1(tcplInternalCoMax);
                               const profileCoMax = Number(TCPL_REVIEW_CO_MAX[m.coNumber] || 0);
                               return usesLegacyTcplProfile && profileCoMax > 0 ? profileCoMax : m.expMax + (ciaExamEnabled ? ciaExamMaxEffective / 2 : 0);
                             })();

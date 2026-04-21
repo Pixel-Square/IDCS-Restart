@@ -41,6 +41,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   academic_controller: Layout,
   notifications: Bell,
   academic_calendar: Calendar,
+  academic_calendar_admin: Calendar,
   pbas: ClipboardList,
   pbas_manager: Layout,
   settings: Settings,
@@ -489,6 +490,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
   // Academic Calendar intentionally hidden from sidebar for all users
+  // But IQAC can access the admin page
+  if (entry.academic_calendar_admin && !items.some((item) => item.key === 'academic_calendar_admin')) {
+    items.push({ key: 'academic_calendar_admin', label: 'Calendar Admin', to: '/iqac/calendar/admin' });
+  }
 
   // Settings (IQAC only) – includes Notification Templates and WhatsApp config
   if (isIqac && !items.some((item) => item.key === 'settings')) {

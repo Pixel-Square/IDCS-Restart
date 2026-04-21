@@ -80,7 +80,7 @@ const SCANNER_LABELS: Record<ScannerType, string> = {
 async function captureFromScanner(
   type: ResolvedScannerType,
   url: string,
-  opts?: { userId?: string },
+  opts?: { userId?: string; mode?: 'C' | 'M' },
 ): Promise<CaptureResult> {
   /* ── Demo mode ─────────────────────────────────────────────── */
   if (type === 'demo') {
@@ -162,6 +162,18 @@ async function captureFromScanner(
       const reconnectData = await reconnectRes.json().catch(() => ({}));
       if (!reconnectRes.ok || !reconnectData?.connected) {
         throw new Error('Fingerprint bridge is running but no sensor is connected. Check USB cable/port and retry.');
+      }
+    }
+
+    if (opts?.mode) {
+      const modeRes = await fetch(`${url}/mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: opts.mode }),
+      });
+      const modeData = await modeRes.json().catch(() => ({}));
+      if (!modeRes.ok || !modeData?.ok) {
+        throw new Error(modeData?.error || `Failed to switch ESP32 mode to ${opts.mode}.`);
       }
     }
 
@@ -469,6 +481,7 @@ export default function FingerprintEnrollPage() {
     try {
       const capture = await captureFromScanner(resolved.type, resolved.url, {
         userId: resolved.type === 'esp32_bridge' ? 'verify' : undefined,
+        mode: resolved.type === 'esp32_bridge' ? 'M' : undefined,
       });
       if (!monitorActiveRef.current) return;
 
@@ -505,9 +518,11 @@ export default function FingerprintEnrollPage() {
       }
 
       if (res.status === 404) {
+        const err = await res.json().catch(() => ({}));
+        const unmatchedMsg = String(err?.detail || 'Finger detected but no enrolled match found');
         monitorConsecutiveErrorsRef.current = 0;
         setMonitorEvents((prev) => [
-          { at: new Date().toLocaleTimeString(), status: 'unmatched' as const, text: 'Finger detected but no enrolled match found' },
+          { at: new Date().toLocaleTimeString(), status: 'unmatched' as const, text: unmatchedMsg },
           ...prev,
         ].slice(0, 8));
         return;
@@ -554,6 +569,34 @@ export default function FingerprintEnrollPage() {
     setLastIdentified(null);
     setMonitorEvents([]);
   }, []);
+
+  const startMonitoring = useCallback(async () => {
+    const resolved = resolveScannerForCapture();
+    if (!resolved) {
+      setMonitorError('No scanner detected. Connect scanner and retry monitoring.');
+      return;
+    }
+
+    if (resolved.type === 'esp32_bridge') {
+      try {
+        const modeRes = await fetch(`${resolved.url}/mode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'M' }),
+        });
+        const modeData = await modeRes.json().catch(() => ({}));
+        if (!modeRes.ok || !modeData?.ok) {
+          throw new Error(modeData?.error || 'Failed to switch ESP32 to monitor mode.');
+        }
+      } catch (e: any) {
+        setMonitorError(e?.message || 'Failed to switch scanner mode to monitoring.');
+        return;
+      }
+    }
+
+    setMonitorError(null);
+    setMonitoring(true);
+  }, [resolveScannerForCapture]);
 
   const refreshCaptureSection = useCallback(() => {
     setMessage(null);
@@ -666,7 +709,10 @@ export default function FingerprintEnrollPage() {
           resolvedType === 'esp32_bridge'
             ? String(userInfo?.identifier || idValue.trim() || fingerKey || 'capture').trim()
             : undefined;
-        const result = await captureFromScanner(resolvedType, resolvedUrl, { userId: esp32CaptureUserId });
+        const result = await captureFromScanner(resolvedType, resolvedUrl, {
+          userId: esp32CaptureUserId,
+          mode: resolvedType === 'esp32_bridge' ? 'C' : undefined,
+        });
         setSlots((prev) =>
           prev.map((s) =>
             s.finger === fingerKey
@@ -998,12 +1044,11 @@ export default function FingerprintEnrollPage() {
         <div className="flex items-center gap-3 flex-wrap mb-3">
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               if (monitoring) {
                 refreshMonitoringSection();
               } else {
-                setMonitorError(null);
-                setMonitoring(true);
+                await startMonitoring();
               }
             }}
             disabled={deviceConnecting || scannerOnline === false}

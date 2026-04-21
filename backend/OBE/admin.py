@@ -451,7 +451,12 @@ def _build_default_admin(model):
     if 'subject' in field_names:
         search_fields.extend(['subject__code', 'subject__name'])
     if 'student' in field_names:
-        search_fields.extend(['student__reg_no', 'student__user__username'])
+        search_fields.extend([
+            'student__reg_no',
+            'student__user__username',
+            'student__user__first_name',
+            'student__user__last_name',
+        ])
     if 'staff_user' in field_names:
         search_fields.append('staff_user__username')
 

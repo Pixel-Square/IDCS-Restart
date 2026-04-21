@@ -11,6 +11,12 @@ export type IQACTeachingMapRow = {
   section_id: number;
   section_name: string;
   academic_year: string;
+  semester?: number | null;
+  department?: {
+    id?: number;
+    code?: string | null;
+    name?: string | null;
+  } | null;
   staff?: {
     id?: number;
     username?: string;

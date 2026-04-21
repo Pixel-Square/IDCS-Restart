@@ -14,6 +14,7 @@ import {
   formatApiErrorMessage,
   formatEditRequestSentMessage,
   publishLabSheet,
+  resetAssessmentMarks,
   saveDraft,
 } from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
@@ -108,6 +109,8 @@ type Props = {
   tcprMode?: boolean;
   useSsaPublishedLockUi?: boolean;
   projectReviewMode?: boolean;
+  /** Override the default 50-mark cap for project review mode (e.g. 100 for PRBL Review 3). */
+  projectReviewMaxTotal?: number;
 };
 
 const DEFAULT_EXPERIMENTS = 5;
@@ -153,6 +156,10 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
   const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
   const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
   return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
+}
+
+function normalizeRegDigits(value: string): string {
+  return String(value || '').replace(/\D/g, '');
 }
 
 function clampInt(n: number, min: number, max: number) {
@@ -254,9 +261,13 @@ function makeReviewComponentId() {
   return `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function normalizeReviewComponents(raw: unknown, projectMode = false): ReviewComponent[] {
+function normalizeReviewComponents(raw: unknown, projectMode = false, maxTotal = REVIEW_TOTAL_MAX): ReviewComponent[] {
   if (projectMode) {
-    return [{ id: PROJECT_REVIEW_COMPONENT_ID, title: 'CO1', max: REVIEW_TOTAL_MAX }];
+    // Prefer previously saved max (faculty may have changed it); fall back to maxTotal.
+    const src = Array.isArray(raw) ? raw : [];
+    const saved = src.find((c: any) => c?.id === PROJECT_REVIEW_COMPONENT_ID);
+    const savedMax = saved ? Math.max(1, Math.round(Number(saved.max) || 0) || maxTotal) : maxTotal;
+    return [{ id: PROJECT_REVIEW_COMPONENT_ID, title: 'CO1', max: savedMax }];
   }
   const src = Array.isArray(raw) ? raw : [];
   const out: ReviewComponent[] = [];
@@ -310,11 +321,11 @@ function normalizeReviewComponentMarks(
   return out;
 }
 
-function constrainReviewComponentsTotal(components: ReviewComponent[]): ReviewComponent[] {
+function constrainReviewComponentsTotal(components: ReviewComponent[], maxTotal = REVIEW_TOTAL_MAX): ReviewComponent[] {
   const out: ReviewComponent[] = [];
   let used = 0;
   for (const component of components) {
-    const remaining = Math.max(0, REVIEW_TOTAL_MAX - used);
+    const remaining = Math.max(0, maxTotal - used);
     const nextMax = clampInt(Number(component.max), 0, remaining);
     out.push({ ...component, max: nextMax });
     used += nextMax;
@@ -394,9 +405,11 @@ export default function LabEntry({
   cia1Embed,
   useSsaPublishedLockUi,
   projectReviewMode,
+  projectReviewMaxTotal,
 }: Props) {
   const reviewFixedTable = assessmentKey === 'review1' || assessmentKey === 'review2' || assessmentKey === 'model';
   const isProjectReviewMode = Boolean(projectReviewMode && reviewFixedTable);
+  const effectiveReviewMax = projectReviewMaxTotal ?? REVIEW_TOTAL_MAX;
 
   // `selectableCosArr` controls what we render in Mark Manager.
   // For Review 1/Review 2, we want CO1..CO5 checkboxes visible.
@@ -438,6 +451,10 @@ export default function LabEntry({
   const [markManagerAnimating, setMarkManagerAnimating] = useState(false);
   const [rosterRefreshTick, setRosterRefreshTick] = useState(0);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
+  const [alphaOrderEnabled, setAlphaOrderEnabled] = useState(false);
+  const [digitFilterEnabled, setDigitFilterEnabled] = useState(false);
+  const [digitFilterLength, setDigitFilterLength] = useState<3 | 8>(3);
+  const [digitFilterValue, setDigitFilterValue] = useState('');
   const [excelBusy, setExcelBusy] = useState(false);
   const excelFileInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -452,7 +469,7 @@ export default function LabEntry({
       expCountB: DEFAULT_EXPERIMENTS,
       btlsA: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1),
       btlsB: Array.from({ length: DEFAULT_EXPERIMENTS }, () => 1),
-      reviewComponents: constrainReviewComponentsTotal(normalizeReviewComponents(null, isProjectReviewMode)),
+      reviewComponents: constrainReviewComponentsTotal(normalizeReviewComponents(null, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax),
       rowsByStudentId: {},
           expMaxA: DEFAULT_EXPERIMENT_MAX,
           expMaxB: DEFAULT_EXPERIMENT_MAX,
@@ -613,7 +630,7 @@ export default function LabEntry({
           const expMaxB = clampInt(Number(cfgB?.expMax ?? expMaxBLegacy), 0, 100);
           const btlsA = normalizeBtlArray(cfgA?.btl ?? btlsALegacy, expCountA);
           const btlsB = normalizeBtlArray(cfgB?.btl ?? btlsBLegacy, expCountB);
-          const reviewComponents = constrainReviewComponentsTotal(normalizeReviewComponents((d.sheet as any).reviewComponents, isProjectReviewMode));
+          const reviewComponents = constrainReviewComponentsTotal(normalizeReviewComponents((d.sheet as any).reviewComponents, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax);
           const normalizedRows: Record<string, LabRowState> = {};
           const rawRows = (d.sheet as any).rowsByStudentId && typeof (d.sheet as any).rowsByStudentId === 'object' ? (d.sheet as any).rowsByStudentId : {};
           for (const [sid, row0] of Object.entries(rawRows)) {
@@ -716,7 +733,7 @@ export default function LabEntry({
           const rowsByStudentId = stored?.rowsByStudentId && typeof stored.rowsByStudentId === 'object' ? stored.rowsByStudentId : {};
           setDraft((p) => ({
             ...p,
-            sheet: { ...p.sheet, batchLabel: String(subjectId), reviewComponents: constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents, isProjectReviewMode)), rowsByStudentId },
+            sheet: { ...p.sheet, batchLabel: String(subjectId), reviewComponents: constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax), rowsByStudentId },
           }));
         }
       } catch {
@@ -742,7 +759,12 @@ export default function LabEntry({
       try {
         const res = await fetchTeachingAssignmentRoster(teachingAssignmentId);
         if (!mounted) return;
-        const roster = (res?.students || []) as Student[];
+        const roster = ((res?.students || []) as any[]).map((raw: any) => ({
+          id: Number(raw?.id),
+          reg_no: String(raw?.reg_no ?? raw?.register_no ?? raw?.regNo ?? ''),
+          name: String(raw?.name ?? raw?.student_name ?? ''),
+          section: raw?.section ?? null,
+        })) as Student[];
         const sorted = [...roster].sort((a, b) => compareStudentName(a, b));
         setStudents(sorted);
       } catch (e: any) {
@@ -768,7 +790,7 @@ export default function LabEntry({
       const expCountB = clampInt(Number(p.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
       const btlsA = normalizeBtlArray((p.sheet as any).btlsA, expCountA);
       const btlsB = normalizeBtlArray((p.sheet as any).btlsB, expCountB);
-      const reviewComponents = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents, isProjectReviewMode));
+      const reviewComponents = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax);
       const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
 
       for (const s of students) {
@@ -829,7 +851,7 @@ export default function LabEntry({
 
   useEffect(() => {
     if (!isProjectReviewMode) return;
-    const nextComponents = constrainReviewComponentsTotal(normalizeReviewComponents((draft.sheet as any).reviewComponents, true));
+    const nextComponents = constrainReviewComponentsTotal(normalizeReviewComponents((draft.sheet as any).reviewComponents, true, effectiveReviewMax), effectiveReviewMax);
     const nextRowsByStudentId: Record<string, LabRowState> = {};
     for (const [sid, row] of Object.entries(draft.sheet.rowsByStudentId || {})) {
       const nextMarks = normalizeReviewComponentMarks((row as any)?.reviewComponentMarks, nextComponents, true, (row as any)?.ciaExam);
@@ -989,9 +1011,29 @@ export default function LabEntry({
   }, [draft.sheet.rowsByStudentId]);
 
   const renderStudents = useMemo(() => {
-    if (!showAbsenteesOnly) return students;
-    return students.filter((s) => Boolean((draft.sheet.rowsByStudentId?.[String(s.id)] as any)?.absent));
-  }, [students, showAbsenteesOnly, draft.sheet.rowsByStudentId]);
+    let rows = [...students];
+
+    if (showAbsenteesOnly) {
+      rows = rows.filter((s) => Boolean((draft.sheet.rowsByStudentId?.[String(s.id)] as any)?.absent));
+    }
+
+    const digitQuery = normalizeRegDigits(digitFilterValue).slice(0, digitFilterLength);
+    if (digitFilterEnabled && digitQuery) {
+      rows = rows.filter((s) => {
+        const regDigits = normalizeRegDigits(String((s as any).reg_no || ''));
+        const suffix = regDigits.slice(-digitFilterLength);
+        return suffix.endsWith(digitQuery);
+      });
+    }
+
+    if (alphaOrderEnabled) {
+      rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    } else {
+      rows.sort((a, b) => compareStudentName(a, b));
+    }
+
+    return rows;
+  }, [students, showAbsenteesOnly, draft.sheet.rowsByStudentId, alphaOrderEnabled, digitFilterEnabled, digitFilterLength, digitFilterValue]);
   
   // Table visibility and blocking logic:
   // - BEFORE Mark Manager confirm: table is HIDDEN
@@ -1001,14 +1043,14 @@ export default function LabEntry({
   const tableBlocked = Boolean(globalLocked || (isPublished ? (editRequestsEnabled && !entryOpen) : false));
 
   const reviewComponents = useMemo(
-    () => constrainReviewComponentsTotal(normalizeReviewComponents((draft.sheet as any).reviewComponents, isProjectReviewMode)),
-    [draft.sheet.reviewComponents, isProjectReviewMode],
+    () => constrainReviewComponentsTotal(normalizeReviewComponents((draft.sheet as any).reviewComponents, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax),
+    [draft.sheet.reviewComponents, isProjectReviewMode, effectiveReviewMax],
   );
   const reviewSplitTotal = useMemo(
-    () => reviewComponents.reduce((sum, component) => sum + clampInt(Number(component.max), 0, REVIEW_TOTAL_MAX), 0),
-    [reviewComponents],
+    () => reviewComponents.reduce((sum, component) => sum + clampInt(Number(component.max), 0, effectiveReviewMax), 0),
+    [reviewComponents, effectiveReviewMax],
   );
-  const reviewSplitRemaining = Math.max(0, REVIEW_TOTAL_MAX - reviewSplitTotal);
+  const reviewSplitRemaining = Math.max(0, effectiveReviewMax - reviewSplitTotal);
   const hasEmptyProjectReviewTitle = !isProjectReviewMode ? false : reviewComponents.some((component) => {
     const titleValue = Object.prototype.hasOwnProperty.call(reviewComponentTitleInputs, component.id)
       ? reviewComponentTitleInputs[component.id]
@@ -1341,6 +1383,7 @@ export default function LabEntry({
 
       const absentIdx = getCol('Absent');
       const ciaIdx = getCol('CIA Exam', 'CIA');
+      const totalIdx = getCol('Total', 'Total Marks', 'Mark', 'Marks');
       const expCols = enabledCoMetas.flatMap((m) =>
         Array.from({ length: m.expCount }, (_, i) => ({
           coNumber: m.coNumber,
@@ -1349,87 +1392,152 @@ export default function LabEntry({
           idx: getCol(`CO${m.coNumber}_E${i + 1}`, `CO${m.coNumber} E${i + 1}`, `CO${m.coNumber}-E${i + 1}`),
         })),
       );
+      const projectComponentCols = reviewComponents.map((component, idx) => ({
+        component,
+        idx: getCol(
+          `${component.title} (${component.max})`,
+          `${component.title}(${component.max})`,
+          component.title,
+          `CO${idx + 1} (${component.max})`,
+          `CO${idx + 1}`,
+        ),
+      }));
+
+      if (isProjectReviewMode) {
+        const hasProjectMarkColumn = projectComponentCols.some((c) => c.idx != null) || totalIdx != null;
+        if (!hasProjectMarkColumn) {
+          alert('Invalid file format: Project mark columns not found (e.g., CO1 (50) or Total).');
+          return;
+        }
+      }
+
+      let rosterForImport: Student[] = Array.isArray(students) ? [...students] : [];
+      if ((!rosterForImport || rosterForImport.length === 0) && typeof teachingAssignmentId === 'number') {
+        try {
+          const rosterResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+          rosterForImport = ((rosterResp?.students || []) as any[]).map((raw: any) => ({
+            id: Number(raw?.id),
+            reg_no: String(raw?.reg_no ?? raw?.register_no ?? raw?.regNo ?? ''),
+            name: String(raw?.name ?? raw?.student_name ?? ''),
+            section: raw?.section ?? null,
+          })) as Student[];
+          if (rosterForImport.length) {
+            setStudents([...rosterForImport].sort((a, b) => compareStudentName(a, b)));
+          }
+        } catch {
+          // keep existing rosterForImport
+        }
+      }
 
       const studentByReg = new Map<string, Student>();
-      for (const st of students) {
+      for (const st of rosterForImport) {
         for (const k of registerNoKeys(st.reg_no)) studentByReg.set(k, st);
       }
 
+      const rowsByStudentId: Record<string, LabRowState> = { ...(draft.sheet.rowsByStudentId || {}) };
       let matched = 0;
-      setDraft((p) => {
-        const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
 
-        for (let r = 1; r < rows.length; r++) {
-          const line = rows[r] || [];
-          const regKeys = registerNoKeys(line[regIdx]);
-          if (!regKeys.length) continue;
-          let student: Student | undefined;
-          for (const k of regKeys) {
-            const s = studentByReg.get(k);
-            if (s) {
-              student = s;
-              break;
-            }
+      for (let r = 1; r < rows.length; r++) {
+        const line = rows[r] || [];
+        const regKeys = registerNoKeys(line[regIdx]);
+        if (!regKeys.length) continue;
+        let student: Student | undefined;
+        for (const k of regKeys) {
+          const s = studentByReg.get(k);
+          if (s) {
+            student = s;
+            break;
           }
-          if (!student) continue;
+        }
+        if (!student) continue;
 
-          const sid = String(student.id);
-          const existing = rowsByStudentId[sid] || {
-            studentId: student.id,
-            marksA: Array.from({ length: expCountA }, () => ''),
-            marksB: Array.from({ length: expCountB }, () => ''),
-            marksByCo: {},
-            ciaExam: '',
-            caaExamByCo: {},
-          };
+        const sid = String(student.id);
+        const existing = rowsByStudentId[sid] || {
+          studentId: student.id,
+          marksA: Array.from({ length: expCountA }, () => ''),
+          marksB: Array.from({ length: expCountB }, () => ''),
+          marksByCo: {},
+          ciaExam: '',
+          caaExamByCo: {},
+        };
 
-          const marksByCo: Record<string, Array<number | ''>> =
-            (existing as any).marksByCo && typeof (existing as any).marksByCo === 'object' ? { ...(existing as any).marksByCo } : {};
+        const marksByCo: Record<string, Array<number | ''>> =
+          (existing as any).marksByCo && typeof (existing as any).marksByCo === 'object' ? { ...(existing as any).marksByCo } : {};
 
-          for (const m of enabledCoMetas) {
-            const key = String(m.coNumber);
-            marksByCo[key] = normalizeMarksArray(marksByCo[key], m.expCount);
-          }
-
-          for (const c of expCols) {
-            if (c.idx == null) continue;
-            const n = parseFinite(line[c.idx]);
-            const coKey = String(c.coNumber);
-            const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
-            arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
-            marksByCo[coKey] = arr;
-          }
-
-          const nextRow: LabRowState = {
-            ...(existing as any),
-            studentId: student.id,
-            marksByCo,
-            marksA: normalizeMarksArray(marksByCo[String(coA)] ?? (existing as any).marksA, expCountA),
-            marksB: normalizeMarksArray(marksByCo[String(coB)] ?? (existing as any).marksB, expCountB),
-          };
-
-          if (absentIdx != null) {
-            const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
-            if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
-              nextRow.absent = false;
-              nextRow.absentKind = undefined;
-            } else {
-              nextRow.absent = true;
-              nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
-            }
-          }
-
-          if (ciaIdx != null) {
-            const n = parseFinite(line[ciaIdx]);
-            nextRow.ciaExam = n == null ? '' : clampInt(n, 0, DEFAULT_CIA_EXAM_MAX);
-          }
-
-          rowsByStudentId[sid] = nextRow;
-          matched += 1;
+        for (const m of enabledCoMetas) {
+          const key = String(m.coNumber);
+          marksByCo[key] = normalizeMarksArray(marksByCo[key], m.expCount);
         }
 
-        return { ...p, sheet: { ...p.sheet, rowsByStudentId } };
-      });
+        for (const c of expCols) {
+          if (c.idx == null) continue;
+          const n = parseFinite(line[c.idx]);
+          const coKey = String(c.coNumber);
+          const arr = normalizeMarksArray(marksByCo[coKey], enabledCoMetas.find((x) => x.coNumber === c.coNumber)?.expCount ?? 0);
+          arr[c.expIndex] = n == null ? '' : clampInt(n, 0, c.expMax);
+          marksByCo[coKey] = arr;
+        }
+
+        const nextRow: LabRowState = {
+          ...(existing as any),
+          studentId: student.id,
+          marksByCo,
+          marksA: normalizeMarksArray(marksByCo[String(coA)] ?? (existing as any).marksA, expCountA),
+          marksB: normalizeMarksArray(marksByCo[String(coB)] ?? (existing as any).marksB, expCountB),
+        };
+
+        if (isProjectReviewMode) {
+          const priorComponentMarks =
+            (existing as any).reviewComponentMarks && typeof (existing as any).reviewComponentMarks === 'object'
+              ? { ...(existing as any).reviewComponentMarks }
+              : {};
+          const nextComponentMarks = normalizeReviewComponentMarks(priorComponentMarks, reviewComponents, true, (existing as any).ciaExam);
+          let importedProjectMark = false;
+
+          for (const c of projectComponentCols) {
+            if (c.idx == null) continue;
+            const n = parseFinite(line[c.idx]);
+            nextComponentMarks[c.component.id] = n == null ? '' : clampInt(n, 0, c.component.max);
+            importedProjectMark = importedProjectMark || n != null;
+          }
+
+          if (!importedProjectMark && reviewComponents.length === 1 && totalIdx != null) {
+            const totalImported = parseFinite(line[totalIdx]);
+            const onlyComponent = reviewComponents[0];
+            nextComponentMarks[onlyComponent.id] = totalImported == null ? '' : clampInt(totalImported, 0, onlyComponent.max);
+          }
+
+          const importedTotal = reviewComponents.reduce((sum, component) => {
+            const raw = nextComponentMarks[component.id];
+            if (typeof raw !== 'number' || !Number.isFinite(raw)) return sum;
+            return sum + clampInt(raw, 0, component.max);
+          }, 0);
+
+          nextRow.reviewComponentMarks = nextComponentMarks;
+          nextRow.ciaExam = clampInt(importedTotal, 0, REVIEW_TOTAL_MAX);
+        }
+
+        if (absentIdx != null) {
+          const rawAbsent = String(line[absentIdx] ?? '').trim().toUpperCase();
+          if (!rawAbsent || rawAbsent === 'NO' || rawAbsent === 'N' || rawAbsent === 'FALSE' || rawAbsent === '0') {
+            nextRow.absent = false;
+            nextRow.absentKind = undefined;
+          } else {
+            nextRow.absent = true;
+            nextRow.absentKind = rawAbsent === 'ML' || rawAbsent === 'SKL' ? (rawAbsent as any) : 'AL';
+          }
+        }
+
+        if (!isProjectReviewMode && ciaIdx != null) {
+          const n = parseFinite(line[ciaIdx]);
+          nextRow.ciaExam = n == null ? '' : clampInt(n, 0, DEFAULT_CIA_EXAM_MAX);
+        }
+
+        rowsByStudentId[sid] = nextRow;
+        matched += 1;
+      }
+
+      setDraft((p) => ({ ...p, sheet: { ...p.sheet, rowsByStudentId } }));
 
       if (!matched) {
         alert('No matching students found in the imported file.');
@@ -1793,8 +1901,26 @@ export default function LabEntry({
 
   async function resetSheet() {
     if (!subjectId) return;
+    if (typeof teachingAssignmentId !== 'number') {
+      alert('Please select a teaching assignment before resetting marks.');
+      return;
+    }
     const ok = window.confirm('Reset all lab marks for this sheet? This clears the draft (students + experiments + CIA Exam).');
     if (!ok) return;
+
+    try {
+      await resetAssessmentMarks(
+        assessmentKey,
+        subjectId,
+        teachingAssignmentId,
+      );
+      setPublishedAt(null);
+      refreshMarkLock({ silent: true });
+      refreshPublishWindow({ silent: true });
+    } catch (e: any) {
+      alert(e?.message || 'Backend reset failed');
+      return;
+    }
 
     const expCountA2 = clampInt(Number(draft.sheet.expCountA ?? DEFAULT_EXPERIMENTS), 0, 12);
     const expCountB2 = clampInt(Number(draft.sheet.expCountB ?? DEFAULT_EXPERIMENTS), 0, 12);
@@ -2173,6 +2299,47 @@ export default function LabEntry({
           <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={excelBusy || students.length === 0 || tableBlocked || globalLocked}>
             {excelBusy ? 'Importing…' : 'Import Excel'}
           </button>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              padding: '6px 10px',
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              background: '#f8fafc',
+            }}
+          >
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={alphaOrderEnabled} onChange={(e) => setAlphaOrderEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
+              Alphabetical order
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={digitFilterEnabled} onChange={(e) => setDigitFilterEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
+              Digits filter
+            </label>
+            <select
+              value={digitFilterLength}
+              disabled={!digitFilterEnabled}
+              onChange={(e) => setDigitFilterLength(Number(e.target.value) === 8 ? 8 : 3)}
+              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}
+            >
+              <option value={3}>Last 3</option>
+              <option value={8}>Last 8</option>
+            </select>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder={digitFilterLength === 8 ? 'Enter up to 8 digits' : 'Enter up to 3 digits'}
+              disabled={!digitFilterEnabled}
+              value={digitFilterValue}
+              onChange={(e) => setDigitFilterValue(normalizeRegDigits(e.target.value).slice(0, digitFilterLength))}
+              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, width: 170, background: '#fff' }}
+            />
+          </div>
           <input ref={excelFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleExcelFileSelect} style={{ display: 'none' }} />
         </div>
 
@@ -2267,13 +2434,10 @@ export default function LabEntry({
                   setDraft((p) => ({ ...p, sheet: { ...p.sheet, markManagerLocked: false } }));
                   return;
                 }
-                if (markManagerLocked && !editRequestsEnabled) {
-                  return;
-                }
                 setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
               }}
               className="obe-btn obe-btn-success"
-              disabled={!subjectId || markManagerBusy || (markManagerLocked && markManagerEditRequestsEnabled && !editRequestsEnabled)}
+              disabled={!subjectId || markManagerBusy}
               style={{ minWidth: 100 }}
             >
               {markManagerBusy ? 'Saving...' : markManagerLocked ? (markManagerEditRequestsEnabled ? 'Request Edit' : 'Edit') : 'Save & Lock'}
@@ -2284,9 +2448,26 @@ export default function LabEntry({
             <>
               <div style={{ width: '100%', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
                 <div style={{ fontWeight: 800, color: '#111827' }}>Total Marks</div>
-                <input type="number" className="obe-input" value={REVIEW_TOTAL_MAX} disabled style={{ width: 90 }} />
+                <input
+                  type="number"
+                  className="obe-input"
+                  value={reviewComponents[0]?.max ?? effectiveReviewMax}
+                  min={1}
+                  style={{ width: 90 }}
+                  disabled={markManagerLocked}
+                  onChange={(e) => {
+                    const n = Math.max(1, Math.round(Number(e.target.value) || 1));
+                    setDraft((p) => ({
+                      ...p,
+                      sheet: {
+                        ...p.sheet,
+                        reviewComponents: [{ id: PROJECT_REVIEW_COMPONENT_ID, title: 'CO1', max: n }],
+                      },
+                    }));
+                  }}
+                />
                 <div style={{ fontSize: 12, color: '#6b7280' }}>
-                  Used: <strong>{reviewSplitTotal}</strong> / {REVIEW_TOTAL_MAX}
+                  Used: <strong>{reviewSplitTotal}</strong> / {reviewComponents[0]?.max ?? effectiveReviewMax}
                 </div>
               </div>
 
@@ -2309,7 +2490,7 @@ export default function LabEntry({
                 ))}
               </div>
 
-              <div style={{ width: '100%', fontSize: 12, color: reviewSplitTotal > REVIEW_TOTAL_MAX ? '#b91c1c' : '#6b7280', marginTop: 8 }}>
+              <div style={{ width: '100%', fontSize: 12, color: reviewSplitTotal > effectiveReviewMax ? '#b91c1c' : '#6b7280', marginTop: 8 }}>
                 PROJECT reviews always use a fixed single component mapped to CO1.
               </div>
               {projectReviewValidationError ? (

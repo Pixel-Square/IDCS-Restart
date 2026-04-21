@@ -24,6 +24,7 @@ Assign/unassign/gatepass-check require SECURITY role.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, time, timedelta
 from typing import Any, Optional
@@ -3178,6 +3179,64 @@ class FingerprintIdentifyView(APIView):
                 uniq.append(key)
         return uniq
 
+    @staticmethod
+    def _extract_slot_candidates(payload: dict) -> list[int]:
+        import re
+
+        slots: list[int] = []
+        direct = payload.get('slot') if isinstance(payload, dict) else None
+        if direct is not None:
+            try:
+                slot_val = int(str(direct).strip())
+                if 1 <= slot_val <= 127:
+                    slots.append(slot_val)
+            except Exception:
+                pass
+
+        output = str((payload or {}).get('output') or '')
+        for m in re.findall(r'\bslot\s*[:#-]?\s*(\d{1,3})\b', output, flags=re.IGNORECASE):
+            try:
+                slot_val = int(str(m).strip())
+                if 1 <= slot_val <= 127 and slot_val not in slots:
+                    slots.append(slot_val)
+            except Exception:
+                pass
+
+        return slots
+
+    @staticmethod
+    def _find_active_esp32_by_slot(slot: int):
+        if not (1 <= int(slot) <= 127):
+            return None, []
+
+        matched = []
+        for e in FingerprintEnrollment.objects.filter(is_active=True).select_related('user').order_by('-enrolled_at'):
+            try:
+                t = bytes(e.template).decode('utf-8', errors='ignore')
+                p = json.loads(t)
+            except Exception:
+                continue
+
+            if not (isinstance(p, dict) and str(p.get('type', '')).startswith('esp32_')):
+                continue
+
+            try:
+                template_slot = int(str(p.get('slot', '')).strip())
+            except Exception:
+                continue
+
+            if template_slot == int(slot):
+                matched.append(e)
+
+        if not matched:
+            return None, []
+
+        user_ids = {e.user_id for e in matched}
+        if len(user_ids) == 1:
+            return matched[0], matched
+
+        return None, matched
+
     def post(self, request):
         data = request.data or {}
         b64 = (data.get("template_b64") or "").strip()
@@ -3231,6 +3290,24 @@ class FingerprintIdentifyView(APIView):
                     data['match_source'] = 'esp32_identifier'
                     return Response(data, status=status.HTTP_200_OK)
 
+            slot_candidates = self._extract_slot_candidates(payload)
+            for slot in slot_candidates:
+                enrollment_by_slot, matched_enrollments = self._find_active_esp32_by_slot(slot)
+                if enrollment_by_slot:
+                    data = self._build_user_payload(enrollment_by_slot.user, enrollment_by_slot)
+                    data['match_source'] = 'esp32_slot'
+                    data['slot'] = slot
+                    return Response(data, status=status.HTTP_200_OK)
+                if len(matched_enrollments) > 1:
+                    return Response(
+                        {
+                            "detail": f"Ambiguous ESP32 slot mapping for slot {slot}. Re-enroll affected users.",
+                            "slot": slot,
+                            "count": len(matched_enrollments),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
             # Last fallback: match normalized ESP32 textual output to previous enrollments.
             target = self._normalize_esp32_output(payload.get('output') or '')
             if target:
@@ -3259,5 +3336,14 @@ class FingerprintIdentifyView(APIView):
                         },
                         status=status.HTTP_409_CONFLICT,
                     )
+
+            if slot_candidates:
+                return Response(
+                    {
+                        "detail": f"Finger matched on sensor slot {slot_candidates[0]}, but no active user mapping exists in IDCS. Re-enroll that user fingerprint.",
+                        "slot": slot_candidates[0],
+                    },
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)

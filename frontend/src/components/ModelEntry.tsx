@@ -136,6 +136,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const SNO_COL_WIDTH = 32;
 
+  const normalizeRegDigits = (value: string): string => String(value || '').replace(/\D/g, '');
+  const compareByRegLast3 = (aRaw: unknown, bRaw: unknown) => {
+    const aLast3 = parseInt(String(aRaw || '').slice(-3), 10);
+    const bLast3 = parseInt(String(bRaw || '').slice(-3), 10);
+    return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
+  };
+
   const [students, setStudents] = useState<TeachingAssignmentRosterStudent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -160,6 +167,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const suppressAutosaveRef = useRef(false);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshotKeys, setAbsenteesSnapshotKeys] = useState<string[] | null>(null);
+  const [alphaOrderEnabled, setAlphaOrderEnabled] = useState(false);
+  const [digitFilterEnabled, setDigitFilterEnabled] = useState(false);
+  const [digitFilterLength, setDigitFilterLength] = useState<3 | 8>(3);
+  const [digitFilterValue, setDigitFilterValue] = useState('');
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
   const [tcplSheet, setTcplSheet] = useState<TcplSheetState>({});
   const [theorySheet, setTheorySheet] = useState<TcplSheetState>({});
@@ -181,6 +192,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
+  const isSpecial = normalizedClassType === 'SPECIAL';
 
   const {
     data: publishWindow,
@@ -631,6 +643,16 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       setTheorySheet(clearedTheory);
       setTcplSheet(clearedTcpl);
 
+      try {
+        await OBE.resetAssessmentMarks('model', String(subjectId), teachingAssignmentId ?? undefined);
+      } catch (e: any) {
+        const status = Number((e as any)?.status || 0);
+        const msg = String(e?.message || '');
+        const routeMissing = status === 404 || /\b404\b|not\s*found/i.test(msg);
+        if (!routeMissing) throw e;
+        console.warn('Backend rejected native model assessment reset, gracefully falling back to draft reset:', msg);
+      }
+
       await OBE.saveDraft(
         'model',
         String(subjectId),
@@ -692,7 +714,76 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     setPublishing(true);
     setActionError(null);
     try {
-      await OBE.publishModelSheet(subjectId, buildPayload(), teachingAssignmentId);
+      const coMarksTarget = students.map((s, idx) => {
+        const rowKey = getRowKey(s as any, idx);
+        const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
+        
+        const absent = Boolean(row.absent);
+        const kind = absent ? normalizeAbsenceKind((row as any).absentKind) : null;
+        const assignedTotal = absent && kind === 'AL' ? 0 : null;
+
+        const qMarks: Record<string, number> = {};
+        const defs = getQuestionDefsForSheet();
+        defs.forEach((q) => {
+          const v = ((row.q || {}) as Record<string, CellNumber>)[q.key] ?? '';
+          const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+          qMarks[q.key] = Math.max(0, Math.min(q.max, n));
+        });
+        const qTotal = Object.values(qMarks).reduce((sum, n) => sum + n, 0);
+
+        let labNum = 0;
+        let coCount = theoryCoCount;
+        let cosRow = theoryCosRow;
+        let coMaxRow = theoryCoMaxRow;
+
+        if (isTcplLike) {
+          const lv = (row as any).lab ?? '';
+          labNum = typeof lv === 'number' && Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : 0;
+          coCount = tcplCoCount;
+          cosRow = tcplCosRow;
+          coMaxRow = tcplCoMaxRow;
+        }
+
+        const totalVal = assignedTotal != null ? assignedTotal : qTotal + labNum;
+
+        const coMark: number[] = Array.from({ length: coCount }, () => 0);
+        
+        if (!isTcplLike) {
+          theoryQuestions.forEach((q, i) => {
+            const cs = theoryCosRow[i] ?? [1];
+            const validCos = Array.isArray(cs) ? cs.filter(c => c >= 1 && c <= coCount) : (typeof cs === 'number' && cs >= 1 && cs <= coCount ? [cs] : []);
+            if (validCos.length > 0) {
+              const splitVal = (qMarks[q.key] || 0) / validCos.length;
+              validCos.forEach(c => coMark[c - 1] += splitVal);
+            }
+          });
+        } else {
+          tcplQuestions.forEach((q, i) => {
+            const co = tcplCosRow[i] ?? 1;
+            if (co >= 1 && co <= coCount) coMark[co - 1] += qMarks[q.key] || 0;
+          });
+          if (tcplReviewIsCo5) {
+            coMark[4] += labNum;
+          } else {
+            for (let i = 0; i < coCount; i++) coMark[i] += labNum / coCount;
+          }
+        }
+
+        const coBreakdown: Record<string, any> = {};
+        coMark.forEach((m, i) => {
+          const denom = coMaxRow[i] || 0;
+          const pct = denom ? (m / denom) * 100 : 0;
+          coBreakdown[`co${i + 1}`] = { mark: m, percentage: pct };
+        });
+
+        return {
+          studentId: (s as any).id,
+          total: absent && kind === 'AL' ? 0 : totalVal,
+          coBreakdown
+        };
+      });
+
+      await OBE.publishModelSheet(subjectId, { ...buildPayload(), coMarks: coMarksTarget }, teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       await refreshPublishedSnapshot(false);
       refreshPublishWindow({ silent: true });
@@ -884,10 +975,27 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
 
   const rowsToRender = useMemo(() => {
-    if (students.length) return students;
-    // Fallback skeleton rows when roster isn't available yet.
-    return Array.from({ length: 5 }, (_, i) => ({ id: -(i + 1), reg_no: '', name: '', section: null }));
-  }, [students]);
+    let rows: TeachingAssignmentRosterStudent[] = students.length
+      ? [...students]
+      : (Array.from({ length: 5 }, (_, i) => ({ id: -(i + 1), reg_no: '', name: '', section: null })) as any);
+
+    const digitQuery = normalizeRegDigits(digitFilterValue).slice(0, digitFilterLength);
+    if (digitFilterEnabled && digitQuery) {
+      rows = rows.filter((s: any) => {
+        const regDigits = normalizeRegDigits(String((s as any)?.reg_no || ''));
+        const suffix = regDigits.slice(-digitFilterLength);
+        return suffix.endsWith(digitQuery);
+      }) as any;
+    }
+
+    if (alphaOrderEnabled) {
+      rows = [...rows].sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''))) as any;
+    } else {
+      rows = [...rows].sort((a: any, b: any) => compareByRegLast3(a?.reg_no, b?.reg_no)) as any;
+    }
+
+    return rows;
+  }, [students, alphaOrderEnabled, digitFilterEnabled, digitFilterLength, digitFilterValue]);
 
   const hasAbsentees = useMemo(() => {
     const sheet = activeSheet || {};
@@ -933,7 +1041,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const theoryQuestions = useMemo<QuestionDef[]>(() => {
     // Prefer IQAC-configured QP pattern if present.
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
-    if (Array.isArray(marks) && marks.length && isTheory) {
+    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial)) {
       return marks.map((max, i) => ({
         key: `q${i + 1}`,
         label: `Q${i + 1}`,
@@ -959,29 +1067,44 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       { key: 'q15', label: 'Q15', max: 14 },
       { key: 'q16', label: 'Q16', max: 10 },
     ];
-  }, [iqacPattern, isTheory]);
+  }, [iqacPattern, isTheory, isSpecial]);
 
   const theoryTotalMax = useMemo(() => theoryQuestions.reduce((sum, q) => sum + q.max, 0), [theoryQuestions]);
 
   // CO mapping row under Q1..Q16.
+  const extractModelCos = (raw: any): number[] => {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return [Math.trunc(raw)];
+    const s = String(raw || '').trim().replace(/CO/ig, '');
+    if (s.includes('&') || s.includes(',') || s.includes('/')) {
+      return s.split(/[&,/]+/).map((p) => parseInt(p, 10)).filter(Number.isFinite);
+    }
+    const n = Number(raw);
+    if (Number.isFinite(n)) return [Math.trunc(n)];
+    return [1];
+  };
+
   const theoryCosRow = useMemo(() => {
     const defaultRow = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5];
     const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-    if (isTheory && Array.isArray(cos) && cos.length === theoryQuestions.length) {
-      return cos.map((v: any) => {
-        const n = Number(v);
-        if (Number.isFinite(n)) return Math.max(1, Math.trunc(n));
-        return 1;
-      });
+    if ((isTheory || isSpecial) && Array.isArray(cos) && cos.length === theoryQuestions.length) {
+      return cos.map((v: any) => extractModelCos(v));
     }
-    if (theoryQuestions.length === defaultRow.length) return defaultRow;
-    return Array.from({ length: theoryQuestions.length }, (_, i) => defaultRow[i % defaultRow.length]);
-  }, [iqacPattern, isTheory, theoryQuestions.length]);
+    if (theoryQuestions.length === defaultRow.length) return defaultRow.map(v => [v]);
+    return Array.from({ length: theoryQuestions.length }, (_, i) => [defaultRow[i % defaultRow.length]]);
+  }, [iqacPattern, isTheory, isSpecial, theoryQuestions.length]);
 
   // Derived from actual COs used so unused CO columns are hidden automatically.
   const theoryCoCount = useMemo(() => {
     if (!theoryCosRow.length) return 1;
-    return Math.max(1, Math.max(...theoryCosRow));
+    let maxCo = 1;
+    theoryCosRow.forEach(row => {
+      if (Array.isArray(row)) {
+        row.forEach(co => maxCo = Math.max(maxCo, co));
+      } else if (typeof row === 'number') {
+        maxCo = Math.max(maxCo, row as number);
+      }
+    });
+    return Math.max(1, maxCo);
   }, [theoryCosRow]);
 
   // BTL mapping row under Q1..Q16.
@@ -995,8 +1118,14 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const theoryCoTheoryMaxRow = useMemo(() => {
     const coMax: number[] = Array.from({ length: theoryCoCount }, () => 0);
     theoryQuestions.forEach((q, i) => {
-      const co = theoryCosRow[i] ?? 1;
-      if (co >= 1 && co <= theoryCoCount) coMax[co - 1] += q.max;
+      const coMap = theoryCosRow[i] ?? [1];
+      const validCos = coMap.filter((co: number) => co >= 1 && co <= theoryCoCount);
+      if (validCos.length > 0) {
+        const splitMax = q.max / validCos.length;
+        validCos.forEach((co: number) => {
+          coMax[co - 1] += splitMax;
+        });
+      }
     });
     return coMax;
   }, [theoryQuestions, theoryCosRow, theoryCoCount]);
@@ -1019,7 +1148,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [theoryQuestionBtl, setTheoryQuestionBtl] = useState<Record<string, BtlValue>>(defaultTheoryQuestionBtl);
 
   useEffect(() => {
-    if (!isTheory) return;
+    if (!isTheory && !isSpecial) return;
     const stored = lsGet<Record<string, BtlValue>>(theoryQuestionBtlStorageKey);
     if (stored && typeof stored === 'object') {
       setTheoryQuestionBtl({
@@ -1029,7 +1158,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     } else {
       setTheoryQuestionBtl(defaultTheoryQuestionBtl);
     }
-  }, [isTheory, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
+  }, [isTheory, isSpecial, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
 
   const setTheoryBtl = (qKey: string, value: BtlValue) => {
     setTheoryQuestionBtl((prev) => {
@@ -1243,11 +1372,27 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (isTcplLike) header.push(`${tcplLabLabel} (${tcplLabMax})`);
     header.push('Status', 'Absence Kind');
 
-    const data = students.map((s) => {
+    const data = students.map((s, idx) => {
+      const rowKey = getRowKey(s as any, idx);
+      const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
+      const qObj = (row.q || {}) as Record<string, CellNumber>;
+      const absent = Boolean(row.absent);
+      const statusStr = absent ? 'absent' : 'present';
+      const kindStr = absent ? normalizeAbsenceKind((row as any).absentKind) : 'AL';
+
       const base = [String((s as any).reg_no || ''), String((s as any).name || '')];
-      const marks = defs.map(() => '');
-      if (isTcplLike) return [...base, ...marks, '', 'present', 'AL'];
-      return [...base, ...marks, 'present', 'AL'];
+      const marks = defs.map((q) => {
+        const raw = qObj[q.key];
+        const n = Number(raw);
+        return Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
+      });
+
+      if (isTcplLike) {
+        const lv = Number(row.lab);
+        const labMark = Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : '';
+        return [...base, ...marks, labMark, statusStr, kindStr];
+      }
+      return [...base, ...marks, statusStr, kindStr];
     });
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
@@ -1256,7 +1401,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     XLSX.utils.book_append_sheet(wb, ws, 'MODEL');
 
     const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
-    const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}_template.xlsx`;
+    const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.xlsx`;
     (XLSX as any).writeFile(wb, filename);
   };
 
@@ -1612,6 +1757,47 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!students.length || publishedEditLocked || excelBusy}>
             {excelBusy ? 'Importing…' : 'Import Excel'}
           </button>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              padding: '6px 10px',
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              background: '#f8fafc',
+            }}
+          >
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={alphaOrderEnabled} onChange={(e) => setAlphaOrderEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
+              Alphabetical order
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={digitFilterEnabled} onChange={(e) => setDigitFilterEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
+              Digits filter
+            </label>
+            <select
+              value={digitFilterLength}
+              disabled={!digitFilterEnabled}
+              onChange={(e) => setDigitFilterLength(Number(e.target.value) === 8 ? 8 : 3)}
+              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}
+            >
+              <option value={3}>Last 3</option>
+              <option value={8}>Last 8</option>
+            </select>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder={digitFilterLength === 8 ? 'Enter up to 8 digits' : 'Enter up to 3 digits'}
+              disabled={!digitFilterEnabled}
+              value={digitFilterValue}
+              onChange={(e) => setDigitFilterValue(normalizeRegDigits(e.target.value).slice(0, digitFilterLength))}
+              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, width: 170, background: '#fff' }}
+            />
+          </div>
           <input
             ref={excelFileInputRef}
             type="file"
@@ -1632,16 +1818,33 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
               {savingDraft ? 'Saving…' : 'Save Draft'}
             </button>
           ) : null}
-          {!isPublished && publishAllowed && !globalLocked ? (
-            <button
-              onClick={resetAllMarks}
-              className="obe-btn obe-btn-danger"
-              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
-              title="Clears the saved draft marks"
-            >
-              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
-            </button>
-          ) : null}
+          <button
+            onClick={resetAllMarks}
+            className="obe-btn obe-btn-danger"
+            disabled={
+              resettingMarks ||
+              students.length === 0 ||
+              tableBlocked ||
+              publishedEditLocked ||
+              globalLocked ||
+              !publishAllowed ||
+              !subjectId ||
+              typeof teachingAssignmentId !== 'number'
+            }
+            title={
+              globalLocked
+                ? 'Reset is blocked: publishing is locked by IQAC'
+                : !publishAllowed
+                  ? 'Reset is blocked: publish window is closed'
+                  : publishedEditLocked
+                    ? 'Reset is blocked: published table is locked; request edit first'
+                    : typeof teachingAssignmentId !== 'number'
+                      ? 'Reset is unavailable: teaching assignment is not selected'
+                      : 'Clears marks from draft and database for this teaching assignment'
+            }
+          >
+            {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+          </button>
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
@@ -2010,12 +2213,12 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           >
           {!isTcplLike ? (
             <>
-              {isTheory ? (
+              {isTheory || isSpecial ? (
                 <>
                   <thead>
                     <tr>
                       <th style={cellTh} colSpan={theoryColSpan}>
-                        MODEL (THEORY Header Template)
+                        MODEL ({isSpecial ? 'SPECIAL' : 'THEORY'} Header Template)
                       </th>
                     </tr>
 
@@ -2066,7 +2269,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                     <tr>
                       {theoryCosRow.map((v, i) => (
                         <th key={`theory-co-map-${i}`} style={{ ...cellTh, width: 40, minWidth: 40 }}>
-                          {v}
+                          {Array.isArray(v) ? v.join('&') : String(v)}
                         </th>
                       ))}
 
@@ -2216,8 +2419,14 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
                           const coMark: number[] = Array.from({ length: theoryCoCount }, () => 0);
                           theoryQuestions.forEach((q, i) => {
-                            const co = theoryCosRow[i] ?? 1;
-                            if (co >= 1 && co <= theoryCoCount) coMark[co - 1] += qMarks[q.key] || 0;
+                              const cs = theoryCosRow[i] ?? [1];
+                              const validCos = Array.isArray(cs) ? cs.filter(co => co >= 1 && co <= theoryCoCount) : (typeof cs === 'number' && cs >= 1 && cs <= theoryCoCount ? [cs] : []);
+                              if (validCos.length > 0) {
+                                const splitVal = (qMarks[q.key] || 0) / validCos.length;
+                                validCos.forEach(co => {
+                                  coMark[co - 1] += splitVal;
+                                });
+                              }
                           });
 
                           const coPct = coMark.map((m, i) => {

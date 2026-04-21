@@ -25,6 +25,7 @@ from django.core.mail import send_mail
 from django.core.mail import get_connection
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from urllib.parse import urlparse
 import posixpath
 import os
@@ -880,6 +881,7 @@ class ProfileUpdateView(APIView):
         first_name = request.data.get('first_name')
         last_name = request.data.get('last_name')
         email = request.data.get('email')
+        personal_email = request.data.get('personal_email')
         profile_edited = request.data.get('profileEdited', request.data.get('profile_edited'))
         username = request.data.get('username')
         profile_image = request.FILES.get('profile_image')
@@ -955,6 +957,22 @@ class ProfileUpdateView(APIView):
         if email is not None:
             user.email = str(email).strip()
             updated = True
+
+        if personal_email is not None:
+            normalized_personal_email = str(personal_email).strip().lower()
+            if normalized_personal_email:
+                try:
+                    validate_email(normalized_personal_email)
+                except ValidationError:
+                    return Response({'detail': 'Enter a valid personal email address.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_profile is None:
+                return Response({'detail': 'Personal email can be updated only for staff profiles.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if str(getattr(staff_profile, 'personal_email', '') or '') != normalized_personal_email:
+                staff_profile.personal_email = normalized_personal_email
+                staff_profile.save(update_fields=['personal_email'])
 
         # Do not mark name/email as permanently edited; allow subsequent edits.
 

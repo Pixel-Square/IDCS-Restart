@@ -209,6 +209,33 @@ def persist_lab_exam_marks(*, subject, teaching_assignment, assessment: str, dat
             enabled_cos.append(n)
     enabled_cos = sorted(enabled_cos)
 
+    # Back-compat: older/pure-lab payloads may miss coConfigs or expCount details.
+    # Infer cycle COs from fixed sheet COs and row-level marksByCo keys.
+    if not enabled_cos:
+        inferred: set[int] = set()
+        for raw in (sheet.get("coANum"), sheet.get("coBNum")):
+            try:
+                n = int(raw)
+            except Exception:
+                continue
+            if n > 0:
+                inferred.add(n)
+
+        for row in rows.values():
+            row_obj = row if isinstance(row, dict) else {}
+            mbc = row_obj.get("marksByCo") if isinstance(row_obj.get("marksByCo"), dict) else {}
+            for k, v in mbc.items():
+                if not isinstance(v, list):
+                    continue
+                try:
+                    n = int(str(k))
+                except Exception:
+                    continue
+                if n > 0:
+                    inferred.add(n)
+
+        enabled_cos = sorted(inferred)
+
     cia_enabled = bool(sheet.get("ciaExamEnabled"))
     cia_exam_max = _to_float(sheet.get("ciaExamMax"))
     if cia_enabled and (cia_exam_max is None or cia_exam_max <= 0):
@@ -235,6 +262,7 @@ def persist_lab_exam_marks(*, subject, teaching_assignment, assessment: str, dat
             cia_by_co = row.get("ciaExamByCo") if isinstance(row.get("ciaExamByCo"), dict) else {}
             legacy_cia = _to_float(row.get("ciaExam"))
             enabled_count = max(1, len(enabled_cos))
+            exp_marks_for_avg: list[float] = []
 
             # Keep total_mark aligned to the entered LAB exam mark shown in the UI
             # (e.g. CIA EXAM / review exam column), not summed CO attainment marks.
@@ -254,7 +282,6 @@ def persist_lab_exam_marks(*, subject, teaching_assignment, assessment: str, dat
 
             for co_num in enabled_cos:
                 cfg = co_configs.get(str(co_num)) if isinstance(co_configs.get(str(co_num)), dict) else {}
-                exp_count = int(_to_float(cfg.get("expCount")) or 0)
                 exp_max = float(_to_float(cfg.get("expMax")) or 0.0)
 
                 arr = marks_by_co.get(str(co_num))
@@ -265,6 +292,16 @@ def persist_lab_exam_marks(*, subject, teaching_assignment, assessment: str, dat
                         arr = row.get("marksB")
                     else:
                         arr = []
+
+                exp_count_cfg = int(_to_float(cfg.get("expCount")) or 0)
+                exp_count = exp_count_cfg if exp_count_cfg > 0 else (len(arr) if isinstance(arr, list) else 0)
+
+                if not absent and isinstance(arr, list):
+                    for i in range(max(0, exp_count)):
+                        raw_n = _to_float(arr[i]) if i < len(arr) else None
+                        if raw_n is None:
+                            continue
+                        exp_marks_for_avg.append(_clamp(float(raw_n), 0.0, float(exp_max)))
 
                 norm = _normalize_marks(arr, exp_count)
                 exp_obt = 0.0 if absent else float(sum(_clamp(x, 0.0, exp_max) for x in norm))
@@ -286,6 +323,9 @@ def persist_lab_exam_marks(*, subject, teaching_assignment, assessment: str, dat
                 co_max = exp_total + cia_max_part
                 pct = ((co_mark / co_max) * 100.0) if (co_mark is not None and co_max > 0) else None
                 per_co_rows.append((co_num, (round(co_mark, 2) if co_mark is not None else None), None if pct is None else round(pct, 2)))
+
+            if parent_total is None and exp_marks_for_avg:
+                parent_total = max(0.0, float(sum(exp_marks_for_avg)) / float(len(exp_marks_for_avg)))
 
             parent, _ = LabExamMark.objects.update_or_create(
                 subject=subject,

@@ -121,6 +121,7 @@ urlpatterns = [
     path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),
     path('iqac/class-type-weights', views.class_type_weights_list),
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
+    path('iqac/special-courses', views.iqac_special_courses_list),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),
@@ -129,6 +130,7 @@ urlpatterns = [
     # IQAC QP Pattern config
     path('iqac/qp-pattern', views.qp_pattern_get),
     path('iqac/qp-pattern/save', views.qp_pattern_upsert),
+    path('iqac/special-exam-config', views.iqac_special_exam_config),
 
     # IQAC Customizable Exam (batch-scoped QP pattern overrides)
     path('iqac/custom-exam/batches', views.iqac_custom_exam_batches),

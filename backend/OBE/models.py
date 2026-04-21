@@ -408,6 +408,35 @@ class Review2Mark(models.Model):
         ]
 
 
+class ProjectMark(models.Model):
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='project_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='project_marks',
+    )
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='project_marks')
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_project_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_project_mark_subject_student_legacy',
+            ),
+        ]
+
+
 class Formative1Mark(models.Model):
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='formative1_marks')
     teaching_assignment = models.ForeignKey(

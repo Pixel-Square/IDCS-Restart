@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react'
-import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload, Download } from 'lucide-react'
+import { Users, Building2, AlertCircle, Edit, UserPlus, Filter, List, Plus, Trash2, Upload, Download, ChevronLeft, ChevronRight } from 'lucide-react'
 import fetchWithAuth from '../services/fetchAuth'
 import StaffFormModal from '../components/StaffFormModal'
 import StaffImportModal from '../components/StaffImportModal'
@@ -8,6 +8,7 @@ type StaffMember = {
   id: number
   staff_id: string
   internal_id?: string | null
+  date_of_join?: string | null
   user: {
     username: string
     first_name: string
@@ -49,7 +50,7 @@ type Department = {
 }
 
 type ExportField = {
-  key: 'department' | 'staff_id' | 'internal_id' | 'name' | 'username' | 'email' | 'designation' | 'roles' | 'status'
+  key: 'department' | 'staff_id' | 'internal_id' | 'name' | 'username' | 'email' | 'designation' | 'date_of_join' | 'experience' | 'roles' | 'status'
   label: string
 }
 
@@ -61,6 +62,8 @@ const EXPORT_FIELDS: ExportField[] = [
   { key: 'username', label: 'Username' },
   { key: 'email', label: 'Email' },
   { key: 'designation', label: 'Designation' },
+  { key: 'date_of_join', label: 'Date of Join' },
+  { key: 'experience', label: 'Experience' },
   { key: 'roles', label: 'Roles' },
   { key: 'status', label: 'Status' },
 ]
@@ -70,11 +73,39 @@ const getStaffDisplayName = (staff: StaffMember): string => {
   return staff.user.username || staff.staff_id
 }
 
+const getExperienceText = (value: unknown): string => {
+  const raw = String(value || '').trim()
+  if (!raw) return '—'
+  const doj = new Date(raw)
+  if (Number.isNaN(doj.getTime())) return '—'
+
+  const now = new Date()
+  if (doj > now) return '0 months'
+
+  let years = now.getFullYear() - doj.getFullYear()
+  let months = now.getMonth() - doj.getMonth()
+
+  if (now.getDate() < doj.getDate()) {
+    months -= 1
+  }
+  if (months < 0) {
+    years -= 1
+    months += 12
+  }
+
+  if (years <= 0) {
+    return `${Math.max(months, 0)} month${months === 1 ? '' : 's'}`
+  }
+
+  return `${years} year${years === 1 ? '' : 's'} ${months} month${months === 1 ? '' : 's'}`
+}
+
 export default function StaffsPage() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [currentDeptId, setCurrentDeptId] = useState<number | 'all' | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
   const [selectedRole, setSelectedRole] = useState<string>('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null)
@@ -128,6 +159,8 @@ export default function StaffsPage() {
     username: true,
     email: true,
     designation: true,
+    date_of_join: true,
+    experience: true,
     roles: true,
     status: true,
   })
@@ -143,7 +176,7 @@ export default function StaffsPage() {
   }, [notificationOpen])
 
   useEffect(() => {
-    fetchStaffs()
+    fetchStaffs(true)
   }, [includeNonTeaching])
 
   const withCacheBust = (url: string) => `${url}${url.includes('?') ? '&' : '?'}_ts=${Date.now()}`
@@ -210,6 +243,40 @@ export default function StaffsPage() {
     return staffs.filter(staff => staff.roles?.includes(selectedRole))
   }
 
+  const itemsPerPage = 10
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [currentDeptId, selectedRole])
+
+  const renderPageNumbers = (totalPages: number, activePage: number) => {
+    const pages = []
+    const maxPagesToShow = 5
+    let startPage = Math.max(1, activePage - Math.floor(maxPagesToShow / 2))
+    const endPage = Math.min(totalPages, startPage + maxPagesToShow - 1)
+
+    if (endPage - startPage + 1 < maxPagesToShow) {
+      startPage = Math.max(1, endPage - maxPagesToShow + 1)
+    }
+
+    for (let page = startPage; page <= endPage; page++) {
+      pages.push(
+        <button
+          key={page}
+          onClick={() => setCurrentPage(page)}
+          className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+            activePage === page
+              ? 'bg-indigo-600 text-white'
+              : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+          }`}
+        >
+          {page}
+        </button>
+      )
+    }
+    return pages
+  }
+
   const handleEdit = (staff: StaffMember) => {
     setEditingStaff(staff)
     setIsModalOpen(true)
@@ -233,7 +300,7 @@ export default function StaffsPage() {
       })
       if (response.ok) {
         setStatusEditStaff(null)
-        await fetchStaffs()
+        await fetchStaffs(true)
       } else {
         const errorData = await response.json().catch(() => ({}))
         setStatusError(errorData.detail || 'Failed to update status.')
@@ -441,6 +508,8 @@ export default function StaffsPage() {
           username: staff.user?.username || '',
           email: staff.user?.email || '',
           designation: staff.designation || '',
+          date_of_join: staff.date_of_join || '',
+          experience: getExperienceText(staff.date_of_join),
           roles: [
             ...(staff.user_roles || []),
             ...((staff.department_role_mappings || []).map((item) => `${item.role} - ${item.department.short_name || item.department.code || item.department.name}`)),
@@ -628,7 +697,7 @@ export default function StaffsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-6">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full mx-auto">
         {/* Header */}
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <div className="flex items-center justify-between">
@@ -780,6 +849,11 @@ export default function StaffsPage() {
             const filteredStaffs = getFilteredStaffs(allStaffs) as (StaffMember & { departmentInfo: Department })[]
             const staffCount = filteredStaffs.length
             const totalStaffCount = allStaffs.length
+            const totalPages = Math.max(1, Math.ceil(staffCount / itemsPerPage))
+            const activePage = Math.min(currentPage, totalPages)
+            const startIndex = (activePage - 1) * itemsPerPage
+            const endIndex = startIndex + itemsPerPage
+            const paginatedStaffs = filteredStaffs.slice(startIndex, endIndex)
 
             return (
               <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -835,6 +909,12 @@ export default function StaffsPage() {
                             Designation
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Date of Join
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Experience
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             User & Department Roles
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -848,7 +928,7 @@ export default function StaffsPage() {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {filteredStaffs.map((staff) => (
+                        {paginatedStaffs.map((staff) => (
                           <tr key={`${staff.departmentInfo.id}-${staff.id}`} className="hover:bg-gray-50 transition-colors">
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                               <span className="inline-flex px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-800">
@@ -866,6 +946,12 @@ export default function StaffsPage() {
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                               {staff.designation || '—'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                              {staff.date_of_join || '—'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                              {getExperienceText(staff.date_of_join)}
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-600">
                               <div className="space-y-1">
@@ -937,6 +1023,45 @@ export default function StaffsPage() {
                     </table>
                   </div>
                 )}
+
+                {staffCount > 0 && totalPages > 1 && (
+                  <div className="px-6 py-4 border-t border-slate-200 bg-slate-50">
+                    <div className="flex items-center justify-between flex-wrap gap-4">
+                      <div className="text-sm text-slate-600">
+                        Showing <span className="font-semibold text-slate-900">{startIndex + 1}</span> to{' '}
+                        <span className="font-semibold text-slate-900">{Math.min(endIndex, staffCount)}</span> of{' '}
+                        <span className="font-semibold text-slate-900">{staffCount}</span> faculties
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setCurrentPage(activePage - 1)}
+                          disabled={activePage === 1}
+                          className={`p-2 rounded-md transition-colors ${
+                            activePage === 1
+                              ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <div className="flex items-center gap-1">
+                          {renderPageNumbers(totalPages, activePage)}
+                        </div>
+                        <button
+                          onClick={() => setCurrentPage(activePage + 1)}
+                          disabled={activePage === totalPages}
+                          className={`p-2 rounded-md transition-colors ${
+                            activePage === totalPages
+                              ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           }
@@ -949,6 +1074,11 @@ export default function StaffsPage() {
           const filteredStaffs = getFilteredStaffs(allStaffs)
           const staffCount = filteredStaffs.length
           const totalStaffCount = allStaffs.length
+          const totalPages = Math.max(1, Math.ceil(staffCount / itemsPerPage))
+          const activePage = Math.min(currentPage, totalPages)
+          const startIndex = (activePage - 1) * itemsPerPage
+          const endIndex = startIndex + itemsPerPage
+          const paginatedStaffs = filteredStaffs.slice(startIndex, endIndex)
 
           return (
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -1016,6 +1146,12 @@ export default function StaffsPage() {
                           Designation
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Date of Join
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Experience
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           User & Department Roles
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1029,7 +1165,7 @@ export default function StaffsPage() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredStaffs.map((staff) => (
+                      {paginatedStaffs.map((staff) => (
                         <tr key={staff.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             {staff.staff_id}
@@ -1042,6 +1178,12 @@ export default function StaffsPage() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                             {staff.designation || '—'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            {staff.date_of_join || '—'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            {getExperienceText(staff.date_of_join)}
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">
                             <div className="space-y-1">
@@ -1111,6 +1253,45 @@ export default function StaffsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {staffCount > 0 && totalPages > 1 && (
+                <div className="px-6 py-4 border-t border-slate-200 bg-slate-50">
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="text-sm text-slate-600">
+                      Showing <span className="font-semibold text-slate-900">{startIndex + 1}</span> to{' '}
+                      <span className="font-semibold text-slate-900">{Math.min(endIndex, staffCount)}</span> of{' '}
+                      <span className="font-semibold text-slate-900">{staffCount}</span> faculties
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setCurrentPage(activePage - 1)}
+                        disabled={activePage === 1}
+                        className={`p-2 rounded-md transition-colors ${
+                          activePage === 1
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <div className="flex items-center gap-1">
+                        {renderPageNumbers(totalPages, activePage)}
+                      </div>
+                      <button
+                        onClick={() => setCurrentPage(activePage + 1)}
+                        disabled={activePage === totalPages}
+                        className={`p-2 rounded-md transition-colors ${
+                          activePage === totalPages
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
