@@ -1069,3 +1069,178 @@ def public_stats(request):
         },
         status=200,
     )
+
+
+# ── Calendar Event Labels ─────────────────────────────────────────────────────
+
+from .models import CalendarEventLabel, CalendarEventAssignment
+
+
+def _label_to_dict(label: CalendarEventLabel) -> dict:
+    return {
+        'id': str(label.id),
+        'title': label.title,
+        'color': label.color,
+        'visible_roles': label.visible_roles or [],
+        'semesters': label.semesters or [],
+        'created_by': label.created_by_id,
+        'created_at': label.created_at.isoformat(),
+        'updated_at': label.updated_at.isoformat(),
+    }
+
+
+def _assignment_to_dict(a: CalendarEventAssignment) -> dict:
+    return {
+        'id': str(a.id),
+        'event_id': str(a.event_id),
+        'event_title': a.event.title,
+        'event_color': a.event.color,
+        'calendar_ref': a.calendar_ref,
+        'start_date': a.start_date.isoformat(),
+        'end_date': a.end_date.isoformat(),
+        'description': a.description,
+        'extra_data': a.extra_data,
+        'created_by': a.created_by_id,
+        'created_at': a.created_at.isoformat(),
+        'updated_at': a.updated_at.isoformat(),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def event_labels(request):
+    """List all event labels or create a new one."""
+    if request.method == 'GET':
+        labels = CalendarEventLabel.objects.all()
+        return Response([_label_to_dict(l) for l in labels])
+
+    # POST – create
+    data = request.data
+    title = str(data.get('title', '')).strip()
+    if not title:
+        return Response({'error': 'title is required'}, status=400)
+    color = str(data.get('color', '#3B82F6')).strip()
+    visible_roles = data.get('visible_roles', [])
+    semesters = data.get('semesters', [])
+    if not isinstance(visible_roles, list):
+        visible_roles = []
+    if not isinstance(semesters, list):
+        semesters = []
+    label = CalendarEventLabel.objects.create(
+        title=title,
+        color=color,
+        visible_roles=visible_roles,
+        semesters=semesters,
+        created_by=request.user,
+    )
+    return Response(_label_to_dict(label), status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def event_label_detail(request, label_id):
+    try:
+        label = CalendarEventLabel.objects.get(pk=label_id)
+    except CalendarEventLabel.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return Response(_label_to_dict(label))
+
+    if request.method == 'PUT':
+        data = request.data
+        if 'title' in data:
+            label.title = str(data['title']).strip() or label.title
+        if 'color' in data:
+            label.color = str(data['color']).strip()
+        if 'visible_roles' in data and isinstance(data['visible_roles'], list):
+            label.visible_roles = data['visible_roles']
+        if 'semesters' in data and isinstance(data['semesters'], list):
+            label.semesters = data['semesters']
+        label.save()
+        return Response(_label_to_dict(label))
+
+    if request.method == 'DELETE':
+        label.delete()
+        return Response(status=204)
+
+
+# ── Calendar Event Assignments ────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def event_assignments(request):
+    """List all assignments (optionally filter by calendar_ref) or create."""
+    if request.method == 'GET':
+        qs = CalendarEventAssignment.objects.select_related('event').all()
+        calendar_ref = request.query_params.get('calendar_ref')
+        if calendar_ref:
+            qs = qs.filter(calendar_ref=calendar_ref)
+        return Response([_assignment_to_dict(a) for a in qs])
+
+    # POST – create
+    data = request.data
+    event_id = data.get('event_id')
+    calendar_ref = str(data.get('calendar_ref', '')).strip()
+    start_date = data.get('start_date')  # YYYY-MM-DD
+    end_date = data.get('end_date')
+    description = str(data.get('description', '')).strip()
+    extra_data = data.get('extra_data') or None
+
+    if not event_id or not calendar_ref or not start_date or not end_date:
+        return Response({'error': 'event_id, calendar_ref, start_date, end_date are required'}, status=400)
+    try:
+        label = CalendarEventLabel.objects.get(pk=event_id)
+    except CalendarEventLabel.DoesNotExist:
+        return Response({'error': 'Event label not found'}, status=404)
+    from datetime import date as _date
+    try:
+        from datetime import datetime as _dt
+        s = _dt.strptime(start_date, '%Y-%m-%d').date()
+        e = _dt.strptime(end_date, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({'error': 'Dates must be YYYY-MM-DD'}, status=400)
+    assignment = CalendarEventAssignment.objects.create(
+        event=label,
+        calendar_ref=calendar_ref,
+        start_date=s,
+        end_date=e,
+        description=description,
+        extra_data=extra_data,
+        created_by=request.user,
+    )
+    return Response(_assignment_to_dict(assignment), status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def event_assignment_detail(request, assignment_id):
+    try:
+        a = CalendarEventAssignment.objects.select_related('event').get(pk=assignment_id)
+    except CalendarEventAssignment.DoesNotExist:
+        return Response({'error': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return Response(_assignment_to_dict(a))
+
+    if request.method == 'PUT':
+        data = request.data
+        if 'description' in data:
+            a.description = str(data['description'])
+        if 'extra_data' in data:
+            a.extra_data = data['extra_data']
+        if 'start_date' in data or 'end_date' in data:
+            from datetime import datetime as _dt
+            try:
+                if 'start_date' in data:
+                    a.start_date = _dt.strptime(data['start_date'], '%Y-%m-%d').date()
+                if 'end_date' in data:
+                    a.end_date = _dt.strptime(data['end_date'], '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'Dates must be YYYY-MM-DD'}, status=400)
+        a.save()
+        return Response(_assignment_to_dict(a))
+
+    if request.method == 'DELETE':
+        a.delete()
+        return Response(status=204)

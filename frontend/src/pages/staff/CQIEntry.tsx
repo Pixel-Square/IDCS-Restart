@@ -1632,22 +1632,37 @@ export default function CQIEntry({
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
                       : 10;
-                    return raw != null ? { raw, max } : null;
+                    // If exam was conducted (other students have marks) but this student has none, treat as 0
+                    const ssa1Conducted = Object.keys((ssa1Res as any)?.marks || {}).length > 0;
+                    return raw != null ? { raw, max } : (ssa1Conducted && max > 0 ? { raw: 0, max } : null);
                   }
                   case 'SSA2': {
                     const raw = toNumOrNull((ssa2Res as any)?.marks?.[String(studentId)]);
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
                       : 10;
-                    return raw != null ? { raw, max } : null;
+                    // If exam was conducted (other students have marks) but this student has none, treat as 0
+                    const ssa2Conducted = Object.keys((ssa2Res as any)?.marks || {}).length > 0;
+                    return raw != null ? { raw, max } : (ssa2Conducted && max > 0 ? { raw: 0, max } : null);
                   }
                   case 'CIA1':
                   case 'CIA2': {
                     const ciaData_ = examKey === 'CIA1' ? cia1Data : cia2Data;
                     const ciaQs = examKey === 'CIA1' ? cia1Questions : cia2Questions;
                     if (!ciaData_) return null;
+                    const ciaHasAny = Object.keys(ciaData_.rowsByStudentId || {}).length > 0;
                     const row = (ciaData_.rowsByStudentId || {})[String(studentId)] || {};
-                    if (Boolean((row as any)?.absent)) return null;
+                    if (Boolean((row as any)?.absent)) {
+                      // Absent: compute max from pattern only, return 0 mark
+                      let absentMax = 0;
+                      ciaQs.forEach((qDef: any, idx: number) => {
+                        const patCo = patCos[idx] != null ? patCos[idx] : Number(qDef.co ?? 0);
+                        const qMax = patMarks[idx] != null ? patMarks[idx] : Number(qDef.max || 0);
+                        if (patCo !== co) return;
+                        absentMax += qMax;
+                      });
+                      return absentMax > 0 ? { raw: 0, max: absentMax } : null;
+                    }
                     const q = (row as any)?.q && typeof (row as any).q === 'object'
                       ? (row as any).q : row;
                     let coRaw = 0; let coMax = 0; let hasAny = false; let hasThisCo = false;
@@ -1662,6 +1677,8 @@ export default function CQIEntry({
                       if (v != null) { coRaw += clamp(v, 0, qMax); hasAny = true; }
                     });
                     if (!hasThisCo) return null;
+                    // If exam was conducted but no marks for this student, return 0/max
+                    if (!hasAny && ciaHasAny && coMax > 0) return { raw: 0, max: coMax };
                     return hasAny ? { raw: coRaw, max: coMax } : null;
                   }
                   case 'MODEL': {
@@ -1670,7 +1687,10 @@ export default function CQIEntry({
                     const coKey = `co${co}` as const;
                     const raw = toNumOrNull((modelScaled as any)[coKey]);
                     const max = (modelMaxes as any)[coKey] ?? 0;
-                    return raw != null && max > 0 ? { raw, max } : null;
+                    if (raw != null && max > 0) return { raw, max };
+                    // Model conducted but student has no mark for this CO → treat as 0
+                    const modelHasCo = max > 0;
+                    return modelHasCo ? { raw: 0, max } : null;
                   }
                   default:
                     return null;
@@ -1976,11 +1996,14 @@ export default function CQIEntry({
                     ciaAcc += mark * wCo;
                   });
 
+                  // Always set ciaMax from config so absent students get mark=0 with full weight
+                  const cia1HeaderMaxForCo = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
+                  const cia1DefaultMaxForCo = coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
+                  ciaMax = cia1HeaderMaxForCo > 0 ? cia1HeaderMaxForCo : cia1DefaultMaxForCo;
                   if (anyCiaForCo) {
                     ciaMark = ciaAcc;
-                    const headerMax = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
-                    ciaMax = headerMax > 0 ? headerMax : coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
                   }
+                  // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
                 }
 
                 // TCPR: Review1 replaces Formative1
@@ -2003,14 +2026,19 @@ export default function CQIEntry({
 
                 // THEORY/SPECIAL: Formative1
                 if (!isTcpr && !isTcpl) {
-                  const f1Row = ((f1Res as any).marks || {})[String(student.id)] || {};
+                  const f1Marks = (f1Res as any).marks || {};
+                  const f1HasAny = Object.keys(f1Marks).length > 0;
+                  // Always set faMax when FA sheet has data so absent students get mark=0 with full weight
+                  if (f1HasAny) {
+                    faMax = coNum === 1 ? maxes.f1.co1 : maxes.f1.co2;
+                  }
+                  const f1Row = f1Marks[String(student.id)] || {};
                   const skillKey = coNum === 1 ? 'skill1' : 'skill2';
                   const attKey = coNum === 1 ? 'att1' : 'att2';
                   const skill = toNumOrNull(f1Row[skillKey]);
                   const att = toNumOrNull(f1Row[attKey]);
                   if (skill !== null && att !== null) {
                     faMark = skill + att;
-                    faMax = coNum === 1 ? maxes.f1.co1 : maxes.f1.co2;
                   }
                 }
               } else {
@@ -2062,11 +2090,14 @@ export default function CQIEntry({
                     ciaAcc += mark * wCo;
                   });
 
+                  // Always set ciaMax from config so absent students get mark=0 with full weight
+                  const cia2HeaderMaxForCo = coNum === 3 ? cia2HeaderMax.co3 : cia2HeaderMax.co4;
+                  const cia2DefaultMaxForCo = coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
+                  ciaMax = cia2HeaderMaxForCo > 0 ? cia2HeaderMaxForCo : cia2DefaultMaxForCo;
                   if (anyCiaForCo) {
                     ciaMark = ciaAcc;
-                    const headerMax = coNum === 3 ? cia2HeaderMax.co3 : cia2HeaderMax.co4;
-                    ciaMax = headerMax > 0 ? headerMax : coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
                   }
+                  // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
                 }
 
                 // TCPR: Review2 replaces Formative2
@@ -2089,14 +2120,19 @@ export default function CQIEntry({
 
                 // THEORY/SPECIAL: Formative2
                 if (!isTcpr && !isTcpl) {
-                  const f2Row = ((f2Res as any).marks || {})[String(student.id)] || {};
+                  const f2Marks = (f2Res as any).marks || {};
+                  const f2HasAny = Object.keys(f2Marks).length > 0;
+                  // Always set faMax when FA sheet has data so absent students get mark=0 with full weight
+                  if (f2HasAny) {
+                    faMax = coNum === 3 ? maxes.f2.co3 : maxes.f2.co4;
+                  }
+                  const f2Row = f2Marks[String(student.id)] || {};
                   const skillKey = coNum === 3 ? 'skill1' : 'skill2';
                   const attKey = coNum === 3 ? 'att1' : 'att2';
                   const skill = toNumOrNull(f2Row[skillKey]);
                   const att = toNumOrNull(f2Row[attKey]);
                   if (skill !== null && att !== null) {
                     faMark = skill + att;
-                    faMax = coNum === 3 ? maxes.f2.co3 : maxes.f2.co4;
                   }
                 }
               } else {
@@ -2123,25 +2159,43 @@ export default function CQIEntry({
             // Build component list and breakdown (only include components present)
             const weights = weightsForCo(coNum);
             const components: Array<{ key: string; mark: number; max: number; w: number; }> = [];
-            if (ssaMark !== null && ssaMax > 0) components.push({ key: 'ssa', mark: ssaMark, max: ssaMax, w: weights.ssa });
-            if (ciaMark !== null && ciaMax > 0) components.push({ key: 'cia', mark: ciaMark, max: ciaMax, w: weights.cia });
 
-            if (reviewMark !== null && reviewMax > 0) {
-              // TCPR review replaces formative weight
-              components.push({ key: 'review', mark: reviewMark, max: reviewMax, w: isProject ? reviewMax : weights.fa });
+            const isExamConducted = (res: any) => {
+              if (!res) return false;
+              if (res.marks && Object.keys(res.marks).length > 0) return true;
+              if (res.draft?.rows && res.draft.rows.length > 0) return true;
+              if (res.draft?.sheet?.rows && res.draft.sheet.rows.length > 0) return true;
+              if (res.rowsByStudentId && Object.keys(res.rowsByStudentId).length > 0) return true;
+              if (res.sheet?.rowsByStudentId && Object.keys(res.sheet.rowsByStudentId).length > 0) return true;
+              return false;
+            };
+
+            const ssaConducted = isExamConducted(coNum <= 2 ? ssa1Res : ssa2Res);
+            if ((ssaMark !== null || ssaConducted) && ssaMax > 0) {
+              components.push({ key: 'ssa', mark: ssaMark ?? 0, max: ssaMax, w: weights.ssa });
             }
 
-            if (faMark !== null && faMax > 0) {
+            const ciaConducted = isExamConducted(coNum <= 2 ? cia1Data : cia2Data) || (isLabLike && isExamConducted(coNum <= 2 ? labCia1 : labCia2));
+            if ((ciaMark !== null || ciaConducted) && ciaMax > 0) {
+              components.push({ key: 'cia', mark: ciaMark ?? 0, max: ciaMax, w: weights.cia });
+            }
+
+            const reviewConducted = isExamConducted(coNum <= 2 ? review1Res : review2Res);
+            if ((reviewMark !== null || reviewConducted) && reviewMax > 0) {
+              components.push({ key: 'review', mark: reviewMark ?? 0, max: reviewMax, w: isProject ? reviewMax : weights.fa });
+            }
+
+            const faConducted = isExamConducted(coNum <= 2 ? f1Res : f2Res) || isExamConducted(coNum <= 2 ? tcplLab1 : tcplLab2);
+            if ((faMark !== null || faConducted) && faMax > 0) {
               const key = isTcpl ? (coNum === 1 || coNum === 2 ? 'lab1' : coNum === 3 || coNum === 4 ? 'lab2' : 'fa') : 'fa';
               const tcplFaWeight = isTcpl ? Math.max(0, Number(weights.fa || 0) + Number(weights.ciaExam || 0)) : weights.fa;
-              components.push({ key, mark: faMark, max: faMax, w: tcplFaWeight });
+              components.push({ key, mark: faMark ?? 0, max: faMax, w: tcplFaWeight });
             }
 
-            if (meMark !== null && meMax > 0) {
-              // For local model sheets: meMax is already 2/4 and mark is scaled to that; set w=meMax so contrib==mark.
-              // For lab-like: meMax is the CO_MAX; treat it like a regular component with weight equal to meMax.
+            const modelConducted = modelScaled != null || (isLabLike && isExamConducted(labModel));
+            if ((meMark !== null || modelConducted) && meMax > 0) {
               const meWeight = weights.me > 0 ? weights.me : ((!isLabLike && modelScaled) ? (coNum === 5 ? 4 : 2) : meMax);
-              components.push({ key: 'me', mark: meMark, max: meMax, w: meWeight });
+              components.push({ key: 'me', mark: meMark ?? 0, max: meMax, w: meWeight });
             }
 
             if (components.length > 0) {

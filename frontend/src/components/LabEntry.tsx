@@ -2687,7 +2687,7 @@ export default function LabEntry({
                       {reviewComponents.map((component) => (
                         <th key={`pr_max_${component.id}`} style={cellTh}>{component.max}</th>
                       ))}
-                      <th style={cellTh}>{REVIEW_TOTAL_MAX}</th>
+                      <th style={cellTh}>{reviewComponents[0]?.max ?? effectiveReviewMax}</th>
                       <th style={cellTh}>100</th>
                     </tr>
                   </thead>
@@ -2739,8 +2739,8 @@ export default function LabEntry({
                                 </td>
                               ))}
                               <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{total}</td>
-                              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center', color: (!row && total === 0) ? '#94a3b8' : (total / REVIEW_TOTAL_MAX >= 0.58 ? '#16a34a' : '#dc2626') }}>
-                                {(!row && total === 0) ? '—' : `${((total / REVIEW_TOTAL_MAX) * 100).toFixed(2)}%`}
+                              <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center', color: (!row && total === 0) ? '#94a3b8' : (total / (reviewComponents[0]?.max ?? effectiveReviewMax) >= 0.58 ? '#16a34a' : '#dc2626') }}>
+                                {(!row && total === 0) ? '—' : `${((total / (reviewComponents[0]?.max ?? effectiveReviewMax)) * 100).toFixed(2)}%`}
                               </td>
                             </tr>
                           );
@@ -3333,7 +3333,7 @@ export default function LabEntry({
                         <tr>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 800 }}>Total</td>
                           <td colSpan={2} style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right', fontWeight: 600 }}>
-                            {reviewSplitTotal} / {REVIEW_TOTAL_MAX}
+                            {reviewSplitTotal} / {reviewComponents[0]?.max ?? effectiveReviewMax}
                           </td>
                         </tr>
                       ) : (

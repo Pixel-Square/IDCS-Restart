@@ -15,6 +15,7 @@ CLASS_TYPE_CHOICES = (
     ('PROJECT', 'Project'),
     ('AUDIT', 'Audit'),
     ('SPECIAL', 'Special'),
+    ('ENGLISH', 'English'),
 )
 
 def validate_question_paper_type_code(value: str):

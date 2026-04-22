@@ -1,5 +1,16 @@
 from django.contrib import admin
-from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance, StaffFormUsage
+from .models import (
+    RequestTemplate,
+    ApprovalStep,
+    StaffRequest,
+    ApprovalLog,
+    StaffLeaveBalance,
+    StaffFormUsage,
+    VacationEntitlementRule,
+    VacationSemester,
+    VacationConfirmSlot,
+    VacationSlot,
+)
 
 
 class ApprovalStepInline(admin.TabularInline):
@@ -38,11 +49,20 @@ class RequestTemplateAdmin(admin.ModelAdmin):
     )
     
     readonly_fields = ['created_at', 'updated_at']
-    
+
     def total_approval_steps(self, obj):
         """Display the number of approval steps"""
         return obj.approval_steps.count()
     total_approval_steps.short_description = 'Approval Steps'
+
+
+@admin.register(VacationConfirmSlot)
+class VacationConfirmSlotAdmin(admin.ModelAdmin):
+    list_display = ['slot_name', 'semester', 'from_date', 'to_date', 'is_active', 'created_at']
+    list_filter = ['is_active', 'semester', 'from_date']
+    search_fields = ['slot_name', 'semester']
+    filter_horizontal = ['departments']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(ApprovalStep)
@@ -207,3 +227,36 @@ class StaffFormUsageAdmin(admin.ModelAdmin):
         if obj:  # Editing existing object
             return self.readonly_fields + ['staff', 'template', 'reset_period_start', 'reset_period_end']
         return self.readonly_fields
+
+
+@admin.register(VacationEntitlementRule)
+class VacationEntitlementRuleAdmin(admin.ModelAdmin):
+    list_display = ['condition', 'min_years', 'min_months', 'entitled_days', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'updated_at']
+    ordering = ['id']
+
+
+@admin.register(VacationSlot)
+class VacationSlotAdmin(admin.ModelAdmin):
+    list_display = [
+        'slot_name',
+        'semester_ref',
+        'semester',
+        'semester_from_date',
+        'semester_to_date',
+        'from_date',
+        'to_date',
+        'total_days',
+        'is_active',
+    ]
+    list_filter = ['is_active', 'semester']
+    search_fields = ['slot_name', 'semester']
+    ordering = ['from_date', 'slot_name']
+
+
+@admin.register(VacationSemester)
+class VacationSemesterAdmin(admin.ModelAdmin):
+    list_display = ['name', 'from_date', 'to_date', 'is_active', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['name']
+    ordering = ['from_date', 'name']

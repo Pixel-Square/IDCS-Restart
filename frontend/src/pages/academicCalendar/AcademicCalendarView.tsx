@@ -1,32 +1,21 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Calendar } from 'lucide-react'
-import { CalendarData, CalendarDate, loadCalendars } from './calendarTypes'
-
-function rowBgClass(entry: CalendarDate): string {
-  const d = entry.day.toLowerCase()
-  const wd = entry.workingDays.toLowerCase()
-  if (d === 'sun' || wd === 'sun') return 'bg-orange-100'
-  if (d === 'sat' || wd === 'sat') return 'bg-orange-50'
-  return ''
-}
-
-function yearCell(event: string, count: string, workingDays: string): string {
-  const wd = workingDays.toLowerCase()
-  if (wd === 'sun' || wd === 'sat') return workingDays
-  if (event) return event
-  return count
-}
+import { CalendarData, CalendarEventDef, DateAssignment, loadCalendars, loadEventDefs, loadDateAssignments } from './calendarTypes'
+import { CalendarGrid } from './CalendarGrid'
 
 export default function AcademicCalendarView() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [calendar, setCalendar] = useState<CalendarData | null>(null)
+  const [eventDefs, setEventDefs] = useState<CalendarEventDef[]>([])
+  const [assignments, setAssignments] = useState<DateAssignment[]>([])
 
   useEffect(() => {
     const all = loadCalendars()
-    const found = all.find(c => c.id === id)
-    setCalendar(found || null)
+    setCalendar(all.find(c => c.id === id) || null)
+    setEventDefs(loadEventDefs())
+    setAssignments(loadDateAssignments())
   }, [id])
 
   if (!calendar) {
@@ -44,104 +33,31 @@ export default function AcademicCalendarView() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-full mx-auto px-6 py-4 flex items-center gap-4">
-          <button
-            onClick={() => navigate('/iqac/calendar/admin')}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            Back
-          </button>
-          <div className="flex items-center gap-3">
-            <Calendar className="w-6 h-6 text-blue-600" />
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">{calendar.name}</h1>
-              <p className="text-sm text-gray-500">
-                {calendar.academicYear} &bull;{' '}
-                <span className={`font-medium ${calendar.semesterType === 'ODD' ? 'text-blue-600' : 'text-purple-600'}`}>
-                  {calendar.semesterType} Semester
-                </span>
-                &bull; {calendar.dates.length} entries
-              </p>
-            </div>
+    <div className="min-h-screen bg-gray-100 flex flex-col">
+      {/* Top bar */}
+      <div className="bg-white border-b px-6 py-3 flex items-center gap-4 sticky top-0 z-10 shadow-sm">
+        <button onClick={() => navigate('/iqac/calendar/admin')} className="flex items-center gap-1.5 text-gray-500 hover:text-gray-900 transition-colors text-sm">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+        <div className="flex items-center gap-2">
+          <Calendar className="w-5 h-5 text-blue-600 flex-shrink-0" />
+          <div>
+            <h1 className="text-base font-bold text-gray-900">{calendar.name}</h1>
+            <p className="text-xs text-gray-500">
+              {calendar.academicYear} &bull;{' '}
+              <span className={calendar.semesterType === 'ODD' ? 'text-blue-600 font-medium' : 'text-purple-600 font-medium'}>
+                {calendar.semesterType} Semester
+              </span>
+              &bull; {calendar.dates.length} days
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="p-6 overflow-x-auto">
-        <table className="min-w-full border border-gray-300 text-sm bg-white">
-          <thead>
-            <tr className="bg-gray-200">
-              <th className="border border-gray-300 px-3 py-2 text-left font-semibold whitespace-nowrap">Date</th>
-              <th className="border border-gray-300 px-3 py-2 text-left font-semibold whitespace-nowrap">Day</th>
-              <th className="border border-gray-300 px-3 py-2 text-center font-semibold whitespace-nowrap">Working Days</th>
-              <th className="border border-gray-300 px-3 py-2 text-center font-semibold whitespace-nowrap" colSpan={2}>II Year</th>
-              <th className="border border-gray-300 px-3 py-2 text-center font-semibold whitespace-nowrap" colSpan={2}>III Year</th>
-              <th className="border border-gray-300 px-3 py-2 text-center font-semibold whitespace-nowrap" colSpan={2}>IV Year</th>
-              <th className="border border-gray-300 px-3 py-2 text-center font-semibold whitespace-nowrap">I Year</th>
-            </tr>
-            <tr className="bg-gray-100 text-xs text-gray-600">
-              <th className="border border-gray-300 px-3 py-1"></th>
-              <th className="border border-gray-300 px-3 py-1"></th>
-              <th className="border border-gray-300 px-3 py-1"></th>
-              <th className="border border-gray-300 px-3 py-1 text-center">Event</th>
-              <th className="border border-gray-300 px-3 py-1 text-center">#</th>
-              <th className="border border-gray-300 px-3 py-1 text-center">Event</th>
-              <th className="border border-gray-300 px-3 py-1 text-center">#</th>
-              <th className="border border-gray-300 px-3 py-1 text-center">Event</th>
-              <th className="border border-gray-300 px-3 py-1 text-center">#</th>
-              <th className="border border-gray-300 px-3 py-1 text-center"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {calendar.dates.map((entry, idx) => {
-              const bg = rowBgClass(entry)
-              const isHoliday = bg === 'bg-orange-100'
-              return (
-                <tr key={idx} className={bg || (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50')}>
-                  <td className={`border border-gray-300 px-3 py-1.5 whitespace-nowrap font-medium ${isHoliday ? 'text-orange-800' : ''}`}>
-                    {entry.date}
-                  </td>
-                  <td className={`border border-gray-300 px-3 py-1.5 whitespace-nowrap ${isHoliday ? 'text-orange-800 font-semibold' : ''}`}>
-                    {entry.day}
-                  </td>
-                  <td className={`border border-gray-300 px-3 py-1.5 text-center ${entry.workingDays ? 'font-semibold text-orange-700' : ''}`}>
-                    {entry.workingDays}
-                  </td>
-                  {/* II Year */}
-                  <td className={`border border-gray-300 px-3 py-1.5 ${entry.iiYearEvent && !isHoliday ? 'text-blue-700 font-medium' : ''}`}>
-                    {isHoliday ? '' : entry.iiYearEvent}
-                  </td>
-                  <td className="border border-gray-300 px-3 py-1.5 text-center text-gray-700">
-                    {isHoliday ? '' : entry.iiYearCount}
-                  </td>
-                  {/* III Year */}
-                  <td className={`border border-gray-300 px-3 py-1.5 ${entry.iiiYearEvent && !isHoliday ? 'text-blue-700 font-medium' : ''}`}>
-                    {isHoliday ? '' : entry.iiiYearEvent}
-                  </td>
-                  <td className="border border-gray-300 px-3 py-1.5 text-center text-gray-700">
-                    {isHoliday ? '' : entry.iiiYearCount}
-                  </td>
-                  {/* IV Year */}
-                  <td className={`border border-gray-300 px-3 py-1.5 ${entry.ivYearEvent && !isHoliday ? 'text-blue-700 font-medium' : ''}`}>
-                    {isHoliday ? '' : entry.ivYearEvent}
-                  </td>
-                  <td className="border border-gray-300 px-3 py-1.5 text-center text-gray-700">
-                    {isHoliday ? '' : entry.ivYearCount}
-                  </td>
-                  {/* I Year */}
-                  <td className={`border border-gray-300 px-3 py-1.5 text-center ${entry.iYearText && !isHoliday ? 'text-gray-700' : ''}`}>
-                    {isHoliday ? '' : entry.iYearText}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+      <div className="flex-1 p-4">
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
+          <CalendarGrid calendar={calendar} assignments={assignments} eventDefs={eventDefs} />
+        </div>
       </div>
     </div>
   )

@@ -7,9 +7,10 @@ type Props = {
   label?: string;
   classType?: string | null;
   questionPaperType?: string | null;
+  forceSingleCo?: boolean;
 };
 
-export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, classType, questionPaperType }: Props) {
+export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, classType, questionPaperType, forceSingleCo }: Props) {
   return (
     <Ssa1SheetEntry
       subjectId={subjectId}
@@ -18,6 +19,7 @@ export default function Ssa1Entry({ subjectId, teachingAssignmentId, label, clas
       label={label || 'SSA1'}
       classType={classType}
       questionPaperType={questionPaperType}
+      forceSingleCo={forceSingleCo}
     />
   );
 }

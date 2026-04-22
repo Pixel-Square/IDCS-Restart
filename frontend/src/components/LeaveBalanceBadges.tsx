@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, RefreshCw } from 'lucide-react';
-import { getLeaveBalances, getActiveTemplates, getLateEntryStats } from '../services/staffRequests';
+import { getLeaveBalances, getActiveTemplates, getLateEntryStats, getVacationDashboard } from '../services/staffRequests';
 import type { LeaveBalance, RequestTemplate, LateEntryStats } from '../types/staffRequests';
 
 interface LeaveBalanceBadgesProps {
@@ -22,10 +22,15 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
     setLoading(true);
     setError(null);
     try {
-      const [data, tmpl, lateData] = await Promise.all([
+      const now = new Date();
+      const targetYear = month ? Number((month || '').split('-')[0]) : now.getFullYear();
+      const targetMonth = month ? Number((month || '').split('-')[1]) : (now.getMonth() + 1);
+
+      const [data, tmpl, lateData, vacationData] = await Promise.all([
         getLeaveBalances(),
         getActiveTemplates(),
         getLateEntryStats(month).catch(() => null),
+        getVacationDashboard({ year: targetYear, month: targetMonth }).catch(() => null),
       ]);
       setLateStats(lateData);
       const actualBalances = data.balances || [];
@@ -98,7 +103,28 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
         }
       });
       
-      setBalances(combinedBalances);
+      const hiddenVacationTemplateBalances = new Set([
+        'vacation application',
+        'vacation application - spl',
+        'vacation cancellation form',
+        'vacation cancellation form - spl',
+      ]);
+
+      const filteredBalances = combinedBalances.filter(
+        (b) => !hiddenVacationTemplateBalances.has(String(b.leave_type || '').trim().toLowerCase())
+      );
+
+      const withoutVacationBadge = filteredBalances.filter(
+        (b) => String(b.leave_type || '').trim().toLowerCase() !== 'vacation'
+      );
+      const vacationCount = Number((vacationData as any)?.remaining_days ?? 0);
+      withoutVacationBadge.push({
+        leave_type: 'Vacation',
+        balance: Number.isFinite(vacationCount) ? vacationCount : 0,
+        updated_at: undefined,
+      });
+
+      setBalances(withoutVacationBadge);
     } catch (err: any) {
       console.error('Failed to fetch leave balances:', err);
       setError('Failed to load balances');
@@ -201,6 +227,7 @@ export default function LeaveBalanceBadges({ month }: LeaveBalanceBadgesProps) {
   };
 
   const getStatusCode = (leaveType: string) => {
+    if (String(leaveType).toLowerCase() === 'vacation') return 'VAC';
     const tmpl = templates.find(t => String(t.name).toLowerCase() === String(leaveType).toLowerCase());
     if (tmpl && tmpl.leave_policy && tmpl.leave_policy.attendance_status) return String(tmpl.leave_policy.attendance_status).toUpperCase();
     // If leaveType itself looks like a status code (LOP, OD, COL), use uppercased leaveType

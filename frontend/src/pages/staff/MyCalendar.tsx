@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle, Trash2 } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
-import { getMyRequests, getColClaimableInfo, getActiveTemplates, deleteMyPendingRequest } from '../../services/staffRequests';
+import { getMyRequests, getColClaimableInfo, getActiveTemplates, deleteMyPendingRequest, getVacationDashboard } from '../../services/staffRequests';
 import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import { renderFormValue } from '../staff-requests/formValueUtils';
@@ -64,8 +64,24 @@ export default function MyCalendarPage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [showNewRequestModal, setShowNewRequestModal] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [preselectedTemplateId, setPreselectedTemplateId] = useState<number | null>(null);
+  const [prefilledFormData, setPrefilledFormData] = useState<Record<string, any> | undefined>(undefined);
   const [lateEntryTemplateId, setLateEntryTemplateId] = useState<number | null>(null);
   const [mobileWeekIndex, setMobileWeekIndex] = useState(0);
+  const [vacationDashboard, setVacationDashboard] = useState<any | null>(null);
+  const [vacationLoading, setVacationLoading] = useState(false);
+  const [selectedVacationSlotIds, setSelectedVacationSlotIds] = useState<number[]>([]);
+  const [selectedDateAttendanceSnapshot, setSelectedDateAttendanceSnapshot] = useState<{
+    date: string;
+    in_time?: string | null;
+    out_time?: string | null;
+    effective_hours?: string | null;
+    fn_status?: string | null;
+    an_status?: string | null;
+    go_time?: string | null;
+    gi_time?: string | null;
+    overall_status?: string | null;
+  } | null>(null);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -81,7 +97,33 @@ export default function MyCalendarPage() {
     fetchColInfo();
     fetchLateEntryTemplate();
     fetchAttendanceSettings();
+    fetchVacationDashboard();
   }, [selectedYear, selectedMonth]);
+
+  const fetchVacationDashboard = async () => {
+    try {
+      setVacationLoading(true);
+      const data = await getVacationDashboard({ year: selectedYear, month: selectedMonth });
+      setVacationDashboard(data);
+    } catch {
+      setVacationDashboard(null);
+    } finally {
+      setVacationLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!vacationDashboard?.slots) {
+      setSelectedVacationSlotIds([]);
+      return;
+    }
+    const validIds = new Set(
+      (vacationDashboard.slots || [])
+        .filter((slot: any) => slot.can_apply && !slot.existing_request_status)
+        .map((slot: any) => slot.id)
+    );
+    setSelectedVacationSlotIds(prev => prev.filter(id => validIds.has(id)));
+  }, [vacationDashboard]);
 
   const fetchLateEntryTemplate = async () => {
     try {
@@ -224,6 +266,21 @@ export default function MyCalendarPage() {
     return attendanceData.records.find(r => r.date === dateStr);
   };
 
+  const buildDateAttendanceSnapshot = (dateStr: string) => {
+    const attendance = attendanceData?.records?.find(r => r.date === dateStr);
+    return {
+      date: dateStr,
+      in_time: attendance?.morning_in || null,
+      out_time: attendance?.evening_out || null,
+      effective_hours: attendance?.effective_hours || null,
+      fn_status: attendance?.fn_status || null,
+      an_status: attendance?.an_status || null,
+      go_time: attendance?.gate_out_time || null,
+      gi_time: attendance?.gate_in_time || null,
+      overall_status: attendance?.status || null,
+    };
+  };
+
   const getDaysInMonth = () => {
     return new Date(selectedYear, selectedMonth, 0).getDate();
   };
@@ -252,6 +309,9 @@ export default function MyCalendarPage() {
     e.stopPropagation();
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     setSelectedDate(dateStr);
+    setPreselectedTemplateId(null);
+    setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(dateStr));
     setShowNewRequestModal(true);
   };
 
@@ -299,27 +359,212 @@ export default function MyCalendarPage() {
 
   const handleDateClick = (day: number) => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+    // If the clicked date is within a vacation slot, open only cancellation flow.
+    const clickedVacationSlot = (vacationDashboard?.slots || []).find((slot: any) => {
+      const from = String(slot?.from_date || '').slice(0, 10);
+      const to = String(slot?.to_date || '').slice(0, 10);
+      const isVacationCovered = Boolean(
+        slot?.is_confirmed ||
+        (slot?.existing_request_id && String(slot?.existing_request_status || '').toLowerCase() === 'approved')
+      );
+      return Boolean(from && to && isVacationCovered && dateStr >= from && dateStr <= to);
+    });
+
+    if (clickedVacationSlot) {
+      if (clickedVacationSlot.is_confirmed) {
+        alert('Vacation cancellation is not allowed for compulsory slot dates.');
+        return;
+      }
+
+      if (vacationDashboard?.cancellation_template_id && clickedVacationSlot.existing_request_id) {
+        const slotFrom = String(clickedVacationSlot.from_date || '').slice(0, 10);
+        const slotTo = String(clickedVacationSlot.to_date || '').slice(0, 10);
+        if (slotFrom && slotTo) {
+          setSelectedDate(slotFrom);
+          setPreselectedTemplateId(vacationDashboard.cancellation_template_id);
+          setPrefilledFormData({
+            from_date: slotFrom,
+            to_date: slotTo,
+            linked_vacation_request_id: clickedVacationSlot.existing_request_id,
+          });
+          setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(slotFrom));
+          setShowNewRequestModal(true);
+          return;
+        }
+      }
+    }
+
     setSelectedDate(dateStr);
+    setPreselectedTemplateId(null);
+    setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(dateStr));
     setShowNewRequestModal(true);
   };
 
   const handleRequestCreated = () => {
     setShowNewRequestModal(false);
+    setPreselectedTemplateId(null);
+    setPrefilledFormData(undefined);
+    setSelectedDateAttendanceSnapshot(null);
+    setSelectedVacationSlotIds([]);
     fetchMyRequests();
     fetchColInfo();
+    fetchVacationDashboard();
+  };
+
+  const isVacationRequest = (request: StaffRequest) => {
+    const name = (request.template?.name || '').toLowerCase();
+    return name === 'vacation application' || name === 'vacation application - spl';
+  };
+
+  const isVacationCancelled = (request: StaffRequest) => {
+    return Boolean((request.form_data || {}).vacation_cancelled);
+  };
+
+  const isConfirmedVacationRange = (request: StaffRequest) => {
+    const fromDate = normalizeDateInput(
+      request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    const toDate = normalizeDateInput(
+      request.form_data?.to_date || request.form_data?.end_date || request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    if (!fromDate || !toDate) return false;
+
+    return (vacationDashboard?.slots || []).some((slot: any) => {
+      if (!slot?.is_confirmed) return false;
+      const slotFrom = String(slot.from_date || '').slice(0, 10);
+      const slotTo = String(slot.to_date || '').slice(0, 10);
+      if (!slotFrom || !slotTo) return false;
+      return fromDate <= slotTo && toDate >= slotFrom;
+    });
+  };
+
+  const normalizeDateInput = (value: any): string => {
+    if (!value) return '';
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      if (!raw) return '';
+      if (raw.length >= 10 && raw[4] === '-' && raw[7] === '-') {
+        return raw.slice(0, 10);
+      }
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString().slice(0, 10);
+      }
+      return raw.slice(0, 10);
+    }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+    return '';
+  };
+
+  const handleToggleVacationSlot = (slot: any) => {
+    if (!slot?.can_apply || slot?.existing_request_status) return;
+
+    setSelectedVacationSlotIds(prev => {
+      const alreadySelected = prev.includes(slot.id);
+      if (alreadySelected) {
+        return prev.filter(id => id !== slot.id);
+      }
+
+      if (prev.length === 0) {
+        return [slot.id];
+      }
+
+      const selectedSlots = (vacationDashboard?.slots || []).filter((s: any) => prev.includes(s.id));
+      const selectedGroup = selectedSlots[0]?.multi_group_key;
+      const nextGroup = slot.multi_group_key;
+      if (selectedGroup && nextGroup && selectedGroup !== nextGroup) {
+        alert('You can select multiple slots only when they are continuous with no working day gap.');
+        return prev;
+      }
+
+      return [...prev, slot.id];
+    });
+  };
+
+  const handleApplySelectedVacationSlots = () => {
+    if (!vacationDashboard?.vacation_template_id || selectedVacationSlotIds.length === 0) return;
+
+    const selectedSlots = (vacationDashboard?.slots || []).filter((slot: any) =>
+      selectedVacationSlotIds.includes(slot.id)
+    );
+    if (selectedSlots.length === 0) return;
+
+    const sortedSlots = [...selectedSlots].sort((a: any, b: any) =>
+      String(a.from_date).localeCompare(String(b.from_date))
+    );
+    const fromDate = String(sortedSlots[0]?.from_date || '');
+    const toDate = String(
+      sortedSlots.reduce((latest: string, slot: any) => {
+        const candidate = String(slot.to_date || '');
+        return candidate > latest ? candidate : latest;
+      }, fromDate)
+    );
+
+    setSelectedDate(fromDate || null);
+    setPreselectedTemplateId(vacationDashboard.vacation_template_id);
+    setPrefilledFormData({
+      from_date: fromDate,
+      to_date: toDate,
+      slot_ids: selectedVacationSlotIds,
+    });
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(fromDate));
+    setShowNewRequestModal(true);
+  };
+
+  const handleApplyCancellation = (request: StaffRequest) => {
+    if (!vacationDashboard?.cancellation_template_id) return;
+    const fromDate = normalizeDateInput(
+      request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    const toDate = normalizeDateInput(
+      request.form_data?.to_date || request.form_data?.end_date || request.form_data?.from_date || request.form_data?.start_date || request.form_data?.date
+    );
+    if (!fromDate || !toDate) return;
+
+    setSelectedDate(fromDate);
+    setPreselectedTemplateId(vacationDashboard.cancellation_template_id);
+    setPrefilledFormData({
+      from_date: fromDate,
+      to_date: toDate,
+      linked_vacation_request_id: request.id,
+    });
+    setSelectedDateAttendanceSnapshot(buildDateAttendanceSnapshot(fromDate));
+    setShowNewRequestModal(true);
   };
 
   // Get leave status for a specific date from approved requests
   const getLeaveStatusForDate = (date: number): string | null => {
     const dateStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
     const dateObj = new Date(dateStr);
+
+    const confirmedSlot = (vacationDashboard?.slots || []).find((slot: any) => {
+      if (!slot?.is_confirmed) return false;
+      const from = String(slot.from_date || '').slice(0, 10);
+      const to = String(slot.to_date || '').slice(0, 10);
+      return Boolean(from && to && dateStr >= from && dateStr <= to);
+    });
+    if (confirmedSlot) {
+      return 'VAC';
+    }
     
     // Find approved requests that cover this date
     for (const request of myRequests) {
       if (request.status !== 'approved') continue;
+
+      const templateName = (request.template?.name || '').toLowerCase();
+      if ((templateName === 'vacation application' || templateName === 'vacation application - spl') && request.form_data?.vacation_cancelled) {
+        continue;
+      }
       
       const statusCode = request.template?.leave_policy?.attendance_status;
-      if (!statusCode) continue;
+      const effectiveStatus = statusCode || ((templateName === 'vacation application' || templateName === 'vacation application - spl') ? 'VAC' : '');
+      if (!effectiveStatus) continue;
       
       // Get date range from form_data
       const formData = request.form_data;
@@ -348,7 +593,7 @@ export default function MyCalendarPage() {
       
       // Check if date falls within range
       if (startDate && endDate && dateObj >= startDate && dateObj <= endDate) {
-        return statusCode;
+        return effectiveStatus;
       }
     }
     
@@ -588,6 +833,90 @@ export default function MyCalendarPage() {
               
             </div>
 
+            <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold text-gray-900">Apply Vacation</h3>
+                {vacationLoading && <span className="text-xs text-gray-500">Loading...</span>}
+              </div>
+              {vacationDashboard ? (
+                <>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Experience: {vacationDashboard.experience?.years || 0}y {vacationDashboard.experience?.months || 0}m
+                    {' '}| Allocated: {vacationDashboard.entitlement_days || 0} days
+                    {' '}| Used: {vacationDashboard.used_days || 0} days
+                    {' '}| Remaining: <span className="font-semibold">{vacationDashboard.remaining_days || 0} days</span>
+                  </p>
+
+                  {!vacationDashboard.eligible ? (
+                    <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                      Not eligible for vacation based on current HR experience rules.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(vacationDashboard.slots || []).length === 0 ? (
+                        <div className="text-sm text-gray-500">No vacation slots configured for this month.</div>
+                      ) : (
+                        vacationDashboard.slots.map((slot: any) => {
+                          const isSelected = selectedVacationSlotIds.includes(slot.id);
+                          return (
+                          <div
+                            key={slot.id}
+                            onClick={() => handleToggleVacationSlot(slot)}
+                            className={`border rounded p-2 flex items-center justify-between ${isSelected ? 'border-blue-500 bg-blue-50' : ''} ${slot.can_apply && !slot.existing_request_status ? 'cursor-pointer' : ''}`}
+                          >
+                            <div>
+                              <div className="text-sm font-medium text-gray-900">{slot.slot_name}</div>
+                              <div className="text-xs text-gray-600">
+                                {slot.semester ? `${slot.semester} · ` : ''}
+                                {slot.from_date} to {slot.to_date} ({slot.total_days} days)
+                              </div>
+                            </div>
+                            <div>
+                              {slot.existing_request_status ? (
+                                <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 uppercase">{slot.existing_request_status}</span>
+                              ) : (
+                                <label className="text-xs text-gray-700 flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    disabled={!slot.can_apply}
+                                    checked={isSelected}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={() => handleToggleVacationSlot(slot)}
+                                  />
+                                  Select
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        )})
+                      )}
+
+                      {selectedVacationSlotIds.length > 0 && (
+                        <div className="mt-3 border border-blue-200 bg-blue-50 rounded p-3">
+                          <div className="text-sm text-blue-900 mb-2">
+                            Selected slots: <strong>{selectedVacationSlotIds.length}</strong>
+                            {' '}| Total vacation days:{' '}
+                            <strong>{(vacationDashboard.slots || [])
+                              .filter((slot: any) => selectedVacationSlotIds.includes(slot.id))
+                              .reduce((sum: number, slot: any) => sum + Number(slot.total_days || 0), 0)}</strong>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleApplySelectedVacationSlots}
+                            className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"
+                          >
+                            Apply Selected Vacation Slots
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">Vacation data unavailable.</p>
+              )}
+            </div>
+
             <div className="bg-white rounded-lg shadow-md p-3 sm:p-6 mb-6">
             {/* Day headers - hidden on mobile, shown on desktop */}
             <div className="hidden sm:grid grid-cols-7 gap-1 sm:gap-2 mb-3 sm:mb-4">
@@ -764,6 +1093,7 @@ export default function MyCalendarPage() {
                              displayLeaveStatus === 'OD' ? 'On Duty' :
                              displayLeaveStatus === 'COL' ? 'Compensatory' :
                              displayLeaveStatus === 'LOP' ? 'Loss of Pay' :
+                              displayLeaveStatus === 'VAC' ? 'Vacation' :
                              displayLeaveStatus === 'ML' ? 'Medical Leave' :
                              displayLeaveStatus === 'LEAVE' ? 'Leave' :
                              displayLeaveStatus}
@@ -898,6 +1228,16 @@ export default function MyCalendarPage() {
                           Delete
                         </button>
                       )}
+                      {request.status === 'approved' && isVacationRequest(request) && !isVacationCancelled(request) && !isConfirmedVacationRange(request) && vacationDashboard?.cancellation_template_id && (
+                        <button
+                          type="button"
+                          onClick={() => handleApplyCancellation(request)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border border-amber-300 text-amber-800 hover:bg-amber-50"
+                          title="Apply vacation cancellation"
+                        >
+                          Apply Cancellation
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -965,7 +1305,15 @@ export default function MyCalendarPage() {
         {showNewRequestModal && (
           <NewRequestModal
             preselectedDate={selectedDate}
-            onClose={() => setShowNewRequestModal(false)}
+            preselectedTemplateId={preselectedTemplateId}
+            prefilledFormData={prefilledFormData}
+            attendanceSnapshot={selectedDateAttendanceSnapshot}
+            onClose={() => {
+              setShowNewRequestModal(false);
+              setPreselectedTemplateId(null);
+              setPrefilledFormData(undefined);
+              setSelectedDateAttendanceSnapshot(null);
+            }}
             onSuccess={handleRequestCreated}
           />
         )}

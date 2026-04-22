@@ -35,7 +35,7 @@ import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } fr
 import { normalizeRegisterNo } from '../utils/excelImport';
 import { normalizeObeClassType } from '../constants/classTypes';
 
-type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1'; classType?: string | null; questionPaperType?: string | null };
+type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1'; classType?: string | null; questionPaperType?: string | null; /** When true (e.g. PRBL courses), lock to a single CO1 — hides the second CO column entirely. */ forceSingleCo?: boolean; };
 
 type Ssa1Row = {
   studentId: number;
@@ -181,7 +181,7 @@ function shortenRegisterNo(registerNo: string): string {
   return String(registerNo || '').trim();
 }
 
-export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa1', classType, questionPaperType }: Props) {
+export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa1', classType, questionPaperType, forceSingleCo = false }: Props) {
   const displayLabel = String(label || 'SSA1');
   const isReview = assessmentKey === 'review1';
   const showTotalColumn = false;
@@ -223,7 +223,9 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [classTypeKey, qpTypeKey, assessmentKey]);
 
   // Derive effective CO numbers from IQAC pattern (default: 1, 2 for SSA1)
+  // forceSingleCo (PRBL): always use CO-1 only.
   const effectiveCoA = useMemo(() => {
+    if (forceSingleCo) return 1;
     const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
     if (cos && cos.length) {
       const nums = cos
@@ -238,9 +240,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       if (unique.length >= 1) return unique[0];
     }
     return 1;
-  }, [iqacPattern]);
+  }, [iqacPattern, forceSingleCo]);
 
   const effectiveCoB = useMemo(() => {
+    if (forceSingleCo) return 1;
     const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
     if (cos && cos.length) {
       const nums = cos
@@ -256,7 +259,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       if (unique.length === 1) return unique[0];
     }
     return 2;
-  }, [iqacPattern]);
+  }, [iqacPattern, forceSingleCo]);
 
   // For SPECIAL courses: derive max marks from QP pattern
   const qpDerivedMax = useMemo(() => {
@@ -304,14 +307,17 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const ssa1Cfg = masterCfg?.assessments?.ssa1 || {};
   const MAX_ASMT1_BASE = qpDerivedMax ? qpDerivedMax.total : (Number.isFinite(Number(ssa1Cfg?.maxTotal)) ? Number(ssa1Cfg.maxTotal) : DEFAULT_MAX_ASMT1);
   const MAX_ASMT1 = isReview ? 30 : MAX_ASMT1_BASE;
-  const CO_MAX_BASE = qpDerivedMax
-    ? { co1: qpDerivedMax.co1, co2: qpDerivedMax.co2 }
-    : {
-        co1: Number.isFinite(Number(ssa1Cfg?.coMax?.co1)) ? Number(ssa1Cfg.coMax.co1) : DEFAULT_CO_MAX.co1,
-        co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
-      };
+  const CO_MAX_BASE = forceSingleCo
+    // PRBL (or any single-CO mode): all marks go to CO-1; second column is hidden.
+    ? { co1: MAX_ASMT1_BASE, co2: 0 }
+    : qpDerivedMax
+      ? { co1: qpDerivedMax.co1, co2: qpDerivedMax.co2 }
+      : {
+          co1: Number.isFinite(Number(ssa1Cfg?.coMax?.co1)) ? Number(ssa1Cfg.coMax.co1) : DEFAULT_CO_MAX.co1,
+          co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
+        };
   const CO_MAX = isReview ? { co1: 15, co2: 15 } : CO_MAX_BASE;
-  // For SPECIAL single-CO: hide second column when co2 max is 0
+  // For SPECIAL single-CO or forceSingleCo: hide second column when co2 max is 0
   const hideSecondCo = !isReview && CO_MAX.co2 === 0;
 
   // Per-question structure derived from QP pattern for SPECIAL courses

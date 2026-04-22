@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, AlertCircle, CheckCircle, Clock, Calendar, Trash2, Plus } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Clock, Calendar, Trash2, Plus, RefreshCw } from 'lucide-react';
 import { getApiBase } from '../../services/apiBase';
 import { apiClient } from '../../services/auth';
 
@@ -82,6 +82,42 @@ interface StaffTimeLimitOverride {
   enabled: boolean;
 }
 
+interface EsslDeviceInfo {
+  label: string;
+  ip: string;
+  port: number;
+  reachable: boolean;
+  is_active: boolean;
+  probe_error?: string | null;
+  last_punch_at?: string | null;
+  last_seen_minutes?: number | null;
+  last_staff_id?: string;
+  last_direction?: string;
+  source?: string;
+}
+
+interface EsslRetrieveResponse {
+  success: boolean;
+  message?: string;
+  summary?: {
+    total_logs_checked: number;
+    matched_logs: number;
+    created_logs: number;
+    attendance_updates: number;
+    mapped_staff_total: number;
+  };
+  results?: Array<{
+    device: string;
+    success: boolean;
+    error?: string | null;
+    total_logs_checked: number;
+    matched_logs: number;
+    created_logs: number;
+    attendance_updates: number;
+    mapped_staff: number;
+  }>;
+}
+
 const StaffAttendanceUpload: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDryRun, setIsDryRun] = useState(true);
@@ -127,7 +163,15 @@ const StaffAttendanceUpload: React.FC = () => {
   const [lunchToLimit, setLunchToLimit] = useState('');
   const [esslSkippingTime, setEsslSkippingTime] = useState(30);
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
+  const [attendanceSettingsId, setAttendanceSettingsId] = useState<number>(1);
   const [loadingSettings, setLoadingSettings] = useState(false);
+  const [esslDevices, setEsslDevices] = useState<EsslDeviceInfo[]>([]);
+  const [loadingEsslDevices, setLoadingEsslDevices] = useState(false);
+  const [retrievingEssl, setRetrievingEssl] = useState(false);
+  const [retrieveYear, setRetrieveYear] = useState(now.getFullYear());
+  const [retrieveMonth, setRetrieveMonth] = useState(now.getMonth() + 1);
+  const [retrieveDate, setRetrieveDate] = useState('');
+  const [esslRetrieveResult, setEsslRetrieveResult] = useState<EsslRetrieveResponse | null>(null);
 
   // Department-specific settings states
   const [deptSettings, setDeptSettings] = useState<any[]>([]);
@@ -170,6 +214,7 @@ const StaffAttendanceUpload: React.FC = () => {
     fetchDepartmentSettings();
     fetchDepartments();
     fetchStaffOverrides('');
+    fetchEsslSettings();
   }, []);
 
   useEffect(() => {
@@ -388,6 +433,9 @@ const StaffAttendanceUpload: React.FC = () => {
     try {
       const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
       const settings = response.data;
+
+      const resolvedSettingsId = Number(settings.global_settings_id ?? settings.id ?? 1);
+      setAttendanceSettingsId(Number.isNaN(resolvedSettingsId) ? 1 : resolvedSettingsId);
       
       // Convert time format from "HH:MM:SS" to "HH:MM"
       setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
@@ -399,6 +447,48 @@ const StaffAttendanceUpload: React.FC = () => {
       setApplyTimeLimits(settings.apply_time_based_absence);
     } catch (err: any) {
       console.error('Failed to fetch attendance settings:', err);
+    }
+  };
+
+  const fetchEsslSettings = async () => {
+    try {
+      setLoadingEsslDevices(true);
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/csv-upload/essl_settings/`);
+      setEsslDevices(response.data?.devices || []);
+    } catch (err: any) {
+      console.error('Failed to fetch eSSL settings:', err);
+      setEsslDevices([]);
+    } finally {
+      setLoadingEsslDevices(false);
+    }
+  };
+
+  const handleRetrieveEsslData = async () => {
+    try {
+      setRetrievingEssl(true);
+      setEsslRetrieveResult(null);
+
+      const payload: Record<string, any> = {};
+      if (retrieveDate) {
+        payload.date = retrieveDate;
+      } else {
+        payload.year = retrieveYear;
+        payload.month = retrieveMonth;
+      }
+
+      const response = await apiClient.post(
+        `${getApiBase()}/api/staff-attendance/csv-upload/retrieve_essl_data/`,
+        payload,
+        { timeout: 300000 }
+      );
+
+      setEsslRetrieveResult(response.data);
+      await fetchEsslSettings();
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Failed to retrieve eSSL data';
+      alert(msg);
+    } finally {
+      setRetrievingEssl(false);
     }
   };
 
@@ -507,7 +597,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const handleSaveSettings = async () => {
     setLoadingSettings(true);
     try {
-      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/1/`, {
+      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/${attendanceSettingsId}/`, {
         attendance_in_time_limit: `${inTimeLimit}:00`,
         attendance_out_time_limit: `${outTimeLimit}:00`,
         lunch_from: lunchFromLimit ? `${lunchFromLimit}:00` : null,
@@ -517,6 +607,7 @@ const StaffAttendanceUpload: React.FC = () => {
       });
       
       alert('Attendance settings saved successfully!');
+      await fetchAttendanceSettings();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save settings');
     } finally {
@@ -1653,6 +1744,133 @@ const StaffAttendanceUpload: React.FC = () => {
               <strong> only if</strong> their department doesn't have a specific configuration. Departments with specific 
               Type configurations will use those limits instead.
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* eSSL Settings and Retrieval Section */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+        <div className="px-6 py-4 border-b border-gray-200 bg-cyan-50">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <RefreshCw className="h-5 w-5 text-cyan-700" />
+            eSSL Settings
+          </h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Connected eSSL devices and manual retrieval trigger for monthly/date-wise attendance pull.
+          </p>
+        </div>
+
+        <div className="p-6 space-y-6">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={fetchEsslSettings}
+              disabled={loadingEsslDevices}
+              className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-cyan-300 text-cyan-700 bg-white hover:bg-cyan-50 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loadingEsslDevices ? 'animate-spin' : ''}`} />
+              Refresh Device Status
+            </button>
+          </div>
+
+          {loadingEsslDevices ? (
+            <div className="text-sm text-gray-500">Loading eSSL devices...</div>
+          ) : esslDevices.length === 0 ? (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+              No eSSL devices configured.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {esslDevices.map((dev) => (
+                <div key={dev.label} className="border rounded-lg p-3 flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">{dev.label}</div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      IP: {dev.ip} | Port: {dev.port}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Last Punch: {dev.last_punch_at ? new Date(dev.last_punch_at).toLocaleString() : '-'}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Last Staff: {dev.last_staff_id || '-'} | Direction: {dev.last_direction || '-'}
+                    </div>
+                    {dev.probe_error && (
+                      <div className="text-xs text-red-600 mt-1">Connection: {dev.probe_error}</div>
+                    )}
+                  </div>
+                  <span
+                    className={`text-xs px-2 py-1 rounded-full font-semibold ${dev.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                  >
+                    {dev.is_active ? 'ACTIVE' : 'INACTIVE'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="border-t pt-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Retrieval Section</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
+                <input
+                  type="number"
+                  min="2000"
+                  max="2100"
+                  value={retrieveYear}
+                  onChange={(e) => setRetrieveYear(parseInt(e.target.value || String(now.getFullYear()), 10))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  disabled={Boolean(retrieveDate)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
+                <select
+                  value={retrieveMonth}
+                  onChange={(e) => setRetrieveMonth(parseInt(e.target.value, 10))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  disabled={Boolean(retrieveDate)}
+                >
+                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, i) => (
+                    <option key={i + 1} value={i + 1}>{month}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Date (Optional)</label>
+                <input
+                  type="date"
+                  value={retrieveDate}
+                  onChange={(e) => setRetrieveDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={handleRetrieveEsslData}
+                  disabled={retrievingEssl}
+                  className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-cyan-700 hover:bg-cyan-800 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${retrievingEssl ? 'animate-spin' : ''}`} />
+                  {retrievingEssl ? 'Retrieving...' : 'Retrieve Data'}
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              If date is selected, retrieval runs only for that date. Otherwise it retrieves for the selected year and month.
+            </p>
+
+            {esslRetrieveResult?.summary && (
+              <div className="mt-3 bg-cyan-50 border border-cyan-200 rounded p-3 text-sm text-cyan-900">
+                <div className="font-semibold mb-1">Retrieval Summary</div>
+                <div>Logs Checked: {esslRetrieveResult.summary.total_logs_checked}</div>
+                <div>Matched Logs: {esslRetrieveResult.summary.matched_logs}</div>
+                <div>New Logs Created: {esslRetrieveResult.summary.created_logs}</div>
+                <div>Attendance Updated: {esslRetrieveResult.summary.attendance_updates}</div>
+                <div>Mapped Staff Count: {esslRetrieveResult.summary.mapped_staff_total}</div>
+              </div>
+            )}
           </div>
         </div>
       </div>

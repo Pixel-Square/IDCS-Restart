@@ -1356,6 +1356,12 @@ def proposal_reject(request, proposal_id):
 @permission_classes([IsAuthenticated])
 def notifications_list(request):
     """Return the latest 50 notifications for the current user."""
+    try:
+        from staff_requests.views import run_semester_policy_maintenance
+        run_semester_policy_maintenance()
+    except Exception:
+        pass
+
     qs = UserNotification.objects.filter(user=request.user).order_by('-created_at')[:50]
     return Response([
         {
@@ -1388,6 +1394,12 @@ def notification_mark_read(request, notification_id):
 @permission_classes([IsAuthenticated])
 def notifications_unread_count(request):
     """Return the count of unread notifications."""
+    try:
+        from staff_requests.views import run_semester_policy_maintenance
+        run_semester_policy_maintenance()
+    except Exception:
+        pass
+
     count = UserNotification.objects.filter(user=request.user, read=False).count()
     return Response({'count': count})
 

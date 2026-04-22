@@ -1,6 +1,7 @@
 import csv
 import io
 import calendar
+import os
 import re
 import traceback as tb_module
 from datetime import datetime, date as date_type, timedelta, time as time_type
@@ -8,6 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from django.core.management import call_command
 from django.http import HttpResponse
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
@@ -18,7 +20,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from accounts.models import User
-from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings, SpecialDepartmentDateAttendanceLimit, StaffAttendanceTimeLimitOverride
+from .models import AttendanceRecord, UploadLog, HalfDayRequest, Holiday, AttendanceSettings, DepartmentAttendanceSettings, SpecialDepartmentDateAttendanceLimit, StaffAttendanceTimeLimitOverride, StaffBiometricPunchLog
 from .serializers import AttendanceRecordSerializer, UploadLogSerializer, CSVUploadSerializer, HalfDayRequestSerializer, HalfDayRequestCreateSerializer, HalfDayRequestReviewSerializer, HolidaySerializer, HolidayCreateSerializer, AttendanceSettingsSerializer, DepartmentAttendanceSettingsSerializer, SpecialDepartmentDateAttendanceLimitSerializer, StaffAttendanceTimeLimitOverrideSerializer
 from .permissions import StaffAttendanceViewPermission, StaffAttendanceUploadPermission, StaffAttendanceConfigPermission
 
@@ -1442,6 +1444,384 @@ class CSVUploadViewSet(viewsets.ViewSet):
     def _col(self, day):
         return f'D{day}'
 
+    def _parse_essl_devices(self):
+        """Resolve configured eSSL devices from ESSL_DEVICE_IPS or fallback single device config."""
+        raw_ips = str(getattr(settings, 'ESSL_DEVICE_IPS', '') or os.getenv('ESSL_DEVICE_IPS', '')).strip()
+        default_ip = str(getattr(settings, 'ESSL_DEVICE_IP', '') or '').strip()
+        default_port = int(getattr(settings, 'ESSL_DEVICE_PORT', 4370) or 4370)
+        default_password = int(getattr(settings, 'ESSL_DEVICE_PASSWORD', 0) or 0)
+        default_timeout = int(getattr(settings, 'ESSL_CONNECT_TIMEOUT', 8) or 8)
+
+        pairs = []
+        if raw_ips:
+            pairs = [p.strip() for p in raw_ips.split(',') if p and p.strip()]
+        elif default_ip:
+            pairs = [f'{default_ip}:{default_port}']
+
+        devices = []
+        seen = set()
+        for pair in pairs:
+            token = str(pair).strip()
+            if not token:
+                continue
+            if ':' in token:
+                ip_part, port_part = token.split(':', 1)
+                ip = ip_part.strip()
+                try:
+                    port = int(port_part.strip()) if port_part.strip() else default_port
+                except Exception:
+                    port = default_port
+            else:
+                ip = token
+                port = default_port
+
+            if not ip:
+                continue
+
+            key = f'{ip}:{port}'
+            if key in seen:
+                continue
+            seen.add(key)
+
+            devices.append({
+                'ip': ip,
+                'port': port,
+                'password': default_password,
+                'timeout': default_timeout,
+                'label': key,
+            })
+
+        return devices
+
+    def _probe_essl_device(self, device):
+        """Attempt a short connection test to determine if device is currently reachable."""
+        try:
+            from zk import ZK  # type: ignore
+        except Exception:
+            return False, 'pyzk not installed'
+
+        conn = None
+        try:
+            zk = ZK(
+                device['ip'],
+                port=int(device['port']),
+                timeout=max(2, min(int(device.get('timeout', 8) or 8), 8)),
+                password=int(device.get('password', 0) or 0),
+                force_udp=False,
+                ommit_ping=False,
+            )
+            conn = zk.connect()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+        finally:
+            if conn is not None:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+
+    def _normalize_essl_direction(self, punch_value):
+        if punch_value in (0, '0', 'IN', 'in'):
+            return 'IN'
+        if punch_value in (1, '1', 'OUT', 'out'):
+            return 'OUT'
+        return 'UNKNOWN'
+
+    def _normalize_essl_log_datetime(self, raw_timestamp):
+        """Return local timezone datetime for raw eSSL log timestamp."""
+        if not raw_timestamp:
+            return None
+
+        if isinstance(raw_timestamp, datetime):
+            dt_obj = raw_timestamp
+        else:
+            try:
+                dt_obj = datetime.fromisoformat(str(raw_timestamp))
+            except Exception:
+                return None
+
+        try:
+            if timezone.is_naive(dt_obj):
+                dt_obj = timezone.make_aware(dt_obj, timezone.get_current_timezone())
+            return timezone.localtime(dt_obj)
+        except Exception:
+            return None
+
+    def _essl_log_matches_filter(self, log_dt, year=None, month=None, target_date=None):
+        if not log_dt:
+            return False
+        local_dt = self._normalize_essl_log_datetime(log_dt)
+        if not local_dt:
+            return False
+        if target_date is not None:
+            return local_dt.date() == target_date
+        if year is None or month is None:
+            return False
+        return local_dt.year == year and local_dt.month == month
+
+    def _retrieve_from_single_essl_device(self, *, device, year=None, month=None, target_date=None):
+        """Pull logs from one eSSL machine and ingest them into attendance."""
+        try:
+            from zk import ZK  # type: ignore
+        except Exception as exc:
+            return {
+                'device': device.get('label'),
+                'ip': device.get('ip'),
+                'port': device.get('port'),
+                'success': False,
+                'error': f'pyzk not installed: {exc}',
+                'total_logs_checked': 0,
+                'matched_logs': 0,
+                'created_logs': 0,
+                'attendance_updates': 0,
+                'mapped_staff': 0,
+            }
+
+        from .biometric import ingest_biometric_punch
+
+        conn = None
+        total_logs_checked = 0
+        matched_logs = 0
+        created_logs = 0
+        attendance_updates = 0
+        mapped_user_ids = set()
+
+        try:
+            zk = ZK(
+                device['ip'],
+                port=int(device['port']),
+                timeout=max(2, min(int(device.get('timeout', 8) or 8), 12)),
+                password=int(device.get('password', 0) or 0),
+                force_udp=False,
+                ommit_ping=False,
+            )
+            conn = zk.connect()
+            conn.disable_device()
+            attendance_logs = conn.get_attendance() or []
+            conn.enable_device()
+
+            # Device logs may not be returned in chronological order.
+            # Sorting prevents OUT-before-IN ingestion that can drop same-day pairs.
+            attendance_logs = sorted(
+                attendance_logs,
+                key=lambda att: self._normalize_essl_log_datetime(getattr(att, 'timestamp', None)) or datetime.min,
+            )
+
+            for att in attendance_logs:
+                total_logs_checked += 1
+                raw_timestamp = getattr(att, 'timestamp', None)
+                if not raw_timestamp:
+                    continue
+
+                dt_obj = self._normalize_essl_log_datetime(raw_timestamp)
+                if not dt_obj:
+                    continue
+
+                if not self._essl_log_matches_filter(dt_obj, year=year, month=month, target_date=target_date):
+                    continue
+
+                matched_logs += 1
+
+                result = ingest_biometric_punch(
+                    raw_uid=str(getattr(att, 'uid', '') or ''),
+                    raw_staff_id=str(getattr(att, 'user_id', '') or ''),
+                    raw_direction=self._normalize_essl_direction(getattr(att, 'punch', None)),
+                    raw_timestamp=raw_timestamp,
+                    source='essl_manual_retrieval',
+                    device_ip=device.get('ip') or '',
+                    device_port=device.get('port'),
+                    payload={
+                        'uid': str(getattr(att, 'uid', '') or ''),
+                        'user_id': str(getattr(att, 'user_id', '') or ''),
+                        'punch': getattr(att, 'punch', None),
+                        'timestamp': str(raw_timestamp),
+                        'trigger': 'manual_retrieve',
+                    },
+                )
+
+                if result.get('created_log'):
+                    created_logs += 1
+                if result.get('attendance_updated'):
+                    attendance_updates += 1
+                if result.get('user') is not None:
+                    mapped_user_ids.add(result['user'].id)
+
+            return {
+                'device': device.get('label'),
+                'ip': device.get('ip'),
+                'port': device.get('port'),
+                'success': True,
+                'error': None,
+                'total_logs_checked': total_logs_checked,
+                'matched_logs': matched_logs,
+                'created_logs': created_logs,
+                'attendance_updates': attendance_updates,
+                'mapped_staff': len(mapped_user_ids),
+            }
+        except Exception as exc:
+            return {
+                'device': device.get('label'),
+                'ip': device.get('ip'),
+                'port': device.get('port'),
+                'success': False,
+                'error': str(exc),
+                'total_logs_checked': total_logs_checked,
+                'matched_logs': matched_logs,
+                'created_logs': created_logs,
+                'attendance_updates': attendance_updates,
+                'mapped_staff': len(mapped_user_ids),
+            }
+        finally:
+            if conn is not None:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+
+    @action(detail=False, methods=['get'])
+    def essl_settings(self, request):
+        """Return configured eSSL devices with current active/reachable state and recent punch summary."""
+        devices = self._parse_essl_devices()
+        now_local = timezone.localtime(timezone.now())
+
+        results = []
+        for dev in devices:
+            last_log = (
+                StaffBiometricPunchLog.objects.filter(
+                    device_ip=dev['ip'],
+                    device_port=dev['port'],
+                )
+                .order_by('-punch_time')
+                .first()
+            )
+
+            reachable, probe_error = self._probe_essl_device(dev)
+            last_seen_minutes = None
+            if last_log and last_log.punch_time:
+                try:
+                    delta = now_local - timezone.localtime(last_log.punch_time)
+                    last_seen_minutes = max(0, int(delta.total_seconds() // 60))
+                except Exception:
+                    last_seen_minutes = None
+
+            results.append({
+                'label': dev['label'],
+                'ip': dev['ip'],
+                'port': dev['port'],
+                'reachable': bool(reachable),
+                'is_active': bool(reachable),
+                'probe_error': probe_error,
+                'last_punch_at': timezone.localtime(last_log.punch_time).isoformat() if last_log and last_log.punch_time else None,
+                'last_seen_minutes': last_seen_minutes,
+                'last_staff_id': getattr(last_log, 'raw_staff_id', '') if last_log else '',
+                'last_direction': getattr(last_log, 'direction', '') if last_log else '',
+                'source': getattr(last_log, 'source', '') if last_log else '',
+            })
+
+        return Response({
+            'devices': results,
+            'count': len(results),
+        })
+
+    @action(detail=False, methods=['post'])
+    def retrieve_essl_data(self, request):
+        """Pull attendance from configured active eSSL devices for month or specific date."""
+        payload = request.data or {}
+        year_raw = payload.get('year')
+        month_raw = payload.get('month')
+        date_raw = payload.get('date')
+
+        target_date = None
+        year = None
+        month = None
+
+        if date_raw:
+            try:
+                target_date = date_type.fromisoformat(str(date_raw))
+                year = target_date.year
+                month = target_date.month
+            except Exception:
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if year_raw in (None, '') or month_raw in (None, ''):
+                return Response({'error': 'Year and month are required when date is not provided'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                year = int(year_raw)
+                month = int(month_raw)
+            except Exception:
+                return Response({'error': 'Year and month must be numbers'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if year < 2000 or year > 2100:
+                return Response({'error': 'Year must be between 2000 and 2100'}, status=status.HTTP_400_BAD_REQUEST)
+            if month < 1 or month > 12:
+                return Response({'error': 'Month must be between 1 and 12'}, status=status.HTTP_400_BAD_REQUEST)
+
+        devices = self._parse_essl_devices()
+        if not devices:
+            return Response({'error': 'No eSSL devices configured'}, status=status.HTTP_400_BAD_REQUEST)
+
+        active_devices = []
+        inactive_devices = []
+        for dev in devices:
+            reachable, probe_error = self._probe_essl_device(dev)
+            if reachable:
+                active_devices.append(dev)
+            else:
+                inactive_devices.append({
+                    'device': dev['label'],
+                    'ip': dev['ip'],
+                    'port': dev['port'],
+                    'error': probe_error,
+                })
+
+        if not active_devices:
+            return Response({
+                'error': 'No active/reachable eSSL machines found',
+                'inactive_devices': inactive_devices,
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        device_results = []
+        total_checked = 0
+        total_matched = 0
+        total_created = 0
+        total_updates = 0
+        total_mapped = 0
+
+        for dev in active_devices:
+            res = self._retrieve_from_single_essl_device(
+                device=dev,
+                year=year,
+                month=month,
+                target_date=target_date,
+            )
+            device_results.append(res)
+            total_checked += int(res.get('total_logs_checked') or 0)
+            total_matched += int(res.get('matched_logs') or 0)
+            total_created += int(res.get('created_logs') or 0)
+            total_updates += int(res.get('attendance_updates') or 0)
+            total_mapped += int(res.get('mapped_staff') or 0)
+
+        return Response({
+            'success': True,
+            'filter': {
+                'year': year,
+                'month': month,
+                'date': target_date.isoformat() if target_date else None,
+            },
+            'active_devices': len(active_devices),
+            'inactive_devices': inactive_devices,
+            'results': device_results,
+            'summary': {
+                'total_logs_checked': total_checked,
+                'matched_logs': total_matched,
+                'created_logs': total_created,
+                'attendance_updates': total_updates,
+                'mapped_staff_total': total_mapped,
+            },
+            'message': 'eSSL retrieval completed',
+        })
+
     def _is_holiday(self, target_date, user=None):
         """
         Check if a specific date is a holiday.
@@ -1472,6 +1852,27 @@ class CSVUploadViewSet(viewsets.ViewSet):
             if user_dept_id is not None and user_dept_id in dept_ids:
                 return True
         return False  # no matching holiday for this user's dept
+
+    def _is_approved_vacation_day(self, user, target_date):
+        """Return True when user has an approved, non-cancelled vacation request on target_date."""
+        try:
+            from staff_requests.models import StaffRequest
+
+            qs = StaffRequest.objects.filter(
+                applicant=user,
+                status='approved',
+                template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+            )
+            for req in qs:
+                form_data = req.form_data or {}
+                if bool(form_data.get('vacation_cancelled')):
+                    continue
+                covered_dates = self._request_dates_for_month(form_data, target_date, target_date)
+                if target_date in covered_dates:
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _check_time_based_absence(self, morning_in, evening_out):
         """Check if attendance should be marked absent based on time limits"""
@@ -1828,10 +2229,41 @@ class CSVUploadViewSet(viewsets.ViewSet):
                            no biometric data are NOT written as absent.
         """
         record = AttendanceRecord.objects.filter(user=user, date=target_date).first()
+        is_vacation_day = self._is_approved_vacation_day(user, target_date)
 
         # Never overwrite attendance rows that were locked by approved 10-min late entry forms.
         if record is not None and record.notes and self.LATE10_LOCK_MARKER in record.notes:
             return None
+
+        if is_vacation_day:
+            has_biometric = morning_in is not None or evening_out is not None
+            if record is None and not has_biometric:
+                return None
+
+            if record is None:
+                record = AttendanceRecord(
+                    user=user,
+                    date=target_date,
+                    morning_in=morning_in,
+                    evening_out=evening_out,
+                    fn_status=None,
+                    an_status=None,
+                    status='vacation',
+                    source_file=source_file,
+                )
+            else:
+                allow_update = overwrite or (mode == 'today')
+                if morning_in is not None and (allow_update or not record.morning_in):
+                    record.morning_in = morning_in
+                if evening_out is not None and (allow_update or not record.evening_out):
+                    record.evening_out = evening_out
+                record.fn_status = None
+                record.an_status = None
+                record.status = 'vacation'
+
+            record.source_file = source_file
+            record.save()
+            return record
 
         # backfill: skip if record already exists and no overwrite.
         # Exception: holiday_mode must still process existing records so COL logic can run.
@@ -2699,7 +3131,7 @@ class HolidayViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         """Allow any authenticated user to list/retrieve holidays; restrict create/delete to PS role."""
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'departments', 'check_date']:
             return [IsAuthenticated()]
         return [permission() for permission in self.permission_classes]
 
@@ -2925,6 +3357,19 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
         Returns department-specific settings if available, otherwise global settings.
         Available to all staff."""
         result = {}
+
+        # Resolve global settings singleton first so caller can always patch the
+        # authoritative row for values that are global-only (e.g., essl_skip_minutes).
+        global_settings, _ = AttendanceSettings.objects.get_or_create(
+            id=1,
+            defaults={
+                'attendance_in_time_limit': '08:45:00',
+                'attendance_out_time_limit': '17:45:00',
+                'essl_skip_minutes': 30,
+                'apply_time_based_absence': True,
+                'updated_by': request.user
+            }
+        )
         
         # Try to get department-specific settings
         dept_settings = None
@@ -2940,21 +3385,14 @@ class AttendanceSettingsViewSet(viewsets.ModelViewSet):
             from .serializers import DepartmentAttendanceSettingsSerializer
             result = DepartmentAttendanceSettingsSerializer(dept_settings).data
             result['is_department_specific'] = True
+            result['global_settings_id'] = global_settings.id
+            result['essl_skip_minutes'] = global_settings.essl_skip_minutes
         else:
             # Fall back to global settings
-            settings, created = AttendanceSettings.objects.get_or_create(
-                id=1,
-                defaults={
-                    'attendance_in_time_limit': '08:45:00',
-                    'attendance_out_time_limit': '17:45:00',
-                    'essl_skip_minutes': 30,
-                    'apply_time_based_absence': True,
-                    'updated_by': request.user
-                }
-            )
             from .serializers import AttendanceSettingsSerializer
-            result = AttendanceSettingsSerializer(settings).data
+            result = AttendanceSettingsSerializer(global_settings).data
             result['is_department_specific'] = False
+            result['global_settings_id'] = global_settings.id
         
         return Response(result)
 

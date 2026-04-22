@@ -35,7 +35,7 @@ import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } fr
 import { normalizeRegisterNo } from '../utils/excelImport';
 import { normalizeObeClassType } from '../constants/classTypes';
 
-type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2'; classType?: string | null; questionPaperType?: string | null };
+type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa2' | 'review2'; classType?: string | null; questionPaperType?: string | null; /** When true (e.g. PRBL courses), lock to a single CO1 — hides the second CO column entirely. */ forceSingleCo?: boolean; };
 
 type Ssa2Row = {
   studentId: number;
@@ -176,7 +176,7 @@ function shortenRegisterNo(registerNo: string): string {
   return String(registerNo || '').trim();
 }
 
-export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa2', classType, questionPaperType }: Props) {
+export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa2', classType, questionPaperType, forceSingleCo = false }: Props) {
   const displayLabel = String(label || 'SSA2');
   const isReview = assessmentKey === 'review2';
   const showTotalColumn = false;
@@ -223,7 +223,9 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [classTypeKey, qpTypeKey, assessmentKey]);
 
   // Derive effective CO numbers from IQAC pattern (default: 3, 4 for SSA2)
+  // forceSingleCo (PRBL): always use CO-1 only.
   const effectiveCoA = useMemo(() => {
+    if (forceSingleCo) return 1;
     const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
     if (cos && cos.length) {
       const nums = cos
@@ -238,9 +240,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       if (unique.length >= 1) return unique[0];
     }
     return 3;
-  }, [iqacPattern]);
+  }, [iqacPattern, forceSingleCo]);
 
   const effectiveCoB = useMemo(() => {
+    if (forceSingleCo) return 1;
     const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
     if (cos && cos.length) {
       const nums = cos
@@ -256,7 +259,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
       if (unique.length === 1) return unique[0];
     }
     return 4;
-  }, [iqacPattern]);
+  }, [iqacPattern, forceSingleCo]);
 
   const [sheet, setSheet] = useState<Ssa2Sheet>({
     termLabel: 'KRCT AY25-26',
@@ -286,7 +289,12 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
         ? Number(ssa2Cfg.coMax.co2)
         : DEFAULT_CO_MAX.co4,
   };
-  const CO_MAX_FROM_CFG = isReview ? { co3: 15, co4: 15 } : CO_MAX_BASE;
+  // forceSingleCo (PRBL): all marks go to the primary CO column; second column hidden.
+  const CO_MAX_FROM_CFG = forceSingleCo
+    ? { co3: MAX_ASMT2_BASE, co4: 0 }
+    : isReview
+      ? { co3: 15, co4: 15 }
+      : CO_MAX_BASE;
 
   // Override CO max from QP pattern for SPECIAL courses
   const qpDerivedMax = useMemo(() => {

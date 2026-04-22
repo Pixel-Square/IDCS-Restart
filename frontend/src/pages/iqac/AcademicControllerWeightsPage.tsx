@@ -18,10 +18,14 @@ import {
   getProjectPrblWeightConfig,
   DEFAULT_PROJECT_WEIGHTS,
   DEFAULT_PROJECT_PRBL_WEIGHTS,
+  isEnglishExamWeights,
+  getEnglishExamWeightConfig,
+  DEFAULT_ENGLISH_EXAM_WEIGHTS,
   type LabCycleWeights,
   type LabCycleCoWeight,
   type ProjectWeights,
   type ProjectPrblWeights,
+  type EnglishExamWeights,
 } from '../../utils/internalMarkWeights';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
@@ -295,6 +299,8 @@ function buildDefaults(): Record<string, WeightsRow> {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS));
           } else if (k === 'PRBL') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_PRBL_WEIGHTS));
+          } else if (k === 'ENGLISH') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_ENGLISH_EXAM_WEIGHTS));
           } else if (k === 'PROJECT') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_WEIGHTS));
           } else if (k === 'THEORY') {
@@ -368,6 +374,12 @@ function applyAny(src: any): Record<string, WeightsRow> {
 
     // SPECIAL: structured exam weights from QP config – pass through as-is
     if (k === 'SPECIAL' && rawIm && typeof rawIm === 'object' && (rawIm as any).type === 'special_exam_weights') {
+      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+      continue;
+    }
+
+    // ENGLISH: structured 3-cycle weights – pass through as-is
+    if (k === 'ENGLISH' && isEnglishExamWeights(rawIm)) {
       out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
       continue;
     }
@@ -505,6 +517,17 @@ export default function AcademicControllerWeightsPage() {
 
         // SPECIAL: structured exam weights – pass through as-is
         if (k === 'SPECIAL' && w?.internal_mark_weights && typeof w.internal_mark_weights === 'object' && w.internal_mark_weights.type === 'special_exam_weights') {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+
+        // ENGLISH: structured 3-cycle weights – pass through as-is
+        if (k === 'ENGLISH' && isEnglishExamWeights(w?.internal_mark_weights)) {
           normalized[k] = {
             ssa1: Number(w?.ssa1) || 0,
             cia1: Number(w?.cia1) || 0,
@@ -918,6 +941,129 @@ export default function AcademicControllerWeightsPage() {
                     </tbody>
                   </table>
                 )}
+              </div>
+            );
+          })()}
+
+          {/* ─── ENGLISH (3-Cycle) Exam Weights Editor ─── */}
+          {(() => {
+            const ctKey = 'ENGLISH';
+            const row = weights[ctKey];
+            const rawIm = row?.internal_mark_weights;
+            const cfg: EnglishExamWeights = isEnglishExamWeights(rawIm) ? rawIm : getEnglishExamWeightConfig(null);
+
+            // Grand total = sum of all component weights
+            const nonModelTotal =
+              cfg.ssa1.weight + cfg.fa1.weight + cfg.cia1.weight +
+              cfg.ssa2.weight + cfg.fa2.weight + cfg.cia2.weight;
+            const modelTotal = cfg.model.co_weights.reduce((a, b) => a + b, 0);
+            const grandTotal = nonModelTotal + modelTotal;
+            const totalOk = Math.abs(grandTotal - 60) < 0.01;
+
+            const updateField = (
+              key: keyof EnglishExamWeights,
+              subField: string,
+              value: string,
+            ) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getEnglishExamWeightConfig(null) };
+                const current: EnglishExamWeights = isEnglishExamWeights(prevRow.internal_mark_weights)
+                  ? { ...prevRow.internal_mark_weights as EnglishExamWeights }
+                  : getEnglishExamWeightConfig(null);
+                const n = Number(value);
+                const v = Number.isFinite(n) ? n : 0;
+                (current as any)[key] = { ...(current as any)[key], [subField]: v };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
+              });
+            };
+
+            const updateCoWeight = (coIdx: number, value: string) => {
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getEnglishExamWeightConfig(null) };
+                const current: EnglishExamWeights = isEnglishExamWeights(prevRow.internal_mark_weights)
+                  ? { ...(prevRow.internal_mark_weights as EnglishExamWeights) }
+                  : getEnglishExamWeightConfig(null);
+                const arr = [...current.model.co_weights];
+                const n = Number(value);
+                arr[coIdx] = Number.isFinite(n) ? n : 0;
+                current.model = { ...current.model, co_weights: arr };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
+              });
+            };
+
+            const cellStyle: React.CSSProperties = { border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 };
+            const inputCell = (key: keyof EnglishExamWeights, sub: string, val: number) => (
+              <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                <input type="number" step="0.5" min="0" value={val}
+                  onChange={(e) => updateField(key, sub, e.target.value)}
+                  style={{ width: 64, textAlign: 'center' }} />
+              </td>
+            );
+            const cycleHdr = (label: string) => (
+              <tr style={{ background: '#eff6ff' }}>
+                <td colSpan={4} style={{ border: '1px solid #bfdbfe', padding: '4px 10px', fontWeight: 700, color: '#1d4ed8', fontSize: 12 }}>{label}</td>
+              </tr>
+            );
+
+            return (
+              <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>English (3-Cycle)</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Per-exam weights for ENGLISH class-type. Grand total:{' '}
+                  <b style={{ color: totalOk ? '#059669' : '#d97706' }}>{Math.round(grandTotal * 100) / 100}</b>
+                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 60</span>}
+                  <span style={{ marginLeft: 16, color: '#6b7280' }}>Each CO max = 12 (when all data entered)</span>
+                </div>
+                <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Component</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>COs</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Max Marks</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cycleHdr('Cycle 1  (CO1 + CO2)')}
+                    <tr><td style={cellStyle}>SSA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1, CO2</td>{inputCell('ssa1', 'max', cfg.ssa1.max)}{inputCell('ssa1', 'weight', cfg.ssa1.weight)}</tr>
+                    <tr><td style={cellStyle}>FA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1, CO2</td>{inputCell('fa1', 'max', cfg.fa1.max)}{inputCell('fa1', 'weight', cfg.fa1.weight)}</tr>
+                    <tr><td style={cellStyle}>CIA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1–CO5 (equal)</td>{inputCell('cia1', 'max', cfg.cia1.max)}{inputCell('cia1', 'weight', cfg.cia1.weight)}</tr>
+                    {cycleHdr('Cycle 2  (CO3 + CO4)')}
+                    <tr><td style={cellStyle}>SSA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO3, CO4</td>{inputCell('ssa2', 'max', cfg.ssa2.max)}{inputCell('ssa2', 'weight', cfg.ssa2.weight)}</tr>
+                    <tr><td style={cellStyle}>FA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO3, CO4</td>{inputCell('fa2', 'max', cfg.fa2.max)}{inputCell('fa2', 'weight', cfg.fa2.weight)}</tr>
+                    <tr><td style={cellStyle}>CIA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1–CO5 (equal)</td>{inputCell('cia2', 'max', cfg.cia2.max)}{inputCell('cia2', 'weight', cfg.cia2.weight)}</tr>
+                    {cycleHdr('Cycle 3 — Model Exam  (100 marks, per-CO entry)')}
+                    <tr>
+                      <td style={cellStyle}>Model</td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', fontSize: 11 }}>CO1–CO5</td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center' }}>
+                        <input type="number" step="1" min="0" value={cfg.model.max_per_co}
+                          onChange={(e) => updateField('model', 'max_per_co', e.target.value)}
+                          style={{ width: 64, textAlign: 'center' }} />
+                        <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 4 }}>/ CO</span>
+                      </td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 6px' }}>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11 }}>
+                          {['CO1', 'CO2', 'CO3', 'CO4', 'CO5'].map((co, i) => (
+                            <label key={co} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                              <span style={{ color: '#6b7280' }}>{co}</span>
+                              <input type="number" step="0.1" min="0" value={cfg.model.co_weights[i] ?? 0}
+                                onChange={(e) => updateCoWeight(i, e.target.value)}
+                                style={{ width: 52, textAlign: 'center' }} />
+                            </label>
+                          ))}
+                          <span style={{ marginLeft: 4, fontWeight: 700, color: Math.abs(modelTotal - 32) < 0.01 ? '#059669' : '#d97706' }}>
+                            = {Math.round(modelTotal * 100) / 100}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280' }}>
+                  Tip: defaults give CO1–CO4 model weight 5.6 and CO5 weight 9.6 (model total = 32),
+                  ensuring each CO's cumulative max = 12.
+                </div>
               </div>
             );
           })()}

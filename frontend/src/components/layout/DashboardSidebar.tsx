@@ -559,11 +559,15 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'external_management', label: 'External Management', to: '/iqac/external-management' });
   }
 
-  // PS (Principal Secretary) specific features
-  if (rolesUpper.includes('PS')) {
+  // PS and IQAC specific features
+  if (rolesUpper.includes('PS') || rolesUpper.includes('IQAC')) {
     if (!items.some((item) => item.key === 'ps_staff_attendance')) {
       items.push({ key: 'ps_staff_attendance', label: 'Staff Attendance Upload', to: '/ps/staff-attendance/upload' });
     }
+  }
+
+  // PS (Principal Secretary) specific features
+  if (rolesUpper.includes('PS')) {
     if (!items.some((item) => item.key === 'ps_staff_attendance_view')) {
       items.push({ key: 'ps_staff_attendance_view', label: 'View All Staff Attendance', to: '/ps/staff-attendance/view' });
     }

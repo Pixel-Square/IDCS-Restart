@@ -196,18 +196,25 @@ export default function LmsPage({ user }: Props) {
         throw new Error('Please select a CO title before uploading')
       }
 
-      const form = new FormData()
-      form.append('teaching_assignment', String(option.teaching_assignment_id))
-      form.append('course', String(option.course_id))
-      form.append('material_type', materialType)
-      form.append('title', computedTitle)
-      form.append('co_title', selectedCoOption?.label || computedTitle)
-      form.append('sub_topic', selectedSubTopic || 'ALL')
-      form.append('description', description)
-      if (materialType === 'FILE' && file) form.append('file', file)
-      if (materialType === 'LINK') form.append('external_url', externalUrl)
+      const targets = Array.isArray(option.targets) && option.targets.length > 0
+        ? option.targets
+        : [{ teaching_assignment_id: option.teaching_assignment_id, course_id: option.course_id }]
 
-      await createMaterial(form)
+      for (const target of targets) {
+        const form = new FormData()
+        form.append('teaching_assignment', String(target.teaching_assignment_id))
+        form.append('course', String(target.course_id))
+        form.append('material_type', materialType)
+        form.append('title', computedTitle)
+        form.append('co_title', selectedCoOption?.label || computedTitle)
+        form.append('sub_topic', selectedSubTopic || 'ALL')
+        form.append('description', description)
+        if (materialType === 'FILE' && file) form.append('file', file)
+        if (materialType === 'LINK') form.append('external_url', externalUrl)
+
+        await createMaterial(form)
+      }
+
       setTitle('')
       setSelectedSubTopic('ALL')
       setDescription('')
@@ -341,7 +348,7 @@ export default function LmsPage({ user }: Props) {
               <option value="">Select assignment</option>
               {uploadOptions.map((opt) => (
                 <option key={opt.teaching_assignment_id} value={opt.teaching_assignment_id}>
-                  {`Course: ${opt.subject_name || opt.subject_code || opt.course_name} | Class: ${opt.course_name}`}
+                  {`Course: ${opt.subject_name || opt.subject_code || opt.course_name}${(opt.class_names || []).length > 1 ? ` | Classes: ${(opt.class_names || []).length}` : (opt.class_names || []).length === 1 ? ` | Class: ${opt.class_names?.[0]}` : ''}`}
                 </option>
               ))}
             </select>

@@ -54,6 +54,33 @@ def _is_holiday_for_user(target_date, user) -> bool:
     return False
 
 
+def _is_approved_vacation_day(target_date, user) -> bool:
+    """Return True when user has approved, non-cancelled vacation on target_date."""
+    try:
+        from staff_requests.models import StaffRequest
+
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+            template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+        )
+
+        target_iso = target_date.isoformat()
+        for req in qs:
+            form_data = req.form_data or {}
+            if bool(form_data.get('vacation_cancelled')):
+                continue
+            from_iso = str(form_data.get('from_date') or '')
+            to_iso = str(form_data.get('to_date') or from_iso)
+            if not from_iso:
+                continue
+            if from_iso <= target_iso <= to_iso:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _backfill_absent_gaps_for_realtime(*, user, current_date, source: str) -> int:
     """Create absent rows for missing working days before `current_date`.
 
@@ -92,7 +119,11 @@ def _backfill_absent_gaps_for_realtime(*, user, current_date, source: str) -> in
     created = 0
     cursor = start_date
     while cursor < current_date:
-        if cursor not in existing_dates and not _is_holiday_for_user(cursor, user):
+        if (
+            cursor not in existing_dates
+            and not _is_holiday_for_user(cursor, user)
+            and not _is_approved_vacation_day(cursor, user)
+        ):
             AttendanceRecord.objects.create(
                 user=user,
                 date=cursor,
@@ -186,6 +217,7 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
     local_dt = timezone.localtime(punch_dt)
     target_date = local_dt.date()
     punch_time = local_dt.time().replace(microsecond=0)
+    is_vacation_day = _is_approved_vacation_day(target_date, user)
 
     # If the staff has scans on a later date, any missing *working* dates between
     # last saved attendance and this punch date should be created as absent.
@@ -207,9 +239,9 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
         defaults={
             'morning_in': None,
             'evening_out': None,
-            'status': 'absent',
-            'fn_status': 'absent',
-            'an_status': 'absent',
+            'status': 'vacation' if is_vacation_day else 'absent',
+            'fn_status': None if is_vacation_day else 'absent',
+            'an_status': None if is_vacation_day else 'absent',
             'source_file': source,
         },
     )
@@ -251,6 +283,23 @@ def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, sourc
 
     if created:
         changed = True
+
+    # Vacation day policy: keep biometric in/out values only, no FN/AN or normal status writes.
+    if is_vacation_day:
+        if record.fn_status is not None:
+            record.fn_status = None
+            changed = True
+        if record.an_status is not None:
+            record.an_status = None
+            changed = True
+        if record.status != 'vacation':
+            record.status = 'vacation'
+            changed = True
+
+        if changed:
+            record.source_file = source
+            record.save()
+        return record, created, changed, effective_direction
 
     if changed:
         should_defer_an_until_out = bool(record.morning_in and not record.evening_out)

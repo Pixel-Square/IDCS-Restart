@@ -57,6 +57,60 @@ def _can_access_material(user, material: StudyMaterial) -> bool:
 
     student_profile = getattr(user, 'student_profile', None)
     if student_profile is not None:
+        # Prefer strict roster scoping when material is tied to a teaching assignment.
+        # This ensures a student can see only materials uploaded for their assigned class.
+        ta = getattr(material, 'teaching_assignment', None)
+        if ta is None and getattr(material, 'teaching_assignment_id', None):
+            try:
+                from academics.models import TeachingAssignment
+
+                ta = TeachingAssignment.objects.filter(pk=material.teaching_assignment_id).select_related(
+                    'section',
+                    'academic_year',
+                ).first()
+            except Exception:
+                ta = None
+
+        if ta is not None:
+            roster_ids = set()
+            try:
+                if getattr(ta, 'section_id', None):
+                    from academics.models import StudentProfile, StudentSectionAssignment
+
+                    roster_ids.update(
+                        StudentSectionAssignment.objects.filter(
+                            section_id=ta.section_id,
+                            end_date__isnull=True,
+                        )
+                        .exclude(student__status__in=['INACTIVE', 'DEBAR'])
+                        .values_list('student_id', flat=True)
+                    )
+
+                    # Keep legacy section linkage as a fallback source.
+                    roster_ids.update(
+                        StudentProfile.objects.filter(section_id=ta.section_id)
+                        .exclude(status__in=['INACTIVE', 'DEBAR'])
+                        .values_list('id', flat=True)
+                    )
+                elif getattr(ta, 'elective_subject_id', None):
+                    from curriculum.models import ElectiveChoice
+
+                    eqs = (
+                        ElectiveChoice.objects.filter(
+                            elective_subject_id=ta.elective_subject_id,
+                            is_active=True,
+                        )
+                        .exclude(student__isnull=True)
+                    )
+                    if getattr(ta, 'academic_year_id', None) and eqs.filter(academic_year_id=ta.academic_year_id).exists():
+                        eqs = eqs.filter(academic_year_id=ta.academic_year_id)
+                    roster_ids.update(eqs.values_list('student_id', flat=True))
+            except Exception:
+                roster_ids = set()
+
+            if roster_ids:
+                return int(student_profile.id) in {int(i) for i in roster_ids}
+
         enrolled_ids = set(
             StudentCourseEnrollment.objects.filter(student=student_profile).values_list('course_id', flat=True)
         )
@@ -155,40 +209,37 @@ class StaffUploadOptionsView(APIView):
         from curriculum.models import ElectiveChoice
         from timetable.models import TimetableAssignment
 
-        base_qs = TeachingAssignment.objects.filter(
-            staff=staff_profile,
-        ).select_related(
+        base_qs = TeachingAssignment.objects.select_related(
             'subject__course',
             'section__batch__course',
             'curriculum_row',
             'elective_subject',
             'academic_year',
         ).order_by('id')
+        qs = base_qs.filter(staff__user=request.user, is_active=True)
+        if not qs.exists():
+            qs = base_qs.filter(staff=staff_profile, is_active=True)
+        if not qs.exists():
+            qs = base_qs.filter(staff__user=request.user, academic_year__is_active=True)
 
-        qs = base_qs.filter(
-            staff=staff_profile,
-            is_active=True,
-        )
-
+        # Keep LMS assignment sourcing aligned with academics/my-teaching-assignments.
         try:
-            if qs.filter(academic_year__is_active=True).exists():
-                qs = qs.filter(academic_year__is_active=True)
+            from academics.views import _ensure_teaching_assignments_from_subject_batches
+
+            _ensure_teaching_assignments_from_subject_batches(staff_profile)
         except Exception:
             pass
 
         if not qs.exists():
-            try:
-                from academics.views import _ensure_teaching_assignments_from_subject_batches
+            qs = base_qs.filter(staff__user=request.user, is_active=True)
+            if not qs.exists():
+                qs = base_qs.filter(staff=staff_profile, is_active=True)
 
-                _ensure_teaching_assignments_from_subject_batches(staff_profile)
-                qs = base_qs.filter(is_active=True)
-                try:
-                    if qs.filter(academic_year__is_active=True).exists():
-                        qs = qs.filter(academic_year__is_active=True)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+        # Final fallback: do not hide assignments due to inconsistent flags.
+        if not qs.exists():
+            qs = base_qs.filter(staff__user=request.user)
+            if not qs.exists():
+                qs = base_qs.filter(staff=staff_profile)
 
         # Fallback path for users who are assigned only via subject batches.
         # Create or reuse minimal teaching assignments so upload can proceed.
@@ -225,17 +276,18 @@ class StaffUploadOptionsView(APIView):
                 continue
 
         # Reload after fallback creation so dropdown includes batch-derived options.
-        qs = base_qs.filter(is_active=True)
-        try:
-            if qs.filter(academic_year__is_active=True).exists():
-                qs = qs.filter(academic_year__is_active=True)
-        except Exception:
-            pass
+        refreshed = base_qs.filter(staff__user=request.user, is_active=True)
+        if not refreshed.exists():
+            refreshed = base_qs.filter(staff=staff_profile, is_active=True)
+        if refreshed.exists():
+            qs = refreshed
 
         # Final fallback: align with academics page behavior and do not hide all
         # options when flags are inconsistent.
         if not qs.exists():
-            qs = base_qs
+            qs = base_qs.filter(staff__user=request.user)
+            if not qs.exists():
+                qs = base_qs.filter(staff=staff_profile)
 
         # Preload relevant subject batches to infer course where TA has no section/subject course.
         sb_qs = StudentSubjectBatch.objects.filter(
@@ -373,7 +425,61 @@ class StaffUploadOptionsView(APIView):
                     }
                 )
 
-        return Response({'results': rows})
+        # Merge same subject across multiple class/department assignments into one option.
+        merged = OrderedDict()
+        for item in rows:
+            subject_code_val = str(item.get('subject_code') or '').strip()
+            subject_name_val = str(item.get('subject_name') or '').strip()
+
+            if subject_code_val or subject_name_val:
+                merge_key = f"subj::{subject_code_val.lower()}::{subject_name_val.lower()}"
+            else:
+                merge_key = f"ta::{item['teaching_assignment_id']}"
+
+            if merge_key not in merged:
+                merged[merge_key] = {
+                    'teaching_assignment_id': item['teaching_assignment_id'],
+                    'course_id': item['course_id'],
+                    'course_name': subject_name_val or subject_code_val or item['course_name'],
+                    'subject_code': subject_code_val or None,
+                    'subject_name': subject_name_val or None,
+                    'assignment_ids': [],
+                    'course_ids': [],
+                    'class_names': [],
+                    'targets': [],
+                }
+
+            row = merged[merge_key]
+
+            ta_id = int(item['teaching_assignment_id'])
+            course_id = int(item['course_id'])
+            class_name = str(item['course_name'] or '').strip()
+
+            if ta_id not in row['assignment_ids']:
+                row['assignment_ids'].append(ta_id)
+            if course_id not in row['course_ids']:
+                row['course_ids'].append(course_id)
+            if class_name and class_name not in row['class_names']:
+                row['class_names'].append(class_name)
+
+            target_key = (ta_id, course_id)
+            existing_target_keys = {(t['teaching_assignment_id'], t['course_id']) for t in row['targets']}
+            if target_key not in existing_target_keys:
+                row['targets'].append(
+                    {
+                        'teaching_assignment_id': ta_id,
+                        'course_id': course_id,
+                        'class_name': class_name,
+                    }
+                )
+
+        results = list(merged.values())
+        for r in results:
+            r['class_names'] = sorted(r['class_names'])
+            r['assignment_ids'] = sorted(r['assignment_ids'])
+            r['course_ids'] = sorted(r['course_ids'])
+
+        return Response({'results': results})
 
 
 class StaffUploadMetadataView(APIView):

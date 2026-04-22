@@ -292,3 +292,47 @@ export function getSpecialExamWeightConfig(raw: any): SpecialExamWeights {
   if (isSpecialExamWeights(raw)) return raw;
   return JSON.parse(JSON.stringify(DEFAULT_SPECIAL_EXAM_WEIGHTS));
 }
+
+// ─── ENGLISH Exam Weights (3-cycle structured format) ─────────────────────
+
+export type EnglishCycleEntry = { max: number; weight: number; cos?: number[] };
+export type EnglishModelEntry = { max_per_co: number; co_weights: number[] };
+
+export type EnglishExamWeights = {
+  type: 'english_exam_weights';
+  ssa1:  EnglishCycleEntry;
+  fa1:   EnglishCycleEntry;
+  cia1:  EnglishCycleEntry;
+  ssa2:  EnglishCycleEntry;
+  fa2:   EnglishCycleEntry;
+  cia2:  EnglishCycleEntry;
+  model: EnglishModelEntry;
+};
+
+/** Default weights that produce each CO max = 12, grand total = 60.
+ *
+ *  Breakdown:
+ *   Cycle 1 – CO1+CO2:  SSA1(3) + FA1(5) + CIA1(6) = 14
+ *   Cycle 2 – CO3+CO4:  SSA2(3) + FA2(5) + CIA2(6) = 14
+ *   Cycle 3 – all COs:  Model(5.6×4 + 9.6) = 32
+ *   Total = 60;  each CO max = 12 ✓
+ */
+export const DEFAULT_ENGLISH_EXAM_WEIGHTS: EnglishExamWeights = {
+  type: 'english_exam_weights',
+  ssa1:  { max: 20, weight: 3.0,  cos: [1, 2] },
+  fa1:   { max: 20, weight: 5.0,  cos: [1, 2] },
+  cia1:  { max: 60, weight: 6.0 },
+  ssa2:  { max: 20, weight: 3.0,  cos: [3, 4] },
+  fa2:   { max: 20, weight: 5.0,  cos: [3, 4] },
+  cia2:  { max: 60, weight: 6.0 },
+  model: { max_per_co: 20, co_weights: [5.6, 5.6, 5.6, 5.6, 9.6] },
+};
+
+export function isEnglishExamWeights(w: any): w is EnglishExamWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'english_exam_weights';
+}
+
+export function getEnglishExamWeightConfig(raw: any): EnglishExamWeights {
+  if (isEnglishExamWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_ENGLISH_EXAM_WEIGHTS));
+}

@@ -6,9 +6,20 @@ from django.db import transaction
 from django.db.models import Q, Prefetch
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timedelta
+from calendar import monthrange
 
-from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog, StaffLeaveBalance
+from .models import (
+    RequestTemplate,
+    ApprovalStep,
+    StaffRequest,
+    ApprovalLog,
+    StaffLeaveBalance,
+    VacationEntitlementRule,
+    VacationConfirmSlot,
+    VacationSemester,
+    VacationSlot,
+)
 from staff_salary.models import SalaryMonthPublish
 from .serializers import (
     RequestTemplateSerializer,
@@ -20,6 +31,181 @@ from .serializers import (
     ProcessApprovalSerializer,
     ApprovalLogSerializer
 )
+
+
+VACATION_APPLICATION_TEMPLATES = {'vacation application', 'vacation application - spl'}
+VACATION_CANCELLATION_TEMPLATES = {'vacation cancellation form', 'vacation cancellation form - spl'}
+
+
+def _parse_iso_date(raw_value):
+    if not raw_value:
+        return None
+    try:
+        return datetime.strptime(str(raw_value).strip(), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _is_late_entry_template_name(template_name: str) -> bool:
+    return str(template_name or '').strip().lower() in ['late entry permission', 'late entry permission - spl']
+
+
+def _notify_hr_semester_alert(*, reset_key, title, message, data=None):
+    """Create/update high-priority in-app alerts for HR/Admin users.
+
+    The alert remains unread until resolved by policy updates.
+    """
+    from accounts.models import UserNotification
+
+    payload = dict(data or {})
+    payload['reset_key'] = reset_key
+    payload['priority'] = 'high'
+
+    User = get_user_model()
+    recipients = User.objects.filter(
+        Q(user_roles__role__name__iexact='HR') | Q(user_roles__role__name__iexact='ADMIN')
+    ).distinct()
+
+    if not recipients.exists():
+        recipients = User.objects.filter(is_superuser=True)
+
+    for recipient in recipients:
+        existing = (
+            UserNotification.objects
+            .filter(user=recipient, data__reset_key=reset_key)
+            .order_by('-created_at')
+            .first()
+        )
+        if existing:
+            existing.title = title
+            existing.message = message
+            existing.link = '/hr/vacation-settings'
+            existing.data = payload
+            existing.read = False
+            existing.save(update_fields=['title', 'message', 'link', 'data', 'read'])
+        else:
+            UserNotification.objects.create(
+                user=recipient,
+                title=title,
+                message=message,
+                link='/hr/vacation-settings',
+                read=False,
+                data=payload,
+            )
+
+
+def _mark_resolved_semester_alerts(*, active_template_alert_ids=None, active_vacation_semester_ids=None):
+    """Mark stale semester alerts as read once the period is corrected."""
+    from accounts.models import UserNotification
+
+    active_template_alert_ids = set(active_template_alert_ids or [])
+    active_vacation_semester_ids = set(active_vacation_semester_ids or [])
+
+    template_alerts = UserNotification.objects.filter(data__type='template_period_expired', read=False)
+    for n in template_alerts:
+        data = n.data or {}
+        template_id = data.get('template_id')
+        try:
+            template_id = int(template_id)
+        except Exception:
+            template_id = None
+        if template_id and template_id not in active_template_alert_ids:
+            n.read = True
+            n.save(update_fields=['read'])
+
+    vacation_alerts = UserNotification.objects.filter(data__type='vacation_semester_expired', read=False)
+    for n in vacation_alerts:
+        data = n.data or {}
+        semester_id = data.get('semester_id')
+        try:
+            semester_id = int(semester_id)
+        except Exception:
+            semester_id = None
+        if semester_id and semester_id not in active_vacation_semester_ids:
+            n.read = True
+            n.save(update_fields=['read'])
+
+
+def run_semester_policy_maintenance(as_of_date=None):
+    """Auto-reset expired semester windows and alert HR to configure next period."""
+    today = as_of_date or timezone.localdate()
+
+    # 1) Template leave policy expiry reset (except late entry forms).
+    templates = RequestTemplate.objects.filter(is_active=True).exclude(leave_policy={})
+    active_template_alert_ids = set()
+    for template in templates:
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral', 'earn']:
+            continue
+        if _is_late_entry_template_name(template.name):
+            continue
+
+        to_date = _parse_iso_date(leave_policy.get('to_date'))
+        from_date = _parse_iso_date(leave_policy.get('from_date'))
+        if not from_date or not to_date:
+            continue
+        if today <= to_date:
+            continue
+
+        active_template_alert_ids.add(int(template.id))
+
+        StaffLeaveBalance.objects.filter(leave_type=template.name).exclude(balance=0).update(balance=0.0)
+
+        # Optional LOP reset per policy.
+        if action in ['deduct', 'neutral'] and not bool(leave_policy.get('lop_non_reset', False)):
+            overdraft_name = str(leave_policy.get('overdraft_name') or 'LOP').strip() or 'LOP'
+            StaffLeaveBalance.objects.filter(leave_type=overdraft_name).exclude(balance=0).update(balance=0.0)
+
+        _notify_hr_semester_alert(
+            reset_key=f'template-period-ended:{template.id}',
+            title='SEMESTER PERIOD ENDED - UPDATE FORM WINDOWS',
+            message=(
+                f'"{template.name}" period ended on {to_date.isoformat()}. '
+                f'Please configure a new from/to semester period for this form.'
+            ),
+            data={
+                'type': 'template_period_expired',
+                'template_id': template.id,
+                'template_name': template.name,
+                'from_date': from_date.isoformat(),
+                'to_date': to_date.isoformat(),
+            },
+        )
+
+    # 2) Vacation semester expiry reset + alert.
+    expired_semesters = VacationSemester.objects.filter(is_active=True, to_date__lt=today)
+    active_vacation_semester_ids = set(int(s.id) for s in expired_semesters)
+    if expired_semesters.exists():
+        vacation_leave_types = ['Vacation Application', 'Vacation Application - SPL']
+        StaffLeaveBalance.objects.filter(leave_type__in=vacation_leave_types).exclude(balance=0).update(balance=0.0)
+
+    for sem in expired_semesters:
+        VacationSlot.objects.filter(semester_ref=sem).update(is_active=False)
+        VacationConfirmSlot.objects.filter(semester_ref=sem).update(is_active=False)
+        sem.is_active = False
+        sem.save(update_fields=['is_active', 'updated_at'])
+
+        _notify_hr_semester_alert(
+            reset_key=f'vacation-semester-ended:{sem.id}',
+            title='VACATION SEMESTER ENDED - DEFINE NEW SEMESTER',
+            message=(
+                f'Vacation semester "{sem.name}" ended on {sem.to_date.isoformat()}. '
+                'Please set the next semester from/to dates and vacation slots.'
+            ),
+            data={
+                'type': 'vacation_semester_expired',
+                'semester_id': sem.id,
+                'semester_name': sem.name,
+                'from_date': sem.from_date.isoformat(),
+                'to_date': sem.to_date.isoformat(),
+            },
+        )
+
+    _mark_resolved_semester_alerts(
+        active_template_alert_ids=active_template_alert_ids,
+        active_vacation_semester_ids=active_vacation_semester_ids,
+    )
 
 
 def is_user_approver_for_request(user, staff_request, approver_role):
@@ -148,17 +334,31 @@ def can_user_apply_with_template(user, template):
     return False
 
 
-def template_has_nonzero_allocation_for_user(user, template) -> bool:
+def template_has_nonzero_allocation_for_user(user, template, effective_date=None) -> bool:
     """Return False when template has explicit per-role allotment of 0 for this user.
 
     This is used to hide templates from availability endpoints. The create endpoint
     still performs a strict validation via StaffRequestViewSet._validate_template_allocation.
     """
     try:
+        template_name = (getattr(template, 'name', '') or '').strip().lower()
+        if template_name in VACATION_APPLICATION_TEMPLATES or template_name in VACATION_CANCELLATION_TEMPLATES:
+            return True
+
         leave_policy = getattr(template, 'leave_policy', None) or {}
         action = str(leave_policy.get('action') or '').strip().lower()
         if action not in ['deduct', 'neutral']:
             return True
+
+        check_date = effective_date or timezone.localdate()
+        is_late_entry = _is_late_entry_template_name(getattr(template, 'name', ''))
+
+        # Semester window gating for all non-late-entry deduct/neutral forms.
+        period_from = _parse_iso_date(leave_policy.get('from_date'))
+        period_to = _parse_iso_date(leave_policy.get('to_date'))
+        if not is_late_entry and period_from and period_to:
+            if check_date < period_from or check_date > period_to:
+                return False
 
         def is_monthly_reset(policy: dict) -> bool:
             token = str(policy.get('reset_period') or policy.get('reset_duration') or '').strip().lower()
@@ -223,7 +423,7 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
                         if allocated <= 0.0:
                             return False
 
-                        if is_monthly_reset(leave_policy):
+                        if is_late_entry and is_monthly_reset(leave_policy):
                             # Hide when monthly allocation is used up.
                             period_start, period_end = monthly_period_bounds(timezone.localdate())
                             used = 0.0
@@ -274,7 +474,7 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
         if allocated <= 0:
             return False
 
-        if is_monthly_reset(leave_policy):
+        if is_late_entry and is_monthly_reset(leave_policy):
             period_start, period_end = monthly_period_bounds(timezone.localdate())
             used = 0.0
             qs = StaffRequest.objects.filter(
@@ -285,6 +485,25 @@ def template_has_nonzero_allocation_for_user(user, template) -> bool:
             for req in qs:
                 used += request_units_in_period(req, period_start, period_end)
             remaining = round(allocated - used, 2)
+            return remaining > 0.0
+
+        # Non-late-entry semester usage check with split carry-forward.
+        if not is_late_entry and period_from and period_to:
+            cap = allocated
+            split_date = _parse_iso_date(leave_policy.get('split_date'))
+            if split_date and check_date < split_date:
+                cap = allocated / 2.0
+
+            used = 0.0
+            qs = StaffRequest.objects.filter(
+                applicant=user,
+                template=template,
+                status__in=['pending', 'approved'],
+            ).select_related('template')
+            for req in qs:
+                used += request_units_in_period(req, period_from, min(check_date, period_to))
+
+            remaining = round(float(cap or 0.0) - float(used or 0.0), 2)
             return remaining > 0.0
 
         return True
@@ -337,13 +556,14 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         Filters based on user's roles and SPL/normal template logic.
         GET /api/request-templates/active/
         """
+        run_semester_policy_maintenance()
         active_templates = self.queryset.filter(is_active=True)
         
         # Filter templates based on user's ability to apply
         filtered_templates = [
             template for template in active_templates
             if can_user_apply_with_template(request.user, template)
-            and template_has_nonzero_allocation_for_user(request.user, template)
+            and template_has_nonzero_allocation_for_user(request.user, template, effective_date=timezone.localdate())
         ]
         
         serializer = self.get_serializer(filtered_templates, many=True)
@@ -413,6 +633,8 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         date_str = request.data.get('date')
         if not date_str:
             return Response({'error': 'date parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        run_semester_policy_maintenance()
         
         try:
             from datetime import datetime
@@ -475,7 +697,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             filtered_absent = [
                 template for template in absent_templates
                 if can_user_apply_with_template(request.user, template)
-                and template_has_nonzero_allocation_for_user(request.user, template)
+                and template_has_nonzero_allocation_for_user(request.user, template, effective_date=check_date)
             ]
             
             return Response({
@@ -497,7 +719,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             if not can_user_apply_with_template(request.user, template):
                 continue
 
-            if not template_has_nonzero_allocation_for_user(request.user, template):
+            if not template_has_nonzero_allocation_for_user(request.user, template, effective_date=check_date):
                 continue
                 
             leave_policy = template.leave_policy
@@ -520,6 +742,230 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             'total_available': len(filtered),
             'message': f'{"Earn forms available (Holiday)" if is_holiday_or_sunday else "Deduct/Neutral forms available (Working day)"}'
         })
+
+    @action(detail=False, methods=['get'])
+    def vacation_settings(self, request):
+        """HR/Admin endpoint to fetch vacation entitlement rules and slots."""
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        rules = VacationEntitlementRule.objects.all().order_by('id')
+        semesters = VacationSemester.objects.all().order_by('from_date', 'id')
+        slots = VacationSlot.objects.select_related('semester_ref').all().order_by('from_date', 'id')
+        confirm_slots = VacationConfirmSlot.objects.select_related('semester_ref').prefetch_related('departments').all().order_by('from_date', 'id')
+
+        return Response({
+            'rules': [
+                {
+                    'id': r.id,
+                    'condition': r.condition,
+                    'min_years': r.min_years,
+                    'min_months': r.min_months,
+                    'entitled_days': r.entitled_days,
+                    'is_active': r.is_active,
+                    'notes': r.notes,
+                }
+                for r in rules
+            ],
+            'semesters': [
+                {
+                    'id': sem.id,
+                    'name': sem.name,
+                    'from_date': sem.from_date.isoformat(),
+                    'to_date': sem.to_date.isoformat(),
+                    'is_active': sem.is_active,
+                }
+                for sem in semesters
+            ],
+            'slots': [
+                {
+                    'id': s.id,
+                    'semester_id': s.semester_ref_id,
+                    'semester': s.semester_ref.name if s.semester_ref else s.semester,
+                    'semester_from_date': s.semester_from_date.isoformat() if s.semester_from_date else None,
+                    'semester_to_date': s.semester_to_date.isoformat() if s.semester_to_date else None,
+                    'slot_name': s.slot_name,
+                    'from_date': s.from_date.isoformat(),
+                    'to_date': s.to_date.isoformat(),
+                    'total_days': s.total_days,
+                    'is_active': s.is_active,
+                }
+                for s in slots
+            ],
+            'confirm_slots': [
+                {
+                    'id': s.id,
+                    'semester_id': s.semester_ref_id,
+                    'semester': s.semester_ref.name if s.semester_ref else s.semester,
+                    'slot_name': s.slot_name,
+                    'from_date': s.from_date.isoformat(),
+                    'to_date': s.to_date.isoformat(),
+                    'total_days': s.total_days,
+                    'department_ids': list(s.departments.values_list('id', flat=True)),
+                    'is_active': s.is_active,
+                }
+                for s in confirm_slots
+            ],
+        })
+
+    @action(detail=False, methods=['post'])
+    def save_vacation_settings(self, request):
+        """HR/Admin endpoint to replace vacation entitlement rules and slot definitions."""
+        from datetime import datetime
+        from .permissions import IsAdminOrHR
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+
+        rules_payload = request.data.get('rules', [])
+        semesters_payload = request.data.get('semesters', [])
+        slots_payload = request.data.get('slots', [])
+        confirm_slots_payload = request.data.get('confirm_slots', [])
+
+        if (
+            not isinstance(rules_payload, list)
+            or not isinstance(semesters_payload, list)
+            or not isinstance(slots_payload, list)
+            or not isinstance(confirm_slots_payload, list)
+        ):
+            return Response({'error': 'rules, semesters, slots and confirm_slots must be arrays'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                from academics.models import Department
+
+                VacationEntitlementRule.objects.all().delete()
+                for item in rules_payload:
+                    condition = str(item.get('condition') or '>=').strip()
+                    min_years = int(item.get('min_years') or 0)
+                    min_months = int(item.get('min_months') or 0)
+                    entitled_days = int(item.get('entitled_days') or 0)
+                    if condition not in ['>', '<', '=', '>=', '<=']:
+                        raise ValueError('Rule condition must be one of >, <, =, >=, <=')
+                    if min_months < 0 or min_months > 11:
+                        raise ValueError('Rule months must be between 0 and 11')
+                    if min_years < 0 or entitled_days < 0:
+                        raise ValueError('Rule values must be non-negative')
+
+                    VacationEntitlementRule.objects.create(
+                        condition=condition,
+                        min_years=min_years,
+                        min_months=min_months,
+                        entitled_days=entitled_days,
+                        is_active=bool(item.get('is_active', True)),
+                        notes=str(item.get('notes') or '').strip(),
+                    )
+
+                VacationConfirmSlot.objects.all().delete()
+                VacationSlot.objects.all().delete()
+                VacationSemester.objects.all().delete()
+
+                sem_by_name = {}
+                for item in semesters_payload:
+                    name = str(item.get('name') or '').strip()
+                    from_raw = str(item.get('from_date') or '').strip()
+                    to_raw = str(item.get('to_date') or '').strip()
+                    if not name or not from_raw or not to_raw:
+                        raise ValueError('Each semester requires name, from_date and to_date')
+
+                    from_date = datetime.strptime(from_raw, '%Y-%m-%d').date()
+                    to_date = datetime.strptime(to_raw, '%Y-%m-%d').date()
+                    if to_date < from_date:
+                        raise ValueError(f'Semester "{name}" has invalid date range')
+
+                    sem = VacationSemester.objects.create(
+                        name=name,
+                        from_date=from_date,
+                        to_date=to_date,
+                        is_active=bool(item.get('is_active', True)),
+                    )
+                    sem_by_name[name.lower()] = sem
+
+                for item in slots_payload:
+                    slot_name = str(item.get('slot_name') or '').strip()
+                    semester_name = str(item.get('semester') or '').strip()
+                    from_raw = str(item.get('from_date') or '').strip()
+                    to_raw = str(item.get('to_date') or '').strip()
+                    if not slot_name or not semester_name or not from_raw or not to_raw:
+                        raise ValueError('Each slot requires semester, slot_name, from_date, and to_date')
+
+                    sem = sem_by_name.get(semester_name.lower())
+                    if not sem:
+                        raise ValueError(f'Semester "{semester_name}" not found for slot "{slot_name}"')
+
+                    from_date = datetime.strptime(from_raw, '%Y-%m-%d').date()
+                    to_date = datetime.strptime(to_raw, '%Y-%m-%d').date()
+                    if to_date < from_date:
+                        raise ValueError('Slot to_date must be on or after from_date')
+                    if from_date < sem.from_date:
+                        raise ValueError(f'Slot "{slot_name}" starts before semester availability date')
+                    if to_date > sem.to_date:
+                        raise ValueError(f'Slot "{slot_name}" ends after semester availability date')
+
+                    VacationSlot.objects.create(
+                        semester_ref=sem,
+                        semester=sem.name,
+                        semester_from_date=sem.from_date,
+                        semester_to_date=sem.to_date,
+                        slot_name=slot_name,
+                        from_date=from_date,
+                        to_date=to_date,
+                        is_active=bool(item.get('is_active', True)),
+                    )
+
+                for item in confirm_slots_payload:
+                    semester_name = str(item.get('semester') or '').strip()
+                    from_raw = str(item.get('from_date') or '').strip()
+                    to_raw = str(item.get('to_date') or '').strip()
+                    slot_name = str(item.get('slot_name') or 'Confirmed Slot').strip() or 'Confirmed Slot'
+                    department_ids = item.get('department_ids') or []
+
+                    if not semester_name or not from_raw or not to_raw:
+                        raise ValueError('Each confirm slot requires semester, from_date and to_date')
+                    if not isinstance(department_ids, list) or not department_ids:
+                        raise ValueError('Each confirm slot must include at least one department')
+
+                    sem = sem_by_name.get(semester_name.lower())
+                    if not sem:
+                        raise ValueError(f'Semester "{semester_name}" not found for confirm slot')
+
+                    from_date = datetime.strptime(from_raw, '%Y-%m-%d').date()
+                    to_date = datetime.strptime(to_raw, '%Y-%m-%d').date()
+                    if to_date < from_date:
+                        raise ValueError('Confirm slot to_date must be on or after from_date')
+                    if from_date < sem.from_date:
+                        raise ValueError('Confirm slot from date must be within semester availability window')
+                    if to_date > sem.to_date:
+                        raise ValueError('Confirm slot to date must be within semester availability window')
+
+                    dept_ids = []
+                    for raw in department_ids:
+                        try:
+                            did = int(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if did > 0 and did not in dept_ids:
+                            dept_ids.append(did)
+
+                    departments = list(Department.objects.filter(id__in=dept_ids))
+                    if len(departments) != len(dept_ids):
+                        raise ValueError('One or more selected departments are invalid for confirm slot')
+
+                    confirm_slot = VacationConfirmSlot.objects.create(
+                        semester_ref=sem,
+                        semester=sem.name,
+                        slot_name=slot_name,
+                        from_date=from_date,
+                        to_date=to_date,
+                        is_active=bool(item.get('is_active', True)),
+                    )
+                    confirm_slot.departments.set(departments)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'message': 'Vacation settings saved successfully'})
 
 
 class StaffRequestViewSet(viewsets.ModelViewSet):
@@ -555,6 +1001,296 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return StaffRequestListSerializer
         return StaffRequestDetailSerializer
+
+    def _template_name_key(self, template):
+        return (getattr(template, 'name', '') or '').strip().lower()
+
+    def _is_vacation_application_template(self, template):
+        return self._template_name_key(template) in VACATION_APPLICATION_TEMPLATES
+
+    def _is_vacation_cancellation_template(self, template):
+        return self._template_name_key(template) in VACATION_CANCELLATION_TEMPLATES
+
+    def _get_staff_experience_months(self, user):
+        profile = getattr(user, 'staff_profile', None)
+        doj = getattr(profile, 'date_of_join', None) if profile else None
+        if not doj:
+            return 0
+
+        today = timezone.localdate()
+        months = (today.year - doj.year) * 12 + (today.month - doj.month)
+        if today.day < doj.day:
+            months -= 1
+        return max(0, months)
+
+    def _get_vacation_entitlement_days(self, user):
+        exp_months = self._get_staff_experience_months(user)
+        rules = VacationEntitlementRule.objects.filter(is_active=True).order_by('id')
+        for rule in rules:
+            threshold = (int(rule.min_years or 0) * 12) + int(rule.min_months or 0)
+            condition = str(rule.condition or '>=').strip()
+
+            matched = False
+            if condition == '>':
+                matched = exp_months > threshold
+            elif condition == '<':
+                matched = exp_months < threshold
+            elif condition == '=':
+                matched = exp_months == threshold
+            elif condition == '<=':
+                matched = exp_months <= threshold
+            else:
+                matched = exp_months >= threshold
+
+            if matched:
+                return int(rule.entitled_days or 0)
+        return 0
+
+    def _is_vacation_request_cancelled(self, vacation_request):
+        try:
+            return bool((vacation_request.form_data or {}).get('vacation_cancelled'))
+        except Exception:
+            return False
+
+    def _extract_vacation_slot_ids(self, form_data):
+        ids = []
+        raw_ids = (form_data or {}).get('slot_ids')
+        if isinstance(raw_ids, list):
+            for item in raw_ids:
+                try:
+                    sid = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if sid > 0 and sid not in ids:
+                    ids.append(sid)
+
+        # Backward compatibility for old payloads that send only slot_id.
+        if not ids:
+            try:
+                sid = int((form_data or {}).get('slot_id'))
+                if sid > 0:
+                    ids.append(sid)
+            except (TypeError, ValueError):
+                pass
+
+        return ids
+
+    def _resolve_vacation_slots(self, slot_ids):
+        if not slot_ids:
+            return []
+
+        by_id = {
+            slot.id: slot
+            for slot in VacationSlot.objects.filter(id__in=slot_ids, is_active=True)
+        }
+        resolved = []
+        for sid in slot_ids:
+            slot = by_id.get(sid)
+            if not slot:
+                return []
+            resolved.append(slot)
+        return resolved
+
+    def _has_working_day_between(self, left_end, right_start, user):
+        """Return True if any working day exists between two slot boundaries."""
+        current = left_end + timedelta(days=1)
+        last = right_start - timedelta(days=1)
+        while current <= last:
+            if current.weekday() != 6 and not self._is_holiday_for_user(current, user):
+                return True
+            current += timedelta(days=1)
+        return False
+
+    def _slots_are_multipick_compatible(self, slots, user):
+        """Multiple slots are allowed only when no working day gap exists between them."""
+        if len(slots) <= 1:
+            return True
+
+        ordered = sorted(slots, key=lambda s: (s.from_date, s.to_date, s.id))
+        previous = ordered[0]
+        for current in ordered[1:]:
+            if self._has_working_day_between(previous.to_date, current.from_date, user):
+                return False
+            # Keep the furthest right boundary for overlap/adjacent chains.
+            if current.to_date > previous.to_date:
+                previous = current
+        return True
+
+    def _vacation_slot_groups(self, slots, user):
+        """Group slots by continuous ranges without working-day gaps."""
+        ordered = sorted(slots, key=lambda s: (s.from_date, s.to_date, s.id))
+        group_by_slot_id = {}
+        group_sizes = {}
+        if not ordered:
+            return group_by_slot_id, group_sizes
+
+        group_idx = 1
+        previous = ordered[0]
+        group_by_slot_id[previous.id] = group_idx
+        group_sizes[group_idx] = 1
+
+        for current in ordered[1:]:
+            if self._has_working_day_between(previous.to_date, current.from_date, user):
+                group_idx += 1
+                previous = current
+            else:
+                if current.to_date > previous.to_date:
+                    previous = current
+
+            group_by_slot_id[current.id] = group_idx
+            group_sizes[group_idx] = int(group_sizes.get(group_idx, 0)) + 1
+
+        return group_by_slot_id, group_sizes
+
+    def _vacation_days_from_request(self, req):
+        form_data = req.form_data or {}
+        slot_ids = self._extract_vacation_slot_ids(form_data)
+        if slot_ids:
+            by_id = {
+                slot.id: slot
+                for slot in VacationSlot.objects.filter(id__in=slot_ids)
+            }
+            total = 0
+            for sid in slot_ids:
+                slot = by_id.get(sid)
+                if slot:
+                    total += int(slot.total_days)
+            if total > 0:
+                return int(total)
+
+        try:
+            explicit_days = int(form_data.get('vacation_days') or 0)
+            if explicit_days > 0:
+                return explicit_days
+        except (TypeError, ValueError):
+            pass
+
+        return int(round(self._calculate_days_from_form_data(form_data) or 0))
+
+    def _get_vacation_semester_for_date(self, target_date):
+        if not target_date:
+            return None
+        return VacationSemester.objects.filter(
+            is_active=True,
+            from_date__lte=target_date,
+            to_date__gte=target_date,
+        ).order_by('from_date', 'id').first()
+
+    def _vacation_used_days(self, user, semester_from, semester_to):
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+            template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+        )
+
+        used = 0
+        for req in qs:
+            if self._is_vacation_request_cancelled(req):
+                continue
+            form_data = req.form_data or {}
+            from_str = str(form_data.get('from_date') or '')
+            if not from_str:
+                continue
+            to_str = str(form_data.get('to_date') or from_str)
+            try:
+                req_from = datetime.strptime(from_str, '%Y-%m-%d').date()
+                req_to = datetime.strptime(to_str, '%Y-%m-%d').date()
+            except ValueError:
+                continue
+            if req_to < semester_from or req_from > semester_to:
+                continue
+            used += self._vacation_days_from_request(req)
+        return max(0, int(used))
+
+    def _vacation_remaining_days(self, user, target_date):
+        semester = self._get_vacation_semester_for_date(target_date)
+        if not semester:
+            return 0
+        entitlement = self._get_vacation_entitlement_days(user)
+        used = self._vacation_used_days(user, semester.from_date, semester.to_date)
+        return max(0, int(entitlement - used))
+
+    def _resolve_vacation_slot(self, slot_id):
+        slot = VacationSlot.objects.filter(id=slot_id, is_active=True).first()
+        return slot
+
+    def _get_user_department_id(self, user):
+        try:
+            profile = getattr(user, 'staff_profile', None)
+            if not profile:
+                return None
+
+            dept = None
+            if hasattr(profile, 'get_current_department'):
+                dept = profile.get_current_department()
+            if not dept:
+                dept = getattr(profile, 'department', None)
+
+            return int(getattr(dept, 'id', None)) if getattr(dept, 'id', None) else None
+        except Exception:
+            return None
+
+    def _has_confirm_vacation_overlap(self, user, from_date, to_date):
+        dept_id = self._get_user_department_id(user)
+        if not dept_id or not from_date or not to_date:
+            return False
+
+        return VacationConfirmSlot.objects.filter(
+            is_active=True,
+            departments__id=dept_id,
+            from_date__lte=to_date,
+            to_date__gte=from_date,
+        ).exists()
+
+    def _latest_active_vacation_requests_by_slot(self, user):
+        """Return {slot_id: latest request} for pending/approved non-cancelled vacation requests."""
+        result = {}
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+            status__in=['pending', 'approved'],
+        ).order_by('-updated_at', '-id')
+
+        for req in qs:
+            if self._is_vacation_request_cancelled(req):
+                continue
+            for sid in self._extract_vacation_slot_ids(req.form_data or {}):
+                if sid not in result:
+                    result[sid] = req
+
+        return result
+
+    def _find_matching_vacation_request(self, user, from_date, to_date):
+        approved = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+            template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+        ).order_by('-updated_at', '-id')
+
+        from_iso = from_date.isoformat()
+        to_iso = to_date.isoformat()
+        for req in approved:
+            if self._is_vacation_request_cancelled(req):
+                continue
+            fd = req.form_data or {}
+            if str(fd.get('from_date') or '') == from_iso and str(fd.get('to_date') or '') == to_iso:
+                return req
+        return None
+
+    def _get_vacation_template_for_user(self, user, *, cancellation=False):
+        candidates = [
+            'Vacation Cancellation Form - SPL',
+            'Vacation Cancellation Form',
+        ] if cancellation else [
+            'Vacation Application - SPL',
+            'Vacation Application',
+        ]
+
+        for name in candidates:
+            template = RequestTemplate.objects.filter(is_active=True, name=name).first()
+            if template and can_user_apply_with_template(user, template):
+                return template
+        return None
     
     def list(self, request, *args, **kwargs):
         """
@@ -591,11 +1327,171 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             }
         }
         """
+        run_semester_policy_maintenance()
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         template = serializer.validated_data.get('template')
         form_data = serializer.validated_data.get('form_data', {})
+
+        if self._is_vacation_application_template(template):
+            selected_slot_ids = self._extract_vacation_slot_ids(form_data)
+            if not selected_slot_ids:
+                return Response({'error': 'slot_id or slot_ids is required for vacation application'}, status=status.HTTP_400_BAD_REQUEST)
+
+            selected_slots = self._resolve_vacation_slots(selected_slot_ids)
+            if len(selected_slots) != len(selected_slot_ids):
+                return Response({'error': 'One or more selected vacation slots are not available'}, status=status.HTTP_400_BAD_REQUEST)
+
+            selected_slots = sorted(selected_slots, key=lambda s: (s.from_date, s.to_date, s.id))
+            if len(selected_slots) > 1 and not self._slots_are_multipick_compatible(selected_slots, request.user):
+                return Response(
+                    {'error': 'Selected slots are not continuous. Multiple slot selection is allowed only when there is no working day between slots.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            from_date = selected_slots[0].from_date
+            to_date = max(slot.to_date for slot in selected_slots)
+            today = timezone.localdate()
+
+            active_semester = self._get_vacation_semester_for_date(from_date)
+            if not active_semester:
+                return Response(
+                    {'error': 'Vacation semester period is not active for selected slot dates. Contact HR to set new semester dates.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if from_date.year != to_date.year:
+                return Response({'error': 'Selected slots must belong to the same year'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if from_date <= today:
+                return Response({'error': 'Vacation can be applied only for slots after the current date'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if self._has_confirm_vacation_overlap(request.user, from_date, to_date):
+                return Response(
+                    {'error': 'Selected dates are part of HR compulsory vacation slots and cannot be applied manually'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            entitlement = self._get_vacation_entitlement_days(request.user)
+            if entitlement <= 0:
+                return Response({'error': 'You are not eligible for vacation by current experience rules'}, status=status.HTTP_400_BAD_REQUEST)
+
+            remaining = self._vacation_remaining_days(request.user, from_date)
+            total_days = int(sum(int(slot.total_days) for slot in selected_slots))
+            if remaining < total_days:
+                return Response(
+                    {'error': f'Insufficient vacation balance. Remaining: {remaining}, required: {total_days}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            existing_by_slot = self._latest_active_vacation_requests_by_slot(request.user)
+            duplicate_slot_names = []
+            for slot in selected_slots:
+                if slot.id in existing_by_slot:
+                    duplicate_slot_names.append(slot.slot_name)
+            if duplicate_slot_names:
+                return Response(
+                    {'error': f'Vacation already requested for slot(s): {", ".join(duplicate_slot_names)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            normalized = dict(form_data)
+            normalized['slot_ids'] = [slot.id for slot in selected_slots]
+            normalized['slot_id'] = selected_slots[0].id
+            normalized['slot_name'] = selected_slots[0].slot_name
+            normalized['slot_names'] = [slot.slot_name for slot in selected_slots]
+
+            semesters = []
+            for slot in selected_slots:
+                sem = str(slot.semester or '').strip()
+                if sem and sem not in semesters:
+                    semesters.append(sem)
+            normalized['semester'] = ' + '.join(semesters) if semesters else ''
+
+            normalized['from_date'] = from_date.isoformat()
+            normalized['to_date'] = to_date.isoformat()
+            normalized['vacation_days'] = total_days
+            form_data = normalized
+
+        if self._is_vacation_cancellation_template(template):
+            normalized = dict(form_data)
+
+            linked_id = (
+                normalized.get('linked_vacation_request_id') or
+                normalized.get('linked_request_id')
+            )
+            linked_vacation_request = None
+            if linked_id:
+                linked_vacation_request = StaffRequest.objects.filter(
+                    id=linked_id,
+                    applicant=request.user,
+                    status='approved',
+                    template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+                ).first()
+
+            linked_form = (linked_vacation_request.form_data or {}) if linked_vacation_request else {}
+
+            vacation_request = linked_vacation_request
+
+            from_date = self._coerce_form_date(
+                normalized.get('from_date') or
+                normalized.get('start_date') or
+                normalized.get('date') or
+                linked_form.get('from_date') or
+                linked_form.get('start_date') or
+                linked_form.get('date')
+            )
+            to_date = self._coerce_form_date(
+                normalized.get('to_date') or
+                normalized.get('end_date') or
+                normalized.get('date') or
+                linked_form.get('to_date') or
+                linked_form.get('end_date') or
+                linked_form.get('date') or
+                from_date
+            )
+
+            if vacation_request is None and (not from_date or not to_date):
+                return Response({'error': 'from_date and to_date are required for vacation cancellation'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if from_date and to_date and to_date < from_date:
+                return Response({'error': 'to_date must be on or after from_date'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if from_date and to_date and self._has_confirm_vacation_overlap(request.user, from_date, to_date):
+                return Response(
+                    {'error': 'Vacation cancellation is not allowed for HR compulsory vacation slot dates'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if vacation_request is None:
+                vacation_request = self._find_matching_vacation_request(request.user, from_date, to_date)
+            if not vacation_request:
+                return Response({'error': 'No approved active vacation found for selected date range'}, status=status.HTTP_400_BAD_REQUEST)
+
+            pending_cancel = StaffRequest.objects.filter(
+                applicant=request.user,
+                template__name__in=['Vacation Cancellation Form', 'Vacation Cancellation Form - SPL'],
+                status='pending',
+                form_data__linked_vacation_request_id=vacation_request.id,
+            )
+            if pending_cancel.exists():
+                return Response({'error': 'A cancellation request for this vacation is already pending'}, status=status.HTTP_400_BAD_REQUEST)
+
+            normalized['linked_vacation_request_id'] = vacation_request.id
+            if from_date:
+                normalized['from_date'] = from_date.isoformat()
+            elif linked_form.get('from_date'):
+                normalized['from_date'] = str(linked_form.get('from_date'))[:10]
+
+            if to_date:
+                normalized['to_date'] = to_date.isoformat()
+            elif linked_form.get('to_date'):
+                normalized['to_date'] = str(linked_form.get('to_date'))[:10]
+            normalized['slot_id'] = (vacation_request.form_data or {}).get('slot_id')
+            normalized['slot_ids'] = (vacation_request.form_data or {}).get('slot_ids') or []
+            form_data = normalized
 
         locked_month_message = self._validate_month_publish_lock(form_data)
         if locked_month_message:
@@ -690,7 +1586,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         )
         
         # Create the request with current user as applicant
-        staff_request = serializer.save(applicant=request.user)
+        staff_request = serializer.save(applicant=request.user, form_data=form_data)
 
         # Auto-approve 10 mins FN late entry only when biometric in-time confirms eligibility.
         if self._should_auto_approve_late_entry(request.user, template, form_data):
@@ -725,6 +1621,68 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         start = date(dt.year, dt.month, 1)
         end = date(dt.year, dt.month, calendar.monthrange(dt.year, dt.month)[1])
         return start, end
+
+    def _policy_window_bounds(self, leave_policy):
+        from_date = _parse_iso_date((leave_policy or {}).get('from_date'))
+        to_date = _parse_iso_date((leave_policy or {}).get('to_date'))
+        return from_date, to_date
+
+    def _split_adjusted_allocation_cap(self, user, template, *, effective_date=None):
+        allocated = float(self._resolve_template_allocation(user, template) or 0.0)
+        if allocated <= 0.0:
+            return 0.0
+
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        split_date = _parse_iso_date(leave_policy.get('split_date'))
+        if split_date and effective_date and effective_date < split_date:
+            return round(allocated / 2.0, 2)
+        return round(allocated, 2)
+
+    def _used_units_in_period(self, user, template, *, period_start, period_end):
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status__in=['pending', 'approved'],
+        ).select_related('template')
+
+        used = 0.0
+        for req in qs:
+            used += self._request_units_for_usage(
+                template,
+                req.form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        return round(used, 2)
+
+    def _approved_units_in_period(self, user, template, *, period_start, period_end, exclude_request_id=None):
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status='approved',
+        ).select_related('template')
+        if exclude_request_id:
+            qs = qs.exclude(id=exclude_request_id)
+
+        used = 0.0
+        action = str((getattr(template, 'leave_policy', None) or {}).get('action') or '').strip().lower()
+        for req in qs:
+            if action == 'deduct':
+                try:
+                    if bool((req.form_data or {}).get('claim_col')):
+                        continue
+                except Exception:
+                    pass
+
+            used += self._request_units_for_usage(
+                template,
+                req.form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        return round(used, 2)
 
     def _request_units_for_usage(self, template, form_data, user, *, period_start=None, period_end=None) -> float:
         """Compute how much allocation a request consumes for monthly usage checks."""
@@ -824,8 +1782,25 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         `allotment_per_role` mapping. If mapping exists but user's role is missing,
         it is treated as 0 allocation (safer default).
         """
+        if self._is_vacation_application_template(template) or self._is_vacation_cancellation_template(template):
+            return None
+
         leave_policy = getattr(template, 'leave_policy', None) or {}
         action = str(leave_policy.get('action') or '').strip().lower()
+        if action not in ['deduct', 'neutral', 'earn']:
+            return None
+
+        effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+        is_late_entry = self._is_late_entry_template(template)
+        period_start, period_end = self._policy_window_bounds(leave_policy)
+
+        # Semester-wise reset window for all non-late-entry forms.
+        if not is_late_entry and period_start and period_end:
+            if effective_date < period_start:
+                return f'You cannot apply this form before semester start date ({period_start.isoformat()}).'
+            if effective_date > period_end:
+                return 'You cannot apply this form because the semester period has ended. Please contact HR to update from/to dates.'
+
         if action not in ['deduct', 'neutral']:
             return None
 
@@ -833,9 +1808,8 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         if allocated <= 0.0:
             return 'You cannot apply this form because the allocated count is 0.'
 
-        # Monthly reset policy: block once used up for the month.
-        if self._is_monthly_reset_policy(leave_policy):
-            effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+        # Late entry continues monthly behavior.
+        if is_late_entry and self._is_monthly_reset_policy(leave_policy):
             period_start, period_end = self._monthly_period_bounds(effective_date)
 
             used = self._used_units_in_month(user, template, period_start=period_start, period_end=period_end)
@@ -843,6 +1817,26 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             remaining = round(allocated - used, 2)
             if remaining + 1e-9 < requested or remaining <= 0.0:
                 return 'You cannot apply this form because your monthly allocation is exhausted.'
+
+        # Non-late-entry forms are enforced semester-wise using from_date/to_date.
+        if not is_late_entry and period_start and period_end:
+            cap = self._split_adjusted_allocation_cap(user, template, effective_date=effective_date)
+            used = self._used_units_in_period(
+                user,
+                template,
+                period_start=period_start,
+                period_end=min(effective_date, period_end),
+            )
+            requested = self._request_units_for_usage(
+                template,
+                form_data or {},
+                user,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            remaining = round(cap - used, 2)
+            if remaining + 1e-9 < requested or remaining <= 0.0:
+                return 'You cannot apply this form because your semester allocation is exhausted.'
 
         return None
 
@@ -998,6 +1992,31 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             except Exception:
                 continue
         return None
+
+    def _coerce_form_date(self, value):
+        """Parse request date inputs from date/datetime/ISO strings into date objects."""
+        if not value:
+            return None
+
+        if isinstance(value, datetime):
+            return value.date()
+
+        if isinstance(value, date_type):
+            return value
+
+        raw = str(value).strip()
+        if not raw:
+            return None
+
+        try:
+            return datetime.fromisoformat(raw.replace('Z', '+00:00')).date()
+        except Exception:
+            pass
+
+        try:
+            return datetime.strptime(raw[:10], '%Y-%m-%d').date()
+        except Exception:
+            return None
 
     def _get_user_in_time_limit(self, user):
         """Resolve in-time limit with staff override, department, then global fallback."""
@@ -1404,6 +2423,13 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         logger = logging.getLogger(__name__)
 
+        if self._is_vacation_cancellation_template(staff_request.template):
+            try:
+                self._process_vacation_cancellation(staff_request)
+            except Exception as e:
+                logger.exception('Failed to process vacation cancellation for request %s: %s', staff_request.id, str(e))
+            return
+
         try:
             self._process_leave_balance(staff_request)
         except Exception as e:
@@ -1656,6 +2682,96 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         lop_balance.balance = lop_count
         lop_balance.save(update_fields=['balance', 'updated_at'])
         return lop_count
+
+    def _process_vacation_cancellation(self, cancel_request):
+        """Finalize approved vacation cancellation and restore day statuses to regular flow."""
+        from staff_attendance.models import AttendanceRecord
+
+        form_data = cancel_request.form_data or {}
+        linked_id = form_data.get('linked_vacation_request_id')
+
+        vacation_request = None
+        if linked_id:
+            vacation_request = StaffRequest.objects.filter(
+                id=linked_id,
+                applicant=cancel_request.applicant,
+                status='approved',
+                template__name__in=['Vacation Application', 'Vacation Application - SPL'],
+            ).first()
+
+        if not vacation_request:
+            try:
+                from_date = self._coerce_form_date(form_data.get('from_date') or form_data.get('start_date'))
+                to_date = self._coerce_form_date(form_data.get('to_date') or form_data.get('end_date') or from_date)
+            except Exception:
+                return
+            if not from_date or not to_date:
+                return
+            vacation_request = self._find_matching_vacation_request(cancel_request.applicant, from_date, to_date)
+
+        if not vacation_request:
+            return
+
+        vacation_form = dict(vacation_request.form_data or {})
+        vacation_form['vacation_cancelled'] = True
+        vacation_form['cancelled_by_request_id'] = cancel_request.id
+        vacation_request.form_data = vacation_form
+        vacation_request.save(update_fields=['form_data', 'updated_at'])
+
+        start_date = self._coerce_form_date(
+            vacation_form.get('from_date') or
+            vacation_form.get('start_date') or
+            vacation_form.get('date')
+        )
+        end_date = self._coerce_form_date(
+            vacation_form.get('to_date') or
+            vacation_form.get('end_date') or
+            vacation_form.get('date') or
+            start_date
+        )
+        if not start_date or not end_date:
+            return
+
+        if end_date < start_date:
+            start_date, end_date = end_date, start_date
+
+        today = timezone.localdate()
+        current = start_date
+        while current <= end_date:
+            if current.weekday() == 6 or self._is_holiday_for_user(current, cancel_request.applicant):
+                current += timedelta(days=1)
+                continue
+
+            record = AttendanceRecord.objects.filter(user=cancel_request.applicant, date=current).first()
+
+            if record and (record.morning_in or record.evening_out):
+                if record.fn_status is None:
+                    record.fn_status = 'absent'
+                if record.an_status is None:
+                    record.an_status = 'absent'
+                record.update_status()
+                record.save()
+            elif current <= today:
+                if record is None:
+                    record = AttendanceRecord(
+                        user=cancel_request.applicant,
+                        date=current,
+                        morning_in=None,
+                        evening_out=None,
+                        fn_status='absent',
+                        an_status='absent',
+                        status='absent',
+                        notes='Auto-marked absent after approved vacation cancellation',
+                    )
+                else:
+                    record.fn_status = 'absent'
+                    record.an_status = 'absent'
+                    record.status = 'absent'
+                record.save()
+
+            current += timedelta(days=1)
+
+        self._recalculate_lop_for_user(cancel_request.applicant)
 
     def _late_entry_rows_for_month(self, target_user, year, month):
         """Return monthly late-entry rows and aggregate counts for a user."""
@@ -2075,8 +3191,40 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
                     logger.info(f'[LeaveBalance] Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
 
+                    # Semester/split policy rebase for non-late-entry forms:
+                    # carry first-half remainder into second-half automatically.
+                    period_start, period_end = self._policy_window_bounds(leave_policy)
+                    effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+                    if (
+                        not self._is_late_entry_template(template)
+                        and period_start
+                        and period_end
+                        and period_start <= effective_date <= period_end
+                    ):
+                        cap = self._split_adjusted_allocation_cap(
+                            staff_request.applicant,
+                            template,
+                            effective_date=effective_date,
+                        )
+                        used_before_current = self._approved_units_in_period(
+                            staff_request.applicant,
+                            template,
+                            period_start=period_start,
+                            period_end=min(effective_date, period_end),
+                            exclude_request_id=staff_request.id,
+                        )
+                        expected_before = round(max(0.0, cap - used_before_current), 2)
+                        if abs(float(balance_obj.balance or 0.0) - expected_before) > 1e-9:
+                            logger.info(
+                                '[LeaveBalance] Rebased balance by semester policy: %s -> %s',
+                                balance_obj.balance,
+                                expected_before,
+                            )
+                            balance_obj.balance = expected_before
+                            balance_obj.save()
+
                     # Initialize balance for new entries (deduct action only)
-                    if created:
+                    if created and (period_start is None or period_end is None or self._is_late_entry_template(template)):
                         from datetime import datetime, date
                         
                         # Get user's role (simplified - use first matching role)
@@ -2196,9 +3344,39 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 )
                 
                 logger.info(f'[LeaveBalance] Neutral (with allotment) - Balance object - Created: {created}, Initial Balance: {balance_obj.balance}')
+
+                period_start, period_end = self._policy_window_bounds(leave_policy)
+                effective_date = self._get_request_effective_date(form_data or {}) or timezone.localdate()
+                if (
+                    not self._is_late_entry_template(template)
+                    and period_start
+                    and period_end
+                    and period_start <= effective_date <= period_end
+                ):
+                    cap = self._split_adjusted_allocation_cap(
+                        staff_request.applicant,
+                        template,
+                        effective_date=effective_date,
+                    )
+                    used_before_current = self._approved_units_in_period(
+                        staff_request.applicant,
+                        template,
+                        period_start=period_start,
+                        period_end=min(effective_date, period_end),
+                        exclude_request_id=staff_request.id,
+                    )
+                    expected_before = round(max(0.0, cap - used_before_current), 2)
+                    if abs(float(balance_obj.balance or 0.0) - expected_before) > 1e-9:
+                        logger.info(
+                            '[LeaveBalance] Neutral rebase by semester policy: %s -> %s',
+                            balance_obj.balance,
+                            expected_before,
+                        )
+                        balance_obj.balance = expected_before
+                        balance_obj.save()
                 
                 # Initialize balance for new entries
-                if created:
+                if created and (period_start is None or period_end is None or self._is_late_entry_template(template)):
                     from datetime import datetime, date
                     
                     # Get user's role
@@ -2894,6 +4072,9 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         logger = logging.getLogger(__name__)
         template = staff_request.template
+        if self._is_vacation_application_template(template) or self._is_vacation_cancellation_template(template):
+            return
+
         attendance_action = template.attendance_action
         leave_policy = template.leave_policy
         lock_marker = f'LATE10_LOCK:req_{staff_request.id}'
@@ -3434,6 +4615,114 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         
         serializer = StaffRequestDetailSerializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def vacation_dashboard(self, request):
+        """Return vacation eligibility, remaining days, and visible slots for month view."""
+        year = int(request.query_params.get('year', timezone.localdate().year))
+        month = int(request.query_params.get('month', timezone.localdate().month))
+
+        month_start = date_type(year, month, 1)
+        month_end = date_type(year, month, monthrange(year, month)[1])
+
+        exp_months = self._get_staff_experience_months(request.user)
+        exp_years = exp_months // 12
+        exp_rem_months = exp_months % 12
+
+        entitlement = self._get_vacation_entitlement_days(request.user)
+        used = self._vacation_used_days(request.user, year)
+        remaining = max(0, entitlement - used)
+        today = timezone.localdate()
+        user_dept_id = self._get_user_department_id(request.user)
+
+        app_template = self._get_vacation_template_for_user(request.user, cancellation=False)
+        cancel_template = self._get_vacation_template_for_user(request.user, cancellation=True)
+
+        slots_qs = VacationSlot.objects.filter(
+            is_active=True,
+            from_date__lte=month_end,
+            to_date__gte=month_start,
+        ).order_by('from_date', 'id')
+
+        confirm_slots_qs = VacationConfirmSlot.objects.filter(
+            is_active=True,
+            from_date__lte=month_end,
+            to_date__gte=month_start,
+        ).order_by('from_date', 'id')
+        if user_dept_id:
+            confirm_slots_qs = confirm_slots_qs.filter(departments__id=user_dept_id)
+        else:
+            confirm_slots_qs = confirm_slots_qs.none()
+        confirm_slots_qs = confirm_slots_qs.prefetch_related('departments').distinct()
+
+        confirmed_slots_list = list(confirm_slots_qs)
+        confirmed_ranges = [(s.from_date, s.to_date) for s in confirmed_slots_list]
+
+        slots_list = list(slots_qs)
+        latest_by_slot = self._latest_active_vacation_requests_by_slot(request.user)
+        group_by_slot_id, group_sizes = self._vacation_slot_groups(slots_list, request.user)
+
+        slots = []
+        for slot in slots_list:
+            last_req = latest_by_slot.get(slot.id)
+            overlaps_confirmed = any(slot.from_date <= c_to and slot.to_date >= c_from for c_from, c_to in confirmed_ranges)
+
+            slot_days = int(slot.total_days)
+            group_key = int(group_by_slot_id.get(slot.id, 0) or 0)
+            existing_status = last_req.status if last_req else ('compulsory' if overlaps_confirmed else None)
+            slots.append({
+                'id': slot.id,
+                'semester': slot.semester,
+                'slot_name': slot.slot_name,
+                'from_date': slot.from_date.isoformat(),
+                'to_date': slot.to_date.isoformat(),
+                'total_days': slot_days,
+                'existing_request_id': last_req.id if last_req else None,
+                'existing_request_status': existing_status,
+                'can_apply': bool(
+                    app_template
+                    and entitlement > 0
+                    and remaining >= slot_days
+                    and not last_req
+                    and not overlaps_confirmed
+                    and slot.from_date > today
+                ),
+                'multi_group_key': group_key,
+                'multi_select_allowed': bool(group_key and int(group_sizes.get(group_key, 0)) > 1),
+                'is_confirmed': False,
+            })
+
+        for cslot in confirmed_slots_list:
+            slots.append({
+                'id': -int(cslot.id),
+                'semester': cslot.semester,
+                'slot_name': cslot.slot_name or 'Compulsory Slot',
+                'from_date': cslot.from_date.isoformat(),
+                'to_date': cslot.to_date.isoformat(),
+                'total_days': int(cslot.total_days),
+                'existing_request_id': None,
+                'existing_request_status': 'compulsory',
+                'can_apply': False,
+                'multi_group_key': 0,
+                'multi_select_allowed': False,
+                'is_confirmed': True,
+            })
+
+        slots = sorted(slots, key=lambda s: (str(s.get('from_date') or ''), str(s.get('slot_name') or '')))
+
+        return Response({
+            'eligible': entitlement > 0,
+            'experience': {
+                'years': exp_years,
+                'months': exp_rem_months,
+            },
+            'entitlement_days': entitlement,
+            'used_days': used,
+            'remaining_days': remaining,
+            'vacation_template_id': app_template.id if app_template else None,
+            'cancellation_template_id': cancel_template.id if cancel_template else None,
+            'slots': slots,
+        })
     
     @action(detail=False, methods=['get'])
     def department_requests(self, request):
@@ -4715,6 +6004,409 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         return dates
 
+    def _build_attendance_protection_map(self, user, start_date=None, end_date=None):
+        """Map date -> protected shifts (FN/AN/FULL) changed by approved forms."""
+        protected_by_date = {}
+
+        approved_requests_for_attendance = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+        ).select_related('template')
+
+        for req in approved_requests_for_attendance:
+            template = getattr(req, 'template', None)
+            if not template:
+                continue
+
+            leave_policy = getattr(template, 'leave_policy', None) or {}
+            attendance_action = getattr(template, 'attendance_action', None) or {}
+            impacts_attendance = bool(leave_policy.get('attendance_status')) or bool(attendance_action.get('change_status'))
+            if not impacts_attendance:
+                continue
+
+            try:
+                targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
+            except Exception:
+                targets = []
+
+            for target_date, target_shift in targets:
+                if not target_date:
+                    continue
+                if start_date and target_date < start_date:
+                    continue
+                if end_date and target_date > end_date:
+                    continue
+                shift_token = str(target_shift or '').strip().upper() or 'FULL'
+                protected_by_date.setdefault(target_date, set()).add(shift_token)
+
+        return protected_by_date
+
+    def _is_lop_attendance_template(self, template):
+        """Best-effort check: template explicitly drives LOP attendance behavior."""
+        if not template:
+            return False
+
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        attendance_status = str(leave_policy.get('attendance_status') or '').strip().upper()
+        if attendance_status == 'LOP':
+            return True
+
+        template_name = str(getattr(template, 'name', '') or '').strip().upper()
+        return 'LOP' in template_name
+
+    def _build_holiday_lop_request_map(self, user, start_date=None, end_date=None, holiday_dates=None):
+        """Map holiday date -> requested LOP units and shifts from approved forms."""
+        lop_map = {}
+
+        approved_requests = StaffRequest.objects.filter(
+            applicant=user,
+            status='approved',
+        ).select_related('template')
+
+        for req in approved_requests:
+            if not self._is_lop_attendance_template(getattr(req, 'template', None)):
+                continue
+
+            try:
+                targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
+            except Exception:
+                targets = []
+
+            for target_date, target_shift in targets:
+                if not target_date:
+                    continue
+                if start_date and target_date < start_date:
+                    continue
+                if end_date and target_date > end_date:
+                    continue
+                is_holiday = (target_date in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(target_date, user)
+                if target_date.weekday() != 6 and not is_holiday:
+                    continue
+
+                shift_token = str(target_shift or '').strip().upper() or 'FULL'
+                unit = 1.0 if shift_token == 'FULL' else 0.5
+
+                row = lop_map.setdefault(target_date, {'units': 0.0, 'shifts': set()})
+                row['units'] = min(1.0, float(row['units']) + float(unit))
+                row['shifts'].add(shift_token)
+
+        return lop_map
+
+    def _worked_minutes(self, record):
+        """Return worked minutes from in/out times (0 when incomplete)."""
+        from datetime import datetime, timedelta
+
+        if not record.morning_in or not record.evening_out:
+            return 0
+
+        start_dt = datetime.combine(record.date, record.morning_in)
+        end_dt = datetime.combine(record.date, record.evening_out)
+        if end_dt < start_dt:
+            end_dt = end_dt + timedelta(days=1)
+
+        return max(0, int((end_dt - start_dt).total_seconds() // 60))
+
+    def _backfill_missing_working_dates_as_absent(self, user, start_date=None, end_date=None, holiday_dates=None):
+        """Create absent rows for missing working dates between existing attendance dates."""
+        from datetime import timedelta
+        from staff_attendance.models import AttendanceRecord
+
+        qs = AttendanceRecord.objects.filter(user=user)
+        if start_date:
+            qs = qs.filter(date__gte=start_date)
+        if end_date:
+            qs = qs.filter(date__lte=end_date)
+
+        record_dates = list(qs.order_by('date').values_list('date', flat=True))
+
+        if len(record_dates) < 2:
+            return 0
+
+        existing_dates = set(record_dates)
+        created_count = 0
+
+        for idx in range(len(record_dates) - 1):
+            current_date = record_dates[idx]
+            next_date = record_dates[idx + 1]
+
+            cursor = current_date + timedelta(days=1)
+            while cursor < next_date:
+                is_holiday = (cursor in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(cursor, user)
+                if cursor not in existing_dates and cursor.weekday() != 6 and not is_holiday:
+                    AttendanceRecord.objects.create(
+                        user=user,
+                        date=cursor,
+                        morning_in=None,
+                        evening_out=None,
+                        fn_status='absent',
+                        an_status='absent',
+                        status='absent',
+                        notes='Auto-marked absent (missing attendance between working dates)'
+                    )
+                    existing_dates.add(cursor)
+                    created_count += 1
+
+                cursor += timedelta(days=1)
+
+        return created_count
+
+    def _recalculate_attendance_rows_for_user(self, user, protected_by_date, holiday_lop_map, start_date=None, end_date=None, holiday_dates=None):
+        """Recompute FN/AN/status with holiday and LOP-on-holiday rules."""
+        from staff_attendance.models import AttendanceRecord
+        from .models import StaffLeaveBalance
+
+        updated_count = 0
+        lop_balance_changed = False
+        lop_delta_total = 0.0
+
+        def _marker_token(target_date, units):
+            return f'LOP_HOLIDAY_CREDIT:{target_date.isoformat()}:{units:.1f}'
+
+        def _split_note_tokens(notes):
+            return [p.strip() for p in str(notes or '').split(';') if p.strip()]
+
+        records_qs = AttendanceRecord.objects.filter(user=user)
+        if start_date:
+            records_qs = records_qs.filter(date__gte=start_date)
+        if end_date:
+            records_qs = records_qs.filter(date__lte=end_date)
+
+        for record in records_qs.iterator(chunk_size=500):
+            protected_shifts = protected_by_date.get(record.date, set())
+            protect_fn = 'FULL' in protected_shifts or 'FN' in protected_shifts
+            protect_an = 'FULL' in protected_shifts or 'AN' in protected_shifts
+
+            is_holiday = (record.date in (holiday_dates or set())) if holiday_dates is not None else self._is_holiday_for_user(record.date, user)
+            is_holiday_day = record.date.weekday() == 6 or is_holiday
+
+            original_fn = record.fn_status
+            original_an = record.an_status
+            original_status = record.status
+            original_notes = record.notes
+            original_morning_in = record.morning_in
+            original_evening_out = record.evening_out
+
+            if is_holiday_day:
+                # Rule 1: If date became a holiday and no approved-form session is protecting it,
+                # clear attendance statuses only (keep in/out times untouched).
+                lop_req = holiday_lop_map.get(record.date)
+
+                if lop_req:
+                    requested_units = float(lop_req.get('units') or 0.0)
+                    requested_shifts = set(lop_req.get('shifts') or set())
+                    required_minutes = 240 if requested_units <= 0.5 else 480
+                    worked_minutes = self._worked_minutes(record)
+                    qualifies = worked_minutes >= required_minutes
+
+                    # Half-day LOP request: evaluate requested session only.
+                    if requested_units <= 0.5 and requested_shifts:
+                        if 'FN' in requested_shifts and 'AN' not in requested_shifts:
+                            record.fn_status = 'present' if qualifies else 'absent'
+                            record.an_status = None
+                        elif 'AN' in requested_shifts and 'FN' not in requested_shifts:
+                            record.an_status = 'present' if qualifies else 'absent'
+                            record.fn_status = None
+                        else:
+                            # If shift is ambiguous, treat as full-day requirement mapping.
+                            record.fn_status = 'present' if qualifies else 'absent'
+                            record.an_status = 'present' if qualifies else 'absent'
+                    else:
+                        # Full-day LOP request.
+                        record.fn_status = 'present' if qualifies else 'absent'
+                        record.an_status = 'present' if qualifies else 'absent'
+
+                    # Idempotent LOP balance mutation for holiday-work credits:
+                    # - Qualifies => increment by requested units once.
+                    # - No longer qualifies => rollback previously granted increment.
+                    marker = _marker_token(record.date, requested_units)
+                    tokens = _split_note_tokens(record.notes)
+                    has_marker = marker in tokens
+
+                    if qualifies and not has_marker:
+                        lop_delta_total += requested_units
+                        tokens.append(marker)
+                    elif (not qualifies) and has_marker:
+                        lop_delta_total -= requested_units
+                        tokens = [tok for tok in tokens if tok != marker]
+
+                    record.notes = '; '.join(tokens)
+                elif not protect_fn and not protect_an:
+                    record.fn_status = None
+                    record.an_status = None
+
+                record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+
+                if (
+                    record.fn_status != original_fn
+                    or record.an_status != original_an
+                    or record.status != original_status
+                    or record.notes != original_notes
+                ):
+                    # Defensive guard: holiday recalculation must never wipe IN/OUT times.
+                    AttendanceRecord.objects.filter(pk=record.pk).update(
+                        fn_status=record.fn_status,
+                        an_status=record.an_status,
+                        status=record.status,
+                        notes=record.notes,
+                        morning_in=original_morning_in,
+                        evening_out=original_evening_out,
+                    )
+                    updated_count += 1
+
+                continue
+
+            protected_fn_value = original_fn if protect_fn else None
+            protected_an_value = original_an if protect_an else None
+
+            record.update_status(defer_an_until_out=False)
+
+            if protect_fn:
+                record.fn_status = protected_fn_value
+            if protect_an:
+                record.an_status = protected_an_value
+
+            record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+
+            if record.fn_status != original_fn or record.an_status != original_an or record.status != original_status:
+                record.save(update_fields=['fn_status', 'an_status', 'status'])
+                updated_count += 1
+
+        if abs(lop_delta_total) > 0.0001:
+            lop_balance, _ = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type='LOP',
+                defaults={'balance': 0.0}
+            )
+            old_balance = float(lop_balance.balance or 0.0)
+            new_balance = max(0.0, round(old_balance + lop_delta_total, 2))
+            if new_balance != old_balance:
+                lop_balance.balance = new_balance
+                lop_balance.save(update_fields=['balance', 'updated_at'])
+                lop_balance_changed = True
+
+        return updated_count, lop_balance_changed
+
+    @action(detail=False, methods=['post'], url_path='balances/recalculate_attendance')
+    def recalculate_attendance_balances(self, request):
+        """
+        HR/Admin: recalculate FN/AN/status and backfill gaps for a selected month/year.
+        Leaves/approved-form modified FN/AN sessions are preserved.
+        POST /api/staff-requests/requests/balances/recalculate_attendance/
+        """
+        from .permissions import IsAdminOrHR
+        from staff_attendance.models import AttendanceRecord
+
+        if not IsAdminOrHR().has_permission(request, self):
+            return Response({'error': 'Only HR/Admin can recalculate attendance'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            year = int(request.data.get('year'))
+            month = int(request.data.get('month'))
+        except (TypeError, ValueError):
+            return Response({'error': 'year and month are required as numbers'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if month < 1 or month > 12:
+            return Response({'error': 'month must be between 1 and 12'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if year < 2000 or year > 2100:
+            return Response({'error': 'year must be between 2000 and 2100'}, status=status.HTTP_400_BAD_REQUEST)
+
+        start_date = date_type(year, month, 1)
+        end_date = date_type(year, month, monthrange(year, month)[1])
+
+        User = get_user_model()
+        month_user_ids = list(
+            AttendanceRecord.objects.filter(date__gte=start_date, date__lte=end_date)
+            .values_list('user_id', flat=True)
+            .distinct()
+        )
+
+        users = User.objects.filter(
+            is_active=True,
+            staff_profile__isnull=False,
+            id__in=month_user_ids,
+        ).distinct()
+
+        # Build holiday lookup once for this month and all target users to avoid
+        # repetitive per-day DB queries during recalculation.
+        from staff_attendance.models import Holiday
+
+        month_holidays = list(
+            Holiday.objects.filter(date__gte=start_date, date__lte=end_date).prefetch_related('departments')
+        )
+        global_holiday_dates = set()
+        dept_holiday_dates = {}
+
+        for holiday in month_holidays:
+            dept_ids = list(holiday.departments.values_list('id', flat=True))
+            if not dept_ids:
+                global_holiday_dates.add(holiday.date)
+                continue
+            for dept_id in dept_ids:
+                dept_holiday_dates.setdefault(dept_id, set()).add(holiday.date)
+
+        holiday_dates_by_user = {}
+        for user in users:
+            user_dept_id = None
+            try:
+                if hasattr(user, 'staff_profile') and user.staff_profile:
+                    dept = user.staff_profile.get_current_department()
+                    if dept:
+                        user_dept_id = dept.id
+            except Exception:
+                user_dept_id = None
+
+            merged = set(global_holiday_dates)
+            if user_dept_id in dept_holiday_dates:
+                merged.update(dept_holiday_dates.get(user_dept_id, set()))
+            holiday_dates_by_user[user.id] = merged
+
+        processed_users = 0
+        absent_rows_created = 0
+        attendance_rows_updated = 0
+        lop_balances_updated = 0
+        failed_users = []
+
+        for user in users:
+            processed_users += 1
+            try:
+                user_holiday_dates = holiday_dates_by_user.get(user.id, set())
+                protected_by_date = self._build_attendance_protection_map(user, start_date, end_date)
+                holiday_lop_map = self._build_holiday_lop_request_map(user, start_date, end_date, user_holiday_dates)
+                absent_rows_created += self._backfill_missing_working_dates_as_absent(user, start_date, end_date, user_holiday_dates)
+                updated_rows, lop_changed = self._recalculate_attendance_rows_for_user(
+                    user,
+                    protected_by_date,
+                    holiday_lop_map,
+                    start_date,
+                    end_date,
+                    user_holiday_dates,
+                )
+                attendance_rows_updated += updated_rows
+                if lop_changed:
+                    lop_balances_updated += 1
+            except Exception as exc:
+                failed_users.append({
+                    'user_id': user.id,
+                    'username': user.username,
+                    'error': str(exc),
+                })
+
+        return Response({
+            'success': True,
+            'message': 'Attendance recalculation completed successfully',
+            'year': year,
+            'month': month,
+            'from_date': start_date.isoformat(),
+            'to_date': end_date.isoformat(),
+            'processed_users': processed_users,
+            'absent_rows_created': absent_rows_created,
+            'attendance_rows_updated': attendance_rows_updated,
+            'lop_balances_updated': lop_balances_updated,
+            'failed_users_count': len(failed_users),
+            'failed_users': failed_users[:50],
+        })
+
     @action(detail=False, methods=['post'], url_path='balances/recalculate_lop')
     def recalculate_lop_balances(self, request):
         """
@@ -4732,84 +6424,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         processed_users = 0
         updated_users = 0
-        attendance_rows_updated = 0
-
-        def _overall_status_from_sessions(fn_status, an_status):
-            if fn_status is None and an_status is None:
-                return 'absent'
-            if fn_status is None:
-                return an_status
-            if an_status is None:
-                return fn_status
-            if fn_status == an_status:
-                return fn_status
-            if fn_status != 'absent' or an_status != 'absent':
-                return 'half_day'
-            return 'absent'
 
         for user in users:
             processed_users += 1
 
-            # 1) First, fix biometric FN/AN for this staff while preserving any
-            #    sessions that were intentionally changed by approved forms
-            #    (Late Entry Permission, CL/OD/etc attendance_status sync, etc.).
-            protected_by_date = {}
-            approved_requests_for_attendance = StaffRequest.objects.filter(
-                applicant=user,
-                status='approved',
-            ).select_related('template')
-
-            for req in approved_requests_for_attendance:
-                template = getattr(req, 'template', None)
-                if not template:
-                    continue
-
-                leave_policy = getattr(template, 'leave_policy', None) or {}
-                attendance_action = getattr(template, 'attendance_action', None) or {}
-
-                impacts_attendance = bool((leave_policy or {}).get('attendance_status')) or bool(attendance_action.get('change_status'))
-                if not impacts_attendance:
-                    continue
-
-                try:
-                    targets = self._extract_attendance_targets_from_form_data(req.form_data or {})
-                except Exception:
-                    targets = []
-
-                for target_date, target_shift in targets:
-                    if not target_date:
-                        continue
-                    shift_token = str(target_shift or '').strip().upper() or 'FULL'
-                    protected_by_date.setdefault(target_date, set()).add(shift_token)
-
-            for record in AttendanceRecord.objects.filter(user=user).iterator(chunk_size=500):
-                protected_shifts = protected_by_date.get(record.date, set())
-                protect_fn = 'FULL' in protected_shifts or 'FN' in protected_shifts
-                protect_an = 'FULL' in protected_shifts or 'AN' in protected_shifts
-
-                original_fn = record.fn_status
-                original_an = record.an_status
-                original_status = record.status
-
-                protected_fn_value = original_fn if protect_fn else None
-                protected_an_value = original_an if protect_an else None
-
-                # Recompute biometric statuses (respects time limits + staff noon split).
-                record.update_status(defer_an_until_out=False)
-
-                # Restore sessions that were explicitly controlled by forms.
-                if protect_fn:
-                    record.fn_status = protected_fn_value
-                if protect_an:
-                    record.an_status = protected_an_value
-
-                record.status = _overall_status_from_sessions(record.fn_status, record.an_status)
-
-                if record.fn_status != original_fn or record.an_status != original_an or record.status != original_status:
-                    record.save(update_fields=['fn_status', 'an_status', 'status'])
-                    attendance_rows_updated += 1
-
-            # 2) Now compute LOP based on corrected attendance
+            # Recalculate LOP strictly from currently available attendance records.
             attendance_records = AttendanceRecord.objects.filter(user=user)
             absent_units_by_date = {}
             for record in attendance_records:
@@ -4864,7 +6483,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'message': 'LOP recalculation completed successfully',
             'processed_users': processed_users,
             'updated_users': updated_users,
-            'attendance_rows_updated': attendance_rows_updated,
         })
 
     @action(detail=False, methods=['get'])

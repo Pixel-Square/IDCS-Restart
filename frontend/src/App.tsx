@@ -58,6 +58,7 @@ import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarR
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
 import AcademicCalendarAdmin from './pages/academicCalendar/AcademicCalendarAdmin';
 import AcademicCalendarView from './pages/academicCalendar/AcademicCalendarView';
+import CalendarEvents from './pages/academicCalendar/CalendarEvents';
 import BrandingLayout from './pages/branding/BrandingLayout';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import HodEventsListPage from './pages/hod/events/HodEventsListPage';
@@ -359,7 +360,7 @@ export default function App() {
                 />
                 <Route
                   path="/ps/staff-attendance/upload"
-                  element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['PS', 'IQAC']} element={<StaffAttendanceUpload />} />}
                 />
                 <Route
                   path="/feedback"
@@ -381,6 +382,10 @@ export default function App() {
                 <Route
                   path="/iqac/calendar/admin/view/:id"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarView />} />}
+                />
+                <Route
+                  path="/iqac/calendar/events"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<CalendarEvents />} />}
                 />
                 <Route
                   path="/hod/calendar"

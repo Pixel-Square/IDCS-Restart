@@ -7,7 +7,13 @@ import type {
   ProcessApprovalPayload,
   ProcessApprovalResponse,
   ApprovalStep,
-  LeaveBalancesResponse
+  LeaveBalancesResponse,
+  VacationDashboardResponse,
+  VacationSettingsResponse,
+  VacationEntitlementRule,
+  VacationSemester,
+  VacationConfirmSlot,
+  VacationSlot,
 } from '../types/staffRequests';
 
 const BASE_URL = `${getApiBase()}/api/staff-requests`;
@@ -179,6 +185,15 @@ export async function recalculateLopBalances(): Promise<any> {
   return res.data;
 }
 
+export async function recalculateAttendanceBalances(data: { year: number; month: number }): Promise<any> {
+  const res = await apiClient.post(
+    `${BASE_URL}/requests/balances/recalculate_attendance/`,
+    data,
+    { timeout: 180000 }
+  );
+  return res.data;
+}
+
 export async function getLateEntryMonthlyByUser(userId: number, month?: string): Promise<any> {
   const params: Record<string, any> = { user_id: userId };
   if (month) params.month = month;
@@ -256,5 +271,25 @@ export async function hrApplyClForLop(data: {
   staff_user_ids: number[];
 }): Promise<any> {
   const res = await apiClient.post(`${BASE_URL}/requests/hr_apply_cl_for_lop/`, data);
+  return res.data;
+}
+
+export async function getVacationDashboard(params: { year: number; month: number }): Promise<VacationDashboardResponse> {
+  const res = await apiClient.get(`${BASE_URL}/requests/vacation_dashboard/`, { params });
+  return res.data;
+}
+
+export async function getVacationSettings(): Promise<VacationSettingsResponse> {
+  const res = await apiClient.get(`${BASE_URL}/templates/vacation_settings/`);
+  return res.data;
+}
+
+export async function saveVacationSettings(data: {
+  rules: VacationEntitlementRule[];
+  semesters: VacationSemester[];
+  slots: VacationSlot[];
+  confirm_slots: VacationConfirmSlot[];
+}): Promise<{ message: string }> {
+  const res = await apiClient.post(`${BASE_URL}/templates/save_vacation_settings/`, data);
   return res.data;
 }

@@ -353,6 +353,161 @@ class StaffFormUsage(models.Model):
         self.save(update_fields=['usage_count', 'last_used', 'updated_at'])
 
 
+class VacationEntitlementRule(models.Model):
+    """HR-defined vacation entitlement mapping by minimum experience threshold."""
+
+    CONDITION_CHOICES = [
+        ('>', '>'),
+        ('<', '<'),
+        ('=', '='),
+        ('>=', '>='),
+        ('<=', '<='),
+    ]
+
+    min_years = models.PositiveIntegerField(default=0)
+    min_months = models.PositiveIntegerField(default=0)
+    condition = models.CharField(max_length=2, choices=CONDITION_CHOICES, default='>=')
+    entitled_days = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    notes = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-min_years', '-min_months', '-entitled_days']
+        unique_together = [['condition', 'min_years', 'min_months']]
+        verbose_name = 'Vacation Entitlement Rule'
+        verbose_name_plural = 'Vacation Entitlement Rules'
+
+    def clean(self):
+        super().clean()
+        if self.min_months > 11:
+            raise ValidationError({'min_months': 'Months must be between 0 and 11'})
+
+    @property
+    def threshold_months(self):
+        return int(self.min_years or 0) * 12 + int(self.min_months or 0)
+
+    def __str__(self):
+        return f"{self.condition} {self.min_years}y {self.min_months}m -> {self.entitled_days} days"
+
+
+class VacationSemester(models.Model):
+    """Master semester availability window; slots are created under this entity."""
+
+    name = models.CharField(max_length=80, unique=True)
+    from_date = models.DateField(db_index=True)
+    to_date = models.DateField(db_index=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['from_date', 'id']
+        verbose_name = 'Vacation Semester'
+        verbose_name_plural = 'Vacation Semesters'
+
+    def clean(self):
+        super().clean()
+        if self.to_date and self.from_date and self.to_date < self.from_date:
+            raise ValidationError({'to_date': 'Semester to date must be on or after semester from date'})
+
+    def __str__(self):
+        return f"{self.name} ({self.from_date} to {self.to_date})"
+
+
+class VacationSlot(models.Model):
+    """HR-defined slot windows for semester vacation applications."""
+
+    semester_ref = models.ForeignKey(
+        VacationSemester,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='slots'
+    )
+    semester = models.CharField(max_length=80, blank=True, default='')
+    semester_from_date = models.DateField(null=True, blank=True, db_index=True)
+    semester_to_date = models.DateField(null=True, blank=True, db_index=True)
+    slot_name = models.CharField(max_length=120)
+    from_date = models.DateField(db_index=True)
+    to_date = models.DateField(db_index=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['from_date', 'id']
+        verbose_name = 'Vacation Slot'
+        verbose_name_plural = 'Vacation Slots'
+
+    def clean(self):
+        super().clean()
+        if self.to_date and self.from_date and self.to_date < self.from_date:
+            raise ValidationError({'to_date': 'To date must be on or after from date'})
+
+        if self.semester_from_date and self.semester_to_date and self.semester_to_date < self.semester_from_date:
+            raise ValidationError({'semester_to_date': 'Semester to date must be on or after semester from date'})
+
+        if self.semester_from_date and self.from_date and self.from_date < self.semester_from_date:
+            raise ValidationError({'from_date': 'Slot from date must be within semester availability window'})
+
+        if self.semester_to_date and self.to_date and self.to_date > self.semester_to_date:
+            raise ValidationError({'to_date': 'Slot to date must be within semester availability window'})
+
+    @property
+    def total_days(self):
+        if not self.from_date or not self.to_date:
+            return 0
+        return (self.to_date - self.from_date).days + 1
+
+    def __str__(self):
+        return f"{self.slot_name} ({self.from_date} to {self.to_date})"
+
+
+class VacationConfirmSlot(models.Model):
+    """HR-confirmed vacation windows auto-applied for selected departments."""
+
+    semester_ref = models.ForeignKey(
+        VacationSemester,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='confirm_slots'
+    )
+    semester = models.CharField(max_length=80, blank=True, default='')
+    slot_name = models.CharField(max_length=120, blank=True, default='Confirmed Slot')
+    from_date = models.DateField(db_index=True)
+    to_date = models.DateField(db_index=True)
+    departments = models.ManyToManyField(
+        'academics.Department',
+        related_name='vacation_confirm_slots',
+        blank=True,
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['from_date', 'id']
+        verbose_name = 'Vacation Confirm Slot'
+        verbose_name_plural = 'Vacation Confirm Slots'
+
+    def clean(self):
+        super().clean()
+        if self.to_date and self.from_date and self.to_date < self.from_date:
+            raise ValidationError({'to_date': 'To date must be on or after from date'})
+
+    @property
+    def total_days(self):
+        if not self.from_date or not self.to_date:
+            return 0
+        return (self.to_date - self.from_date).days + 1
+
+    def __str__(self):
+        return f"{self.slot_name or 'Confirmed Slot'} ({self.from_date} to {self.to_date})"
+
+
 class ApprovalLog(models.Model):
     """
     Audit trail of all approval actions on a StaffRequest.

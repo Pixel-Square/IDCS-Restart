@@ -18,6 +18,7 @@ import {
   formatApiErrorMessage,
   formatEditRequestSentMessage,
   publishFormative,
+  resetAssessmentMarks,
   saveDraft,
 } from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
@@ -1221,18 +1222,23 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const resetAllMarks = async () => {
     if (!subjectId) return;
-    // Only show this action while publish window is open (per requirement).
-    if (!publishAllowed || globalLocked) return;
+    if (globalLocked) return;
     if (tableBlocked || publishedEditLocked) return;
-    const ok = window.confirm(`Reset ${assessmentLabel} marks for all students? This clears the saved draft.`);
+    const ok = window.confirm(`Reset ${assessmentLabel} marks for all students? This permanently clears all saved marks.`);
     if (!ok) return;
 
     setResettingMarks(true);
     setError(null);
     try {
-      // Clear local caches first so we don't rehydrate old values.
+      // 1. Delete draft from backend.
+      if (teachingAssignmentId != null) {
+        await resetAssessmentMarks(assessmentKey as any, String(subjectId), teachingAssignmentId);
+      }
+
+      // 2. Clear local cache so roster merges don't restore old data.
       clearLocalDraftCache(String(subjectId), String(assessmentKey), teachingAssignmentId ?? null);
 
+      // 3. Reset in-memory state to all-blank rows.
       const clearedRows: Record<string, F1RowState> = {};
       for (const s of students) {
         clearedRows[String(s.id)] = { studentId: s.id, skill1: '', skill2: '', att1: '', att2: '' };
@@ -1243,12 +1249,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         termLabel: String(sheetRef.current?.termLabel || masterTermLabel || 'KRCT AY25-26'),
         batchLabel: String(subjectId),
         rowsByStudentId: clearedRows,
+        markManagerLocked: false,
+        markManagerSnapshot: null,
       };
       setSheet(nextSheet);
-
-      const payload: F1DraftPayload = { sheet: nextSheet, partBtl: partBtlRef.current } as any;
-      await saveDraft(assessmentKey, String(subjectId), payload, teachingAssignmentId);
-      setSavedAt(new Date().toLocaleString());
+      setSavedAt(null);
     } catch (e: any) {
       setError(e?.message || 'Failed to reset marks');
     } finally {
@@ -1725,12 +1730,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
               {savingDraft ? 'Saving…' : 'Save Draft'}
             </button>
           ) : null}
-          {!isPublished && publishAllowed && !globalLocked ? (
+          {!publishedEditLocked && !globalLocked ? (
             <button
               onClick={resetAllMarks}
               className="obe-btn obe-btn-danger"
               disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
-              title="Clears the saved draft marks"
+              title="Clears all saved marks for this assessment"
             >
               {resettingMarks ? 'Resetting…' : 'Reset Marks'}
             </button>

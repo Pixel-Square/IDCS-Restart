@@ -1897,8 +1897,8 @@ def _normalise_class_type_weights_array(class_type: str, arr):
     expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
     defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
 
-    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL – pass through as-is
-    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights'):
+    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH – pass through as-is
+    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights'):
         return arr
 
     if not isinstance(arr, list):
@@ -2329,8 +2329,8 @@ def class_type_weights_upsert(request):
             im = None
             try:
                 im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
-                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL – store as-is
-                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights'):
+                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH – store as-is
+                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights'):
                     im = im_raw
                 elif isinstance(im_raw, list):
                     im = []

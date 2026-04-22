@@ -15,7 +15,7 @@ import {
 import { fetchAssessmentMasterConfig, saveAssessmentMasterConfig } from '../../services/cdapDb';
 import { fetchQpTypes, type QuestionPaperTypeItem } from '../../services/curriculum';
 
-type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB' | 'SPECIAL';
+type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB' | 'SPECIAL' | 'ENGLISH';
 
 export default function AcademicControllerQPPage(): JSX.Element {
   const [tab, setTab] = useState<'qp' | 'custom'>('qp');
@@ -59,6 +59,10 @@ export default function AcademicControllerQPPage(): JSX.Element {
       // For SPECIAL, auto-select CSD
       const csd = qpTypes.find((qp) => qp.code === 'CSD');
       setSelectedQpType(csd ? csd.code : null);
+    } else if (selectedClassType === 'ENGLISH') {
+      // For ENGLISH, auto-select ELECTIVE1 if available
+      const e1 = qpTypes.find((qp) => qp.code === 'ELECTIVE1');
+      setSelectedQpType(e1 ? e1.code : 'ELECTIVE1');
     } else if (selectedClassType === 'THEORY') {
       // For THEORY, select first non-CSD type
       const nonCsd = qpTypes.filter((qp) => qp.code !== 'CSD');
@@ -77,6 +81,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
       { key: 'TCPL', label: 'TCPL' },
       { key: 'LAB', label: 'LAB' },
       { key: 'SPECIAL', label: 'Special' },
+      { key: 'ENGLISH', label: 'English' },
     ],
     []
   );

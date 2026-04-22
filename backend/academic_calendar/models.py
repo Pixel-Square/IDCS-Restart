@@ -196,3 +196,66 @@ class EventProposal(models.Model):
 
     def __str__(self) -> str:
         return f"{self.title} [{self.get_status_display()}]"
+
+
+# ── Calendar Event Label + Assignment (IQAC Calendar Admin) ──────────────────
+
+class CalendarEventLabel(models.Model):
+    """
+    A reusable event definition created by IQAC admin.
+    Stores display metadata: title, hex color, which roles can see it,
+    and which year-semesters it applies to.
+    Semesters stored as JSON list, e.g. ["COMMON"] or ["I", "III"].
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=255)
+    color = models.CharField(max_length=16)                      # hex, e.g. '#3B82F6'
+    visible_roles = models.JSONField(default=list, blank=True)   # e.g. ["STUDENT","STAFF"]
+    semesters = models.JSONField(default=list, blank=True)       # e.g. ["COMMON"] or ["I","II"]
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='calendar_event_labels',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['title']
+        indexes = [models.Index(fields=['created_at'])]
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.color})"
+
+
+class CalendarEventAssignment(models.Model):
+    """
+    Assigns a CalendarEventLabel to a date range within a specific academic calendar.
+    calendar_ref stores the frontend calendar id (UUID/timestamp string).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(
+        CalendarEventLabel, on_delete=models.CASCADE,
+        related_name='assignments',
+    )
+    calendar_ref = models.CharField(max_length=64)  # frontend calendar id
+    start_date = models.DateField()
+    end_date = models.DateField()
+    description = models.TextField(blank=True)
+    extra_data = models.JSONField(null=True, blank=True)  # any additional structured data
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='calendar_event_assignments',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['start_date']
+        indexes = [
+            models.Index(fields=['calendar_ref']),
+            models.Index(fields=['start_date', 'end_date']),
+            models.Index(fields=['event']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event.title}: {self.start_date} → {self.end_date}"

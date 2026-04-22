@@ -1372,7 +1372,7 @@ export default function MarkEntryTabs({
                   );
                 }
 
-                if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />;
+                if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} forceSingleCo={isPrblRaw} />;
                 if (active === 'review1') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
                     <Review1SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 1" />
@@ -1384,7 +1384,7 @@ export default function MarkEntryTabs({
                     />
                   );
                 }
-                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />;
+                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} forceSingleCo={isPrblRaw} />;
                 if (active === 'review2') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
                     <Review2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 2" />

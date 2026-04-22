@@ -41,6 +41,14 @@ export type UploadOption = {
   course_name: string
   subject_code?: string | null
   subject_name?: string | null
+  assignment_ids?: number[]
+  course_ids?: number[]
+  class_names?: string[]
+  targets?: Array<{
+    teaching_assignment_id: number
+    course_id: number
+    class_name?: string
+  }>
 }
 
 export type CoOption = {

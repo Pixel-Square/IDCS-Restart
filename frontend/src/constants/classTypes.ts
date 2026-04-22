@@ -9,13 +9,15 @@ export const CLASS_TYPES = [
   { value: 'PRBL', label: 'PRBL' },
   { value: 'PROJECT', label: 'Project' },
   { value: 'AUDIT', label: 'Audit' },
-  { value: 'SPECIAL', label: 'Special' }
+  { value: 'SPECIAL', label: 'Special' },
+  { value: 'ENGLISH', label: 'English' },
 ] as const;
 
 export const QP_TYPES = [
   { value: 'QP1', label: 'QP1' },
   { value: 'QP2', label: 'QP2' },
-  { value: 'ASPR', label: 'ASPR' }
+  { value: 'ASPR', label: 'ASPR' },
+  { value: 'ELECTIVE1', label: 'Elective 1' },
 ] as const;
 
 export type ClassType = (typeof CLASS_TYPES)[number]['value'] | string;
@@ -39,6 +41,7 @@ export function normalizeObeClassType(raw?: string | null): string {
   if (compact === 'PRACTICAL' || compact.startsWith('PRACT')) return 'PRACTICAL';
   if (compact === 'AUDIT') return 'AUDIT';
   if (compact === 'SPECIAL') return 'SPECIAL';
+  if (compact === 'ENGLISH') return 'ENGLISH';
 
   return normalized;
 }
@@ -55,6 +58,10 @@ export function isLabClassType(raw?: string | null): boolean {
 
 export function isSpecialClassType(raw?: string | null): boolean {
   return normalizeObeClassType(raw) === 'SPECIAL';
+}
+
+export function isEnglishClassType(raw?: string | null): boolean {
+  return normalizeObeClassType(raw) === 'ENGLISH';
 }
 
 export default CLASS_TYPES;
