@@ -741,8 +741,8 @@ WHERE UPPER(code) IN ({placeholders_codes})
     return out_rows
 
 
-def _reshape_powerbi_columns(columns: list[str], rows: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
-    """Normalize output columns for all Power BI mark formats.
+def _reshape_export_columns(columns: list[str], rows: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Normalize output columns for marks export formats.
 
     Requirement:
     - Remove `ese` column/value.
@@ -876,7 +876,7 @@ def query_reporting_view(
             cursor.execute(f"SELECT * FROM {view_name} LIMIT 0")
             desc = cursor.description or []
             columns = [d.name for d in desc]
-        shaped_columns, shaped_rows = _reshape_powerbi_columns(columns, [])
+        shaped_columns, shaped_rows = _reshape_export_columns(columns, [])
         return QueryResult(columns=shaped_columns, rows=shaped_rows, total=0)
 
     if format_key == 'project-lab' and pg == 1:
@@ -890,7 +890,7 @@ def query_reporting_view(
         rows = _enrich_project_lab_metadata(rows)
         rows = _inject_missing_project_rows_from_final_internal(columns=columns, rows=rows, filters=filters)
         columns, rows = _apply_format_course_type_rules(format_key=format_key, columns=columns, rows=rows)
-        shaped_columns, shaped_rows = _reshape_powerbi_columns(columns, rows)
+        shaped_columns, shaped_rows = _reshape_export_columns(columns, rows)
         return QueryResult(columns=shaped_columns, rows=shaped_rows, total=len(shaped_rows))
 
     if format_key == 'theory' and pg == 1:
@@ -906,7 +906,7 @@ def query_reporting_view(
         rows = _apply_theory_entered_co_splits(rows)
 
         columns, rows = _apply_format_course_type_rules(format_key=format_key, columns=columns, rows=rows)
-        shaped_columns, shaped_rows = _reshape_powerbi_columns(columns, rows)
+        shaped_columns, shaped_rows = _reshape_export_columns(columns, rows)
         return QueryResult(columns=shaped_columns, rows=shaped_rows, total=len(shaped_rows))
 
     count_sql = f"SELECT COUNT(*) FROM {view_name}{where_sql}"
@@ -929,5 +929,5 @@ def query_reporting_view(
     if format_key == 'project-lab':
         rows = _enrich_project_lab_metadata(rows)
     columns, rows = _apply_format_course_type_rules(format_key=format_key, columns=columns, rows=rows)
-    shaped_columns, shaped_rows = _reshape_powerbi_columns(columns, rows)
+    shaped_columns, shaped_rows = _reshape_export_columns(columns, rows)
     return QueryResult(columns=shaped_columns, rows=shaped_rows, total=len(shaped_rows) if pg == 1 else total)

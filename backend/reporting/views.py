@@ -3,10 +3,9 @@ import csv
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
-from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .authentication import ReportingApiKeyAuthentication
-from .permissions import CanViewPowerBIDataOrApiKey
+from .permissions import HasReportingApiKey
 from .services import query_reporting_view
 
 
@@ -73,21 +72,21 @@ def _mark_response(request, format_key: str, default_filename: str):
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
-@permission_classes([CanViewPowerBIDataOrApiKey])
+@authentication_classes([ReportingApiKeyAuthentication])
+@permission_classes([HasReportingApiKey])
 def theory_marks(request):
-    return _mark_response(request, 'theory', 'powerbi_theory_marks.csv')
+    return _mark_response(request, 'theory', 'marks_theory.csv')
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
-@permission_classes([CanViewPowerBIDataOrApiKey])
+@authentication_classes([ReportingApiKeyAuthentication])
+@permission_classes([HasReportingApiKey])
 def tcpr_tcpl_marks(request):
-    return _mark_response(request, 'tcpr-tcpl', 'powerbi_tcpr_tcpl_marks.csv')
+    return _mark_response(request, 'tcpr-tcpl', 'marks_tcpr_tcpl.csv')
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
-@permission_classes([CanViewPowerBIDataOrApiKey])
+@authentication_classes([ReportingApiKeyAuthentication])
+@permission_classes([HasReportingApiKey])
 def project_lab_marks(request):
-    return _mark_response(request, 'project-lab', 'powerbi_project_lab_marks.csv')
+    return _mark_response(request, 'project-lab', 'marks_project_lab.csv')
