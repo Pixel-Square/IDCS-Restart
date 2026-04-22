@@ -213,7 +213,96 @@ def _resolve_essl_skip_minutes() -> int:
     return default_minutes
 
 
+
+def force_upsert_attendance_for_date(user, target_date, sorted_punches, source: str = 'essl_manual_retrieval'):
+    """Rebuild attendance for (user, date) from scratch using all eSSL punches.
+
+    Unlike upsert_attendance_from_punch (which never overwrites existing data),
+    this function replaces morning_in / evening_out with the true earliest IN
+    and latest valid OUT derived from the supplied punches, sorted chronologically.
+
+    This is used exclusively during manual eSSL data retrieval so that existing
+    attendance data is always refreshed with the authoritative machine data.
+    """
+    if not sorted_punches:
+        return None, False
+
+    skip_minutes = _resolve_essl_skip_minutes()
+    is_vacation_day = _is_approved_vacation_day(target_date, user)
+
+    # Determine true morning_in (earliest punch time) and evening_out (latest
+    # punch at least skip_minutes after morning_in).
+    morning_in = None
+    evening_out = None
+
+    for punch_dt in sorted_punches:
+        local_dt = timezone.localtime(punch_dt)
+        punch_time = local_dt.time().replace(microsecond=0)
+
+        if morning_in is None:
+            morning_in = punch_time
+            continue
+
+        morning_dt = datetime.combine(target_date, morning_in)
+        punch_dt_combined = datetime.combine(target_date, punch_time)
+
+        if punch_dt_combined < morning_dt:
+            punch_dt_combined = morning_dt
+
+        if (punch_dt_combined - morning_dt) >= timedelta(minutes=skip_minutes):
+            if evening_out is None or punch_time > evening_out:
+                evening_out = punch_time
+
+    record, created = AttendanceRecord.objects.get_or_create(
+        user=user,
+        date=target_date,
+        defaults={
+            'morning_in': morning_in,
+            'evening_out': evening_out,
+            'status': 'vacation' if is_vacation_day else 'absent',
+            'fn_status': None if is_vacation_day else 'absent',
+            'an_status': None if is_vacation_day else 'absent',
+            'source_file': source,
+        },
+    )
+
+    changed = created
+
+    if not created:
+        # Overwrite with authoritative machine data
+        if record.morning_in != morning_in:
+            record.morning_in = morning_in
+            changed = True
+        if record.evening_out != evening_out:
+            record.evening_out = evening_out
+            changed = True
+
+    # Vacation policy
+    if is_vacation_day:
+        if record.fn_status is not None:
+            record.fn_status = None
+            changed = True
+        if record.an_status is not None:
+            record.an_status = None
+            changed = True
+        if record.status != 'vacation':
+            record.status = 'vacation'
+            changed = True
+    else:
+        if changed:
+            _seed_record_defaults(record)
+            should_defer_an_until_out = bool(record.morning_in and not record.evening_out)
+            record.update_status(defer_an_until_out=should_defer_an_until_out)
+
+    if changed:
+        record.source_file = source
+        record.save()
+
+    return record, changed
+
+
 def upsert_attendance_from_punch(user, punch_dt: datetime, direction: str, source: str = 'essl_realtime'):
+
     local_dt = timezone.localtime(punch_dt)
     target_date = local_dt.date()
     punch_time = local_dt.time().replace(microsecond=0)

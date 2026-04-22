@@ -1025,7 +1025,27 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
     def _get_vacation_entitlement_days(self, user):
         exp_months = self._get_staff_experience_months(user)
-        rules = VacationEntitlementRule.objects.filter(is_active=True).order_by('id')
+        rules = list(VacationEntitlementRule.objects.filter(is_active=True))
+
+        # Sort rules so the most-specific (narrowest) condition is evaluated first.
+        # Upper-bound rules (<, <=): ascending threshold — smallest cap wins first.
+        # Lower-bound rules (>, >=): descending threshold — largest floor wins first.
+        # Equality rules (=): always exact, check last as tiebreakers.
+        def _sort_key(rule):
+            threshold = (int(rule.min_years or 0) * 12) + int(rule.min_months or 0)
+            cond = str(rule.condition or '>=').strip()
+            if cond in ('<', '<='):
+                # upper-bound: sort ascending (0 = first priority among upper-bounds)
+                return (0, threshold)
+            elif cond in ('>', '>='):
+                # lower-bound: sort descending → negate threshold so largest is first
+                return (2, -threshold)
+            else:
+                # equality: middle priority
+                return (1, threshold)
+
+        rules.sort(key=_sort_key)
+
         for rule in rules:
             threshold = (int(rule.min_years or 0) * 12) + int(rule.min_months or 0)
             condition = str(rule.condition or '>=').strip()
@@ -4630,7 +4650,18 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         exp_rem_months = exp_months % 12
 
         entitlement = self._get_vacation_entitlement_days(request.user)
-        used = self._vacation_used_days(request.user, year)
+        # Resolve the active semester that covers this month to get the correct date range.
+        # Fall back to full-year range when no semester is active for this month.
+        sem_for_month = self._get_vacation_semester_for_date(month_start)
+        if sem_for_month:
+            used = self._vacation_used_days(request.user, sem_for_month.from_date, sem_for_month.to_date)
+        else:
+            # No active semester — scan the whole year as a fallback
+            used = self._vacation_used_days(
+                request.user,
+                date_type(year, 1, 1),
+                date_type(year, 12, 31),
+            )
         remaining = max(0, entitlement - used)
         today = timezone.localdate()
         user_dept_id = self._get_user_department_id(request.user)
