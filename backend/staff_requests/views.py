@@ -6182,11 +6182,18 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return created_count
 
     def _recalculate_attendance_rows_for_user(self, user, protected_by_date, holiday_lop_map, start_date=None, end_date=None, holiday_dates=None):
-        """Recompute FN/AN/status with holiday and LOP-on-holiday rules."""
+        """Recompute FN/AN/status with holiday and LOP-on-holiday rules.
+
+        When a date is a declared holiday (or Sunday) for a user's department and there is
+        no LOP request and no approved-form protecting any session, the attendance record is
+        KEPT but fn_status and an_status are cleared to null, and overall status is set to
+        'holiday'. The biometric in/out times (morning_in, evening_out) are always preserved.
+        """
         from staff_attendance.models import AttendanceRecord
         from .models import StaffLeaveBalance
 
         updated_count = 0
+        cleared_count = 0  # holiday sessions cleared (fn/an nulled, status='holiday')
         lop_balance_changed = False
         lop_delta_total = 0.0
 
@@ -6218,11 +6225,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             original_evening_out = record.evening_out
 
             if is_holiday_day:
-                # Rule 1: If date became a holiday and no approved-form session is protecting it,
-                # clear attendance statuses only (keep in/out times untouched).
                 lop_req = holiday_lop_map.get(record.date)
 
                 if lop_req:
+                    # Staff has an approved LOP form for this holiday — keep record and
+                    # evaluate present/absent based on worked minutes.
                     requested_units = float(lop_req.get('units') or 0.0)
                     requested_shifts = set(lop_req.get('shifts') or set())
                     required_minutes = 240 if requested_units <= 0.5 else 480
@@ -6261,28 +6268,74 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         tokens = [tok for tok in tokens if tok != marker]
 
                     record.notes = '; '.join(tokens)
-                elif not protect_fn and not protect_an:
-                    record.fn_status = None
-                    record.an_status = None
 
-                record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+                    record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
 
-                if (
-                    record.fn_status != original_fn
-                    or record.an_status != original_an
-                    or record.status != original_status
-                    or record.notes != original_notes
-                ):
-                    # Defensive guard: holiday recalculation must never wipe IN/OUT times.
-                    AttendanceRecord.objects.filter(pk=record.pk).update(
-                        fn_status=record.fn_status,
-                        an_status=record.an_status,
-                        status=record.status,
-                        notes=record.notes,
-                        morning_in=original_morning_in,
-                        evening_out=original_evening_out,
-                    )
-                    updated_count += 1
+                    if (
+                        record.fn_status != original_fn
+                        or record.an_status != original_an
+                        or record.status != original_status
+                        or record.notes != original_notes
+                    ):
+                        # Defensive guard: holiday recalculation must never wipe IN/OUT times.
+                        AttendanceRecord.objects.filter(pk=record.pk).update(
+                            fn_status=record.fn_status,
+                            an_status=record.an_status,
+                            status=record.status,
+                            notes=record.notes,
+                            morning_in=original_morning_in,
+                            evening_out=original_evening_out,
+                        )
+                        updated_count += 1
+
+                elif protect_fn or protect_an:
+                    # An approved form (e.g. COL claim) is protecting at least one session.
+                    # Keep the record but only update unprotected sessions.
+                    if not protect_fn:
+                        record.fn_status = None
+                    if not protect_an:
+                        record.an_status = None
+
+                    record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+
+                    if (
+                        record.fn_status != original_fn
+                        or record.an_status != original_an
+                        or record.status != original_status
+                        or record.notes != original_notes
+                    ):
+                        AttendanceRecord.objects.filter(pk=record.pk).update(
+                            fn_status=record.fn_status,
+                            an_status=record.an_status,
+                            status=record.status,
+                            notes=record.notes,
+                            morning_in=original_morning_in,
+                            evening_out=original_evening_out,
+                        )
+                        updated_count += 1
+
+                else:
+                    # No LOP request and no approved-form protecting any session.
+                    # Clear FN/AN attendance statuses only — the biometric in/out times
+                    # (morning_in, evening_out) are preserved so HR can still see when
+                    # the staff member entered/exited. Status is set to 'holiday'.
+                    new_fn = None
+                    new_an = None
+                    new_status = 'holiday'
+
+                    if (
+                        new_fn != original_fn
+                        or new_an != original_an
+                        or new_status != original_status
+                    ):
+                        AttendanceRecord.objects.filter(pk=record.pk).update(
+                            fn_status=new_fn,
+                            an_status=new_an,
+                            status=new_status,
+                            morning_in=original_morning_in,
+                            evening_out=original_evening_out,
+                        )
+                        cleared_count += 1
 
                 continue
 
@@ -6315,7 +6368,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 lop_balance.save(update_fields=['balance', 'updated_at'])
                 lop_balance_changed = True
 
-        return updated_count, lop_balance_changed
+        return updated_count, cleared_count, lop_balance_changed
 
     @action(detail=False, methods=['post'], url_path='balances/recalculate_attendance')
     def recalculate_attendance_balances(self, request):
@@ -6395,6 +6448,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         processed_users = 0
         absent_rows_created = 0
         attendance_rows_updated = 0
+        attendance_rows_cleared = 0
         lop_balances_updated = 0
         failed_users = []
 
@@ -6405,7 +6459,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 protected_by_date = self._build_attendance_protection_map(user, start_date, end_date)
                 holiday_lop_map = self._build_holiday_lop_request_map(user, start_date, end_date, user_holiday_dates)
                 absent_rows_created += self._backfill_missing_working_dates_as_absent(user, start_date, end_date, user_holiday_dates)
-                updated_rows, lop_changed = self._recalculate_attendance_rows_for_user(
+                updated_rows, cleared_rows, lop_changed = self._recalculate_attendance_rows_for_user(
                     user,
                     protected_by_date,
                     holiday_lop_map,
@@ -6414,6 +6468,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     user_holiday_dates,
                 )
                 attendance_rows_updated += updated_rows
+                attendance_rows_cleared += cleared_rows
                 if lop_changed:
                     lop_balances_updated += 1
             except Exception as exc:
@@ -6433,6 +6488,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'processed_users': processed_users,
             'absent_rows_created': absent_rows_created,
             'attendance_rows_updated': attendance_rows_updated,
+            'attendance_rows_cleared': attendance_rows_cleared,
             'lop_balances_updated': lop_balances_updated,
             'failed_users_count': len(failed_users),
             'failed_users': failed_users[:50],

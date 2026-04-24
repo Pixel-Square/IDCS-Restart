@@ -471,11 +471,12 @@ export default function TemplateManagementPage() {
       setRecalculatingAttendance(true);
       const res = await recalculateAttendanceBalances({ year, month });
       alert(
-        `Attendance recalculation completed for ${res?.year ?? year}-${String(res?.month ?? month).padStart(2, '0')}. ` +
-          `Processed: ${res?.processed_users ?? 0}, ` +
-          `Absent rows created: ${res?.absent_rows_created ?? 0}, ` +
-          `Attendance rows updated: ${res?.attendance_rows_updated ?? 0}, ` +
-          `LOP balances updated: ${res?.lop_balances_updated ?? 0}`
+        `Attendance recalculation completed for ${res?.year ?? year}-${String(res?.month ?? month).padStart(2, '0')}.\n\n` +
+          `✅ Processed users: ${res?.processed_users ?? 0}\n` +
+          `🗑️ Holiday FN/AN cleared: ${res?.attendance_rows_cleared ?? 0}\n` +
+          `🔄 Attendance rows updated: ${res?.attendance_rows_updated ?? 0}\n` +
+          `➕ Absent rows created: ${res?.absent_rows_created ?? 0}\n` +
+          `📊 LOP balances updated: ${res?.lop_balances_updated ?? 0}`
       );
 
       if (selectedStaff) {
