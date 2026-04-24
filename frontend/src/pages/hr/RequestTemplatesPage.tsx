@@ -226,6 +226,18 @@ export default function TemplateManagementPage() {
     }
   };
 
+  const handleRemoveSlot = async (idx: number) => {
+    const nextSlots = vacationSlots.filter((_, i) => i !== idx);
+    setVacationSlots(nextSlots);
+    await persistVacationSettings({ slots: nextSlots }, false);
+  };
+
+  const handleRemoveRule = async (idx: number) => {
+    const nextRules = vacationRules.filter((_, i) => i !== idx);
+    setVacationRules(nextRules);
+    await persistVacationSettings({ rules: nextRules }, false);
+  };
+
   const startConfirmEdit = (idx: number) => {
     setEditingConfirmRows(prev => ({ ...prev, [idx]: true }));
   };
@@ -235,6 +247,12 @@ export default function TemplateManagementPage() {
     if (ok) {
       setEditingConfirmRows(prev => ({ ...prev, [idx]: false }));
     }
+  };
+
+  const handleRemoveConfirmSlot = async (idx: number) => {
+    const nextConfirmSlots = vacationConfirmSlots.filter((_, i) => i !== idx);
+    setVacationConfirmSlots(nextConfirmSlots);
+    await persistVacationSettings({ confirm_slots: nextConfirmSlots }, false);
   };
 
   const handleCreateSemester = async () => {
@@ -453,11 +471,12 @@ export default function TemplateManagementPage() {
       setRecalculatingAttendance(true);
       const res = await recalculateAttendanceBalances({ year, month });
       alert(
-        `Attendance recalculation completed for ${res?.year ?? year}-${String(res?.month ?? month).padStart(2, '0')}. ` +
-          `Processed: ${res?.processed_users ?? 0}, ` +
-          `Absent rows created: ${res?.absent_rows_created ?? 0}, ` +
-          `Attendance rows updated: ${res?.attendance_rows_updated ?? 0}, ` +
-          `LOP balances updated: ${res?.lop_balances_updated ?? 0}`
+        `Attendance recalculation completed for ${res?.year ?? year}-${String(res?.month ?? month).padStart(2, '0')}.\n\n` +
+          `✅ Processed users: ${res?.processed_users ?? 0}\n` +
+          `🗑️ Holiday FN/AN cleared: ${res?.attendance_rows_cleared ?? 0}\n` +
+          `🔄 Attendance rows updated: ${res?.attendance_rows_updated ?? 0}\n` +
+          `➕ Absent rows created: ${res?.absent_rows_created ?? 0}\n` +
+          `📊 LOP balances updated: ${res?.lop_balances_updated ?? 0}`
       );
 
       if (selectedStaff) {
@@ -741,7 +760,7 @@ export default function TemplateManagementPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setVacationRules(prev => prev.filter((_, i) => i !== idx))}
+                            onClick={() => handleRemoveRule(idx)}
                             className="text-xs text-red-600 hover:text-red-700"
                           >
                             Remove
@@ -765,7 +784,7 @@ export default function TemplateManagementPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setVacationRules(prev => prev.filter((_, i) => i !== idx))}
+                            onClick={() => handleRemoveRule(idx)}
                             className="text-xs text-red-600 hover:text-red-700"
                           >
                             Remove
@@ -935,7 +954,7 @@ export default function TemplateManagementPage() {
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() => setVacationSlots(prev => prev.filter((_, i) => i !== idx))}
+                                            onClick={() => handleRemoveSlot(idx)}
                                             className="text-xs text-red-600 hover:text-red-700"
                                           >
                                             Remove
@@ -957,7 +976,7 @@ export default function TemplateManagementPage() {
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() => setVacationSlots(prev => prev.filter((_, i) => i !== idx))}
+                                            onClick={() => handleRemoveSlot(idx)}
                                             className="text-xs text-red-600 hover:text-red-700"
                                           >
                                             Remove
@@ -1054,6 +1073,13 @@ export default function TemplateManagementPage() {
                                             >
                                               Save
                                             </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemoveConfirmSlot(idx)}
+                                              className="text-xs text-red-600 hover:text-red-700"
+                                            >
+                                              Remove
+                                            </button>
                                           </div>
                                         </>
                                       ) : (
@@ -1078,6 +1104,13 @@ export default function TemplateManagementPage() {
                                               className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
                                             >
                                               Edit
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemoveConfirmSlot(idx)}
+                                              className="text-xs text-red-600 hover:text-red-700"
+                                            >
+                                              Remove
                                             </button>
                                           </div>
                                         </>

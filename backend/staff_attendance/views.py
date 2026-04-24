@@ -1608,6 +1608,17 @@ class CSVUploadViewSet(viewsets.ViewSet):
                 key=lambda att: self._normalize_essl_log_datetime(getattr(att, 'timestamp', None)) or datetime.min,
             )
 
+            # ----------------------------------------------------------------
+            # Group punch timestamps by (resolved_user, date) and then force-
+            # upsert each group.  This overwrites existing attendance data with
+            # the authoritative machine data instead of skipping already-set
+            # morning_in / evening_out values.
+            # ----------------------------------------------------------------
+            from .biometric import resolve_staff_user, normalize_uid, normalize_staff_id, force_upsert_attendance_for_date  # noqa: E402
+
+            # Phase 1 – collect and log every matched punch
+            punches_by_user_date = {}  # { (user_id, date): (user, [datetime, ...]) }
+
             for att in attendance_logs:
                 total_logs_checked += 1
                 raw_timestamp = getattr(att, 'timestamp', None)
@@ -1623,29 +1634,55 @@ class CSVUploadViewSet(viewsets.ViewSet):
 
                 matched_logs += 1
 
-                result = ingest_biometric_punch(
-                    raw_uid=str(getattr(att, 'uid', '') or ''),
-                    raw_staff_id=str(getattr(att, 'user_id', '') or ''),
-                    raw_direction=self._normalize_essl_direction(getattr(att, 'punch', None)),
-                    raw_timestamp=raw_timestamp,
-                    source='essl_manual_retrieval',
-                    device_ip=device.get('ip') or '',
-                    device_port=device.get('port'),
-                    payload={
-                        'uid': str(getattr(att, 'uid', '') or ''),
-                        'user_id': str(getattr(att, 'user_id', '') or ''),
-                        'punch': getattr(att, 'punch', None),
-                        'timestamp': str(raw_timestamp),
-                        'trigger': 'manual_retrieve',
-                    },
-                )
+                raw_uid = normalize_uid(str(getattr(att, 'uid', '') or ''))
+                raw_staff_id = normalize_staff_id(str(getattr(att, 'user_id', '') or ''))
+                user_obj = resolve_staff_user(raw_staff_id=raw_staff_id, raw_uid=raw_uid)
 
-                if result.get('created_log'):
+                if user_obj is not None:
+                    mapped_user_ids.add(user_obj.id)
+
+                # Log the punch in StaffBiometricPunchLog (ignore duplicate errors)
+                from .biometric import ingest_biometric_punch  # noqa: E402
+                try:
+                    ingest_biometric_punch(
+                        raw_uid=str(getattr(att, 'uid', '') or ''),
+                        raw_staff_id=str(getattr(att, 'user_id', '') or ''),
+                        raw_direction=self._normalize_essl_direction(getattr(att, 'punch', None)),
+                        raw_timestamp=raw_timestamp,
+                        source='essl_manual_retrieval',
+                        device_ip=device.get('ip') or '',
+                        device_port=device.get('port'),
+                        payload={
+                            'uid': str(getattr(att, 'uid', '') or ''),
+                            'user_id': str(getattr(att, 'user_id', '') or ''),
+                            'punch': getattr(att, 'punch', None),
+                            'timestamp': str(raw_timestamp),
+                            'trigger': 'manual_retrieve',
+                        },
+                    )
                     created_logs += 1
-                if result.get('attendance_updated'):
+                except Exception:
+                    pass
+
+                if user_obj is None:
+                    continue
+
+                key = (user_obj.id, dt_obj.date())
+                if key not in punches_by_user_date:
+                    punches_by_user_date[key] = (user_obj, [])
+                punches_by_user_date[key][1].append(dt_obj)
+
+            # Phase 2 – force-upsert one attendance record per (user, date)
+            for (uid, the_date), (user_obj, punch_dts) in punches_by_user_date.items():
+                sorted_punch_dts = sorted(punch_dts)
+                _, changed = force_upsert_attendance_for_date(
+                    user=user_obj,
+                    target_date=the_date,
+                    sorted_punches=sorted_punch_dts,
+                    source='essl_manual_retrieval',
+                )
+                if changed:
                     attendance_updates += 1
-                if result.get('user') is not None:
-                    mapped_user_ids.add(result['user'].id)
 
             return {
                 'device': device.get('label'),

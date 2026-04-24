@@ -72,6 +72,8 @@ def _extract_time_window(app: app_models.Application):
         key=lambda r: (getattr(r.field, "order", 0), getattr(r.field, "field_key", "")),
     )
 
+    is_gatepass = _is_gatepass_application(app)
+
     # 1) Composite field types
     for row in rows_sorted:
         ftype = str(getattr(row.field, "field_type", "") or "").upper()
@@ -85,6 +87,14 @@ def _extract_time_window(app: app_models.Application):
 
         out_t = _parse_clock_time(payload.get("out_time"))
         in_t = _parse_clock_time(payload.get("in_time"))
+
+        # Gatepass can be exit-only (no in_time). In that case,
+        # treat the window as valid until midnight (12:00 AM) after the selected date.
+        if is_gatepass and out_t and not in_t:
+            tz = timezone.get_current_timezone()
+            start_dt = timezone.make_aware(datetime.combine(day, out_t), tz)
+            end_dt = timezone.make_aware(datetime.combine(day + timedelta(days=1), time(0, 0)), tz)
+            return {"start": start_dt, "end": end_dt}
 
         candidates = []
         if out_t and in_t:
@@ -120,6 +130,11 @@ def _extract_time_window(app: app_models.Application):
         end_dt = timezone.make_aware(datetime.combine(day, end_t), tz)
         if end_dt <= start_dt:
             end_dt = end_dt + timedelta(days=1)
+
+        if is_gatepass:
+            midnight_end = timezone.make_aware(datetime.combine(day + timedelta(days=1), time(0, 0)), tz)
+            if end_dt > midnight_end:
+                end_dt = midnight_end
 
         return {"start": start_dt, "end": end_dt}
 
@@ -159,6 +174,13 @@ def _extract_time_window(app: app_models.Application):
         time_rows.append((role, t))
 
     if len(time_rows) < 2:
+        # Gatepass fallback: if we only have one TIME field, expire at midnight.
+        if is_gatepass and len(time_rows) == 1:
+            _, only_time = time_rows[0]
+            tz = timezone.get_current_timezone()
+            start_dt = timezone.make_aware(datetime.combine(date_day, only_time), tz)
+            end_dt = timezone.make_aware(datetime.combine(date_day + timedelta(days=1), time(0, 0)), tz)
+            return {"start": start_dt, "end": end_dt}
         return None
 
     in_t = next((t for role, t in time_rows if role == "in"), None)
@@ -174,6 +196,11 @@ def _extract_time_window(app: app_models.Application):
     end_dt = timezone.make_aware(datetime.combine(date_day, out_t), tz)
     if end_dt <= start_dt:
         end_dt = end_dt + timedelta(days=1)
+
+    if is_gatepass:
+        midnight_end = timezone.make_aware(datetime.combine(date_day + timedelta(days=1), time(0, 0)), tz)
+        if end_dt > midnight_end:
+            end_dt = midnight_end
     return {"start": start_dt, "end": end_dt}
 
 
@@ -186,7 +213,21 @@ def _display_name(user) -> str | None:
 
 
 def _is_gatepass_application(app: app_models.Application) -> bool:
-    """Gatepass = (final step is SECURITY) AND (has composite DATE IN OUT / DATE OUT IN field)."""
+    """Return True when the application should be treated as a gatepass.
+
+    Primary detection is by application type (code/name). We then fall back to
+    the stricter heuristic (final step SECURITY + composite DATE IN/OUT) for
+    older/misaligned configurations.
+    """
+    try:
+        at = getattr(app, 'application_type', None)
+        code = str(getattr(at, 'code', '') or '').strip().upper()
+        name = str(getattr(at, 'name', '') or '').strip().upper()
+        if code == 'GATEPASS' or name == 'GATEPASS' or 'GATEPASS' in name:
+            return True
+    except Exception:
+        pass
+
     try:
         flow = approval_engine._get_flow_for_application(app)
     except Exception:

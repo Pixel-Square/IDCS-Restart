@@ -2419,8 +2419,121 @@ class GatepassCheckView(APIView):
                 status=status.HTTP_200_OK,
             )
 
+        # ── Pre-form IN scan ─────────────────────────────────────────────────────
+        # No active/pending gatepass was found above. Before giving up, check
+        # whether this user has an OUT scan that still needs an IN scan. This
+        # covers the common case of "student/staff returning from an exit" without
+        # needing to manually open a new application first.
+        #
+        # Rules (confirmed with HR):
+        #   • If the OUT scan happened on today's date AND it is still before
+        #     midnight of today → record the IN directly on that Application.
+        #   • If we are now AFTER midnight (the OUT was yesterday or the
+        #     application's gate date has passed) → save a raw "NEW IN" record
+        #     as a GatepassOfflineScan (direction=IN, auto-PULLED) so HR can see
+        #     it in Gatepass Logs without a linked Application.
+        #   • If the user already has a NEW gatepass for today that is pending or
+        #     approved → skip the pre-form IN entirely (the gatepass flow handles
+        #     it normally).
+
+        # Check if a new gatepass was applied today (pending/approved, not yet scanned out).
+        today_local = timezone.localtime(now_ref).date()
+        has_new_gatepass_today = app_models.Application.objects.filter(
+            applicant_user=applicant_user,
+            gatepass_scanned_at__isnull=True,
+            submitted_at__date=today_local,
+            current_state__in=["SUBMITTED", "IN_REVIEW", "APPROVED"],
+        ).exists()
+
+        # Find the most recent OUT-scanned application that has no IN scan yet.
+        unmatched_out = (
+            app_models.Application.objects.filter(
+                applicant_user=applicant_user,
+                gatepass_scanned_at__isnull=False,
+                gatepass_in_scanned_at__isnull=True,
+            )
+            .order_by("-gatepass_scanned_at")
+            .first()
+        )
+
+        if unmatched_out is not None and not has_new_gatepass_today:
+            # Compute hard expiry (midnight of the day after the gatepass date).
+            from applications.services.gatepass_utils import gatepass_hard_expiry as _gp_expiry
+            hard_exp = _gp_expiry(unmatched_out)
+            before_midnight = (hard_exp is None) or (now_ref < hard_exp)
+
+            if before_midnight:
+                # ── Record IN on the existing application (same-day return) ──
+                with transaction.atomic():
+                    locked = app_models.Application.objects.select_for_update().get(pk=unmatched_out.pk)
+                    if locked.gatepass_scanned_at and not locked.gatepass_in_scanned_at:
+                        locked.gatepass_in_scanned_at = now_ref
+                        locked.gatepass_in_scanned_by = request.user
+                        try:
+                            locked.gatepass_in_scanned_mode = app_models.Application.GatepassScanMode.ONLINE
+                            locked.save(update_fields=[
+                                "gatepass_in_scanned_at",
+                                "gatepass_in_scanned_by",
+                                "gatepass_in_scanned_mode",
+                            ])
+                        except Exception:
+                            locked.save(update_fields=["gatepass_in_scanned_at", "gatepass_in_scanned_by"])
+
+                flow = _get_flow_for_application(unmatched_out)
+                timeline = _build_timeline(unmatched_out, flow) if flow else []
+                return Response(
+                    {
+                        "allowed": True,
+                        "message": "IN scan recorded.",
+                        "late_return": False,
+                        "pre_form_in": True,
+                        "application_id": unmatched_out.id,
+                        "application_type": unmatched_out.application_type.name if unmatched_out.application_type else None,
+                        "scanned_at": now_ref.isoformat(),
+                        "profile_type": profile_type,
+                        "profile": profile_data,
+                        "student": student_data,
+                        "staff": staff_data,
+                        "approval_timeline": timeline,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            else:
+                # ── After midnight: save as a raw "NEW IN" GatepassOfflineScan ──
+                # (visible in Gatepass Logs without a linked Application)
+                uid_norm = _normalize_uid(uid)
+                GatepassOfflineScan.objects.create(
+                    uid=uid_norm,
+                    direction="IN",
+                    recorded_at=now_ref,
+                    device_label="ESP-ONLINE",
+                    uploaded_by=request.user,
+                    status=GatepassOfflineScan.Status.PULLED,
+                    pulled_at=now_ref,
+                    pulled_by=request.user,
+                    pulled_security_user=request.user,
+                )
+                return Response(
+                    {
+                        "allowed": True,
+                        "message": "NEW IN recorded (after midnight — saved as entry log).",
+                        "late_return": True,
+                        "pre_form_in": True,
+                        "new_in_record": True,
+                        "application_id": None,
+                        "profile_type": profile_type,
+                        "profile": profile_data,
+                        "student": student_data,
+                        "staff": staff_data,
+                        "approval_timeline": [],
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        # ── No unmatched OUT scan + no active gatepass ────────────────────────
         # If the most recent gatepass is already completed (OUT+IN scanned),
-        # treat as "no active gatepass".
+        # show a friendly "last completed" message.
         already_scanned = (
             app_models.Application.objects.filter(
                 applicant_user=applicant_user,
