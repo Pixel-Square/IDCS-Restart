@@ -7,7 +7,7 @@ from urllib.parse import quote
 from django.http import FileResponse
 from django.core import signing
 from django.urls import reverse
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -133,14 +133,17 @@ def _group_materials_by_course(materials_qs, *, serializer_context):
     grouped = OrderedDict()
     for item in data:
         cid = item.get('course')
-        if cid not in grouped:
-            grouped[cid] = {
+        subj_code = item.get('subject_code') or ''
+        subj_name = item.get('subject_name') or ''
+        group_key = f"{cid}::{subj_code}::{subj_name}"
+        if group_key not in grouped:
+            grouped[group_key] = {
                 'course_id': cid,
                 'course_name': item.get('course_name'),
                 'department_code': item.get('department_code'),
                 'materials': [],
             }
-        grouped[cid]['materials'].append(item)
+        grouped[group_key]['materials'].append(item)
     return list(grouped.values())
 
 
@@ -713,7 +716,9 @@ class StudentCourseWiseMaterialsView(APIView):
 
         qs = StudyMaterial.objects.none()
         if enrolled_ids:
-            qs = StudyMaterial.objects.filter(course_id__in=enrolled_ids).select_related(
+            qs = StudyMaterial.objects.filter(
+                Q(course_id__in=enrolled_ids) | Q(shared_courses__in=enrolled_ids)
+            ).distinct().select_related(
                 'uploaded_by__user',
                 'course__department',
                 'curriculum_row',
@@ -721,10 +726,38 @@ class StudentCourseWiseMaterialsView(APIView):
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
                 'teaching_assignment__elective_subject',
-            )
+            ).prefetch_related('shared_courses__department')
 
-        grouped = _group_materials_by_course(qs.order_by('course__name', '-created_at'), serializer_context={'request': request})
-        return Response({'results': grouped})
+        data = StudyMaterialSerializer(qs.order_by('course__name', '-created_at'), many=True, context={'request': request}).data
+
+        if enrolled_ids:
+            materials_dict = {m.id: m for m in qs}
+            for item in data:
+                m = materials_dict.get(item['id'])
+                if m and m.course_id not in enrolled_ids:
+                    for sc in m.shared_courses.all():
+                        if sc.id in enrolled_ids:
+                            item['course'] = sc.id
+                            item['course_name'] = sc.name
+                            item['department_code'] = sc.department.code if sc.department else None
+                            break
+
+        grouped = OrderedDict()
+        for item in data:
+            cid = item.get('course')
+            subj_code = item.get('subject_code') or ''
+            subj_name = item.get('subject_name') or ''
+            group_key = f"{cid}::{subj_code}::{subj_name}"
+            if group_key not in grouped:
+                grouped[group_key] = {
+                    'course_id': cid,
+                    'course_name': item.get('course_name'),
+                    'department_code': item.get('department_code'),
+                    'materials': [],
+                }
+            grouped[group_key]['materials'].append(item)
+            
+        return Response({'results': list(grouped.values())})
 
 
 class HODCourseWiseMaterialsView(APIView):
