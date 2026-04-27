@@ -498,7 +498,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  // Academic Calendar intentionally hidden from sidebar for all users
+  // Academic Calendar (IQAC only)
+  if (isIqac && !items.some((item) => item.key === 'academic_calendar')) {
+    items.push({ key: 'academic_calendar', label: 'Academic Calendar', to: '/iqac/calendar' });
+  }
 
   // Settings (IQAC only) – includes Notification Templates and WhatsApp config
   if (isIqac && !items.some((item) => item.key === 'settings')) {
@@ -525,6 +528,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Academic 2.1 Admin for IQAC - collapsible group
   if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
     items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '/academic-v2/admin' });
+  }
+  if (isIqac && !items.some(item => item.key === 'academic_v2_weightage')) {
+    items.push({ key: 'academic_v2_weightage', label: 'Academic 2.1 Weightage', to: '/academic-v2/admin/weightage' });
   }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });

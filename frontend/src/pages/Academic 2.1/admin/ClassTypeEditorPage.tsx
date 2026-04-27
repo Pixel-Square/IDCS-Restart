@@ -4,7 +4,7 @@
  * Exam assignments are picked from pre-created QP Patterns (Exam Assignment Admin page).
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Trash2, Save, BookOpen, Edit2, X, RefreshCw, ExternalLink, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import fetchWithAuth from '../../../services/fetchAuth';
@@ -43,15 +43,23 @@ interface ExamTemplate {
   pattern?: { cos?: number[]; marks?: number[]; enabled?: boolean[]; mark_manager?: { enabled?: boolean } | null };
 }
 
+interface QpType {
+  id: string;
+  name: string;
+  short_code: string;
+  display_name?: string;
+}
+
 export default function ClassTypeEditorPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [classTypes, setClassTypes] = useState<ClassType[]>([]);
   const [examTemplates, setExamTemplates] = useState<ExamTemplate[]>([]);
+  const [qpTypes, setQpTypes] = useState<QpType[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [showExamPicker, setShowExamPicker] = useState(false);
+  const [examPickerQpType, setExamPickerQpType] = useState<string | null>(null);
   const [examPickerSearch, setExamPickerSearch] = useState('');
   const [newName, setNewName] = useState('');
   const [newShortCode, setNewShortCode] = useState('');
@@ -62,12 +70,31 @@ export default function ClassTypeEditorPage() {
 
   const selectedClassType = classTypes.find(ct => ct.id === selectedId);
 
+  // Group exam assignments by qp_type for the selected class type
+  const examsByQpType = useMemo(() => {
+    const groups: Record<string, { exam: ExamAssignment; idx: number }[]> = {};
+    (localData.exam_assignments || []).forEach((exam, idx) => {
+      const key = exam.qp_type || 'Unknown';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push({ exam, idx });
+    });
+    return groups;
+  }, [localData.exam_assignments]);
+
+  // All QP type keys: from qpTypes list + any orphaned keys in assignments
+  const allQpTypeKeys = useMemo(() => {
+    const fromTypes = qpTypes.map(q => q.short_code);
+    const fromAssignments = (localData.exam_assignments || []).map(e => e.qp_type).filter(Boolean);
+    return [...new Set([...fromTypes, ...fromAssignments])];
+  }, [qpTypes, localData.exam_assignments]);
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const [ctRes, tplRes] = await Promise.all([
+      const [ctRes, tplRes, qtRes] = await Promise.all([
         fetchWithAuth('/api/academic-v2/class-types/'),
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
+        fetchWithAuth('/api/academic-v2/qp-types/'),
       ]);
       if (!ctRes.ok) throw new Error('Failed to load class types');
       const ctData = await ctRes.json();
@@ -76,6 +103,10 @@ export default function ClassTypeEditorPage() {
       if (tplRes.ok) {
         const tplData = await tplRes.json();
         setExamTemplates(Array.isArray(tplData) ? tplData : (tplData.results || []));
+      }
+      if (qtRes.ok) {
+        const qtData = await qtRes.json();
+        setQpTypes(Array.isArray(qtData) ? qtData : (qtData.results || []));
       }
     } catch {
       setMessage({ type: 'error', text: 'Failed to load class types' });
@@ -170,7 +201,7 @@ export default function ClassTypeEditorPage() {
       customize_questions: false,
     });
     handleChange('exam_assignments', exams);
-    setShowExamPicker(false);
+    setExamPickerQpType(null);
     setExamPickerSearch('');
   };
 
@@ -262,8 +293,9 @@ export default function ClassTypeEditorPage() {
   }, 0);
 
   const filteredTemplates = examTemplates.filter(t =>
-    t.name.toLowerCase().includes(examPickerSearch.toLowerCase()) ||
-    t.qp_type.toLowerCase().includes(examPickerSearch.toLowerCase())
+    (examPickerQpType ? t.qp_type === examPickerQpType : true) &&
+    (t.name.toLowerCase().includes(examPickerSearch.toLowerCase()) ||
+      t.qp_type.toLowerCase().includes(examPickerSearch.toLowerCase()))
   );
 
   if (loading) {
@@ -427,240 +459,241 @@ export default function ClassTypeEditorPage() {
                   </div>
                 </div>
 
-                {/* Exam Assignments */}
+                {/* Exam Assignments — grouped by QP Type */}
                 <div>
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-semibold text-gray-700">Exam Assignments</h3>
-                    {isEditing && (
-                      <div className="flex items-center gap-2">
-                        <Link to="/academic-v2/admin/exam-assignments" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
-                          <ExternalLink className="w-3 h-3" /> Manage Templates
-                        </Link>
-                        <button
-                          onClick={() => { setShowExamPicker(true); setExamPickerSearch(''); }}
-                          className="flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-lg hover:bg-blue-200"
-                        >
-                          <Plus className="w-3.5 h-3.5" /> Add Exam
-                        </button>
-                      </div>
-                    )}
+                    <Link to="/academic-v2/admin/exam-assignments" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                      <ExternalLink className="w-3 h-3" /> Manage Templates
+                    </Link>
                   </div>
 
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Code</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Display Name</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">QP Type</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">CO Weights</th>
-                          {isEditing && <th className="px-2 py-2 w-10"></th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {(localData.exam_assignments || []).length === 0 ? (
-                          <tr>
-                            <td colSpan={isEditing ? 5 : 4} className="px-4 py-8 text-center text-gray-400">
-                              No exam assignments.{' '}
-                              {isEditing ? (
-                                <button onClick={() => setShowExamPicker(true)} className="text-blue-600 hover:underline">
-                                  Add one from exam templates
-                                </button>
-                              ) : 'Click Edit to add exams.'}
-                            </td>
-                          </tr>
-                        ) : (
-                          (localData.exam_assignments || []).map((exam, index) => (
-                            <tr key={index} className="hover:bg-gray-50">
-                              <td className="px-3 py-2">
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={exam.exam}
-                                    onChange={(e) => handleExamChange(index, 'exam', e.target.value)}
-                                    placeholder="CAT1"
-                                    className="w-24 px-2 py-1 border rounded text-sm"
-                                  />
-                                ) : (
-                                  <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{exam.exam}</code>
-                                )}
-                              </td>
-                              <td className="px-3 py-2">
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={exam.exam_display_name}
-                                    onChange={(e) => handleExamChange(index, 'exam_display_name', e.target.value)}
-                                    placeholder="CAT 1"
-                                    className="w-36 px-2 py-1 border rounded text-sm"
-                                  />
-                                ) : (
-                                  <span className="font-medium">{exam.exam_display_name}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2">
-                                <span className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{exam.qp_type}</span>
-                              </td>
-                              <td className="px-3 py-2">
-                                {exam.mark_manager_enabled ? (
-                                  <div className="space-y-2">
-                                    {/* WITHOUT Exam */}
-                                    <div>
-                                      <div className="text-[10px] text-gray-500 mb-1">Without Exam</div>
-                                      <div className="flex flex-wrap gap-1.5">
-                                        {(exam.default_cos || []).map((co) => {
-                                          const coKey = String(co);
-                                          const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
-                                          return (
-                                            <div key={`wo-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
-                                              <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
-                                              {isEditing ? (
-                                                <input
-                                                  type="number"
-                                                  step="any"
-                                                  value={coWeight}
-                                                  onChange={(e) => {
-                                                    const newWo = { ...(exam.mm_co_weights_without_exam || {}) };
-                                                    newWo[coKey] = parseFloat(e.target.value) || 0;
-                                                    const withCo = exam.mm_co_weights_with_exam || {};
-                                                    const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
-                                                    const exams = [...(localData.exam_assignments || [])];
-                                                    exams[index] = { ...exams[index], mm_co_weights_without_exam: newWo, weight: withTotal };
-                                                    handleChange('exam_assignments', exams);
-                                                  }}
-                                                  className="w-12 px-1 py-0.5 border rounded text-center text-xs"
-                                                />
-                                              ) : (
-                                                <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                        <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
-                                          <span className="text-[10px] text-gray-500">Σ</span>
-                                          <span className="text-xs font-semibold text-gray-700">
-                                            {Object.values(exam.mm_co_weights_without_exam || {}).reduce((s, w) => s + (w || 0), 0) || 0}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* WITH Exam */}
-                                    <div>
-                                      <div className="text-[10px] text-gray-500 mb-1">With Exam</div>
-                                      <div className="flex flex-wrap gap-1.5 items-center">
-                                        <div className="flex items-center gap-1 bg-amber-50 rounded px-1 py-0.5">
-                                          <span className="text-[10px] text-amber-700 font-medium">Exam</span>
-                                          {isEditing ? (
-                                            <input
-                                              type="number"
-                                              step="any"
-                                              value={Number(exam.mm_exam_weight) || 0}
-                                              onChange={(e) => {
-                                                const newExamW = parseFloat(e.target.value) || 0;
-                                                const withCo = exam.mm_co_weights_with_exam || {};
-                                                const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + newExamW;
-                                                const exams = [...(localData.exam_assignments || [])];
-                                                exams[index] = { ...exams[index], mm_exam_weight: newExamW, weight: withTotal };
-                                                handleChange('exam_assignments', exams);
-                                              }}
-                                              className="w-14 px-1 py-0.5 border rounded text-center text-xs"
-                                            />
-                                          ) : (
-                                            <span className="text-xs font-semibold text-amber-800">{Number(exam.mm_exam_weight) || 0}</span>
-                                          )}
-                                        </div>
-
-                                        {(exam.default_cos || []).map((co) => {
-                                          const coKey = String(co);
-                                          const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
-                                          return (
-                                            <div key={`w-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
-                                              <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
-                                              {isEditing ? (
-                                                <input
-                                                  type="number"
-                                                  step="any"
-                                                  value={coWeight}
-                                                  onChange={(e) => {
-                                                    const newWith = { ...(exam.mm_co_weights_with_exam || {}) };
-                                                    newWith[coKey] = parseFloat(e.target.value) || 0;
-                                                    const withTotal = Object.values(newWith).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
-                                                    const exams = [...(localData.exam_assignments || [])];
-                                                    exams[index] = { ...exams[index], mm_co_weights_with_exam: newWith, weight: withTotal };
-                                                    handleChange('exam_assignments', exams);
-                                                  }}
-                                                  className="w-12 px-1 py-0.5 border rounded text-center text-xs"
-                                                />
-                                              ) : (
-                                                <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                        <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
-                                          <span className="text-[10px] text-gray-500">Σ</span>
-                                          <span className="text-xs font-semibold text-gray-700">
-                                            {(Object.values(exam.mm_co_weights_with_exam || {}).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0)) || exam.weight || 0}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  /* Non-Mark-Manager: single co_weights */
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {(exam.default_cos || []).map((co) => {
-                                      const coKey = String(co);
-                                      const coWeight = (exam.co_weights || {})[coKey] ?? 0;
-                                      return (
-                                        <div key={co} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
-                                          <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
-                                          {isEditing ? (
-                                            <input
-                                              type="number"
-                                              step="any"
-                                              value={coWeight}
-                                              onChange={(e) => {
-                                                const newCoWeights = { ...(exam.co_weights || {}) };
-                                                newCoWeights[coKey] = parseFloat(e.target.value) || 0;
-                                                // Also update legacy weight as sum
-                                                const newTotal = Object.values(newCoWeights).reduce((s, w) => s + (w || 0), 0);
-                                                const exams = [...(localData.exam_assignments || [])];
-                                                exams[index] = { ...exams[index], co_weights: newCoWeights, weight: newTotal };
-                                                handleChange('exam_assignments', exams);
-                                              }}
-                                              className="w-12 px-1 py-0.5 border rounded text-center text-xs"
-                                            />
-                                          ) : (
-                                            <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                    {/* Show total weight */}
-                                    <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
-                                      <span className="text-[10px] text-gray-500">Σ</span>
-                                      <span className="text-xs font-semibold text-gray-700">
-                                        {Object.values(exam.co_weights || {}).reduce((s, w) => s + (w || 0), 0) || exam.weight || 0}
-                                      </span>
-                                    </div>
-                                  </div>
-                                )}
-                              </td>
+                  {allQpTypeKeys.length === 0 ? (
+                    <div className="border-2 border-dashed rounded-lg p-8 text-center text-gray-400 text-sm">
+                      No QP types found.{' '}
+                      <Link to="/academic-v2/admin/qp-pattern" className="text-blue-600 hover:underline">Set up QP Types first →</Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {allQpTypeKeys.map(qpTypeKey => {
+                        const items = examsByQpType[qpTypeKey] || [];
+                        const qpTypeObj = qpTypes.find(q => q.short_code === qpTypeKey);
+                        const qpTypeLabel = qpTypeObj?.name || qpTypeKey;
+                        return (
+                          <div key={qpTypeKey} className="border rounded-lg overflow-hidden">
+                            {/* QP Type header */}
+                            <div className="px-3 py-2 bg-gray-50 border-b flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-sm text-gray-800">{qpTypeLabel}</span>
+                                <code className="text-xs bg-gray-200 px-1.5 py-0.5 rounded text-gray-500">{qpTypeKey}</code>
+                                <span className="text-xs text-gray-400">{items.length} exam{items.length !== 1 ? 's' : ''}</span>
+                              </div>
                               {isEditing && (
-                                <td className="px-2 py-2 text-center">
-                                  <button onClick={() => removeExamAssignment(index)} className="p-1 text-red-400 hover:text-red-600 rounded">
-                                    <Trash2 className="w-4 h-4" />
-                                  </button>
-                                </td>
+                                <button
+                                  onClick={() => { setExamPickerQpType(qpTypeKey); setExamPickerSearch(''); }}
+                                  className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded hover:bg-blue-200"
+                                >
+                                  <Plus className="w-3 h-3" /> Add Exam
+                                </button>
                               )}
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                            </div>
+
+                            <table className="w-full text-sm">
+                              <thead className="bg-white border-b">
+                                <tr>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Code</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">Display Name</th>
+                                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase">CO Weights</th>
+                                  {isEditing && <th className="px-2 py-2 w-10"></th>}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {items.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={isEditing ? 4 : 3} className="px-4 py-4 text-center text-gray-400 text-xs">
+                                      No exams assigned.{' '}
+                                      {isEditing && (
+                                        <button
+                                          onClick={() => { setExamPickerQpType(qpTypeKey); setExamPickerSearch(''); }}
+                                          className="text-blue-600 hover:underline"
+                                        >
+                                          Add one
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  items.map(({ exam, idx }) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                      <td className="px-3 py-2">
+                                        {isEditing ? (
+                                          <input
+                                            type="text"
+                                            value={exam.exam}
+                                            onChange={(e) => handleExamChange(idx, 'exam', e.target.value)}
+                                            placeholder="CAT1"
+                                            className="w-24 px-2 py-1 border rounded text-sm"
+                                          />
+                                        ) : (
+                                          <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{exam.exam}</code>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        {isEditing ? (
+                                          <input
+                                            type="text"
+                                            value={exam.exam_display_name}
+                                            onChange={(e) => handleExamChange(idx, 'exam_display_name', e.target.value)}
+                                            placeholder="CAT 1"
+                                            className="w-36 px-2 py-1 border rounded text-sm"
+                                          />
+                                        ) : (
+                                          <span className="font-medium">{exam.exam_display_name}</span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        {exam.mark_manager_enabled ? (
+                                          <div className="space-y-2">
+                                            <div>
+                                              <div className="text-[10px] text-gray-500 mb-1">Without Exam</div>
+                                              <div className="flex flex-wrap gap-1.5">
+                                                {(exam.default_cos || []).map((co) => {
+                                                  const coKey = String(co);
+                                                  const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
+                                                  return (
+                                                    <div key={`wo-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                                      <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                                      {isEditing ? (
+                                                        <input
+                                                          type="number" step="any" value={coWeight}
+                                                          onChange={(e) => {
+                                                            const newWo = { ...(exam.mm_co_weights_without_exam || {}) };
+                                                            newWo[coKey] = parseFloat(e.target.value) || 0;
+                                                            const withCo = exam.mm_co_weights_with_exam || {};
+                                                            const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
+                                                            const exs = [...(localData.exam_assignments || [])];
+                                                            exs[idx] = { ...exs[idx], mm_co_weights_without_exam: newWo, weight: withTotal };
+                                                            handleChange('exam_assignments', exs);
+                                                          }}
+                                                          className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                                        />
+                                                      ) : (
+                                                        <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })}
+                                                <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                                  <span className="text-[10px] text-gray-500">Σ</span>
+                                                  <span className="text-xs font-semibold text-gray-700">{Object.values(exam.mm_co_weights_without_exam || {}).reduce((s, w) => s + (w || 0), 0) || 0}</span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div>
+                                              <div className="text-[10px] text-gray-500 mb-1">With Exam</div>
+                                              <div className="flex flex-wrap gap-1.5 items-center">
+                                                <div className="flex items-center gap-1 bg-amber-50 rounded px-1 py-0.5">
+                                                  <span className="text-[10px] text-amber-700 font-medium">Exam</span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      type="number" step="any" value={Number(exam.mm_exam_weight) || 0}
+                                                      onChange={(e) => {
+                                                        const newExamW = parseFloat(e.target.value) || 0;
+                                                        const withCo = exam.mm_co_weights_with_exam || {};
+                                                        const withTotal = Object.values(withCo).reduce((s, w) => s + (w || 0), 0) + newExamW;
+                                                        const exs = [...(localData.exam_assignments || [])];
+                                                        exs[idx] = { ...exs[idx], mm_exam_weight: newExamW, weight: withTotal };
+                                                        handleChange('exam_assignments', exs);
+                                                      }}
+                                                      className="w-14 px-1 py-0.5 border rounded text-center text-xs"
+                                                    />
+                                                  ) : (
+                                                    <span className="text-xs font-semibold text-amber-800">{Number(exam.mm_exam_weight) || 0}</span>
+                                                  )}
+                                                </div>
+                                                {(exam.default_cos || []).map((co) => {
+                                                  const coKey = String(co);
+                                                  const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
+                                                  return (
+                                                    <div key={`w-${co}`} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                                      <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                                      {isEditing ? (
+                                                        <input
+                                                          type="number" step="any" value={coWeight}
+                                                          onChange={(e) => {
+                                                            const newWith = { ...(exam.mm_co_weights_with_exam || {}) };
+                                                            newWith[coKey] = parseFloat(e.target.value) || 0;
+                                                            const withTotal = Object.values(newWith).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0);
+                                                            const exs = [...(localData.exam_assignments || [])];
+                                                            exs[idx] = { ...exs[idx], mm_co_weights_with_exam: newWith, weight: withTotal };
+                                                            handleChange('exam_assignments', exs);
+                                                          }}
+                                                          className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                                        />
+                                                      ) : (
+                                                        <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })}
+                                                <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                                  <span className="text-[10px] text-gray-500">Σ</span>
+                                                  <span className="text-xs font-semibold text-gray-700">{(Object.values(exam.mm_co_weights_with_exam || {}).reduce((s, w) => s + (w || 0), 0) + (Number(exam.mm_exam_weight) || 0)) || exam.weight || 0}</span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="flex flex-wrap gap-1.5">
+                                            {(exam.default_cos || []).map((co) => {
+                                              const coKey = String(co);
+                                              const coWeight = (exam.co_weights || {})[coKey] ?? 0;
+                                              return (
+                                                <div key={co} className="flex items-center gap-0.5 bg-blue-50 rounded px-1 py-0.5">
+                                                  <span className="text-[10px] text-blue-600 font-medium">CO{co}</span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      type="number" step="any" value={coWeight}
+                                                      onChange={(e) => {
+                                                        const newCoWeights = { ...(exam.co_weights || {}) };
+                                                        newCoWeights[coKey] = parseFloat(e.target.value) || 0;
+                                                        const newTotal = Object.values(newCoWeights).reduce((s, w) => s + (w || 0), 0);
+                                                        const exs = [...(localData.exam_assignments || [])];
+                                                        exs[idx] = { ...exs[idx], co_weights: newCoWeights, weight: newTotal };
+                                                        handleChange('exam_assignments', exs);
+                                                      }}
+                                                      className="w-12 px-1 py-0.5 border rounded text-center text-xs"
+                                                    />
+                                                  ) : (
+                                                    <span className="text-xs font-semibold text-blue-700 ml-0.5">{coWeight}</span>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                            <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-0.5 ml-1">
+                                              <span className="text-[10px] text-gray-500">Σ</span>
+                                              <span className="text-xs font-semibold text-gray-700">{Object.values(exam.co_weights || {}).reduce((s, w) => s + (w || 0), 0) || exam.weight || 0}</span>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </td>
+                                      {isEditing && (
+                                        <td className="px-2 py-2 text-center">
+                                          <button onClick={() => removeExamAssignment(idx)} className="p-1 text-red-400 hover:text-red-600 rounded">
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        </td>
+                                      )}
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -680,12 +713,12 @@ export default function ClassTypeEditorPage() {
       </div>
 
       {/* Exam Picker Modal */}
-      {showExamPicker && (
+      {examPickerQpType !== null && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold">Pick Exam Assignment</h2>
-              <button onClick={() => setShowExamPicker(false)} className="p-1 hover:bg-gray-100 rounded">
+              <button onClick={() => setExamPickerQpType(null)} className="p-1 hover:bg-gray-100 rounded">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -739,7 +772,7 @@ export default function ClassTypeEditorPage() {
               <Link to="/academic-v2/admin/exam-assignments" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
                 <Plus className="w-3.5 h-3.5" /> Create new exam template
               </Link>
-              <button onClick={() => setShowExamPicker(false)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
+              <button onClick={() => setExamPickerQpType(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
                 Cancel
               </button>
             </div>

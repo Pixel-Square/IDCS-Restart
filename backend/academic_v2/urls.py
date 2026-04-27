@@ -8,6 +8,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AcV2SemesterConfigViewSet,
     AcV2ClassTypeViewSet,
+    AcV2CycleViewSet,
     AcV2QpTypeViewSet,
     AcV2QpPatternViewSet,
     AcV2CourseViewSet,
@@ -26,8 +27,12 @@ from .views import (
     faculty_exam_request_edit,
     faculty_exam_confirm_mark_manager,
     faculty_course_co_summary,
+    faculty_course_cqi_draft,
+    faculty_course_cqi_published,
+    faculty_course_cqi_publish,
     faculty_exam_export_template,
     faculty_exam_import_marks,
+    admin_secure_delete,
 )
 
 app_name = 'academic_v2'
@@ -35,6 +40,7 @@ app_name = 'academic_v2'
 router = DefaultRouter()
 router.register(r'semester-configs', AcV2SemesterConfigViewSet, basename='semester-config')
 router.register(r'class-types', AcV2ClassTypeViewSet, basename='class-type')
+router.register(r'cycles', AcV2CycleViewSet, basename='cycle')
 router.register(r'qp-types', AcV2QpTypeViewSet, basename='qp-type')
 router.register(r'qp-patterns', AcV2QpPatternViewSet, basename='qp-pattern')
 router.register(r'courses', AcV2CourseViewSet, basename='course')
@@ -60,4 +66,8 @@ urlpatterns = [
     path('exams/<uuid:exam_id>/export-template/', faculty_exam_export_template, name='faculty-exam-export-template'),
     path('exams/<uuid:exam_id>/import-marks/', faculty_exam_import_marks, name='faculty-exam-import-marks'),
     path('faculty/courses/<int:ta_id>/co-summary/', faculty_course_co_summary, name='faculty-course-co-summary'),
+    path('faculty/courses/<int:ta_id>/cqi-draft/', faculty_course_cqi_draft, name='faculty-course-cqi-draft'),
+    path('faculty/courses/<int:ta_id>/cqi-published/', faculty_course_cqi_published, name='faculty-course-cqi-published'),
+    path('faculty/courses/<int:ta_id>/cqi-publish/', faculty_course_cqi_publish, name='faculty-course-cqi-publish'),
+    path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
 ]

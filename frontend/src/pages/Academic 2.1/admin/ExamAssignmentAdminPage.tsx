@@ -153,6 +153,11 @@ export default function ExamAssignmentAdminPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   // Form state for selected exam
   const [formName, setFormName] = useState('');
   const [formWeight, setFormWeight] = useState<number>(0);
@@ -164,6 +169,7 @@ export default function ExamAssignmentAdminPage() {
   // Create dialog state
   const [newName, setNewName] = useState('');
   const [newWeight, setNewWeight] = useState<number>(0);
+  const [newCycle, setNewCycle] = useState<string | null>(null);
 
   const selectedExam = exams.find(e => e.id === selectedId);
 
@@ -172,15 +178,18 @@ export default function ExamAssignmentAdminPage() {
       setLoading(true);
       const [pRes, cRes] = await Promise.all([
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
-        fetchWithAuth('/api/academic-v2/cycles/').catch(() => ({ ok: false })),
+        fetchWithAuth('/api/academic-v2/cycles/').catch(() => null),
       ]);
       
       if (!pRes.ok) throw new Error('Failed to load');
       const data = await pRes.json();
-      setExams(Array.isArray(data) ? data : (data.results || []));
+      const allPatterns = Array.isArray(data) ? data : (data.results || []);
+      // Only show global exam templates (class_type=null) in this admin page
+      // Class-type-specific patterns are managed in QP Pattern Editor
+      setExams(allPatterns.filter((p: any) => p.class_type === null || p.class_type === undefined));
 
       // Load cycles if available
-      if (cRes.ok) {
+      if (cRes && cRes.ok) {
         const cycleData = await cRes.json();
         setCycles(Array.isArray(cycleData) ? cycleData : (cycleData.results || []));
       }
@@ -258,6 +267,7 @@ export default function ExamAssignmentAdminPage() {
           name: newName.trim(),
           qp_type: newName.trim().toUpperCase().replace(/\s+/g, '_'),
           default_weight: newWeight,
+          ...(newCycle ? { cycle: newCycle } : {}),
           pattern: {},
           is_active: true,
         }),
@@ -274,6 +284,7 @@ export default function ExamAssignmentAdminPage() {
       setShowCreateDialog(false);
       setNewName('');
       setNewWeight(0);
+      setNewCycle(null);
       setMessage({ type: 'success', text: 'Exam assignment created' });
     } catch {
       setMessage({ type: 'error', text: 'Failed to create exam assignment' });
@@ -328,15 +339,49 @@ export default function ExamAssignmentAdminPage() {
   };
 
   const handleDelete = async () => {
-    if (!selectedId || !confirm('Delete this exam assignment?')) return;
+    if (!selectedId) return;
+    setDeletePassword('');
+    setDeleteError(null);
+    setDeleteModalOpen(true);
+  };
+
+  const executeSecureDelete = async () => {
+    if (!selectedId) return;
+    if (!deletePassword.trim()) {
+      setDeleteError('Password is required');
+      return;
+    }
     try {
-      const res = await fetchWithAuth(`/api/academic-v2/qp-patterns/${selectedId}/`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed');
+      setDeleteSubmitting(true);
+      setDeleteError(null);
+      const res = await fetchWithAuth('/api/academic-v2/admin/secure-delete/', {
+        method: 'POST',
+        body: JSON.stringify({ object_type: 'qp_pattern', id: selectedId, password: deletePassword }),
+      });
+      if (!res.ok) {
+        let msg = 'Failed to delete';
+        try {
+          const data = await res.json();
+          msg = data?.detail || data?.error || msg;
+        } catch {
+          try {
+            msg = (await res.text()) || msg;
+          } catch {
+            // ignore
+          }
+        }
+        setDeleteError(msg);
+        return;
+      }
+      setDeleteModalOpen(false);
+      setDeletePassword('');
       setExams(prev => prev.filter(e => e.id !== selectedId));
       setSelectedId(null);
       setMessage({ type: 'success', text: 'Deleted' });
-    } catch {
-      setMessage({ type: 'error', text: 'Failed to delete' });
+    } catch (e: any) {
+      setDeleteError(e?.message || 'Failed to delete');
+    } finally {
+      setDeleteSubmitting(false);
     }
   };
 
@@ -688,6 +733,60 @@ export default function ExamAssignmentAdminPage() {
         </div>
       </div>
 
+      {/* Password Confirm Delete Modal */}
+      {deleteModalOpen && selectedExam && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">Confirm Delete</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Deleting <span className="font-medium">{selectedExam.name || selectedExam.qp_type}</span> requires your password.
+              </p>
+            </div>
+
+            <div className="px-6 py-4 space-y-3">
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!deleteSubmitting) executeSecureDelete();
+                  }
+                }}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="Enter password"
+                autoFocus
+              />
+              {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  if (deleteSubmitting) return;
+                  setDeleteModalOpen(false);
+                  setDeletePassword('');
+                  setDeleteError(null);
+                }}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+                disabled={deleteSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeSecureDelete}
+                className="px-4 py-2 text-sm text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50"
+                disabled={deleteSubmitting}
+              >
+                {deleteSubmitting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create dialog */}
       {showCreateDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -720,6 +819,19 @@ export default function ExamAssignmentAdminPage() {
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 />
                 <p className="text-xs text-gray-400 mt-1">This weight will be pre-filled when assigned to a Class Type</p>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Cycle</label>
+                <select
+                  value={newCycle || ''}
+                  onChange={e => setNewCycle(e.target.value || null)}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select Cycle (optional)</option>
+                  {cycles.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6">

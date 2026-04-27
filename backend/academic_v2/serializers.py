@@ -9,6 +9,7 @@ from rest_framework import serializers
 from .models import (
     AcV2SemesterConfig,
     AcV2ClassType,
+    Weigthts,
     AcV2QpPattern,
     AcV2Course,
     AcV2Section,
@@ -18,6 +19,7 @@ from .models import (
     AcV2EditRequest,
     AcV2InternalMark,
     AcV2QpType,
+    AcV2Cycle,
 )
 
 
@@ -151,6 +153,65 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
     def get_total_weight(self, obj):
         return obj.get_total_weight()
 
+    def update(self, instance, validated_data):
+        exam_assignments_provided = 'exam_assignments' in validated_data
+        instance = super().update(instance, validated_data)
+
+        # Mirror Weightage config into a normalized DB table for reporting/debug.
+        if exam_assignments_provided:
+            try:
+                Weigthts.objects.filter(class_type=instance).delete()
+
+                rows = []
+                for ea in (instance.exam_assignments or []):
+                    if not isinstance(ea, dict):
+                        continue
+                    qp_type = (ea.get('qp_type') or '').strip()
+                    exam = (ea.get('exam') or '').strip()
+                    if not exam:
+                        continue
+
+                    # CQI is a config-only entry; do not mirror into Weigthts.
+                    if str(ea.get('kind') or '').strip().lower() == 'cqi' or ea.get('is_cqi') is True or exam.strip().upper() == 'CQI':
+                        continue
+
+                    co_weights = ea.get('co_weights') if isinstance(ea.get('co_weights'), dict) else {}
+                    default_cos = ea.get('default_cos') if isinstance(ea.get('default_cos'), list) else []
+
+                    mm_with = ea.get('mm_co_weights_with_exam')
+                    mm_without = ea.get('mm_co_weights_without_exam')
+                    mm_exam_weight = ea.get('mm_exam_weight')
+
+                    # Backward compatibility: allow nested keys
+                    if not mm_with and isinstance(ea.get('mm_with_exam'), dict):
+                        mm_with = ea.get('mm_with_exam', {}).get('co_weights')
+                        mm_exam_weight = ea.get('mm_with_exam', {}).get('exam_weight', mm_exam_weight)
+                    if not mm_without and isinstance(ea.get('mm_without_exam'), dict):
+                        mm_without = ea.get('mm_without_exam', {}).get('co_weights')
+
+                    rows.append(Weigthts(
+                        class_type=instance,
+                        qp_type=qp_type,
+                        exam=exam,
+                        exam_display_name=(ea.get('exam_display_name') or '').strip(),
+                        weight=ea.get('weight') or 0,
+                        co_weights=co_weights,
+                        default_cos=default_cos,
+                        mark_manager_enabled=bool(ea.get('mark_manager_enabled', False)),
+                        mm_co_weights_with_exam=mm_with if isinstance(mm_with, dict) else {},
+                        mm_co_weights_without_exam=mm_without if isinstance(mm_without, dict) else {},
+                        mm_exam_weight=mm_exam_weight or 0,
+                        updated_by=getattr(self.context.get('request'), 'user', None),
+                    ))
+
+                if rows:
+                    Weigthts.objects.bulk_create(rows)
+            except Exception:
+                # Non-critical: do not block class type updates if mirror sync fails
+                pass
+
+        return instance
+
 
 class AcV2QpPatternSerializer(serializers.ModelSerializer):
     class_type_name = serializers.CharField(source='class_type.name', read_only=True, allow_null=True)
@@ -160,8 +221,8 @@ class AcV2QpPatternSerializer(serializers.ModelSerializer):
         model = AcV2QpPattern
         fields = [
             'id', 'name', 'default_weight', 'qp_type', 'class_type', 'class_type_name',
-            'pattern', 'questions',
-            'batch', 'is_active', 'updated_at',
+            'pattern', 'questions', 'order',
+            'batch', 'cycle', 'is_active', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']
     
@@ -403,6 +464,19 @@ class AcV2QpTypeSerializer(serializers.ModelSerializer):
             'id', 'name', 'code', 'description',
             'class_type', 'class_type_name',
             'is_active', 'college',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AcV2CycleSerializer(serializers.ModelSerializer):
+    """Serializer for Academic Cycle"""
+
+    class Meta:
+        model = AcV2Cycle
+        fields = [
+            'id', 'name', 'code', 'description',
+            'college', 'is_active',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

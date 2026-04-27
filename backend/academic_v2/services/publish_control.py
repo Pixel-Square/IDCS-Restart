@@ -194,6 +194,11 @@ def check_publish_control(exam_assignment) -> dict:
     result['is_editable'] = exam_assignment.is_editable()
     result['is_locked'] = not result['is_editable'] and result['status'] in ['PUBLISHED', 'LOCKED']
 
+    # If publish control is disabled, edit requests are irrelevant.
+    if not result.get('publish_control_enabled'):
+        result['has_pending_request'] = False
+        result['pending_request'] = None
+
     # Pending request details + expiry
     pending = _latest_pending_request(exam_assignment)
     if pending is not None:
@@ -350,7 +355,7 @@ def process_auto_publish(semester_config) -> dict:
                         except (TypeError, ValueError):
                             mark_val = None
 
-                        AcV2StudentMark.objects.update_or_create(
+                        sm, _ = AcV2StudentMark.objects.update_or_create(
                             exam_assignment=exam,
                             student=sp,
                             defaults={
@@ -361,6 +366,12 @@ def process_auto_publish(semester_config) -> dict:
                                 'is_absent': bool(payload.get('is_absent', False)) if isinstance(payload, dict) else False,
                             },
                         )
+                        # Keep CO columns in sync with raw question marks for DB/admin reports.
+                        qp_pattern = exam.get_qp_pattern() or {}
+                        sm.calculate_co_marks(qp_pattern)
+                        if mark_val is None:
+                            sm.calculate_total()
+                        sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'total_mark'])
                 try:
                     compute_section_internal_marks(exam.section)
                 except Exception:

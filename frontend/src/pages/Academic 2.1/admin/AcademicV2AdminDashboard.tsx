@@ -73,6 +73,13 @@ const adminPages: AdminPage[] = [
     icon: <BarChart2 size={32} />,
     order: 7,
   },
+  {
+    title: 'Weightage',
+    path: '/academic-v2/admin/weightage',
+    description: 'Set CO weight distributions for assigned exams by QP type',
+    icon: <Grid3x3 size={32} />,
+    order: 8,
+  },
 ];
 
 export default function AcademicV2AdminDashboard() {

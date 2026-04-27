@@ -6,6 +6,7 @@ from django.contrib import admin
 from .models import (
     AcV2SemesterConfig,
     AcV2ClassType,
+    Weigthts,
     AcV2QpPattern,
     AcV2QpType,
     AcV2Question,
@@ -17,6 +18,7 @@ from .models import (
     AcV2UserPatternOverride,
     AcV2EditRequest,
     AcV2InternalMark,
+    AcV2Cycle,
 )
 
 
@@ -33,6 +35,14 @@ class AcV2ClassTypeAdmin(admin.ModelAdmin):
     list_display = ['name', 'college', 'total_internal_marks', 'is_active', 'updated_at']
     list_filter = ['is_active', 'college', 'allow_customize_questions']
     search_fields = ['name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(Weigthts)
+class WeigthtsAdmin(admin.ModelAdmin):
+    list_display = ['class_type', 'qp_type', 'exam', 'weight', 'mark_manager_enabled', 'updated_at']
+    list_filter = ['qp_type', 'mark_manager_enabled', 'class_type']
+    search_fields = ['qp_type', 'exam', 'exam_display_name', 'class_type__name', 'class_type__short_code']
     readonly_fields = ['created_at', 'updated_at']
 
 
@@ -143,10 +153,30 @@ class AcV2QuestionAdmin(admin.ModelAdmin):
 @admin.register(AcV2QpAssignment)
 class AcV2QpAssignmentAdmin(admin.ModelAdmin):
     """Admin for QP Assignments (Class Type -> QP Type -> Exam Assignment)."""
-    list_display = ['class_type', 'qp_type', 'exam_assignment', 'weight', 'is_active', 'updated_at']
+    def exam_assignment_display(self, obj):
+        exam_id = getattr(obj, 'exam_assignment_id', None)
+        if not exam_id:
+            return ''
+        try:
+            ea = obj.exam_assignment
+            return getattr(ea, 'name', None) or getattr(ea, 'exam', None) or str(ea)
+        except Exception:
+            return f"(Missing: {exam_id})"
+
+    exam_assignment_display.short_description = 'Exam Assignment'
+
+    list_display = ['class_type', 'qp_type', 'exam_assignment_display', 'weight', 'is_active', 'updated_at']
     list_filter = ['is_active', 'class_type', 'qp_type']
-    search_fields = ['class_type__name', 'qp_type__name', 'exam_assignment__exam']
+    search_fields = ['class_type__name', 'qp_type__name', 'exam_assignment__name', 'exam_assignment__qp_type']
     raw_id_fields = ['class_type', 'qp_type', 'exam_assignment']
     readonly_fields = ['created_at', 'updated_at']
-    fields = ['class_type', 'qp_type', 'exam_assignment', 'weight', 'is_active', 'config', 'updated_by', 'created_at', 'updated_at']
+    fields = ['class_type', 'qp_type', 'exam_assignment', 'weight', 'is_active', 'config', 'question_table', 'updated_by', 'created_at', 'updated_at']
     ordering = ['class_type', 'qp_type']
+
+
+@admin.register(AcV2Cycle)
+class AcV2CycleAdmin(admin.ModelAdmin):
+    list_display = ['name', 'code', 'college', 'is_active', 'created_at']
+    list_filter = ['is_active', 'college']
+    search_fields = ['name', 'code', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']

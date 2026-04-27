@@ -6,7 +6,8 @@
  * Info bar: Course, Batch, Last Saved, Published status
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Upload, Download, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
@@ -21,12 +22,18 @@ const initialsFromName = (name: string) =>
     .map(s => s[0]?.toUpperCase())
     .join('') || 'U';
 
+const coLabel = (co: number | number[] | null): string => {
+  if (co == null) return '';
+  if (Array.isArray(co)) return co.map(c => `CO${c}`).join(' & ');
+  return `CO${co}`;
+};
+
 interface Question {
   id: string;
   question_number: string;
   max_marks: number;
   btl_level: number | null;
-  co_number: number;
+  co_number: number | number[] | null;
 }
 
 interface Student {
@@ -139,6 +146,9 @@ export default function MarkEntryPage() {
   const [selectedDepartments, setSelectedDepartments] = useState<Set<string>>(new Set());
   const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
 
+  // Keep the raw string for the currently edited cell so decimals like "12." don't get lost.
+  const [editingCell, setEditingCell] = useState<{ key: string; value: string } | null>(null);
+
   // Cell labels/warnings state: tracks which cells have import/edit warnings
   const [importedCells, setImportedCells] = useState<Set<string>>(new Set()); // Set of "studentId:questionId" or "studentId:mark"
   const [concurrentEditCells, setConcurrentEditCells] = useState<Set<string>>(new Set()); // Future: tracks concurrent edits
@@ -177,7 +187,7 @@ export default function MarkEntryPage() {
   const [sealWatermarkEnabled, setSealWatermarkEnabled] = useState(false);
   const [publishCountdown, setPublishCountdown] = useState<number | null>(null);
   const sealHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<number | null>(null);
 
   const resolveMediaUrl = (value: string | null | undefined): string | null => {
     if (!value) return null;
@@ -221,9 +231,176 @@ export default function MarkEntryPage() {
   // Mark Manager entry settings
   const wholeNumber = !!examInfo?.mark_manager?.whole_number;
   const arrowKeysIncDec = examInfo?.mark_manager?.arrow_keys !== false && !!examInfo?.mark_manager?.arrow_keys;
+  type SheetCellPos = { row: number; col: number };
+  const [sheetSelection, setSheetSelection] = useState<null | { anchor: SheetCellPos; focus: SheetCellPos; dragging: boolean }>(null);
+  
+  const getCellPos = (opts: { studentId: string; fieldType: 'question' | 'mark'; qId?: string }): SheetCellPos | null => {
+    const row = filteredStudentIndexById.get(opts.studentId);
+    if (row == null) return null;
+    let col = 0;
+    if (opts.fieldType === 'question') {
+      if (!opts.qId) return null;
+      const qi = questionIndexById.get(opts.qId);
+      if (qi == null) return null;
+      col = qi;
+    } else {
+      col = questions.length > 0 ? questions.length : 0;
+    }
+    if (col < 0 || col >= markColCount) return null;
+    return { row, col };
+  };
+  
+  const getSelectionRange = () => {
+    if (!sheetSelection) return null;
+    const r1 = Math.min(sheetSelection.anchor.row, sheetSelection.focus.row);
+    const r2 = Math.max(sheetSelection.anchor.row, sheetSelection.focus.row);
+    const c1 = Math.min(sheetSelection.anchor.col, sheetSelection.focus.col);
+    const c2 = Math.max(sheetSelection.anchor.col, sheetSelection.focus.col);
+    return { r1, r2, c1, c2 };
+  };
+  
+  const isCellInSelection = (row: number, col: number) => {
+    const range = getSelectionRange();
+    if (!range) return false;
+    return row >= range.r1 && row <= range.r2 && col >= range.c1 && col <= range.c2;
+  };
+  
+  const getCellValueString = (row: number, col: number) => {
+    const student = filteredStudents[row];
+    if (!student) return '';
+    if (questions.length > 0 && col < questions.length) {
+      const q = questions[col];
+      if (!q) return '';
+      const key = `${student.id}:question:${q.id}`;
+      if (editingCell?.key === key) return String(editingCell.value ?? '');
+      const v = (student.co_marks as any)?.[q.id];
+      return v == null ? '' : String(v);
+    }
+    const key = `${student.id}:mark`;
+    if (editingCell?.key === key) return String(editingCell.value ?? '');
+    const v = (student as any)?.mark;
+    return v == null ? '' : String(v);
+  };
+  
+  const startSelection = (pos: SheetCellPos, extend: boolean) => {
+    setSheetSelection(prev => {
+      if (extend && prev) return { ...prev, focus: pos, dragging: true };
+      return { anchor: pos, focus: pos, dragging: true };
+    });
+  };
+  
+  const extendSelection = (pos: SheetCellPos) => {
+    setSheetSelection(prev => (prev ? { ...prev, focus: pos } : { anchor: pos, focus: pos, dragging: true }));
+  };
+  
+  useEffect(() => {
+    const onUp = () => setSheetSelection(prev => (prev ? { ...prev, dragging: false } : prev));
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
+  
+  const copySelectionToClipboard = async () => {
+    const range = getSelectionRange();
+    if (!range) return;
+    const lines: string[] = [];
+    for (let r = range.r1; r <= range.r2; r++) {
+      const row: string[] = [];
+      for (let c = range.c1; c <= range.c2; c++) {
+        row.push(getCellValueString(r, c));
+      }
+      lines.push(row.join('\t'));
+    }
+    const text = lines.join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      ta.style.top = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { document.execCommand('copy'); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
+  };
+  
+  const clearSelectionValues = () => {
+    const range = getSelectionRange();
+    if (!range) return;
+  
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+      setAutoSaveStatus('idle');
+    }
+  
+    setStudents(prev => {
+      const updatesByStudentId = new Map<string, { nextCoMarks?: Record<string, number | null>; nextMark?: number | null }>();
+  
+      for (let r = range.r1; r <= range.r2; r++) {
+        const student = filteredStudents[r];
+        if (!student) continue;
+        if (student.is_absent) continue;
+  
+        if (questions.length > 0) {
+          const cur = (prev.find(s => s.id === student.id)?.co_marks) || student.co_marks || {};
+          const nextCoMarks: Record<string, number | null> = { ...(cur as any) };
+  
+          for (let c = range.c1; c <= range.c2; c++) {
+            if (c >= questions.length) continue;
+            const q = questions[c];
+            if (!q) continue;
+            delete nextCoMarks[q.id];
+          }
+  
+          updatesByStudentId.set(student.id, { nextCoMarks });
+          continue;
+        }
+  
+        if (range.c1 <= 0 && range.c2 >= 0) {
+          updatesByStudentId.set(student.id, { nextMark: null });
+        }
+      }
+  
+      if (updatesByStudentId.size === 0) return prev;
+  
+      return prev.map(s => {
+        const u = updatesByStudentId.get(s.id);
+        if (!u) return s;
+        if (u.nextCoMarks) {
+          const total = Object.values(u.nextCoMarks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
+          return { ...s, co_marks: u.nextCoMarks as any, mark: total, saved: false };
+        }
+        return { ...s, mark: u.nextMark ?? null, saved: false };
+      });
+    });
+  
+    setEditingCell(null);
+    setHasChanges(true);
+    triggerAutoSave();
+  };
 
   // Arrow key cell navigation handler (when arrow_keys inc/dec is OFF)
   const handleCellKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (sheetSelection) {
+      const isCopy = (e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C');
+      if (isCopy) {
+        e.preventDefault();
+        copySelectionToClipboard();
+        return;
+      }
+  
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        if (!canImport) return;
+        clearSelectionValues();
+        return;
+      }
+    }
+  
     if (arrowKeysIncDec) return; // default browser behavior: inc/dec
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
@@ -246,7 +423,52 @@ export default function MarkEntryPage() {
     }
   };
 
+  const handleCellMouseDown = (
+    e: React.MouseEvent<HTMLInputElement>,
+    opts: { studentId: string; fieldType: 'question' | 'mark'; qId?: string; disabled: boolean },
+  ) => {
+    if (opts.disabled) return;
+    const pos = getCellPos(opts);
+    if (!pos) return;
+    startSelection(pos, e.shiftKey);
+  };
+
+  const handleCellMouseEnter = (
+    e: React.MouseEvent<HTMLInputElement>,
+    opts: { studentId: string; fieldType: 'question' | 'mark'; qId?: string; disabled: boolean },
+  ) => {
+    if (opts.disabled) return;
+    if (!(sheetSelection?.dragging)) return;
+    if ((e.buttons & 1) !== 1) return;
+    const pos = getCellPos(opts);
+    if (!pos) return;
+    extendSelection(pos);
+  };
+
   useEffect(() => { loadData(); }, [examId]);
+
+  // Keep latest loadData in a ref so focus/visibility handlers can call it safely
+  const loadDataRef = useRef<null | (() => Promise<void>)>(null);
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  });
+
+  // If user navigates away/back (or tab loses focus) after publish popup,
+  // refresh safely when returning (only when there are no local unsaved changes).
+  useEffect(() => {
+    const maybeRefresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (hasChanges) return;
+      if (!examId) return;
+      loadDataRef.current?.().catch(() => undefined);
+    };
+    window.addEventListener('focus', maybeRefresh);
+    document.addEventListener('visibilitychange', maybeRefresh);
+    return () => {
+      window.removeEventListener('focus', maybeRefresh);
+      document.removeEventListener('visibilitychange', maybeRefresh);
+    };
+  }, [examId, hasChanges]);
 
   const loadData = async () => {
     try {
@@ -373,18 +595,185 @@ export default function MarkEntryPage() {
   };
 
   const updateQuestionMark = (studentId: string, qId: string, value: string) => {
-    const numValue = value === '' ? 0 : (wholeNumber ? parseInt(value, 10) : parseFloat(value));
-    if (isNaN(numValue)) return;
     const q = questions.find(x => x.id === qId);
-    if (!q || numValue > q.max_marks) return;
+    if (!q) return;
+
+    // Allow clearing to blank
+    if (value === '') {
+      setStudents(prev => prev.map(s => {
+        if (s.id !== studentId) return s;
+        const co_marks = { ...s.co_marks };
+        delete co_marks[qId];
+        const total = Object.values(co_marks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
+        return { ...s, co_marks, mark: total, saved: false };
+      }));
+      setHasChanges(true);
+      triggerAutoSave();
+      return;
+    }
+
+    const numValue = wholeNumber ? parseInt(value, 10) : parseFloat(value);
+    if (isNaN(numValue)) return;
+    if (numValue > q.max_marks) return;
+
     setStudents(prev => prev.map(s => {
       if (s.id !== studentId) return s;
       const co_marks = { ...s.co_marks, [qId]: numValue };
-      const total = Object.values(co_marks).reduce((sum, m) => sum + (m || 0), 0);
+      const total = Object.values(co_marks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
       return { ...s, co_marks, mark: total, saved: false };
     }));
     setHasChanges(true);
     triggerAutoSave();
+  };
+
+  const parseClipboardGrid = (text: string): string[][] => {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rows = normalized.split('\n');
+    // Keep internal empty cells, but drop trailing completely empty rows
+    while (rows.length > 0 && rows[rows.length - 1] === '') rows.pop();
+    return rows.map(r => r.split('\t'));
+  };
+
+  const applyPasteGrid = (opts: { startStudentId: string; fieldType: 'question' | 'mark'; startQId?: string; text: string }) => {
+    const grid = parseClipboardGrid(opts.text);
+    if (!grid.length) return;
+
+    // Find starting row based on the currently visible list
+    const startRow = filteredStudents.findIndex(s => s.id === opts.startStudentId);
+    if (startRow < 0) return;
+
+    // Determine starting column
+    const startCol = opts.fieldType === 'question'
+      ? Math.max(0, questions.findIndex(q => q.id === opts.startQId))
+      : 0;
+    if (opts.fieldType === 'question' && startCol < 0) return;
+
+    // Cancel pending autosave to avoid multiple races
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+      setAutoSaveStatus('idle');
+    }
+
+    setStudents(prev => {
+      const updatesByStudentId = new Map<string, { nextCoMarks?: Record<string, number | null>; nextMark?: number | null }>();
+
+      for (let r = 0; r < grid.length; r++) {
+        const student = filteredStudents[startRow + r];
+        if (!student) break;
+        if (student.is_absent) continue;
+
+        if (opts.fieldType === 'mark') {
+          const raw = (grid[r]?.[0] ?? '').trim();
+          const numValue = raw === '' ? null : (wholeNumber ? parseInt(raw, 10) : parseFloat(raw));
+          if (numValue !== null && (isNaN(numValue) || (examInfo && numValue > examInfo.max_marks))) continue;
+          updatesByStudentId.set(student.id, { nextMark: numValue });
+          continue;
+        }
+
+        // Question grid paste
+        const currentCoMarks = (prev.find(s => s.id === student.id)?.co_marks) || student.co_marks || {};
+        const nextCoMarks: Record<string, number | null> = { ...currentCoMarks };
+
+        for (let c = 0; c < grid[r].length; c++) {
+          const q = questions[startCol + c];
+          if (!q) break;
+          const raw = (grid[r]?.[c] ?? '').trim();
+          if (raw === '') {
+            delete nextCoMarks[q.id];
+            continue;
+          }
+          const numValue = wholeNumber ? parseInt(raw, 10) : parseFloat(raw);
+          if (isNaN(numValue)) continue;
+          if (numValue > q.max_marks) continue;
+          nextCoMarks[q.id] = numValue;
+        }
+
+        updatesByStudentId.set(student.id, { nextCoMarks });
+      }
+
+      if (updatesByStudentId.size === 0) return prev;
+
+      return prev.map(s => {
+        const u = updatesByStudentId.get(s.id);
+        if (!u) return s;
+        if (u.nextCoMarks) {
+          const total = Object.values(u.nextCoMarks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
+          return { ...s, co_marks: u.nextCoMarks as any, mark: total, saved: false };
+        }
+        return { ...s, mark: u.nextMark ?? null, saved: false };
+      });
+    });
+
+    setHasChanges(true);
+    triggerAutoSave();
+  };
+
+  const handleCellPaste = (
+    e: React.ClipboardEvent<HTMLInputElement>,
+    opts: { studentId: string; fieldType: 'question' | 'mark'; qId?: string },
+  ) => {
+    const text = e.clipboardData?.getData('text/plain') || '';
+    if (!text) return;
+
+    // Only intercept grid-like paste (tabs/newlines). Let normal paste work otherwise.
+    if (!text.includes('\t') && !text.includes('\n') && !text.includes('\r')) return;
+
+    e.preventDefault();
+    applyPasteGrid({
+      startStudentId: opts.studentId,
+      fieldType: opts.fieldType,
+      startQId: opts.qId,
+      text,
+    });
+  };
+
+  // Commit the currently focused cell value to state immediately.
+  // Fixes: last-edited cell missing when user clicks Publish (blur/click batching).
+  const commitActiveCellValue = () => {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLInputElement)) return;
+    const studentId = el.dataset.studentId;
+    const fieldType = el.dataset.fieldType as 'question' | 'mark' | undefined;
+    if (!studentId || !fieldType) return;
+
+    // Stop pending autosave from racing with publish/save
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+      autoSaveTimeoutRef.current = null;
+      setAutoSaveStatus('idle');
+    }
+
+    const rawValue = el.value;
+    if (fieldType === 'question') {
+      const qId = el.dataset.qid;
+      if (!qId) return;
+      const q = questions.find(x => x.id === qId);
+      if (!q) return;
+      const numValue = rawValue === '' ? 0 : (wholeNumber ? parseInt(rawValue, 10) : parseFloat(rawValue));
+      if (isNaN(numValue)) return;
+      if (numValue > q.max_marks) return;
+      flushSync(() => {
+        setStudents(prev => prev.map(s => {
+          if (s.id !== studentId) return s;
+          const co_marks = { ...s.co_marks, [qId]: numValue };
+          const total = Object.values(co_marks).reduce((sum, m) => sum + (m || 0), 0);
+          return { ...s, co_marks, mark: total, saved: false };
+        }));
+      });
+      setHasChanges(true);
+      return;
+    }
+
+    // Total mark cell
+    const numValue = rawValue === '' ? null : (wholeNumber ? parseInt(rawValue, 10) : parseFloat(rawValue));
+    if (numValue !== null && (isNaN(numValue) || (examInfo && numValue > examInfo.max_marks))) return;
+    flushSync(() => {
+      setStudents(prev => prev.map(s => (
+        s.id === studentId ? { ...s, mark: numValue, saved: false } : s
+      )));
+    });
+    setHasChanges(true);
   };
 
   const toggleAbsent = (studentId: string) => {
@@ -402,13 +791,36 @@ export default function MarkEntryPage() {
     setPublishStatus('idle');
   };
 
+  const closePublishModal = async (refreshAfterClose: boolean) => {
+    setShowPublishConfirm(false);
+    setPublishStatus('idle');
+    setPublishCountdown(null);
+    setShowSealStamp(true);
+    if (countdownIntervalRef.current) {
+      window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    if (refreshAfterClose) {
+      await loadData();
+    }
+  };
+
   const confirmPublish = async () => {
     setPublishStatus('loading');
     setPublishing(true);
     try {
-      if (hasChanges) {
-        await saveMarks(false);
+      // Ensure the currently focused input is committed before saving/publishing.
+      commitActiveCellValue();
+
+      // Cancel any pending autosave to avoid request races.
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+        autoSaveTimeoutRef.current = null;
+        setAutoSaveStatus('idle');
       }
+
+      // Always do a final save before publish (even if hasChanges was auto-reset).
+      await saveMarks(false);
       
       const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
         method: 'POST',
@@ -431,11 +843,11 @@ export default function MarkEntryPage() {
       
       // Start 10-second countdown
       setPublishCountdown(10);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = window.setInterval(() => {
         setPublishCountdown(prev => {
           if (prev === null || prev <= 1) {
-            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+            if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
             return null;
           }
           return prev - 1;
@@ -444,18 +856,13 @@ export default function MarkEntryPage() {
       
       // Auto-close after 10 seconds
       await new Promise(resolve => setTimeout(resolve, 10000));
-      setShowPublishConfirm(false);
-      setPublishStatus('idle');
-      setPublishCountdown(null);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      
-      await loadData();
+      await closePublishModal(true);
     } catch (e) {
       setPublishStatus('idle');
       setShowPublishConfirm(false);
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to publish' });
       setPublishCountdown(null);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
     } finally {
       setPublishing(false);
     }
@@ -626,8 +1033,8 @@ export default function MarkEntryPage() {
     } catch (error) {
       setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to save marks' });
     } finally {
-      setSaving(false);
-      setPublishing(false);
+      if (publish) setPublishing(false);
+      else setSaving(false);
     }
   };
 
@@ -850,6 +1257,20 @@ export default function MarkEntryPage() {
       // Default: register number
       return a.roll_number.localeCompare(b.roll_number);
     });
+
+  const filteredStudentIndexById = useMemo(() => {
+    const m = new Map<string, number>();
+    filteredStudents.forEach((s, i) => m.set(s.id, i));
+    return m;
+  }, [filteredStudents]);
+
+  const questionIndexById = useMemo(() => {
+    const m = new Map<string, number>();
+    questions.forEach((q, i) => m.set(q.id, i));
+    return m;
+  }, [questions]);
+
+  const markColCount = questions.length > 0 ? questions.length + 1 : 1;
 
   /* ────── Render ────── */
   if (loading) {
@@ -1112,7 +1533,7 @@ export default function MarkEntryPage() {
       {/* Publish Confirmation Modal */}
       {showPublishConfirm && (
         <div className="fixed inset-0 z-[60] bg-slate-950/55 flex items-center justify-center p-4 backdrop-blur-[2px] transition-opacity duration-500">
-          <div className={`w-full max-w-xl bg-white/95 rounded-3xl shadow-[0_24px_80px_-20px_rgba(15,23,42,0.55)] border border-slate-200/80 transform transition-all duration-500 animate-in zoom-in-95 overflow-visible ${publishStatus === 'success' ? 'scale-[1.01]' : ''} ${showSealStamp && publishStatus === 'success' ? 'modal-screen-shake' : ''}`}>
+          <div className={`w-full max-w-xl bg-white/95 rounded-3xl shadow-[0_24px_80px_-20px_rgba(15,23,42,0.55)] border border-slate-200/80 transform transition-all duration-500 animate-in zoom-in-95 overflow-hidden ${publishStatus === 'success' ? 'scale-[1.01]' : ''} ${showSealStamp && publishStatus === 'success' ? 'modal-screen-shake' : ''}`}>
             {publishStatus === 'idle' && (
               <>
                 <div className="h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500"></div>
@@ -1141,7 +1562,7 @@ export default function MarkEntryPage() {
 
                 <div className="px-8 py-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3">
                   <button 
-                    onClick={() => setShowPublishConfirm(false)}
+                    onClick={() => closePublishModal(false)}
                     className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors"
                   >
                     Cancel
@@ -1178,7 +1599,7 @@ export default function MarkEntryPage() {
             )}
             
             {publishStatus === 'success' && (
-              <div className="relative p-10 md:p-12 flex flex-row items-stretch justify-between min-h-[380px] bg-gradient-to-br from-slate-50 to-white overflow-visible gap-12">
+              <div className="relative p-8 md:p-10 flex flex-col md:flex-row items-stretch justify-between bg-gradient-to-br from-slate-50 to-white gap-7 md:gap-10">
                 <style>{`
                   @keyframes checkmarkDraw {
                     0% { 
@@ -1421,7 +1842,7 @@ export default function MarkEntryPage() {
                   {/* Action Section - Button and Timer */}
                   <div className="mt-6 pt-6 border-t border-slate-200 flex flex-col gap-4">
                     <button 
-                      onClick={() => setShowPublishConfirm(false)}
+                      onClick={() => closePublishModal(true)}
                       className="w-full px-6 py-2.5 text-sm font-semibold text-blue-700 bg-white border-2 border-blue-300 rounded-xl hover:bg-blue-50 transition-colors"
                     >
                       Back to Mark Entry
@@ -1443,7 +1864,7 @@ export default function MarkEntryPage() {
                 <div className="flex-1 flex flex-col items-center justify-center relative min-w-0">
                   {/* SEAL STAMP - positioned in top-right, extends beyond popup */}
                   {showSealStamp && (
-                    <div className="absolute -top-8 -right-8 seal-animation-swing w-40 h-40 pointer-events-none" style={{ filter: 'drop-shadow(0 15px 30px rgba(0, 0, 0, 0.25))' }}>
+                    <div className="absolute top-4 right-4 seal-animation-swing w-28 h-28 md:w-32 md:h-32 pointer-events-none" style={{ filter: 'drop-shadow(0 12px 24px rgba(0, 0, 0, 0.22))' }}>
                       {sealImageUrl ? (
                         <img 
                           src={sealImageUrl} 
@@ -2075,10 +2496,17 @@ export default function MarkEntryPage() {
                   <th key={q.id} className="px-2 py-2.5 text-center text-xs font-medium text-gray-500 uppercase min-w-[70px]">
                     <div>{q.question_number}</div>
                     <div className="text-[10px] text-gray-400 font-normal">Max: {q.max_marks}</div>
-                    {q.co_number > 0 && (
-                      <div className="text-[10px] text-blue-500 font-normal">CO{q.co_number}</div>
+                    {Array.isArray(q.co_number) && q.co_number.length > 0 ? (
+                      <div className="text-[10px] text-purple-600 font-normal">{coLabel(q.co_number)}</div>
+                    ) : (
+                      (typeof q.co_number === 'number' && q.co_number > 0) && (
+                        <div className="text-[10px] text-blue-500 font-normal">{coLabel(q.co_number)}</div>
+                      )
                     )}
-                    {q.co_number === 0 && typeof q.question_number === 'string' && q.question_number.trim().toLowerCase() === 'exam' && examInfo?.mark_manager?.cia_enabled && (
+                    {(!q.co_number || (typeof q.co_number === 'number' && q.co_number === 0))
+                      && typeof q.question_number === 'string'
+                      && q.question_number.trim().toLowerCase() === 'exam'
+                      && examInfo?.mark_manager?.cia_enabled && (
                       <div className="text-[10px] text-blue-500 font-normal">split</div>
                     )}
                     {q.btl_level !== null ? (
@@ -2116,26 +2544,49 @@ export default function MarkEntryPage() {
                   {showDepartmentColumn && (
                     <td className="px-3 py-1.5 text-sm text-gray-600">{student.department || 'N/A'}</td>
                   )}
-                  {hasQ && questions.map(q => {
+                  {hasQ && questions.map((q, qIdx) => {
                     const cellLabel = getCellLabel(student.id, 'question', q.id);
                     const labelColors = {
                       red: 'bg-red-100 text-red-700 border-red-200',
                       gray: 'bg-gray-100 text-gray-600 border-gray-200',
                       blue: 'bg-blue-100 text-blue-700 border-blue-200',
                     };
+                    const cellKey = `${student.id}:question:${q.id}`;
+                    const displayValue = editingCell?.key === cellKey ? editingCell.value : (student.co_marks[q.id] ?? '');
+                    const selected = isCellInSelection(index, qIdx);
                     return (
-                      <td key={q.id} className="px-1 py-1 relative">
+                      <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''}`}>
                         <div className="relative group w-full">
                           <input
                             type="number"
-                            value={student.co_marks[q.id] ?? ''}
-                            onChange={e => updateQuestionMark(student.id, q.id, e.target.value)}
+                            data-student-id={student.id}
+                            data-field-type="question"
+                            data-qid={q.id}
+                            value={displayValue}
+                            onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent })}
+                            onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent })}
+                            onFocus={e => {
+                              setEditingCell({ key: cellKey, value: e.currentTarget.value ?? '' });
+                            }}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setEditingCell({ key: cellKey, value: v });
+                              // Update numeric state whenever parseable
+                              updateQuestionMark(student.id, q.id, v);
+                            }}
+                            onBlur={e => {
+                              const v = e.currentTarget.value;
+                              // Finalize and clear editing buffer
+                              updateQuestionMark(student.id, q.id, v);
+                              setEditingCell(prev => (prev?.key === cellKey ? null : prev));
+                            }}
+                            onPaste={e => handleCellPaste(e, { studentId: student.id, fieldType: 'question', qId: q.id })}
                             onKeyDown={handleCellKeyDown}
                             disabled={!canImport || student.is_absent}
                             min="0"
                             max={q.max_marks}
-                            step={wholeNumber ? '1' : '0.5'}
-                            className="w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400"
+                            step={wholeNumber ? '1' : '0.01'}
+                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${selected ? 'ring-2 ring-blue-400' : ''}`}
                           />
                           {cellLabel && (
                             <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
@@ -2155,18 +2606,43 @@ export default function MarkEntryPage() {
                           gray: 'bg-gray-100 text-gray-600 border-gray-200',
                           blue: 'bg-blue-100 text-blue-700 border-blue-200',
                         };
+                        const totalCol = questions.length > 0 ? questions.length : 0;
+                        const selected = isCellInSelection(index, totalCol);
                         return (
                           <>
                             <input
                               type="number"
-                              value={student.mark ?? ''}
-                              onChange={e => updateMark(student.id, e.target.value)}
+                              data-student-id={student.id}
+                              data-field-type="mark"
+                              value={(() => {
+                                const key = `${student.id}:mark`;
+                                return editingCell?.key === key ? editingCell.value : (student.mark ?? '');
+                              })()}
+                              onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
+                              onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
+                              onFocus={e => {
+                                const key = `${student.id}:mark`;
+                                setEditingCell({ key, value: e.currentTarget.value ?? '' });
+                              }}
+                              onChange={e => {
+                                const key = `${student.id}:mark`;
+                                const v = e.target.value;
+                                setEditingCell({ key, value: v });
+                                updateMark(student.id, v);
+                              }}
+                              onBlur={e => {
+                                const key = `${student.id}:mark`;
+                                const v = e.currentTarget.value;
+                                updateMark(student.id, v);
+                                setEditingCell(prev => (prev?.key === key ? null : prev));
+                              }}
+                              onPaste={e => handleCellPaste(e, { studentId: student.id, fieldType: 'mark' })}
                               onKeyDown={handleCellKeyDown}
                               disabled={!canImport || student.is_absent || hasQ}
                               min="0"
                               max={examInfo.max_marks}
-                              step={wholeNumber ? '1' : '0.5'}
-                              className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''}`}
+                              step={wholeNumber ? '1' : '0.01'}
+                              className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''} ${selected ? 'ring-2 ring-blue-400' : ''}`}
                             />
                             {cellLabel && (
                               <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>

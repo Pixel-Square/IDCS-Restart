@@ -10,6 +10,7 @@ Database schema for complete OBE mark entry with:
 """
 
 import uuid
+import re
 from datetime import timedelta
 from django.db import models
 from django.db.models import UniqueConstraint, Q
@@ -188,9 +189,23 @@ class AcV2ClassType(models.Model):
     def __str__(self):
         return f"{self.name} ({self.short_code})"
 
+    def _is_cqi_assignment(self, e):
+        if not isinstance(e, dict):
+            return False
+        if str(e.get('kind') or '').strip().lower() == 'cqi':
+            return True
+        if e.get('is_cqi') is True:
+            return True
+        code = str(e.get('exam') or '').strip().upper()
+        return code == 'CQI'
+
     def get_enabled_exams(self):
         """Get list of enabled exam assignments."""
-        return [e for e in (self.exam_assignments or []) if e.get('enabled', True)]
+        return [
+            e
+            for e in (self.exam_assignments or [])
+            if isinstance(e, dict) and e.get('enabled', True) and (not self._is_cqi_assignment(e))
+        ]
 
     def get_total_weight(self):
         """Calculate total weight of all enabled exams."""
@@ -227,6 +242,9 @@ class AcV2QpPattern(models.Model):
         related_name='qp_patterns'
     )
     
+    # Order/sequence for display in faculty view (within class_type + qp_type scope)
+    order = models.IntegerField(default=0, db_index=True)
+    
     # Pattern structure
     # {
     #   "titles": ["Part A - Q1", "Part A - Q2", "Part B - Q1", ...],
@@ -244,6 +262,15 @@ class AcV2QpPattern(models.Model):
         null=True,
         blank=True,
         related_name='acv2_qp_patterns'
+    )
+
+    # Optional: Academic cycle association
+    cycle = models.ForeignKey(
+        'AcV2Cycle',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='qp_patterns'
     )
     
     # College scope
@@ -527,6 +554,14 @@ class AcV2ExamAssignment(models.Model):
         if config and config.open_from and timezone.now() < config.open_from:
             return False
 
+        # If publish control is disabled for the semester, do not lock after publish.
+        # Allow unlimited edits/publish for the whole semester (subject to open_from gating).
+        try:
+            if config is not None and not bool(getattr(config, 'publish_control_enabled', False)):
+                return True
+        except Exception:
+            pass
+
         # Check edit window first
         if self.edit_window_until and self.edit_window_until > timezone.now():
             return True
@@ -671,23 +706,67 @@ class AcV2StudentMark(models.Model):
     def calculate_co_marks(self, qp_pattern):
         """Calculate CO marks based on question→CO mapping."""
         cos = qp_pattern.get('cos', [])
-        marks = qp_pattern.get('marks', [])
         
         co_totals = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+        def _extract_cos(raw_co):
+            """Normalize a CO spec into a validated list of CO numbers."""
+            out = []
+
+            def _push(v):
+                try:
+                    n = int(v)
+                except Exception:
+                    return
+                if 1 <= n <= 5 and n not in out:
+                    out.append(n)
+
+            if raw_co is None:
+                return out
+
+            if isinstance(raw_co, (list, tuple, set)):
+                for item in raw_co:
+                    if isinstance(item, str) and not item.strip():
+                        continue
+                    if isinstance(item, (list, tuple, set)):
+                        for nested in item:
+                            _push(nested)
+                    else:
+                        _push(item)
+                return out
+
+            if isinstance(raw_co, str):
+                s = raw_co.strip()
+                if not s:
+                    return out
+                # Supports forms like "1&2", "1,2", "[1,2]", "CO1&CO2".
+                parts = re.split(r'[^0-9]+', s)
+                for p in parts:
+                    if p:
+                        _push(p)
+                return out
+
+            _push(raw_co)
+            return out
         
+        keys = set(str(k) for k in (self.question_marks or {}).keys())
+        q_base = 0
+        if 'q0' in keys:
+            q_base = 0
+        elif 'q1' in keys and 'q0' not in keys:
+            q_base = 1
+
         for i, co in enumerate(cos):
-            q_key = f'q{i+1}'
-            q_mark = self.question_marks.get(q_key, 0) or 0
-            
-            if co is not None:
-                # Handle "1&2" style multi-CO questions
-                if isinstance(co, str) and '&' in co:
-                    co_list = [int(c.strip()) for c in co.split('&')]
-                    for c in co_list:
-                        if 1 <= c <= 5:
-                            co_totals[c] += q_mark / len(co_list)
-                elif isinstance(co, int) and 1 <= co <= 5:
-                    co_totals[co] += q_mark
+            q_key = f'q{i + q_base}'
+            q_mark = (self.question_marks or {}).get(q_key, 0) or 0
+
+            co_list = _extract_cos(co)
+            if not co_list:
+                continue
+
+            split_mark = q_mark / len(co_list)
+            for c in co_list:
+                co_totals[c] += split_mark
         
         self.co1_mark = round(co_totals[1], 2)
         self.co2_mark = round(co_totals[2], 2)
@@ -1179,9 +1258,10 @@ class AcV2QpAssignment(models.Model):
         related_name='assignments'
     )
     
-    # Link to exam assignment (optional - can be null for template)
+    # Link to the QP Pattern that represents the exam assignment for this class type.
+    # This is what the admin configures in the QP Pattern Editor flow.
     exam_assignment = models.ForeignKey(
-        AcV2ExamAssignment,
+        AcV2QpPattern,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1197,6 +1277,10 @@ class AcV2QpAssignment(models.Model):
     # Additional configuration
     # Can store exam-specific settings like "allow_customize", "covered_cos", etc.
     config = models.JSONField(default=dict, blank=True)
+
+    # Snapshot of the question table for quick access in DB/admin.
+    # Stored as an array of rows: [{title, max_marks, btl_level, co_number, enabled}, ...]
+    question_table = models.JSONField(default=list, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1224,5 +1308,190 @@ class AcV2QpAssignment(models.Model):
         ]
     
     def __str__(self):
-        exam_info = f" - {self.exam_assignment.exam}" if self.exam_assignment else " (Template)"
+        exam_id = getattr(self, 'exam_assignment_id', None)
+        if not exam_id:
+            exam_info = " (No exam)"
+        else:
+            try:
+                ea = self.exam_assignment
+                label = getattr(ea, 'name', None) or getattr(ea, 'exam', None) or str(ea)
+                exam_info = f" - {label}"
+            except Exception:
+                exam_info = f" - (Missing: {exam_id})"
+
         return f"{self.class_type.name} -> {self.qp_type.name}{exam_info}"
+
+
+# ============================================================================
+# WEIGHTS (Admin Weightage persistence)
+# ============================================================================
+
+class Weigthts(models.Model):
+    """Persist WeightagePage settings per (class_type, qp_type, exam).
+
+    Note: The table name is intentionally kept as 'Weigthts' to match
+    existing naming used in operations/requests.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    class_type = models.ForeignKey(
+        AcV2ClassType,
+        on_delete=models.CASCADE,
+        related_name='weights_rows',
+    )
+
+    qp_type = models.CharField(max_length=50, db_index=True)
+    exam = models.CharField(max_length=100, db_index=True)
+    exam_display_name = models.CharField(max_length=150, blank=True, default='')
+
+    weight = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    co_weights = models.JSONField(default=dict, blank=True)
+    default_cos = models.JSONField(default=list, blank=True)
+
+    # Mark Manager conditional config (optional)
+    mark_manager_enabled = models.BooleanField(default=False)
+    mm_co_weights_with_exam = models.JSONField(default=dict, blank=True)
+    mm_co_weights_without_exam = models.JSONField(default=dict, blank=True)
+    mm_exam_weight = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_weights_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'Weigthts'
+        verbose_name = 'Weights'
+        verbose_name_plural = 'Weights'
+        constraints = [
+            UniqueConstraint(
+                fields=['class_type', 'qp_type', 'exam'],
+                name='unique_weights_per_class_qp_exam',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['class_type', 'qp_type']),
+            models.Index(fields=['qp_type', 'exam']),
+        ]
+
+    def __str__(self):
+        nm = self.exam_display_name or self.exam
+        return f"{self.class_type.name} / {self.qp_type} / {nm}"
+
+
+# ============================================================================
+# CYCLE (Academic Cycle e.g. ODD SEM 2024-25, EVEN SEM 2024-25)
+# ============================================================================
+
+class AcV2Cycle(models.Model):
+    """
+    Academic cycle definition.
+    Used to associate exam templates with a specific academic cycle.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=30, unique=True, db_index=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='acv2_cycles'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_cycle'
+        verbose_name = 'Academic Cycle'
+        verbose_name_plural = 'Academic Cycles'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+
+
+# ============================================================================
+# CQI (Continuous Quality Improvement) - Academic 2.1
+# ============================================================================
+
+class AcV2CqiAssignment(models.Model):
+    """CQI assignment/config for a teaching assignment.
+
+    Stores draft CQI entries keyed by student_id.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    teaching_assignment = models.OneToOneField(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='acv2_cqi_assignment',
+    )
+
+    # e.g. [1,2,3,4,5]
+    co_numbers = models.JSONField(default=list, blank=True)
+
+    # Business threshold used by the CQI UI rules (default matches legacy CQI page)
+    threshold_percent = models.FloatField(default=58.0)
+
+    # Shape: { "<student_id>": {"co1": number|null, "co2": number|null, ... } }
+    draft_entries = models.JSONField(default=dict, blank=True)
+    draft_updated_by = models.IntegerField(null=True, blank=True)
+    draft_updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_assignment'
+        verbose_name = 'CQI Assignment'
+        verbose_name_plural = 'CQI Assignments'
+        indexes = [
+            models.Index(fields=['draft_updated_at']),
+        ]
+
+    def __str__(self):
+        return f"CQI - TA {getattr(self.teaching_assignment, 'id', '')}"
+
+
+class AcV2CqiAttained(models.Model):
+    """Published CQI snapshot per teaching assignment.
+
+    Table name uses 'attained' as requested.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    teaching_assignment = models.OneToOneField(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='acv2_cqi_attained',
+    )
+
+    co_numbers = models.JSONField(default=list, blank=True)
+    # Shape: { "<student_id>": {"co1": number|null, ... } }
+    entries = models.JSONField(default=dict, blank=True)
+
+    published_by = models.IntegerField(null=True, blank=True)
+    published_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_attained'
+        verbose_name = 'CQI Attained'
+        verbose_name_plural = 'CQI Attained'
+        indexes = [
+            models.Index(fields=['published_at']),
+        ]
+
+    def __str__(self):
+        return f"CQI Attained - TA {getattr(self.teaching_assignment, 'id', '')}"

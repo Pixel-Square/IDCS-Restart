@@ -56,6 +56,7 @@ import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
+import { AcademicCalendarAdminPage } from './pages/academicCalendar/admin';
 import BrandingLayout from './pages/branding/BrandingLayout';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import HodEventsListPage from './pages/hod/events/HodEventsListPage';
@@ -122,9 +123,11 @@ const AcV2QpPatternEditorPage = React.lazy(() => import('./pages/Academic 2.1/ad
 const AcV2ExamAssignmentAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'));
 const AcV2ApprovalInboxPage = React.lazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'));
 const AcV2InternalMarkAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'));
+const AcV2WeightagePage = React.lazy(() => import('./pages/Academic 2.1/admin/WeightagePage'));
 const AcV2CourseListPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'));
 const AcV2MarkEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'));
 const AcV2InternalMarkPage = React.lazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'));
+const AcV2CqiEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CqiEntryPage'));
 
 type RoleObj = { name: string };
 type Me = {
@@ -374,6 +377,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
+                <Route
+                  path="/iqac/calendar-admin"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarAdminPage />} />}
+                />
                 <Route
                   path="/iqac/calendar"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarPage mode="iqac" />} />}
@@ -825,6 +832,21 @@ export default function App() {
                     />
                   }
                 />
+                <Route
+                  path="/academic-v2/admin/weightage"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2WeightagePage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
                 {/* Faculty Routes (Staff) */}
                 <Route
                   path="/academic-v2/courses"
@@ -851,6 +873,21 @@ export default function App() {
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2InternalMarkPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/course/:courseId/cqi"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.staff']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CqiEntryPage />
                         </React.Suspense>
                       }
                     />
