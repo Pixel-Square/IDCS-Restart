@@ -49,7 +49,7 @@ export default function LmsPage({ user }: Props) {
   const canHodPage = isStaffProfile && (perms.includes('lms.page.hod') || perms.includes('lms.page.ahod') || roles.includes('HOD') || roles.includes('AHOD'))
   const canIqacPage = isStaffProfile && (perms.includes('lms.page.iqac') || roles.includes('IQAC'))
   const canManageOwn = isStaffProfile && (perms.includes('lms.materials.manage_own') || roles.includes('STAFF') || roles.includes('FACULTY') || roles.includes('HOD') || roles.includes('AHOD') || roles.includes('IQAC'))
-  const canViewAudit = perms.includes('lms.materials.view_all') || perms.includes('lms.materials.view_department') || roles.includes('IQAC') || roles.includes('HOD') || roles.includes('AHOD') || canManageOwn
+  const canViewAudit = roles.includes('IQAC')
   const canManageQuota = perms.includes('lms.quota.manage') || roles.includes('IQAC')
 
   const [groups, setGroups] = useState<CourseWiseMaterials[]>([])
@@ -77,7 +77,7 @@ export default function LmsPage({ user }: Props) {
   const [bulkQuotaMb, setBulkQuotaMb] = useState('')
   const [bulkQuotaAction, setBulkQuotaAction] = useState<'set' | 'increase' | 'decrease'>('set')
   const [bulkUpdating, setBulkUpdating] = useState(false)
-  const [expandedCourses, setExpandedCourses] = useState<Record<number, boolean>>({})
+  const [expandedCourses, setExpandedCourses] = useState<Record<string, boolean>>({})
 
   const mode = useMemo(() => {
     if (canIqacPage) return 'IQAC'
@@ -200,20 +200,25 @@ export default function LmsPage({ user }: Props) {
         ? option.targets
         : [{ teaching_assignment_id: option.teaching_assignment_id, course_id: option.course_id }]
 
-      for (const target of targets) {
-        const form = new FormData()
-        form.append('teaching_assignment', String(target.teaching_assignment_id))
-        form.append('course', String(target.course_id))
-        form.append('material_type', materialType)
-        form.append('title', computedTitle)
-        form.append('co_title', selectedCoOption?.label || computedTitle)
-        form.append('sub_topic', selectedSubTopic || 'ALL')
-        form.append('description', description)
-        if (materialType === 'FILE' && file) form.append('file', file)
-        if (materialType === 'LINK') form.append('external_url', externalUrl)
+      const target = targets[0]
+      const form = new FormData()
+      form.append('teaching_assignment', String(target.teaching_assignment_id))
+      form.append('course', String(target.course_id))
+      
+      const sharedTaIds = targets.map(t => t.teaching_assignment_id).join(',')
+      const sharedCourseIds = targets.map(t => t.course_id).join(',')
+      form.append('shared_ta_ids', sharedTaIds)
+      form.append('shared_course_ids', sharedCourseIds)
 
-        await createMaterial(form)
-      }
+      form.append('material_type', materialType)
+      form.append('title', computedTitle)
+      form.append('co_title', selectedCoOption?.label || computedTitle)
+      form.append('sub_topic', selectedSubTopic || 'ALL')
+      form.append('description', description)
+      if (materialType === 'FILE' && file) form.append('file', file)
+      if (materialType === 'LINK') form.append('external_url', externalUrl)
+
+      await createMaterial(form)
 
       setTitle('')
       setSelectedSubTopic('ALL')
@@ -423,8 +428,10 @@ export default function LmsPage({ user }: Props) {
         {!loading && groups.length === 0 ? <div className="text-sm text-gray-500">No materials found.</div> : null}
 
         <div className="space-y-4">
-          {groups.map((g) => (
-            <div key={g.course_id} className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+          {groups.map((g, idx) => {
+            const groupKey = `${g.course_id}_${idx}`
+            return (
+            <div key={groupKey} className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
               {(() => {
                 const firstMaterial = (g.materials || [])[0]
                 const subjectCode = String(firstMaterial?.subject_code || '').trim()
@@ -436,16 +443,16 @@ export default function LmsPage({ user }: Props) {
                   <button
                     type="button"
                     className="w-full text-left font-semibold text-slate-800 flex items-center justify-between"
-                    onClick={() => setExpandedCourses((prev) => ({ ...prev, [g.course_id]: !prev[g.course_id] }))}
+                    onClick={() => setExpandedCourses((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }))}
                   >
                     <span>{subjectLabel}</span>
-                    <span className="text-xs text-slate-500">{expandedCourses[g.course_id] ? 'Hide' : 'Show'}</span>
+                    <span className="text-xs text-slate-500">{expandedCourses[groupKey] ? 'Hide' : 'Show'}</span>
                   </button>
                 ) : (
                   <div className="font-semibold text-slate-800">{subjectLabel}</div>
                 )
               })()}
-              {(!isStudentExpandable || expandedCourses[g.course_id]) ? <div className="mt-2 space-y-2">
+              {(!isStudentExpandable || expandedCourses[groupKey]) ? <div className="mt-2 space-y-2">
                 {(g.materials || []).map((m) => (
                   <div key={m.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-lg p-2 bg-white">
                     <div>
@@ -471,7 +478,7 @@ export default function LmsPage({ user }: Props) {
                 ))}
               </div> : null}
             </div>
-          ))}
+          )})}
         </div>
       </div>
 

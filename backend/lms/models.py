@@ -96,6 +96,16 @@ class StudyMaterial(models.Model):
     original_file_name = models.CharField(max_length=255, blank=True, default='')
     file_size_bytes = models.BigIntegerField(default=0)
     external_url = models.URLField(blank=True)
+    shared_courses = models.ManyToManyField(
+        'academics.Course',
+        blank=True,
+        related_name='shared_study_materials',
+    )
+    shared_teaching_assignments = models.ManyToManyField(
+        'academics.TeachingAssignment',
+        blank=True,
+        related_name='shared_study_materials',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

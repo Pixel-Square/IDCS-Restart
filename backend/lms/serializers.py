@@ -198,7 +198,21 @@ class StudyMaterialCreateSerializer(serializers.ModelSerializer):
         if not validated_data.get('co_title'):
             validated_data['co_title'] = str(validated_data.get('title') or '').strip()[:255]
 
-        return super().create(validated_data)
+        shared_ta_ids = request.data.get('shared_ta_ids')
+        shared_course_ids = request.data.get('shared_course_ids')
+        
+        obj = super().create(validated_data)
+        
+        if shared_course_ids:
+            c_ids = [int(x.strip()) for x in str(shared_course_ids).split(',') if x.strip().isdigit()]
+            if c_ids:
+                obj.shared_courses.set(c_ids)
+        if shared_ta_ids:
+            ta_ids = [int(x.strip()) for x in str(shared_ta_ids).split(',') if x.strip().isdigit()]
+            if ta_ids:
+                obj.shared_teaching_assignments.set(ta_ids)
+                
+        return obj
 
 
 class StaffQuotaSerializer(serializers.ModelSerializer):

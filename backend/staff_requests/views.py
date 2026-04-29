@@ -152,10 +152,14 @@ def run_semester_policy_maintenance(as_of_date=None):
 
         StaffLeaveBalance.objects.filter(leave_type=template.name).exclude(balance=0).update(balance=0.0)
 
-        # Optional LOP reset per policy.
-        if action in ['deduct', 'neutral'] and not bool(leave_policy.get('lop_non_reset', False)):
-            overdraft_name = str(leave_policy.get('overdraft_name') or 'LOP').strip() or 'LOP'
-            StaffLeaveBalance.objects.filter(leave_type=overdraft_name).exclude(balance=0).update(balance=0.0)
+        # LOP should only reset when Casual Leave or Casual Leave - SPL expires.
+        # Enforce this programmatically regardless of the leave_policy JSON.
+        if action in ['deduct', 'neutral']:
+            t_name = str(template.name).strip().lower()
+            if t_name in ['casual leave', 'casual leave - spl']:
+                if not bool(leave_policy.get('lop_non_reset', False)):
+                    overdraft_name = str(leave_policy.get('overdraft_name') or 'LOP').strip() or 'LOP'
+                    StaffLeaveBalance.objects.filter(leave_type=overdraft_name).exclude(balance=0).update(balance=0.0)
 
         _notify_hr_semester_alert(
             reset_key=f'template-period-ended:{template.id}',
@@ -1025,27 +1029,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
     def _get_vacation_entitlement_days(self, user):
         exp_months = self._get_staff_experience_months(user)
-        rules = list(VacationEntitlementRule.objects.filter(is_active=True))
-
-        # Sort rules so the most-specific (narrowest) condition is evaluated first.
-        # Upper-bound rules (<, <=): ascending threshold — smallest cap wins first.
-        # Lower-bound rules (>, >=): descending threshold — largest floor wins first.
-        # Equality rules (=): always exact, check last as tiebreakers.
-        def _sort_key(rule):
-            threshold = (int(rule.min_years or 0) * 12) + int(rule.min_months or 0)
-            cond = str(rule.condition or '>=').strip()
-            if cond in ('<', '<='):
-                # upper-bound: sort ascending (0 = first priority among upper-bounds)
-                return (0, threshold)
-            elif cond in ('>', '>='):
-                # lower-bound: sort descending → negate threshold so largest is first
-                return (2, -threshold)
-            else:
-                # equality: middle priority
-                return (1, threshold)
-
-        rules.sort(key=_sort_key)
-
+        rules = VacationEntitlementRule.objects.filter(is_active=True).order_by('id')
         for rule in rules:
             threshold = (int(rule.min_years or 0) * 12) + int(rule.min_months or 0)
             condition = str(rule.condition or '>=').strip()
@@ -1736,10 +1720,14 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return round(total, 2)
 
     def _used_units_in_month(self, user, template, *, period_start, period_end) -> float:
+        statuses = ['pending', 'approved']
+        if self._is_late_entry_template(template):
+            statuses = ['approved']
+
         qs = StaffRequest.objects.filter(
             applicant=user,
             template=template,
-            status__in=['pending', 'approved'],
+            status__in=statuses,
         ).select_related('template')
 
         used = 0.0
@@ -1832,11 +1820,23 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         if is_late_entry and self._is_monthly_reset_policy(leave_policy):
             period_start, period_end = self._monthly_period_bounds(effective_date)
 
-            used = self._used_units_in_month(user, template, period_start=period_start, period_end=period_end)
-            requested = self._request_units_for_usage(template, form_data or {}, user, period_start=period_start, period_end=period_end)
-            remaining = round(allocated - used, 2)
-            if remaining + 1e-9 < requested or remaining <= 0.0:
-                return 'You cannot apply this form because your monthly allocation is exhausted.'
+            requested_duration = self._normalize_late_duration((form_data or {}).get('late_duration'))
+            if requested_duration not in ['10 mins', '1 hr']:
+                return 'Please select a valid late duration (10 mins or 1 hr).'
+
+            per_duration_cap = self._late_entry_duration_caps(allocated)
+            usage = self._late_entry_usage_by_duration(
+                user,
+                template,
+                period_start=period_start,
+                period_end=period_end,
+                statuses=['approved'],
+            )
+            used_for_duration = float(usage.get(requested_duration, 0.0))
+            if used_for_duration + 1.0 > per_duration_cap + 1e-9:
+                return (
+                    f'You cannot apply {requested_duration} late entry more than {per_duration_cap:g} times in a month.'
+                )
 
         # Non-late-entry forms are enforced semester-wise using from_date/to_date.
         if not is_late_entry and period_start and period_end:
@@ -1990,13 +1990,56 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         token = str(duration_value or '').strip().lower().replace(' ', '')
         if token in ['10', '10min', '10mins', '10minute', '10minutes']:
             return '10 mins'
-        if token in ['60', '1hr', '1hour', '60min', '60mins']:
+        if token in ['60', '1hr', '1hour', '60min', '60mins', '1h']:
             return '1 hr'
         return str(duration_value or '').strip()
 
     def _normalize_shift(self, shift_value):
         token = str(shift_value or '').strip().upper()
+        if token in ['MORNING', 'AM', 'FORENOON']:
+            return 'FN'
+        if token in ['EVENING', 'AFTERNOON', 'PM']:
+            return 'AN'
         return token
+
+    def _late_entry_duration_caps(self, allocated_units):
+        try:
+            allocated = float(allocated_units or 0.0)
+        except (TypeError, ValueError):
+            allocated = 0.0
+        if allocated <= 0.0:
+            return 0.0
+        return round(allocated / 2.0, 2)
+
+    def _late_entry_usage_by_duration(self, user, template, *, period_start, period_end, statuses=None):
+        if statuses is None:
+            statuses = ['pending', 'approved']
+
+        usage = {
+            '10 mins': 0.0,
+            '1 hr': 0.0,
+        }
+
+        qs = StaffRequest.objects.filter(
+            applicant=user,
+            template=template,
+            status__in=list(statuses),
+        ).select_related('template')
+
+        for req in qs:
+            effective_date = self._get_request_effective_date(req.form_data or {})
+            if not effective_date:
+                continue
+            if period_start and effective_date < period_start:
+                continue
+            if period_end and effective_date > period_end:
+                continue
+
+            duration = self._normalize_late_duration((req.form_data or {}).get('late_duration'))
+            if duration in usage:
+                usage[duration] += 1.0
+
+        return usage
 
     def _get_request_effective_date(self, form_data):
         from datetime import datetime
@@ -4650,18 +4693,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         exp_rem_months = exp_months % 12
 
         entitlement = self._get_vacation_entitlement_days(request.user)
-        # Resolve the active semester that covers this month to get the correct date range.
-        # Fall back to full-year range when no semester is active for this month.
-        sem_for_month = self._get_vacation_semester_for_date(month_start)
-        if sem_for_month:
-            used = self._vacation_used_days(request.user, sem_for_month.from_date, sem_for_month.to_date)
-        else:
-            # No active semester — scan the whole year as a fallback
-            used = self._vacation_used_days(
-                request.user,
-                date_type(year, 1, 1),
-                date_type(year, 12, 31),
-            )
+        used = self._vacation_used_days(request.user, year)
         remaining = max(0, entitlement - used)
         today = timezone.localdate()
         user_dept_id = self._get_user_department_id(request.user)
@@ -5121,23 +5153,24 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         month_start = date(year, month, 1)
         month_end = date(year, month, calendar.monthrange(year, month)[1])
 
-        # Find approved Late Entry requests for this user in the month
-        late_requests = StaffRequest.objects.filter(
-            applicant=request.user,
-            template__name__icontains='late entry',
-            status='approved',
-            created_at__date__gte=month_start,
-            created_at__date__lte=month_end,
-        )
+        late_template = RequestTemplate.objects.filter(name__icontains='late entry', is_active=True).first()
+        if not late_template:
+            return Response({
+                'month': f'{year:04d}-{month:02d}',
+                'ten_mins': 0,
+                'one_hr': 0,
+                'total': 0,
+            })
 
-        ten_mins = 0
-        one_hr = 0
-        for req in late_requests:
-            duration = (req.form_data or {}).get('late_duration', '')
-            if duration == '10 mins':
-                ten_mins += 1
-            elif duration == '1 hr':
-                one_hr += 1
+        usage = self._late_entry_usage_by_duration(
+            request.user,
+            late_template,
+            period_start=month_start,
+            period_end=month_end,
+            statuses=['approved'],
+        )
+        ten_mins = int(usage.get('10 mins', 0.0))
+        one_hr = int(usage.get('1 hr', 0.0))
 
         return Response({
             'month': f'{year:04d}-{month:02d}',
@@ -6182,18 +6215,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         return created_count
 
     def _recalculate_attendance_rows_for_user(self, user, protected_by_date, holiday_lop_map, start_date=None, end_date=None, holiday_dates=None):
-        """Recompute FN/AN/status with holiday and LOP-on-holiday rules.
-
-        When a date is a declared holiday (or Sunday) for a user's department and there is
-        no LOP request and no approved-form protecting any session, the attendance record is
-        KEPT but fn_status and an_status are cleared to null, and overall status is set to
-        'holiday'. The biometric in/out times (morning_in, evening_out) are always preserved.
-        """
+        """Recompute FN/AN/status with holiday and LOP-on-holiday rules."""
         from staff_attendance.models import AttendanceRecord
         from .models import StaffLeaveBalance
 
         updated_count = 0
-        cleared_count = 0  # holiday sessions cleared (fn/an nulled, status='holiday')
         lop_balance_changed = False
         lop_delta_total = 0.0
 
@@ -6225,11 +6251,11 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             original_evening_out = record.evening_out
 
             if is_holiday_day:
+                # Rule 1: If date became a holiday and no approved-form session is protecting it,
+                # clear attendance statuses only (keep in/out times untouched).
                 lop_req = holiday_lop_map.get(record.date)
 
                 if lop_req:
-                    # Staff has an approved LOP form for this holiday — keep record and
-                    # evaluate present/absent based on worked minutes.
                     requested_units = float(lop_req.get('units') or 0.0)
                     requested_shifts = set(lop_req.get('shifts') or set())
                     required_minutes = 240 if requested_units <= 0.5 else 480
@@ -6268,74 +6294,28 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         tokens = [tok for tok in tokens if tok != marker]
 
                     record.notes = '; '.join(tokens)
+                elif not protect_fn and not protect_an:
+                    record.fn_status = None
+                    record.an_status = None
 
-                    record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
+                record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
 
-                    if (
-                        record.fn_status != original_fn
-                        or record.an_status != original_an
-                        or record.status != original_status
-                        or record.notes != original_notes
-                    ):
-                        # Defensive guard: holiday recalculation must never wipe IN/OUT times.
-                        AttendanceRecord.objects.filter(pk=record.pk).update(
-                            fn_status=record.fn_status,
-                            an_status=record.an_status,
-                            status=record.status,
-                            notes=record.notes,
-                            morning_in=original_morning_in,
-                            evening_out=original_evening_out,
-                        )
-                        updated_count += 1
-
-                elif protect_fn or protect_an:
-                    # An approved form (e.g. COL claim) is protecting at least one session.
-                    # Keep the record but only update unprotected sessions.
-                    if not protect_fn:
-                        record.fn_status = None
-                    if not protect_an:
-                        record.an_status = None
-
-                    record.status = self._recompute_overall_status_from_sessions(record.fn_status, record.an_status)
-
-                    if (
-                        record.fn_status != original_fn
-                        or record.an_status != original_an
-                        or record.status != original_status
-                        or record.notes != original_notes
-                    ):
-                        AttendanceRecord.objects.filter(pk=record.pk).update(
-                            fn_status=record.fn_status,
-                            an_status=record.an_status,
-                            status=record.status,
-                            notes=record.notes,
-                            morning_in=original_morning_in,
-                            evening_out=original_evening_out,
-                        )
-                        updated_count += 1
-
-                else:
-                    # No LOP request and no approved-form protecting any session.
-                    # Clear FN/AN attendance statuses only — the biometric in/out times
-                    # (morning_in, evening_out) are preserved so HR can still see when
-                    # the staff member entered/exited. Status is set to 'holiday'.
-                    new_fn = None
-                    new_an = None
-                    new_status = 'holiday'
-
-                    if (
-                        new_fn != original_fn
-                        or new_an != original_an
-                        or new_status != original_status
-                    ):
-                        AttendanceRecord.objects.filter(pk=record.pk).update(
-                            fn_status=new_fn,
-                            an_status=new_an,
-                            status=new_status,
-                            morning_in=original_morning_in,
-                            evening_out=original_evening_out,
-                        )
-                        cleared_count += 1
+                if (
+                    record.fn_status != original_fn
+                    or record.an_status != original_an
+                    or record.status != original_status
+                    or record.notes != original_notes
+                ):
+                    # Defensive guard: holiday recalculation must never wipe IN/OUT times.
+                    AttendanceRecord.objects.filter(pk=record.pk).update(
+                        fn_status=record.fn_status,
+                        an_status=record.an_status,
+                        status=record.status,
+                        notes=record.notes,
+                        morning_in=original_morning_in,
+                        evening_out=original_evening_out,
+                    )
+                    updated_count += 1
 
                 continue
 
@@ -6368,7 +6348,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 lop_balance.save(update_fields=['balance', 'updated_at'])
                 lop_balance_changed = True
 
-        return updated_count, cleared_count, lop_balance_changed
+        return updated_count, lop_balance_changed
 
     @action(detail=False, methods=['post'], url_path='balances/recalculate_attendance')
     def recalculate_attendance_balances(self, request):
@@ -6448,7 +6428,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         processed_users = 0
         absent_rows_created = 0
         attendance_rows_updated = 0
-        attendance_rows_cleared = 0
         lop_balances_updated = 0
         failed_users = []
 
@@ -6459,7 +6438,7 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 protected_by_date = self._build_attendance_protection_map(user, start_date, end_date)
                 holiday_lop_map = self._build_holiday_lop_request_map(user, start_date, end_date, user_holiday_dates)
                 absent_rows_created += self._backfill_missing_working_dates_as_absent(user, start_date, end_date, user_holiday_dates)
-                updated_rows, cleared_rows, lop_changed = self._recalculate_attendance_rows_for_user(
+                updated_rows, lop_changed = self._recalculate_attendance_rows_for_user(
                     user,
                     protected_by_date,
                     holiday_lop_map,
@@ -6468,7 +6447,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     user_holiday_dates,
                 )
                 attendance_rows_updated += updated_rows
-                attendance_rows_cleared += cleared_rows
                 if lop_changed:
                     lop_balances_updated += 1
             except Exception as exc:
@@ -6488,7 +6466,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'processed_users': processed_users,
             'absent_rows_created': absent_rows_created,
             'attendance_rows_updated': attendance_rows_updated,
-            'attendance_rows_cleared': attendance_rows_cleared,
             'lop_balances_updated': lop_balances_updated,
             'failed_users_count': len(failed_users),
             'failed_users': failed_users[:50],
@@ -6930,3 +6907,554 @@ class ApprovalStepViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(template_id=template_id)
         
         return queryset
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Event Attending ViewSet
+# ══════════════════════════════════════════════════════════════════════
+
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+class EventAttendingViewSet(viewsets.ViewSet):
+    """
+    API for Event Attending expense reimbursement forms.
+    """
+    permission_classes = [IsAuthenticated]
+
+    # ── helpers ───────────────────────────────────────────────────────
+
+    def _is_iqac(self, user):
+        if user.is_superuser:
+            return True
+        if hasattr(user, 'user_roles'):
+            return user.user_roles.filter(role__name__iexact='IQAC').exists()
+        return False
+
+    def _user_approver_roles(self, user):
+        """Return set of role names the user can approve as."""
+        roles = set()
+        if hasattr(user, 'user_roles'):
+            roles = set(user.user_roles.values_list('role__name', flat=True))
+        # Optional: if testing requires superuser to see everything, we could keep it, but user explicitly wants strict flow.
+        return roles
+
+    def _is_approver_for_form(self, user, event_form):
+        """Check if user can approve the event form at its current step."""
+        step = event_form.get_current_approval_step()
+        if not step:
+            return False
+        approver_role = step.approver_role
+
+        if approver_role in ['HR', 'PRINCIPAL', 'IQAC', 'PS', 'HAA', 'ADMIN']:
+            if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
+                return True
+
+        if approver_role == 'HOD':
+            try:
+                from academics.models import DepartmentRole, AcademicYear
+                applicant_profile = getattr(event_form.staff, 'staff_profile', None)
+                if not applicant_profile or not applicant_profile.department:
+                    return False
+                applicant_dept = applicant_profile.department
+                user_profile = getattr(user, 'staff_profile', None)
+                if not user_profile:
+                    return False
+                current_year = AcademicYear.objects.filter(is_active=True).first()
+                if not current_year:
+                    return False
+                return DepartmentRole.objects.filter(
+                    staff=user_profile, department=applicant_dept,
+                    role__in=['HOD', 'AHOD'], academic_year=current_year, is_active=True,
+                ).exists()
+            except Exception:
+                return False
+
+        return False
+
+    def _get_nature_of_event(self, event_form):
+        """Get nature_of_event from the linked On Duty form."""
+        try:
+            return (event_form.on_duty_request.form_data or {}).get('nature_of_event', '')
+        except Exception:
+            return ''
+
+    def _is_conference(self, event_form):
+        return self._get_nature_of_event(event_form).strip().lower() == 'conference'
+
+    def _get_available_budget(self, user, is_conference):
+        """Return available budget after subtracting already-approved event forms."""
+        from .models import StaffEventDeclaration, EventAttendingForm
+        try:
+            decl = StaffEventDeclaration.objects.get(staff=user)
+        except StaffEventDeclaration.DoesNotExist:
+            return 0
+
+        allocated = float(decl.conference_budget if is_conference else decl.normal_events_budget)
+
+        # Subtract approved forms grand total
+        approved_forms = EventAttendingForm.objects.filter(staff=user, status='approved')
+        used = 0
+        for f in approved_forms:
+            f_is_conf = self._is_conference(f)
+            if f_is_conf == is_conference:
+                used += f.grand_total
+
+        # Also subtract pending forms that are not this form
+        pending_forms = EventAttendingForm.objects.filter(staff=user, status='pending')
+        for f in pending_forms:
+            f_is_conf = self._is_conference(f)
+            if f_is_conf == is_conference:
+                used += f.grand_total
+
+        return round(allocated - used, 2)
+
+    # ── Staff-facing endpoints ────────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def approved_od_forms(self, request):
+        """List approved On Duty forms for the current user that have event fields."""
+        from .models import StaffRequest, RequestTemplate
+
+        od_template_names = ['ON duty', 'ON duty - SPL']
+        od_templates = RequestTemplate.objects.filter(name__in=od_template_names)
+        if not od_templates.exists():
+            return Response([])
+
+        approved = StaffRequest.objects.filter(
+            applicant=request.user,
+            template__in=od_templates,
+            status='approved',
+        ).select_related('template').order_by('-created_at')
+
+        results = []
+        for req in approved:
+            fd = req.form_data or {}
+            # Check if user already submitted an event form for this OD
+            from .models import EventAttendingForm
+            has_form = EventAttendingForm.objects.filter(on_duty_request=req).exists()
+            results.append({
+                'id': req.id,
+                'template_name': req.template.name,
+                'form_data': fd,
+                'has_event_form': has_form,
+                'created_at': req.created_at,
+            })
+
+        return Response(results)
+
+    @action(detail=False, methods=['post'], parser_classes=[MultiPartParser, FormParser, JSONParser])
+    def submit_event_form(self, request):
+        """Submit a new Event Attending expense form."""
+        from .models import EventAttendingForm, EventAttendingFile, StaffEventDeclaration
+        import json
+
+        # Parse data — support both multipart and JSON
+        data = request.data
+        on_duty_request_id = data.get('on_duty_request_id')
+        if not on_duty_request_id:
+            return Response({'error': 'on_duty_request_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            od_request = StaffRequest.objects.get(id=on_duty_request_id, applicant=request.user, status='approved')
+        except StaffRequest.DoesNotExist:
+            return Response({'error': 'On Duty request not found or not approved'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if already submitted
+        if EventAttendingForm.objects.filter(on_duty_request=od_request).exists():
+            return Response({'error': 'Event Attending form already submitted for this On Duty request'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Parse JSON fields
+        def parse_json_field(val):
+            if isinstance(val, list):
+                return val
+            if isinstance(val, str):
+                try:
+                    return json.loads(val)
+                except Exception:
+                    return []
+            return []
+
+        travel_expenses = parse_json_field(data.get('travel_expenses', []))
+        food_expenses = parse_json_field(data.get('food_expenses', []))
+        other_expenses = parse_json_field(data.get('other_expenses', []))
+        total_fees_spend = float(data.get('total_fees_spend') or 0)
+        advance_amount_received = float(data.get('advance_amount_received') or 0)
+        advance_date = data.get('advance_date') or None
+
+        # Create form temporarily to calculate grand total
+        temp_form = EventAttendingForm(
+            staff=request.user,
+            on_duty_request=od_request,
+            travel_expenses=travel_expenses,
+            food_expenses=food_expenses,
+            other_expenses=other_expenses,
+            total_fees_spend=total_fees_spend,
+            advance_amount_received=advance_amount_received,
+        )
+
+        # Budget validation
+        nature = (od_request.form_data or {}).get('nature_of_event', '')
+        is_conf = nature.strip().lower() == 'conference'
+
+        try:
+            decl = StaffEventDeclaration.objects.get(staff=request.user)
+            available = float(decl.conference_budget if is_conf else decl.normal_events_budget)
+
+            if temp_form.grand_total > available:
+                return Response({
+                    'error': 'The amount is exceeding the allocated budget, so please Reevaluate the Budget',
+                    'grand_total': temp_form.grand_total,
+                    'available_budget': available,
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except StaffEventDeclaration.DoesNotExist:
+            # No declaration = no budget allocated, block submission
+            return Response({
+                'error': 'No budget has been allocated for you. Please contact IQAC.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save
+        event_form = EventAttendingForm.objects.create(
+            staff=request.user,
+            on_duty_request=od_request,
+            travel_expenses=travel_expenses,
+            food_expenses=food_expenses,
+            other_expenses=other_expenses,
+            total_fees_spend=total_fees_spend,
+            advance_amount_received=advance_amount_received,
+            advance_date=advance_date if advance_date else None,
+        )
+
+        # Handle file uploads
+        for key in request.FILES:
+            # Keys like: travel_proof_0, food_proof_1, other_proof_0, fees_proof
+            f = request.FILES[key]
+            if f.size > 30 * 1024 * 1024:
+                continue  # Skip oversized files
+
+            parts = key.split('_')
+            if len(parts) >= 3 and parts[0] in ('travel', 'food', 'other'):
+                expense_type = parts[0]
+                try:
+                    expense_index = int(parts[2])
+                except (ValueError, IndexError):
+                    expense_index = 0
+            elif key.startswith('fees_proof'):
+                expense_type = 'fees'
+                expense_index = 0
+            else:
+                continue
+
+            EventAttendingFile.objects.create(
+                event_form=event_form,
+                expense_type=expense_type,
+                expense_index=expense_index,
+                file=f,
+                original_filename=f.name,
+            )
+
+        from .serializers import EventAttendingFormDetailSerializer
+        serializer = EventAttendingFormDetailSerializer(event_form, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def my_event_forms(self, request):
+        """List current user's event attending forms."""
+        from .models import EventAttendingForm
+        from .serializers import EventAttendingFormListSerializer
+
+        forms = EventAttendingForm.objects.filter(staff=request.user).select_related(
+            'on_duty_request', 'on_duty_request__template', 'staff',
+        ).prefetch_related('approval_logs__approver', 'files').order_by('-created_at')
+
+        serializer = EventAttendingFormListSerializer(forms, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'])
+    def event_form_detail(self, request, pk=None):
+        """Get full details of a specific event form."""
+        from .models import EventAttendingForm
+        from .serializers import EventAttendingFormDetailSerializer
+
+        try:
+            form = EventAttendingForm.objects.select_related(
+                'on_duty_request', 'on_duty_request__template', 'staff',
+            ).prefetch_related('approval_logs__approver', 'files').get(pk=pk)
+        except EventAttendingForm.DoesNotExist:
+            return Response({'error': 'Form not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Allow access to the form owner, approvers, or IQAC
+        if form.staff != request.user and not self._is_iqac(request.user) and not request.user.is_superuser:
+            # Check if user is an approver at any step
+            roles = self._user_approver_roles(request.user)
+            steps = form.get_applicable_workflow_steps()
+            step_roles = set(s.approver_role for s in steps)
+            if not roles.intersection(step_roles):
+                return Response({'error': 'Access denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = EventAttendingFormDetailSerializer(form, context={'request': request})
+        return Response(serializer.data)
+
+    # ── Approval endpoints ────────────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def pending_event_approvals(self, request):
+        """List event forms pending current user's approval."""
+        from .models import EventAttendingForm, EventAttendingApprovalWorkflow
+        from .serializers import EventAttendingFormDetailSerializer
+
+        user_roles = self._user_approver_roles(request.user)
+        if not user_roles:
+            return Response([])
+
+        pending_forms = EventAttendingForm.objects.filter(
+            status='pending',
+        ).select_related(
+            'on_duty_request', 'on_duty_request__template', 'staff',
+        ).prefetch_related('approval_logs__approver', 'files')
+
+        result = []
+        for form in pending_forms:
+            if self._is_approver_for_form(request.user, form):
+                result.append(form)
+
+        serializer = EventAttendingFormDetailSerializer(result, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def processed_event_approvals(self, request):
+        """List event forms that the current user has already processed."""
+        from .models import EventAttendingForm
+        from .serializers import EventAttendingFormDetailSerializer
+
+        processed_forms = EventAttendingForm.objects.filter(
+            approval_logs__approver=request.user
+        ).distinct().select_related(
+            'on_duty_request', 'on_duty_request__template', 'staff',
+        ).prefetch_related('approval_logs__approver', 'files').order_by('-updated_at')
+
+        serializer = EventAttendingFormDetailSerializer(processed_forms, many=True, context={'request': request})
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def process_event_approval(self, request, pk=None):
+        """Approve or reject an event attending form."""
+        from .models import EventAttendingForm, EventAttendingApprovalLog, StaffEventDeclaration
+        from .serializers import EventAttendingFormDetailSerializer
+
+        try:
+            form = EventAttendingForm.objects.select_related(
+                'on_duty_request', 'on_duty_request__template', 'staff',
+            ).get(pk=pk, status='pending')
+        except EventAttendingForm.DoesNotExist:
+            return Response({'error': 'Form not found or already processed'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not self._is_approver_for_form(request.user, form):
+            return Response({'error': 'You are not authorized to approve this form'}, status=status.HTTP_403_FORBIDDEN)
+
+        action_val = request.data.get('action')
+        if action_val not in ('approve', 'reject'):
+            return Response({'error': "action must be 'approve' or 'reject'"}, status=status.HTTP_400_BAD_REQUEST)
+
+        comments = request.data.get('comments', '')
+
+        with transaction.atomic():
+            EventAttendingApprovalLog.objects.create(
+                event_form=form,
+                approver=request.user,
+                step_order=form.current_step,
+                action='approved' if action_val == 'approve' else 'rejected',
+                comments=comments,
+            )
+
+            if action_val == 'reject':
+                form.status = 'rejected'
+                form.save(update_fields=['status', 'updated_at'])
+            else:
+                if form.is_final_step():
+                    form.status = 'approved'
+                    form.save(update_fields=['status', 'updated_at'])
+
+                    # Auto-deduct from StaffEventDeclaration
+                    try:
+                        is_conf = self._is_conference(form)
+                        decl = StaffEventDeclaration.objects.select_for_update().get(staff=form.staff)
+                        if is_conf:
+                            decl.conference_budget = max(0, float(decl.conference_budget) - form.grand_total)
+                        else:
+                            decl.normal_events_budget = max(0, float(decl.normal_events_budget) - form.grand_total)
+                        decl.save(update_fields=['normal_events_budget', 'conference_budget', 'updated_at'])
+                    except StaffEventDeclaration.DoesNotExist:
+                        pass
+                else:
+                    form.current_step += 1
+                    form.save(update_fields=['current_step', 'updated_at'])
+
+        form.refresh_from_db()
+        serializer = EventAttendingFormDetailSerializer(form, context={'request': request})
+        return Response({
+            'message': f'Form {"approved" if action_val == "approve" else "rejected"} successfully',
+            'form': serializer.data,
+        })
+
+    # ── IQAC Workflow Settings ────────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def event_workflow_settings(self, request):
+        """Get current workflow rules."""
+        from .models import EventAttendingApprovalWorkflow
+        from .serializers import EventAttendingApprovalWorkflowSerializer
+
+        workflows = EventAttendingApprovalWorkflow.objects.all().order_by('applicant_role', 'step_order')
+        serializer = EventAttendingApprovalWorkflowSerializer(workflows, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def save_event_workflow_settings(self, request):
+        """IQAC: Replace all workflow rules."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can edit workflow settings'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import EventAttendingApprovalWorkflow
+        rules = request.data.get('rules', [])
+        if not isinstance(rules, list):
+            return Response({'error': 'rules must be an array'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                EventAttendingApprovalWorkflow.objects.all().delete()
+                for item in rules:
+                    applicant_role = str(item.get('applicant_role', '')).strip().upper()
+                    step_order = int(item.get('step_order', 0))
+                    approver_role = str(item.get('approver_role', '')).strip().upper()
+                    if not applicant_role or not approver_role or step_order < 1:
+                        continue
+                    EventAttendingApprovalWorkflow.objects.create(
+                        applicant_role=applicant_role,
+                        step_order=step_order,
+                        approver_role=approver_role,
+                        is_active=bool(item.get('is_active', True)),
+                    )
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({'message': 'Workflow settings saved successfully'})
+
+    # ── IQAC Staff Declarations ───────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def staff_declarations(self, request):
+        """List all staff with their event budget declarations."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can access this'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import StaffEventDeclaration
+        from .serializers import StaffEventDeclarationSerializer
+
+        User = get_user_model()
+
+        # Get all active staff
+        staff_users = User.objects.filter(
+            staff_profile__isnull=False,
+            staff_profile__status='ACTIVE',
+        ).select_related('staff_profile').order_by('first_name', 'last_name')
+
+        # Ensure declarations exist for all staff
+        for u in staff_users:
+            StaffEventDeclaration.objects.get_or_create(staff=u)
+
+        declarations = StaffEventDeclaration.objects.filter(
+            staff__in=staff_users,
+        ).select_related('staff', 'staff__staff_profile').order_by('staff__first_name', 'staff__last_name')
+
+        serializer = StaffEventDeclarationSerializer(declarations, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def save_staff_declaration(self, request):
+        """IQAC: Save budget for a single staff."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can edit declarations'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import StaffEventDeclaration
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        User = get_user_model()
+        try:
+            staff_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        decl, _ = StaffEventDeclaration.objects.get_or_create(staff=staff_user)
+        normal = request.data.get('normal_events_budget')
+        conf = request.data.get('conference_budget')
+        if normal is not None:
+            decl.normal_events_budget = float(normal)
+        if conf is not None:
+            decl.conference_budget = float(conf)
+        decl.save()
+
+        from .serializers import StaffEventDeclarationSerializer
+        return Response(StaffEventDeclarationSerializer(decl).data)
+
+    @action(detail=False, methods=['post'])
+    def apply_all_declaration(self, request):
+        """IQAC: Apply a value to all staff for a specific column."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can edit declarations'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import StaffEventDeclaration
+        column = request.data.get('column')  # 'normal_events_budget' or 'conference_budget'
+        value = request.data.get('value')
+        if column not in ('normal_events_budget', 'conference_budget'):
+            return Response({'error': 'column must be normal_events_budget or conference_budget'}, status=status.HTTP_400_BAD_REQUEST)
+        if value is None:
+            return Response({'error': 'value is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        StaffEventDeclaration.objects.all().update(**{column: float(value)})
+        return Response({'message': f'{column} set to {value} for all staff'})
+
+    @action(detail=False, methods=['get'])
+    def my_event_budget(self, request):
+        """Get current user's event budget allocation and usage."""
+        from .models import StaffEventDeclaration, EventAttendingForm
+
+        try:
+            decl = StaffEventDeclaration.objects.get(staff=request.user)
+        except StaffEventDeclaration.DoesNotExist:
+            return Response({
+                'normal_events_budget': 0,
+                'conference_budget': 0,
+                'normal_used': 0,
+                'conference_used': 0,
+                'normal_available': 0,
+                'conference_available': 0,
+            })
+
+        # Calculate historically used budgets
+        normal_used = 0
+        conf_used = 0
+        forms = EventAttendingForm.objects.filter(
+            staff=request.user, status='approved',
+        ).select_related('on_duty_request')
+        for f in forms:
+            nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
+            if nature.strip().lower() == 'conference':
+                conf_used += f.grand_total
+            else:
+                normal_used += f.grand_total
+
+        # Since decl stores the current remaining balance, original budget is remaining + used
+        orig_normal = float(decl.normal_events_budget) + normal_used
+        orig_conf = float(decl.conference_budget) + conf_used
+
+        return Response({
+            'normal_events_budget': round(orig_normal, 2),
+            'conference_budget': round(orig_conf, 2),
+            'normal_used': round(normal_used, 2),
+            'conference_used': round(conf_used, 2),
+            'normal_available': round(float(decl.normal_events_budget), 2),
+            'conference_available': round(float(decl.conference_budget), 2),
+        })
+
