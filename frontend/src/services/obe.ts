@@ -77,6 +77,7 @@ type DraftResponse<T> = {
 };
 
 export type DraftAssessmentKey = 'ssa1' | 'review1' | 'ssa2' | 'review2' | 'cia1' | 'cia2' | 'formative1' | 'formative2' | 'model' | 'cdap';
+export type IqacResetAssessmentKey = DraftAssessmentKey | 'cqi' | 'articulation' | 'lca';
 export type CqiAssessmentKey = `cqi_${string}`;
 
 export type DueAssessmentKey = DraftAssessmentKey | 'articulation' | 'lca' | CqiAssessmentKey;
@@ -90,7 +91,7 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export async function iqacResetAssessment(assessment: DraftAssessmentKey, subjectId: string, teachingAssignmentId: number): Promise<any> {
+export async function iqacResetAssessment(assessment: IqacResetAssessmentKey, subjectId: string, teachingAssignmentId: number): Promise<any> {
   const url = `${apiBase()}/api/obe/iqac/reset/${encodeURIComponent(String(assessment))}/${encodeURIComponent(String(subjectId))}`;
   const res = await apiClient.post(url, { teaching_assignment_id: teachingAssignmentId });
   return res.data;

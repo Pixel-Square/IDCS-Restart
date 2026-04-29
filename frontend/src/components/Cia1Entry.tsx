@@ -172,6 +172,7 @@ function parseCo(raw: unknown): CoValue {
 }
 
 type CoPair = { a: number; b: number };
+type CoList = number[];
 
 function coPairForAssessment(assessmentKey: AssessmentKey): CoPair {
   return assessmentKey === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
@@ -184,26 +185,53 @@ function isSplitCo(co: CoValue): boolean {
 function coWeights(co: CoValue, pair: CoPair): { a: number; b: number } {
   if (isSplitCo(co)) return { a: 0.5, b: 0.5 };
 
-  // For the default CIA2 pair {a:3, b:4}, allow legacy configs that still tag
-  // questions as CO1/CO2 instead of CO3/CO4.
   const isDefaultCia2Pair = pair.a === 3 && pair.b === 4;
   const mapsToA = co === pair.a || (isDefaultCia2Pair && co === 1);
   const mapsToB = co === pair.b || (isDefaultCia2Pair && co === 2);
   if (mapsToA) return { a: 1, b: 0 };
   if (mapsToB) return { a: 0, b: 1 };
-
-  // Any other CO is not represented in CIA's 2-CO attainment panel.
-  // Treat as "no contribution" rather than mis-attributing it.
   return { a: 0, b: 0 };
 }
 
 function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pair: CoPair): { a: number; b: number } {
   const q = questions[idx];
   if (!q) return { a: 0, b: 0 };
-  // Primary: explicit split configured.
   if (isSplitCo(q.co)) return { a: 0.5, b: 0.5 };
-
   return coWeights(q.co, pair);
+}
+
+/** Compute per-CO weights for a question using a dynamic CO list (supports N COs). */
+function coWeightsArr(co: CoValue, list: CoList): Record<number, number> {
+  const result: Record<number, number> = {};
+  for (const c of list) result[c] = 0;
+  if (isSplitCo(co)) {
+    // Split 50/50 between first two COs in list (backward compat for THEORY)
+    if (list.length >= 2) { result[list[0]] = 0.5; result[list[1]] = 0.5; }
+    else if (list.length === 1) result[list[0]] = 1;
+    return result;
+  }
+  const isDefaultCia2List = list.length === 2 && list[0] === 3 && list[1] === 4;
+  const coNum = typeof co === 'number' ? co : null;
+  if (coNum != null) {
+    if (list.includes(coNum)) { result[coNum] = 1; }
+    else if (isDefaultCia2List && coNum === 1) { result[3] = 1; }
+    else if (isDefaultCia2List && coNum === 2) { result[4] = 1; }
+  }
+  return result;
+}
+
+function effectiveCoWeightsArr(questions: QuestionDef[], idx: number, list: CoList): Record<number, number> {
+  const empty: Record<number, number> = {};
+  for (const c of list) empty[c] = 0;
+  const q = questions[idx];
+  if (!q) return empty;
+  if (isSplitCo(q.co)) {
+    const r: Record<number, number> = { ...empty };
+    if (list.length >= 2) { r[list[0]] = 0.5; r[list[1]] = 0.5; }
+    else if (list.length === 1) r[list[0]] = 1;
+    return r;
+  }
+  return coWeightsArr(q.co, list);
 }
 
 type Cia1RowState = {
@@ -287,6 +315,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
   const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
   const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
+  const coList = useMemo((): CoList => assessmentKey === 'cia2' ? [3, 4] : [1, 2], [assessmentKey]);
+  const showMarkLimitPopup = (input: HTMLInputElement, message: string, student?: { name?: string; reg_no?: string }) => {
+    const who = student ? `${student.name || 'Student'} (${student.reg_no || ''}) — ` : '';
+    setLimitDialog({ title: 'Mark Limit Exceeded', message: `${who}${message}` });
+    input.setCustomValidity('');
+  };
 
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
@@ -406,7 +440,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             key: `q${idx + 1}`,
             label: `Q${idx + 1}`,
             max: Number(max) || 0,
-            co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coPair.a as any))) as CoValue,
+            co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coList[0] as any))) as CoValue,
             btl: (fallback?.btl ?? 1) as 1 | 2 | 3 | 4 | 5 | 6,
           };
         })
@@ -416,22 +450,23 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
 
     return qpTypeKey === 'QP2' ? normalizeQuestionsForQp2(baseFromMaster) : baseFromMaster;
-  }, [masterCfg, assessmentKey, iqacPattern, coPair.a, qpTypeKey, customQuestionsProp]);
+  }, [masterCfg, assessmentKey, iqacPattern, coList, qpTypeKey, customQuestionsProp]);
 
-  // Derive the actual display CO pair from the loaded pattern questions.
-  // e.g. QP1 FINAL YEAR CIA2 may assign CO2 & CO3 instead of the default CO3 & CO4.
+  // Derive the actual display CO list from the loaded pattern questions.
+  // For THEORY/SPECIAL this is typically [1,2] or [3,4]; for ENGLISH it may be [1,2,3,4,5].
   // Must be declared AFTER questions (which depends on iqacPattern) to avoid TDZ.
-  const effectiveCoPair = useMemo((): CoPair => {
+  const effectiveCos = useMemo((): CoList => {
     const coNums: number[] = [];
     for (const q of questions) {
       const co = q.co;
       if (typeof co === 'number' && co >= 1 && co <= 5 && !coNums.includes(co)) coNums.push(co);
     }
     coNums.sort((x, y) => x - y);
-    if (coNums.length >= 2) return { a: coNums[0], b: coNums[1] };
-    if (coNums.length === 1) return { a: coNums[0], b: coNums[0] };
-    return coPair;
-  }, [questions, coPair]);
+    if (coNums.length >= 1) return coNums;
+    return coList;
+  }, [questions, coList]);
+  // Keep effectiveCoPair as {a,b} alias for any legacy code
+  const effectiveCoPair = useMemo((): CoPair => ({ a: effectiveCos[0] ?? coList[0], b: effectiveCos[1] ?? effectiveCos[0] ?? coList[1] }), [effectiveCos, coList]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1288,6 +1323,37 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     };
   }, [masterCfg, questionCoMax, assessmentKey, effectiveCoPair, iqacPattern]);
 
+  /** Per-CO max marks for all COs in effectiveCos (supports N COs for ENGLISH etc.) */
+  const effectiveCoMaxArr = useMemo((): Record<number, number> => {
+    const hasIqacCoMapping = (() => {
+      const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : [];
+      const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : [];
+      return marks.length > 0 && cos.length === marks.length;
+    })();
+    const sums: Record<number, number> = {};
+    for (const c of effectiveCos) sums[c] = 0;
+    if (hasIqacCoMapping) {
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const w = effectiveCoWeightsArr(questions, i, effectiveCos);
+        for (const c of effectiveCos) sums[c] = (sums[c] || 0) + q.max * (w[c] || 0);
+      }
+      return sums;
+    }
+    const cfg = ((masterCfg as any)?.assessments?.[assessmentKey]?.coMax ?? (masterCfg as any)?.assessments?.cia1?.coMax) as any;
+    for (const c of effectiveCos) {
+      const rawVal = Number(cfg?.[`co${c}`]);
+      // fallback: sum from questions
+      let fallback = 0;
+      for (let i = 0; i < questions.length; i++) {
+        const w = effectiveCoWeightsArr(questions, i, effectiveCos);
+        fallback += questions[i].max * (w[c] || 0);
+      }
+      sums[c] = Number.isFinite(rawVal) ? Math.max(0, rawVal) : fallback;
+    }
+    return sums;
+  }, [masterCfg, assessmentKey, effectiveCos, questions, iqacPattern]);
+
   const visibleBtls = useMemo(() => {
     const set = new Set<number>();
     for (const q of questions) {
@@ -1776,10 +1842,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           absentKind: effectiveAbsentKind,
           ...emptyQ,
           total: 'ABSENT',
-          [`co${effectiveCoPair.a}_mark`]: '',
-          [`co${effectiveCoPair.a}_pct`]: '',
-          [`co${effectiveCoPair.b}_mark`]: '',
-          [`co${effectiveCoPair.b}_pct`]: '',
+          ...Object.fromEntries(
+            effectiveCos.flatMap((c) => [
+              [`co${c}_mark`, ''],
+              [`co${c}_pct`, ''],
+            ]),
+          ),
           ...Object.fromEntries(
             visibleBtls.flatMap((n) => [
               [`btl${n}_mark`, ''],
@@ -1798,14 +1866,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       );
       const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-      let co1 = 0;
-      let co2 = 0;
+      const coMarksExport: Record<number, number> = {};
+      for (const c of effectiveCos) coMarksExport[c] = 0;
       for (let qi = 0; qi < questions.length; qi++) {
         const q = questions[qi];
-        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
+        const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
         const m = Number(qMarks[q.key] || 0);
-        co1 += m * w.a;
-        co2 += m * w.b;
+        for (const c of effectiveCos) coMarksExport[c] = (coMarksExport[c] || 0) + m * (w[c] || 0);
       }
 
       const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -1822,10 +1889,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         absentKind: exportAbsentKind,
         ...qMarks,
         total,
-        [`co${effectiveCoPair.a}_mark`]: co1,
-        [`co${effectiveCoPair.a}_pct`]: pct(co1, effectiveCoMax.a),
-        [`co${effectiveCoPair.b}_mark`]: co2,
-        [`co${effectiveCoPair.b}_pct`]: pct(co2, effectiveCoMax.b),
+        ...Object.fromEntries(
+          effectiveCos.flatMap((c) => [
+            [`co${c}_mark`, coMarksExport[c] ?? 0],
+            [`co${c}_pct`, pct(coMarksExport[c] ?? 0, effectiveCoMaxArr[c] ?? 0)],
+          ]),
+        ),
         ...Object.fromEntries(
           visibleBtls.flatMap((n) => [
             [`btl${n}_mark`, btl[n as 1 | 2 | 3 | 4 | 5 | 6]],
@@ -2503,7 +2572,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Total max: {totalsMax} | Questions: {questions.length} | COs: {effectiveCoPair.a}–{effectiveCoPair.b} | BTLs: 1–6
+            Total max: {totalsMax} | Questions: {questions.length} | COs: {effectiveCos.join(',')} | BTLs: 1–6
           </div>
         </div>
       </div>
@@ -2611,7 +2680,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto', borderCollapse: 'collapse' }}>
                   <thead>
               <tr>
-                <th style={cellTh} colSpan={(showDeptColumn ? 5 : 4) + questions.length + 1 + 4 + visibleBtls.length * 2}>
+                <th style={cellTh} colSpan={(showDeptColumn ? 5 : 4) + questions.length + 1 + effectiveCos.length * 2 + visibleBtls.length * 2}>
                   {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel}
                 </th>
               </tr>
@@ -2640,7 +2709,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <th style={cellTh} rowSpan={3}>
                   Total
                 </th>
-                <th style={cellTh} colSpan={4}>
+                <th style={cellTh} colSpan={effectiveCos.length * 2}>
                   CO ATTAINMENT
                 </th>
                 {visibleBtls.length ? (
@@ -2655,12 +2724,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     {q.label}
                   </th>
                 ))}
-                <th style={cellTh} colSpan={2}>
-                  CO-{effectiveCoPair.a}
-                </th>
-                <th style={cellTh} colSpan={2}>
-                  CO-{effectiveCoPair.b}
-                </th>
+                {effectiveCos.map((c) => (
+                  <th key={`co-head-${c}`} style={cellTh} colSpan={2}>
+                    CO-{c}
+                  </th>
+                ))}
                 {visibleBtls.map((n) => (
                   <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                     BTL-{n}
@@ -2673,7 +2741,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     {q.max}
                   </th>
                 ))}
-                {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
+                {Array.from({ length: effectiveCos.length + visibleBtls.length }).flatMap((_, i) => (
                   <React.Fragment key={i}>
                     <th style={cellTh}>
                       <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
@@ -2742,7 +2810,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   </td>
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={effectiveCos.length * 2} />
                 {visibleBtls.map((n) => (
                   <React.Fragment key={`btl-pad-${n}`}>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
@@ -2765,10 +2833,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{totalsMax}</td>
 
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.a}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.b}</td>
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                {effectiveCos.map((c) => (
+                  <React.Fragment key={`co-max-${c}`}>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMaxArr[c] ?? 0}</td>
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                  </React.Fragment>
+                ))}
                 {visibleBtls.map((n) => (
                   <React.Fragment key={`btl-max-${n}`}>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveBtlMax[n as 1 | 2 | 3 | 4 | 5 | 6]}</td>
@@ -2792,14 +2862,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 >;
                 const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                let co1 = 0;
-                let co2 = 0;
+                const coMarks: Record<number, number> = {};
+                for (const c of effectiveCos) coMarks[c] = 0;
                 for (let qi = 0; qi < questions.length; qi++) {
                   const q = questions[qi];
-                  const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
+                  const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
                   const m = Number(qMarks[q.key] || 0);
-                  co1 += m * w.a;
-                  co2 += m * w.b;
+                  for (const c of effectiveCos) coMarks[c] = (coMarks[c] || 0) + m * (w[c] || 0);
                 }
 
                 const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -2852,11 +2921,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <td key={q.key} style={{ ...cellTd, textAlign: 'center', width: 46, minWidth: 46 }}>
                         <input
                           style={{ ...inputStyle, textAlign: 'center' }}
-                          type="number"
-                          min={0}
-                          max={q.max}
+                          type="text"
+                          inputMode="decimal"
                           disabled={lockedInputs || (row.absent && !canEditAbsent)}
-                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : Number(row.q?.[q.key] || 0)}
+                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : String(row.q?.[q.key])}
                           onChange={(e) => {
                             const raw = e.target.value;
                             if (raw === '') {
@@ -2865,17 +2933,25 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                             }
 
                             const next = Number(raw);
-                            if (!Number.isFinite(next)) return;
+                            if (!Number.isFinite(next) || next < 0) return;
 
                             if (next > q.max) {
-                              e.currentTarget.setCustomValidity(`Max mark is ${q.max}`);
-                              e.currentTarget.reportValidity();
-                              window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                              showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                              setQuestionMark(s.id, q.key, '');
                               return;
                             }
 
                             e.currentTarget.setCustomValidity('');
                             setQuestionMark(s.id, q.key, next);
+                          }}
+                          onBlur={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') return;
+                            const next = Number(raw);
+                            if (!Number.isFinite(next) || next < 0 || next > q.max) {
+                              showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                              setQuestionMark(s.id, q.key, '');
+                            }
                           }}
                         />
                       </td>
@@ -2885,14 +2961,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       {total}
                     </td>
 
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co1, effectiveCoMax.a)}</span>
-                    </td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>
-                      <span className="obe-pct-badge">{pct(co2, effectiveCoMax.b)}</span>
-                    </td>
+                    {effectiveCos.map((c) => (
+                      <React.Fragment key={`co-cell-${s.id}-${c}`}>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>{coMarks[c] ?? 0}</td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>
+                          <span className="obe-pct-badge">{pct(coMarks[c] ?? 0, effectiveCoMaxArr[c] ?? 0)}</span>
+                        </td>
+                      </React.Fragment>
+                    ))}
 
                     {visibleBtls.map((n) => (
                       <React.Fragment key={`btl-row-${s.id}-${n}`}>
@@ -3245,7 +3321,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={cellTh} colSpan={6 + visibleBtls.length * 2}>
+                      <th style={cellTh} colSpan={4 + effectiveCos.length * 2 + visibleBtls.length * 2}>
                         {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel} (PUBLISHED)
                       </th>
                     </tr>
@@ -3254,8 +3330,9 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>R.No</th>
                       <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>Name of the Students</th>
                       <th style={cellTh}>Total</th>
-                      <th style={cellTh} colSpan={2}>CO-{coPair.a}</th>
-                      <th style={cellTh} colSpan={2}>CO-{coPair.b}</th>
+                      {effectiveCos.map((c) => (
+                        <th key={`pv-co-head-${c}`} style={cellTh} colSpan={2}>CO-{c}</th>
+                      ))}
                       {visibleBtls.map((n) => (
                         <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
                           BTL-{n}
@@ -3267,7 +3344,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <th style={cellTh} />
                       <th style={cellTh} />
                       <th style={cellTh} />
-                      {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
+                      {Array.from({ length: effectiveCos.length + visibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={`pv_hdr_${i}`}>
                           <th style={cellTh}>Mark</th>
                           <th style={cellTh}>%</th>
@@ -3283,14 +3360,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       const qMarks = Object.fromEntries(questions.map((q) => [q.key, clamp(Number(qObj?.[q.key] || 0), 0, q.max)])) as Record<string, number>;
                       const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                      let coA = 0;
-                      let coB = 0;
+                      const coMarksArr: Record<number, number> = {};
+                      for (const c of effectiveCos) coMarksArr[c] = 0;
                       for (let qi = 0; qi < questions.length; qi++) {
                         const q = questions[qi];
-                        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
+                        const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
                         const m = Number(qMarks[q.key] || 0);
-                        coA += m * w.a;
-                        coB += m * w.b;
+                        for (const c of effectiveCos) coMarksArr[c] = (coMarksArr[c] || 0) + m * (w[c] || 0);
                       }
 
                       const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -3308,10 +3384,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                           <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no || sheet.rowsByStudentId[String(s.id)]?.reg_no || '')}</td>
                           <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
                           <td style={{ ...cellTd, textAlign: 'center', fontWeight: 900 }}>{total}</td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coA)}</td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coA, effectiveCoMax.a)}</span></td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coB)}</td>
-                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coB, effectiveCoMax.b)}</span></td>
+                          {effectiveCos.map((c) => (
+                            <React.Fragment key={`pv-co-cell-${s.id}-${c}`}>
+                              <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coMarksArr[c] ?? 0)}</td>
+                              <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coMarksArr[c] ?? 0, effectiveCoMaxArr[c] ?? 0)}</span></td>
+                            </React.Fragment>
+                          ))}
                           {visibleBtls.map((n) => (
                             <React.Fragment key={`pv_btl_${s.id}_${n}`}>
                               <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(btl[n as 1 | 2 | 3 | 4 | 5 | 6])}</td>

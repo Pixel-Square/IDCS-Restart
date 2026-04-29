@@ -11,6 +11,7 @@ export const CLASS_TYPES = [
   { value: 'AUDIT', label: 'Audit' },
   { value: 'SPECIAL', label: 'Special' },
   { value: 'ENGLISH', label: 'English' },
+  { value: 'FOREIGN_LANG', label: 'Foreign Language' },
 ] as const;
 
 export const QP_TYPES = [
@@ -18,6 +19,7 @@ export const QP_TYPES = [
   { value: 'QP2', label: 'QP2' },
   { value: 'ASPR', label: 'ASPR' },
   { value: 'ELECTIVE1', label: 'Elective 1' },
+  { value: 'FLC_QP', label: 'Foreign Language Course QP' },
 ] as const;
 
 export type ClassType = (typeof CLASS_TYPES)[number]['value'] | string;
@@ -42,6 +44,7 @@ export function normalizeObeClassType(raw?: string | null): string {
   if (compact === 'AUDIT') return 'AUDIT';
   if (compact === 'SPECIAL') return 'SPECIAL';
   if (compact === 'ENGLISH') return 'ENGLISH';
+  if (compact === 'FOREIGNLANG' || compact === 'FOREIGN_LANG' || compact === 'FOREIGNLANGUAGE') return 'FOREIGN_LANG';
 
   return normalized;
 }
@@ -62,6 +65,15 @@ export function isSpecialClassType(raw?: string | null): boolean {
 
 export function isEnglishClassType(raw?: string | null): boolean {
   return normalizeObeClassType(raw) === 'ENGLISH';
+}
+
+export function isForeignLangClassType(raw?: string | null): boolean {
+  return normalizeObeClassType(raw) === 'FOREIGN_LANG';
+}
+
+export function isEnglishOrForeignLangClassType(raw?: string | null): boolean {
+  const t = normalizeObeClassType(raw);
+  return t === 'ENGLISH' || t === 'FOREIGN_LANG';
 }
 
 export default CLASS_TYPES;

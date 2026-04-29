@@ -2,7 +2,6 @@ from django.db import models
 from django.db.models import Q
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -751,14 +750,7 @@ class StaffProfile(models.Model):
         max_length=64,
         unique=True,
         db_index=True,
-        validators=[
-            RegexValidator(
-                regex=r'^\d{6}$',
-                message='Staff ID must be exactly 6 numeric digits.',
-                code='invalid_staff_id',
-            )
-        ],
-        help_text='Exactly 6 numeric digits (e.g. 100001).',
+        help_text='Staff ID (format not restricted).',
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)

@@ -21,11 +21,15 @@ import {
   isEnglishExamWeights,
   getEnglishExamWeightConfig,
   DEFAULT_ENGLISH_EXAM_WEIGHTS,
+  isForeignLangExamWeights,
+  getForeignLangExamWeightConfig,
+  DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS,
   type LabCycleWeights,
   type LabCycleCoWeight,
   type ProjectWeights,
   type ProjectPrblWeights,
   type EnglishExamWeights,
+  type ForeignLangExamWeights,
 } from '../../utils/internalMarkWeights';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
@@ -53,7 +57,7 @@ type WeightsRow = {
   ssa1: number | string;
   cia1: number | string;
   formative1: number | string;
-  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights;
+  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights | EnglishExamWeights;
 };
 
 const INTERNAL_CELL_PADDING = 6;
@@ -301,6 +305,8 @@ function buildDefaults(): Record<string, WeightsRow> {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_PRBL_WEIGHTS));
           } else if (k === 'ENGLISH') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_ENGLISH_EXAM_WEIGHTS));
+          } else if (k === 'FOREIGN_LANG') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS));
           } else if (k === 'PROJECT') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_WEIGHTS));
           } else if (k === 'THEORY') {
@@ -384,6 +390,12 @@ function applyAny(src: any): Record<string, WeightsRow> {
       continue;
     }
 
+    // FOREIGN_LANG: structured 3-cycle weights – pass through as-is
+    if (k === 'FOREIGN_LANG' && isForeignLangExamWeights(rawIm)) {
+      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+      continue;
+    }
+
     const im = Array.isArray(rawIm) ? rawIm : null;
     out[k] = {
       ssa1: seedRow.ssa1,
@@ -411,8 +423,7 @@ export default function AcademicControllerWeightsPage() {
     setLoading(true);
     setError(null);
     (async () => {
-      // Prefer server; fallback localStorage; else defaults.
-      // After our save pipeline, server is always the source of truth.
+      // 1. Always prefer server data.
       try {
         const svc = await import('../../services/obe');
         const [remote, exams] = await Promise.all([
@@ -422,21 +433,23 @@ export default function AcademicControllerWeightsPage() {
         const applied = applyAny(remote);
         setWeights(applied);
         setSpecialExams(exams);
-        // Keep localStorage in sync with what the server returns so that
-        // if the server is temporarily unreachable the last-good state is used.
-        try { lsSet('iqac_class_type_weights', applied); } catch {}
+        lsSet('iqac_class_type_weights', applied);
         return;
-      } catch {
-        // Server unreachable — fall through to localStorage / defaults.
+      } catch (err) {
+        console.error('Weight fetch error:', err);
       }
 
-      // Fetch exam list even if weights fell through
+      // 2. Fetch exam list separately if weights fetch failed
       fetchSpecialExamConfig().then(setSpecialExams).catch(() => {});
 
+      // 3. Fallback to localStorage
       try {
         const saved = lsGet<any>('iqac_class_type_weights');
-        const applied = applyAny(saved);
-        setWeights(applied);
+        if (saved && typeof saved === 'object') {
+          setWeights(applyAny(saved));
+        } else {
+          setWeights(buildDefaults());
+        }
       } catch {
         setWeights(buildDefaults());
       } finally {
@@ -537,6 +550,17 @@ export default function AcademicControllerWeightsPage() {
           continue;
         }
 
+        // FOREIGN_LANG: structured 3-cycle weights – pass through as-is
+        if (k === 'FOREIGN_LANG' && isForeignLangExamWeights(w?.internal_mark_weights)) {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+
         const normalizedIm = normalizeInternalWeights(
           k,
           Array.isArray(w?.internal_mark_weights) ? w.internal_mark_weights : defaultInternalWeightsForClassType(k),
@@ -611,10 +635,32 @@ export default function AcademicControllerWeightsPage() {
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: 24 }}>
-      <h2 style={{ margin: '0 0 4px 0' }}>Class Type Weights</h2>
-      <p style={{ margin: '0 0 18px 0', color: '#6b7280', fontSize: 14 }}>
-        Set the weights for each class type. These weights are IQAC-controlled and are not editable by staff.
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
+        <div>
+          <h2 style={{ margin: '0 0 4px 0' }}>Class Type Weights</h2>
+          <p style={{ margin: 0, color: '#6b7280', fontSize: 14 }}>
+            Set the weights for each class type. These weights are IQAC-controlled and are not editable by staff.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            lsSet('iqac_class_type_weights', null);
+            window.location.reload();
+          }}
+          style={{
+            fontSize: 12,
+            padding: '6px 12px',
+            backgroundColor: '#f3f4f6',
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            cursor: 'pointer',
+            color: '#374151'
+          }}
+        >
+          Force Refresh from Server
+        </button>
+      </div>
 
       <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
         <div style={{ padding: 24 }}>
@@ -860,7 +906,7 @@ export default function AcademicControllerWeightsPage() {
                 <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
                   Configure per-exam weights for PRBL class-type. Grand total:{' '}
                   <b style={{ color: totalOk ? '#059669' : '#d97706' }}>{total}</b>
-                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 60</span>}
+                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 40</span>}
                 </div>
                 <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
@@ -958,34 +1004,34 @@ export default function AcademicControllerWeightsPage() {
               cfg.ssa2.weight + cfg.fa2.weight + cfg.cia2.weight;
             const modelTotal = cfg.model.co_weights.reduce((a, b) => a + b, 0);
             const grandTotal = nonModelTotal + modelTotal;
-            const totalOk = Math.abs(grandTotal - 60) < 0.01;
+            const totalOk = Math.abs(grandTotal - 40) < 0.01;
 
             const updateField = (
               key: keyof EnglishExamWeights,
               subField: string,
               value: string,
             ) => {
+              const v = value === '' ? 0 : Number(value);
               setWeights((prev) => {
                 const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getEnglishExamWeightConfig(null) };
                 const current: EnglishExamWeights = isEnglishExamWeights(prevRow.internal_mark_weights)
                   ? { ...prevRow.internal_mark_weights as EnglishExamWeights }
                   : getEnglishExamWeightConfig(null);
-                const n = Number(value);
-                const v = Number.isFinite(n) ? n : 0;
+                
                 (current as any)[key] = { ...(current as any)[key], [subField]: v };
                 return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
               });
             };
 
             const updateCoWeight = (coIdx: number, value: string) => {
+              const v = value === '' ? 0 : Number(value);
               setWeights((prev) => {
                 const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getEnglishExamWeightConfig(null) };
                 const current: EnglishExamWeights = isEnglishExamWeights(prevRow.internal_mark_weights)
                   ? { ...(prevRow.internal_mark_weights as EnglishExamWeights) }
                   : getEnglishExamWeightConfig(null);
                 const arr = [...current.model.co_weights];
-                const n = Number(value);
-                arr[coIdx] = Number.isFinite(n) ? n : 0;
+                arr[coIdx] = v;
                 current.model = { ...current.model, co_weights: arr };
                 return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
               });
@@ -994,7 +1040,7 @@ export default function AcademicControllerWeightsPage() {
             const cellStyle: React.CSSProperties = { border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 };
             const inputCell = (key: keyof EnglishExamWeights, sub: string, val: number) => (
               <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
-                <input type="number" step="0.5" min="0" value={val}
+                <input type="number" step="0.5" min="0" value={val === 0 ? '' : val}
                   onChange={(e) => updateField(key, sub, e.target.value)}
                   style={{ width: 64, textAlign: 'center' }} />
               </td>
@@ -1011,8 +1057,7 @@ export default function AcademicControllerWeightsPage() {
                 <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
                   Per-exam weights for ENGLISH class-type. Grand total:{' '}
                   <b style={{ color: totalOk ? '#059669' : '#d97706' }}>{Math.round(grandTotal * 100) / 100}</b>
-                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 60</span>}
-                  <span style={{ marginLeft: 16, color: '#6b7280' }}>Each CO max = 12 (when all data entered)</span>
+                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 40</span>}
                 </div>
                 <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
@@ -1037,7 +1082,7 @@ export default function AcademicControllerWeightsPage() {
                       <td style={cellStyle}>Model</td>
                       <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', fontSize: 11 }}>CO1–CO5</td>
                       <td style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center' }}>
-                        <input type="number" step="1" min="0" value={cfg.model.max_per_co}
+                        <input type="number" step="1" min="0" value={cfg.model.max_per_co === 0 ? '' : cfg.model.max_per_co}
                           onChange={(e) => updateField('model', 'max_per_co', e.target.value)}
                           style={{ width: 64, textAlign: 'center' }} />
                         <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 4 }}>/ CO</span>
@@ -1047,12 +1092,12 @@ export default function AcademicControllerWeightsPage() {
                           {['CO1', 'CO2', 'CO3', 'CO4', 'CO5'].map((co, i) => (
                             <label key={co} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                               <span style={{ color: '#6b7280' }}>{co}</span>
-                              <input type="number" step="0.1" min="0" value={cfg.model.co_weights[i] ?? 0}
+                              <input type="number" step="0.1" min="0" value={(cfg.model.co_weights[i] ?? 0) === 0 ? '' : (cfg.model.co_weights[i] ?? 0)}
                                 onChange={(e) => updateCoWeight(i, e.target.value)}
                                 style={{ width: 52, textAlign: 'center' }} />
                             </label>
                           ))}
-                          <span style={{ marginLeft: 4, fontWeight: 700, color: Math.abs(modelTotal - 32) < 0.01 ? '#059669' : '#d97706' }}>
+                          <span style={{ marginLeft: 4, fontWeight: 700, color: Math.abs(modelTotal - 12) < 0.01 ? '#059669' : '#d97706' }}>
                             = {Math.round(modelTotal * 100) / 100}
                           </span>
                         </div>
@@ -1061,8 +1106,126 @@ export default function AcademicControllerWeightsPage() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280' }}>
-                  Tip: defaults give CO1–CO4 model weight 5.6 and CO5 weight 9.6 (model total = 32),
-                  ensuring each CO's cumulative max = 12.
+                  Tip: defaults give each CO a model weight of 2.4 (model total = 12), ensuring the grand total is 40.
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ─── FOREIGN LANGUAGE (3-Cycle) Exam Weights Editor ─── */}
+          {(() => {
+            const ctKey = 'FOREIGN_LANG';
+            const row = weights[ctKey];
+            const rawIm = row?.internal_mark_weights;
+            const cfg: ForeignLangExamWeights = isForeignLangExamWeights(rawIm) ? rawIm : getForeignLangExamWeightConfig(null);
+
+            const nonModelTotal =
+              cfg.ssa1.weight + cfg.fa1.weight + cfg.cia1.weight +
+              cfg.ssa2.weight + cfg.fa2.weight + cfg.cia2.weight;
+            const modelTotal = cfg.model.co_weights.reduce((a, b) => a + b, 0);
+            const grandTotal = nonModelTotal + modelTotal;
+            const totalOk = Math.abs(grandTotal - 40) < 0.01;
+
+            const updateField = (
+              key: keyof ForeignLangExamWeights,
+              subField: string,
+              value: string,
+            ) => {
+              const v = value === '' ? 0 : Number(value);
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getForeignLangExamWeightConfig(null) };
+                const current: ForeignLangExamWeights = isForeignLangExamWeights(prevRow.internal_mark_weights)
+                  ? { ...prevRow.internal_mark_weights as ForeignLangExamWeights }
+                  : getForeignLangExamWeightConfig(null);
+                (current as any)[key] = { ...(current as any)[key], [subField]: v };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
+              });
+            };
+
+            const updateCoWeight = (coIdx: number, value: string) => {
+              const v = value === '' ? 0 : Number(value);
+              setWeights((prev) => {
+                const prevRow = prev[ctKey] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: getForeignLangExamWeightConfig(null) };
+                const current: ForeignLangExamWeights = isForeignLangExamWeights(prevRow.internal_mark_weights)
+                  ? { ...(prevRow.internal_mark_weights as ForeignLangExamWeights) }
+                  : getForeignLangExamWeightConfig(null);
+                const arr = [...current.model.co_weights];
+                arr[coIdx] = v;
+                current.model = { ...current.model, co_weights: arr };
+                return { ...prev, [ctKey]: { ...prevRow, internal_mark_weights: current } };
+              });
+            };
+
+            const cellStyle: React.CSSProperties = { border: '1px solid #d1d5db', padding: '4px 10px', fontWeight: 600 };
+            const inputCell = (key: keyof ForeignLangExamWeights, sub: string, val: number) => (
+              <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                <input type="number" step="0.5" min="0" value={val === 0 ? '' : val}
+                  onChange={(e) => updateField(key, sub, e.target.value)}
+                  style={{ width: 64, textAlign: 'center' }} />
+              </td>
+            );
+            const cycleHdr = (label: string) => (
+              <tr style={{ background: '#eff6ff' }}>
+                <td colSpan={4} style={{ border: '1px solid #bfdbfe', padding: '4px 10px', fontWeight: 700, color: '#1d4ed8', fontSize: 12 }}>{label}</td>
+              </tr>
+            );
+
+            return (
+              <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>Foreign Language (3-Cycle)</div>
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Per-exam weights for FOREIGN_LANG class-type. Grand total:{' '}
+                  <b style={{ color: totalOk ? '#059669' : '#d97706' }}>{Math.round(grandTotal * 100) / 100}</b>
+                  {!totalOk && <span style={{ color: '#d97706', marginLeft: 8 }}>⚠ should equal 40</span>}
+                </div>
+                <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Component</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>COs</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Max Marks</th>
+                      <th style={{ border: '1px solid #d1d5db', padding: '4px 10px' }}>Weight</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cycleHdr('Cycle 1  (CO1 + CO2)')}
+                    <tr><td style={cellStyle}>SSA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1, CO2</td>{inputCell('ssa1', 'max', cfg.ssa1.max)}{inputCell('ssa1', 'weight', cfg.ssa1.weight)}</tr>
+                    <tr><td style={cellStyle}>FA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1, CO2</td>{inputCell('fa1', 'max', cfg.fa1.max)}{inputCell('fa1', 'weight', cfg.fa1.weight)}</tr>
+                    <tr><td style={cellStyle}>CIA 1</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1–CO5 (equal)</td>{inputCell('cia1', 'max', cfg.cia1.max)}{inputCell('cia1', 'weight', cfg.cia1.weight)}</tr>
+                    {cycleHdr('Cycle 2  (CO3 + CO4)')}
+                    <tr><td style={cellStyle}>SSA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO3, CO4</td>{inputCell('ssa2', 'max', cfg.ssa2.max)}{inputCell('ssa2', 'weight', cfg.ssa2.weight)}</tr>
+                    <tr><td style={cellStyle}>FA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO3, CO4</td>{inputCell('fa2', 'max', cfg.fa2.max)}{inputCell('fa2', 'weight', cfg.fa2.weight)}</tr>
+                    <tr><td style={cellStyle}>CIA 2</td><td style={{ border: '1px solid #d1d5db', padding: '4px 10px', fontSize: 11 }}>CO1–CO5 (equal)</td>{inputCell('cia2', 'max', cfg.cia2.max)}{inputCell('cia2', 'weight', cfg.cia2.weight)}</tr>
+                    {cycleHdr('Cycle 3 — Model Exam  (100 marks, per-CO entry)')}
+                    <tr>
+                      <td style={cellStyle}>Model</td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 6px', fontSize: 11 }}>CO1–CO5</td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 10px', textAlign: 'center' }}>
+                        <input type="number" step="1" min="0" value={cfg.model.max_per_co === 0 ? '' : cfg.model.max_per_co}
+                          onChange={(e) => updateField('model', 'max_per_co', e.target.value)}
+                          style={{ width: 64, textAlign: 'center' }} />
+                        <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 4 }}>/ CO</span>
+                      </td>
+                      <td style={{ border: '1px solid #d1d5db', padding: '4px 6px' }}>
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11 }}>
+                          {['CO1', 'CO2', 'CO3', 'CO4', 'CO5'].map((co, i) => (
+                            <label key={co} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                              <span style={{ color: '#6b7280' }}>{co}</span>
+                              <input type="number" step="0.1" min="0" value={(cfg.model.co_weights[i] ?? 0) === 0 ? '' : (cfg.model.co_weights[i] ?? 0)}
+                                onChange={(e) => updateCoWeight(i, e.target.value)}
+                                style={{ width: 52, textAlign: 'center' }} />
+                            </label>
+                          ))}
+                          <span style={{ marginLeft: 4, fontWeight: 700, color: Math.abs(modelTotal - 12) < 0.01 ? '#059669' : '#d97706' }}>
+                            = {Math.round(modelTotal * 100) / 100}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280' }}>
+                  Tip: defaults give each CO a model weight of 2.4 (model total = 12), ensuring the grand total is 40.
                 </div>
               </div>
             );

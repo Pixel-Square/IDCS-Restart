@@ -697,6 +697,13 @@ export default function MarkEntryTabs({
     if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
       return [] as CqiPlacement[];
     }
+    // ENGLISH + ELECTIVE1: single final CQI after MODEL covering all CO1–CO5
+    if (normalizedEffectiveClassType === 'ENGLISH' &&
+        String(questionPaperType || '').trim().toUpperCase() === 'ELECTIVE1') {
+      return [
+        { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'] },
+      ] as CqiPlacement[];
+    }
     // QP1FINAL (Theory): single combined CQI after MODEL covering all three cycles
     if (isQp1Final) {
       return [
@@ -707,7 +714,7 @@ export default function MarkEntryTabs({
     return options
       .map((raw) => parseCqiOption(raw))
       .filter((x): x is CqiPlacement => Boolean(x));
-  }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final]);
+  }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final, questionPaperType]);
 
   const visibleTabs = useMemo(() => {
     const out: TabDef[] = [...baseVisibleTabs];
@@ -732,6 +739,10 @@ export default function MarkEntryTabs({
         cqiLabel = 'CQI (CYCLE1, CYCLE2, CYCLE3)';
       } else if (placement.assessmentType === 'project_combined' && normalizedEffectiveClassType === 'PROJECT') {
         cqiLabel = 'CQI (Combined)';
+      } else if (normalizedEffectiveClassType === 'ENGLISH' &&
+          String(questionPaperType || '').trim().toUpperCase() === 'ELECTIVE1' &&
+          placement.assessmentType === 'model') {
+        cqiLabel = 'CQI (Final — All COs)';
       } else {
         cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
       }
@@ -751,7 +762,7 @@ export default function MarkEntryTabs({
       else out.push(cqiTab);
     });
     return out;
-  }, [baseVisibleTabs, cqiPlacements, isPrblRaw, isQp1Final, normalizedEffectiveClassType]);
+  }, [baseVisibleTabs, cqiPlacements, isPrblRaw, isQp1Final, normalizedEffectiveClassType, questionPaperType]);
 
   useEffect(() => {
     if (!subjectId) return;

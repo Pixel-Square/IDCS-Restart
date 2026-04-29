@@ -637,6 +637,8 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 'department_id': getattr(dept, 'id', None),
                 'department_display': str(dept) if dept else None,
                 'parent_id': getattr(parent, 'id', None),
+                'parent_course_code': getattr(parent, 'course_code', None),
+                'parent_course_name': getattr(parent, 'course_name', None),
             }
         except Exception:
             return None

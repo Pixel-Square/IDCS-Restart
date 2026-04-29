@@ -7,10 +7,20 @@ import { addMonths, daysInMonthGrid, formatMonthTitle, isSameDay } from './dateU
 
 export function parseCalDate(s: string): Date | null {
   if (!s) return null
-  const parts = s.split('/')
+  // Accept d/m/yyyy, dd/mm/yyyy, d-m-yyyy, dd-mm-yyyy, yyyy-mm-dd
+  let parts: string[]
+  const trimmed = s.trim()
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(trimmed)) {
+    // ISO yyyy-mm-dd
+    const [y, m, d] = trimmed.split('-').map(Number)
+    if (isNaN(d) || isNaN(m) || isNaN(y)) return null
+    return new Date(y, m - 1, d)
+  }
+  parts = trimmed.split(/[\/\-]/) // split on / or -
   if (parts.length !== 3) return null
   const [d, m, y] = parts.map(Number)
   if (isNaN(d) || isNaN(m) || isNaN(y)) return null
+  if (y < 1900 || m < 1 || m > 12 || d < 1 || d > 31) return null
   return new Date(y, m - 1, d)
 }
 
@@ -49,20 +59,27 @@ const YEAR_DOT: Record<string, string> = {
 function buildDayMap(dates: CalendarDate[]): Map<string, DayInfo> {
   const map = new Map<string, DayInfo>()
   for (const entry of dates) {
+    // Normalize the date key so it always matches keyFor() output (no zero-padding)
+    const parsed = parseCalDate(entry.date)
+    if (!parsed) continue
+    const key = keyFor(parsed)
+
     const day = entry.day.trim().toLowerCase()
     const wd = entry.workingDays.trim().toLowerCase()
     const isWeekend = day === 'sun' || day === 'sat' || wd === 'sun' || wd === 'sat'
     const isNamedHoliday = !isWeekend && wd !== '' && isNaN(Number(wd))
     const isHoliday = isWeekend || isNamedHoliday
     const events: ExcelEvent[] = []
+    // Helper: only push if the column value is actual event text (not a number or Sat/Sun)
+    const isEventText = (v: string) => !!v && isNaN(Number(v)) && v.toLowerCase() !== 'sat' && v.toLowerCase() !== 'sun'
     if (!isHoliday) {
-      if (entry.iiYearEvent)  events.push({ label: entry.iiYearEvent,  year: 'II'  })
-      if (entry.iiiYearEvent) events.push({ label: entry.iiiYearEvent, year: 'III' })
-      if (entry.ivYearEvent)  events.push({ label: entry.ivYearEvent,  year: 'IV'  })
-      if (entry.iYearText && isNaN(Number(entry.iYearText))) events.push({ label: entry.iYearText, year: 'I' })
+      if (isEventText(entry.iiYearEvent))  events.push({ label: entry.iiYearEvent,  year: 'II'  })
+      if (isEventText(entry.iiiYearEvent)) events.push({ label: entry.iiiYearEvent, year: 'III' })
+      if (isEventText(entry.ivYearEvent))  events.push({ label: entry.ivYearEvent,  year: 'IV'  })
+      if (isEventText(entry.iYearText))    events.push({ label: entry.iYearText,    year: 'I'   })
     }
-    if (isNamedHoliday) events.push({ label: entry.workingDays, year: 'all' })
-    map.set(entry.date, { isHoliday, excelEvents: events, workingDayCount: entry.counter })
+    if (isNamedHoliday) events.push({ label: entry.workingDays.trim(), year: 'all' })
+    map.set(key, { isHoliday, excelEvents: events, workingDayCount: entry.counter })
   }
   return map
 }

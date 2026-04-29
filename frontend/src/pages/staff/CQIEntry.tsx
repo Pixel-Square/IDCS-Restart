@@ -427,7 +427,7 @@ export default function CQIEntry({
     if (!exams || !exams.length) return;
 
     let cancelled = false;
-    const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey || null) : null;
+    const qpForApi = qpTypeKey || null;
     const extractCos = (res: any): number[] => {
       const cosArr = Array.isArray(res?.pattern?.cos) ? res.pattern.cos : [];
       return cosArr.flatMap((c: any) =>
@@ -619,15 +619,45 @@ export default function CQIEntry({
               entries?: Record<string, Record<string, number | null>>;
             }> = Array.isArray(pub.pages) ? pub.pages : [];
 
+            const normalizePageKey = (value: any): string => String(value || '').trim().toLowerCase();
+            const normalizeAssessment = (value: any): string => String(value || '').trim().toLowerCase();
+            const normalizeCos = (value: any): number[] => {
+              const nums: number[] = [];
+              if (Array.isArray(value)) {
+                value.forEach((item) => {
+                  const n = Number(item);
+                  if (Number.isFinite(n)) {
+                    const nn = Math.trunc(n);
+                    if (nn >= 1 && nn <= 20 && !nums.includes(nn)) nums.push(nn);
+                  }
+                });
+              }
+              nums.sort((a, b) => a - b);
+              return nums;
+            };
+            const sameCos = (a: number[], b: number[]): boolean =>
+              a.length === b.length && a.every((n, i) => n === b[i]);
+
             // Identify COs published in OTHER pages (not this page's key)
             const thisPageKey = cqiPageKey;
+            const thisNormKey = normalizePageKey(thisPageKey);
+            const thisNormAssessment = normalizeAssessment(assessmentType);
+            const thisNormCos = normalizeCos(coNumbers);
             const otherCos = new Set<number>();
             const allEntries: Record<string, Record<string, number | null>> = {};
 
             for (const pg of pages) {
               if (!pg.publishedAt) continue;
-              // This page is "other" if its key doesn't match the current page
-              const isOtherPage = String(pg.key || '') !== String(thisPageKey || '');
+              const pgNormKey = normalizePageKey(pg.key);
+              const pgNormAssessment = normalizeAssessment(pg.assessmentType);
+              const pgNormCos = normalizeCos(pg.coNumbers || []);
+              const keyMatches = thisNormKey && pgNormKey && pgNormKey === thisNormKey;
+              const contextMatches =
+                Boolean(thisNormAssessment && pgNormAssessment && thisNormAssessment === pgNormAssessment) &&
+                sameCos(thisNormCos, pgNormCos);
+
+              // Treat as current page when either normalized key OR page context matches.
+              const isOtherPage = !(keyMatches || contextMatches);
               const pgCos = (pg.coNumbers || []).filter((n: number) => typeof n === 'number' && n >= 1 && n <= 20);
               if (isOtherPage) {
                 for (const co of pgCos) otherCos.add(co);
@@ -761,6 +791,9 @@ export default function CQIEntry({
       const studentTotals: any = coTotals[s.id] || {};
       const flaggedCos = coNumbers
         .filter((coNum) => {
+          // Skip COs that are owned by a prior CQI page — they are read-only "PRIOR CQI" entries
+          // and should not appear in the flagged list for this page's export.
+          if (priorPublishedCos.has(coNum)) return false;
           const cell = studentTotals?.[`co${coNum}`];
           const max = Number(cell?.max || 0);
           const val = Number(cell?.value || 0);
@@ -791,7 +824,7 @@ export default function CQIEntry({
         total: totalPct,
       };
     });
-  }, [students, coTotals, coNumbers]);
+  }, [students, coTotals, coNumbers, priorPublishedCos]);
 
   // ── Export modal state ─────────────────────────────────────
   type ExportReportType = 'all' | 'flagged';
@@ -875,10 +908,11 @@ export default function CQIEntry({
         const isProject = ct === 'PROJECT';
         const isTcpl = ct === 'TCPL';
         const isLabLike = ct === 'LAB' || ct === 'PRACTICAL';
+        const isEnglishLike = ct === 'ENGLISH' || ct === 'FOREIGN_LANG';
 
         // IQAC QP patterns: used to derive CIA CO mapping + max per CO.
         // This prevents stale sheet/master config CO maps (e.g., CIA max 46) when IQAC updates to CO1=30.
-        const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey ? qpTypeKey : null) : null;
+        const qpForApi = qpTypeKey ? qpTypeKey : null;
         const loadIqacPattern = async (examForApi: 'CIA1' | 'CIA2') => {
           if (!classTypeKey) return null as any;
           let res: any = null;
@@ -919,11 +953,29 @@ export default function CQIEntry({
           }
         };
 
-        // Read MODEL (ME-COx) marks from the saved model sheet in localStorage.
-        // SPECIAL courses can also include MODEL if it's in their enabled_assessments.
+        // MODEL source-of-truth for CQI:
+        // 1) Server draft sheet, 2) server published sheet, 3) localStorage fallback.
+        // This avoids stale browser cache mismatches against Internal Mark computation.
         const canUseLocalModel = !isLabLike && !isProject;
         const needsMe = canUseLocalModel && coNumbers.some((co) => co >= 1 && co <= 5);
-        const modelSheet: any = (() => {
+        const pickModelSheetFromPayload = (raw: any) => {
+          if (!raw || typeof raw !== 'object') return null;
+          const payload = raw?.sheet && typeof raw.sheet === 'object'
+            ? raw.sheet
+            : raw?.data && typeof raw.data === 'object'
+              ? raw.data
+              : raw;
+          if (!payload || typeof payload !== 'object') return null;
+          const isTcplLikeModel = isTcpl || isTcpr;
+          const primaryKey = isTcplLikeModel ? 'tcplSheet' : 'theorySheet';
+          const fallbackKey = isTcplLikeModel ? 'theorySheet' : 'tcplSheet';
+          const primary = (payload as any)[primaryKey];
+          if (primary && typeof primary === 'object') return primary;
+          const fallback = (payload as any)[fallbackKey];
+          if (fallback && typeof fallback === 'object') return fallback;
+          return payload;
+        };
+        const readLocalModelSheet = () => {
           if (!needsMe) return null;
           const taKey = String(teachingAssignmentId ?? 'none');
 
@@ -938,7 +990,9 @@ export default function CQIEntry({
             candidates.push(`model_tcpr_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_tcpr_sheet_${subjectId}_none`);
           } else if (ct === 'SPECIAL') {
-            // SPECIAL model may be saved under theory or generic key
+            candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
+            candidates.push(`model_theory_sheet_${subjectId}_none`);
+          } else if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           }
@@ -949,7 +1003,36 @@ export default function CQIEntry({
             if (v && typeof v === 'object') return v;
           }
           return null;
-        })();
+        };
+        let modelSheet: any = null;
+        let modelRecordCfg: { enabled: boolean; expCount: number; maxPerExp: number } | null = null;
+        if (needsMe && allow('model')) {
+          try {
+            const d = await fetchDraft<any>('model' as any, subjectId, teachingAssignmentId);
+            modelSheet = pickModelSheetFromPayload(d?.draft);
+            const rCfg = d?.draft?.recordMarksForCo5;
+            if (rCfg && typeof rCfg === 'object' && rCfg.enabled) {
+              modelRecordCfg = { enabled: true, expCount: Number(rCfg.expCount) || 3, maxPerExp: Number(rCfg.maxPerExp) || 2.0 };
+            }
+          } catch {
+            // ignore
+          }
+          if (!modelSheet) {
+            try {
+              const p = await fetchPublishedModelSheet(subjectId, teachingAssignmentId);
+              modelSheet = pickModelSheetFromPayload((p as any)?.data);
+              const rCfgP = (p as any)?.data?.recordMarksForCo5;
+              if (rCfgP && typeof rCfgP === 'object' && rCfgP.enabled) {
+                modelRecordCfg = { enabled: true, expCount: Number(rCfgP.expCount) || 3, maxPerExp: Number(rCfgP.maxPerExp) || 2.0 };
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+        if (!modelSheet) {
+          modelSheet = readLocalModelSheet();
+        }
         
         // QP1 FINAL YEAR detection: theory + QP1FINAL type.
         const isQp1FinalCqi = ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey);
@@ -963,10 +1046,12 @@ export default function CQIEntry({
         // For SPECIAL, CO mapping crosses cycle boundaries (SSA→CO3, CIA1/CIA2/MODEL→CO1/CO2)
         // so we always need all patterns and data regardless of which COs are shown.
         const sNeedsAll = !!isSpecial;
+        // For ENGLISH/FOREIGN_LANG, CIA1 and CIA2 both cover all 5 COs, so always fetch both.
+        const englishNeedsBoth = isEnglishLike && !isLabLike && !isProject;
 
         const [iqacCia1Pattern, iqacCia2Pattern, iqacModelPattern] = await Promise.all([
-          (needs12 || sNeedsAll) && allow('cia1') && !isLabLike ? loadIqacPattern('CIA1') : Promise.resolve(null),
-          (needs34 || sNeedsAll) && allow('cia2') && !isLabLike ? loadIqacPattern('CIA2') : Promise.resolve(null),
+          (needs12 || sNeedsAll || englishNeedsBoth) && allow('cia1') ? loadIqacPattern('CIA1') : Promise.resolve(null),
+          (needs34 || sNeedsAll || englishNeedsBoth) && allow('cia2') ? loadIqacPattern('CIA2') : Promise.resolve(null),
           (needsMe || sNeedsAll) ? loadIqacModelPattern() : Promise.resolve(null),
         ]);
 
@@ -1092,6 +1177,19 @@ export default function CQIEntry({
             const lab = clamp(labRaw, 0, 30);
             if (isTcpr) {
               sums.co5 += lab;
+            } else if (modelRecordCfg?.enabled) {
+              // Record mode: CO1-CO4 equal split; CO5 = CIA(lab*4/30) + record avg*(2/maxPerExp)
+              const share = lab / 5;
+              sums.co1 += share;
+              sums.co2 += share;
+              sums.co3 += share;
+              sums.co4 += share;
+              sums.co5 += (lab / 30) * 4.0;
+              const recList: any[] = Array.isArray((row as any).recordMarksCo5) ? (row as any).recordMarksCo5 : [];
+              const recSliced = modelRecordCfg.expCount ? recList.slice(0, modelRecordCfg.expCount) : recList;
+              const recValid = recSliced.map((x: any) => { const n = typeof x === 'number' ? x : Number(x); return Number.isFinite(n) ? n : null; }).filter((x): x is number => x !== null);
+              const recAvg = recValid.length > 0 ? recValid.reduce((a, b) => a + b, 0) / recValid.length : 0;
+              sums.co5 += Math.min(recAvg / (modelRecordCfg.maxPerExp || 2.0), 1.0) * 2.0;
             } else {
               const share = lab / 5;
               sums.co1 += share;
@@ -1160,8 +1258,9 @@ export default function CQIEntry({
             needs12 && allow('formative1') && !isLabLike && !isTcpr && !isTcpl && !isProject ? fetchPublishedFormative1(subjectId, teachingAssignmentId).catch(() => ({ marks: {} })) : { marks: {} },
             needs34 && allow('formative2') && !isLabLike && !isTcpr && !isTcpl && !isProject ? fetchPublishedFormative('formative2', subjectId, teachingAssignmentId).catch(() => ({ marks: {} })) : { marks: {} },
 
-            (needs12 || sNeedsAll) && allow('cia1') && !isLabLike ? fetchPublishedCia1Sheet(subjectId, teachingAssignmentId).catch(() => ({ data: null })) : { data: null },
-            (needs34 || sNeedsAll) && allow('cia2') && !isLabLike ? fetchPublishedCiaSheet('cia2', subjectId, teachingAssignmentId).catch(() => ({ data: null })) : { data: null },
+            (needs12 || sNeedsAll || englishNeedsBoth) && allow('cia1') ? fetchPublishedCia1Sheet(subjectId, teachingAssignmentId).catch(() => ({ data: null })) : { data: null },
+            (needs34 || sNeedsAll || englishNeedsBoth) && allow('cia2') ? fetchPublishedCiaSheet('cia2', subjectId, teachingAssignmentId).catch(() => ({ data: null })) : { data: null },
+            // ^ ENGLISH: CIA2 must also be fetched even when course only has CO1/CO2
 
             // TCPR / PROJECT: review replaces formative
             (allow('review1') && ((isTcpr && needs12) || needProjectReview1)) ? (async () => { try { const p = await fetchPublishedReview1(subjectId, teachingAssignmentId).catch(() => ({marks:{}})); try { const d = await fetchDraft<any>('review1', subjectId, teachingAssignmentId); if (d?.draft) return { ...p, draft: (d.draft as any).data ?? (d.draft as any).sheet ?? d.draft }; } catch{} return p; } catch { return {marks:{}} } })() : { marks: {} },
@@ -1565,6 +1664,43 @@ export default function CQIEntry({
           { co3: 0, co4: 0 },
         );
 
+        const readCiaCoFromPattern = (
+          ciaData: any,
+          questions: any[],
+          studentId: number,
+          targetCo: number,
+        ): { mark: number; max: number; hasAny: boolean; conducted: boolean } => {
+          const rowsByStudentId = ciaData?.rowsByStudentId && typeof ciaData.rowsByStudentId === 'object'
+            ? ciaData.rowsByStudentId
+            : {};
+          const conducted = Object.keys(rowsByStudentId).length > 0;
+          const row = rowsByStudentId[String(studentId)] || {};
+          const qObj = (row as any)?.q && typeof (row as any).q === 'object' ? (row as any).q : (row as any);
+
+          let mark = 0;
+          let max = 0;
+          let hasAny = false;
+
+          (Array.isArray(questions) ? questions : []).forEach((q: any) => {
+            const qMax = Number(q?.max || 0);
+            if (!(qMax > 0)) return;
+
+            const coNums = parseQuestionCoNumbers(q?.co);
+            if (!coNums.length || !coNums.includes(targetCo)) return;
+
+            const share = 1 / Math.max(1, coNums.length);
+            max += qMax * share;
+
+            const raw = toNumOrNull(qObj?.[q.key]);
+            if (raw == null) return;
+
+            hasAny = true;
+            mark += clamp(raw, 0, qMax) * share;
+          });
+
+          return { mark, max, hasAny, conducted };
+        };
+
         const totals: Record<number, Record<string, { value: number; max: number } | null>> = {};
 
         students.forEach(student => {
@@ -1577,6 +1713,7 @@ export default function CQIEntry({
             let ssaMax = 0;
             let ciaMark: number | null = null;
             let ciaMax = 0;
+            let ciaWeightOverride: number | null = null;
             let reviewMark: number | null = null;
             let reviewMax = 0;
             let faMark: number | null = null;
@@ -1629,18 +1766,20 @@ export default function CQIEntry({
                 switch (examKey) {
                   case 'SSA1': {
                     const raw = toNumOrNull((ssa1Res as any)?.marks?.[String(studentId)]);
+                    // CSD SSA sheets are out of 20 (10 per CO). Fall back to 20 if no IQAC pattern.
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
-                      : 10;
+                      : 20;
                     // If exam was conducted (other students have marks) but this student has none, treat as 0
                     const ssa1Conducted = Object.keys((ssa1Res as any)?.marks || {}).length > 0;
                     return raw != null ? { raw, max } : (ssa1Conducted && max > 0 ? { raw: 0, max } : null);
                   }
                   case 'SSA2': {
                     const raw = toNumOrNull((ssa2Res as any)?.marks?.[String(studentId)]);
+                    // CSD SSA sheets are out of 20 (10 per CO). Fall back to 20 if no IQAC pattern.
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
-                      : 10;
+                      : 20;
                     // If exam was conducted (other students have marks) but this student has none, treat as 0
                     const ssa2Conducted = Object.keys((ssa2Res as any)?.marks || {}).length > 0;
                     return raw != null ? { raw, max } : (ssa2Conducted && max > 0 ? { raw: 0, max } : null);
@@ -1976,34 +2115,48 @@ export default function CQIEntry({
                 ssaMax = coNum === 1 ? maxes.ssa1.co1 : maxes.ssa1.co2;
 
                 if (cia1Data) {
-                  const cia1ById = cia1Data.rowsByStudentId || {};
-                  const cia1Row = cia1ById[String(student.id)] || {};
-                  const qObj = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : (cia1Row as any);
+                  if (isEnglishLike) {
+                    // ENGLISH/FLC: CIA1 questions can be tagged any CO 1-5
+                    const cia1Co = readCiaCoFromPattern(cia1Data, cia1Questions, student.id, coNum);
+                    ciaMax = cia1Co.max;
+                    if (cia1Co.hasAny) ciaMark = cia1Co.mark;
+                  } else {
+                    const cia1ById = cia1Data.rowsByStudentId || {};
+                    const cia1Row = cia1ById[String(student.id)] || {};
+                    const qObj = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : (cia1Row as any);
 
-                  let anyCiaForCo = false;
-                  let ciaAcc = 0;
+                    let anyCiaForCo = false;
+                    let ciaAcc = 0;
 
-                  cia1Questions.forEach((q: any, idxQ: number) => {
-                    const qMax = Number(q?.max || 0);
-                    const w = effectiveCia1Weights(cia1Questions, idxQ);
-                    const wCo = coNum === 2 ? w.co2 : w.co1;
+                    cia1Questions.forEach((q: any, idxQ: number) => {
+                      const qMax = Number(q?.max || 0);
+                      const w = effectiveCia1Weights(cia1Questions, idxQ);
+                      const wCo = coNum === 2 ? w.co2 : w.co1;
 
-                    const raw = toNumOrNull(qObj?.[q.key]);
-                    if (raw == null) return;
-                    if (wCo <= 0) return;
-                    anyCiaForCo = true;
-                    const mark = qMax > 0 ? clamp(raw, 0, qMax) : raw;
-                    ciaAcc += mark * wCo;
-                  });
+                      const raw = toNumOrNull(qObj?.[q.key]);
+                      if (raw == null) return;
+                      if (wCo <= 0) return;
+                      anyCiaForCo = true;
+                      const mark = qMax > 0 ? clamp(raw, 0, qMax) : raw;
+                      ciaAcc += mark * wCo;
+                    });
 
-                  // Always set ciaMax from config so absent students get mark=0 with full weight
-                  const cia1HeaderMaxForCo = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
-                  const cia1DefaultMaxForCo = coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
-                  ciaMax = cia1HeaderMaxForCo > 0 ? cia1HeaderMaxForCo : cia1DefaultMaxForCo;
-                  if (anyCiaForCo) {
-                    ciaMark = ciaAcc;
+                    // Always set ciaMax from config so absent students get mark=0 with full weight
+                    const cia1HeaderMaxForCo = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
+                    const cia1DefaultMaxForCo = coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
+                    ciaMax = cia1HeaderMaxForCo > 0 ? cia1HeaderMaxForCo : cia1DefaultMaxForCo;
+                    if (anyCiaForCo) {
+                      ciaMark = ciaAcc;
+                    }
+                    // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
                   }
-                  // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
+                }
+
+                // ENGLISH/FLC: CIA2 also covers CO1/CO2
+                if (isEnglishLike && cia2Data) {
+                  const cia2Co = readCiaCoFromPattern(cia2Data, cia2Questions, student.id, coNum);
+                  ciaMax += cia2Co.max;
+                  if (cia2Co.hasAny) ciaMark = (ciaMark ?? 0) + cia2Co.mark;
                 }
 
                 // TCPR: Review1 replaces Formative1
@@ -2042,8 +2195,37 @@ export default function CQIEntry({
                   }
                 }
               } else {
-                // LAB/PRACTICAL: CIA1 lab-style provides CO1/CO2 values.
-                if (labCia1) {
+                // LAB/PRACTICAL: use pattern if available, else fallback to lab sheet
+                if (iqacCia1Pattern) {
+                  if (cia1Data) {
+                    const cia1ById = cia1Data.rowsByStudentId || {};
+                    const cia1Row = cia1ById[String(student.id)] || {};
+                    const qObj = (cia1Row as any)?.q && typeof (cia1Row as any).q === 'object' ? (cia1Row as any).q : (cia1Row as any);
+
+                    let anyCiaForCo = false;
+                    let ciaAcc = 0;
+
+                    cia1Questions.forEach((q: any, idxQ: number) => {
+                      const qMax = Number(q?.max || 0);
+                      const w = effectiveCia1Weights(cia1Questions, idxQ);
+                      const wCo = coNum === 2 ? w.co2 : w.co1;
+
+                      const raw = toNumOrNull(qObj?.[q.key]);
+                      if (raw == null) return;
+                      if (wCo <= 0) return;
+                      anyCiaForCo = true;
+                      const mark = qMax > 0 ? clamp(raw, 0, qMax) : raw;
+                      ciaAcc += mark * wCo;
+                    });
+
+                    const cia1HeaderMaxForCo = coNum === 1 ? cia1HeaderMax.co1 : cia1HeaderMax.co2;
+                    const cia1DefaultMaxForCo = coNum === 1 ? maxes.cia1.co1 : maxes.cia1.co2;
+                    ciaMax = cia1HeaderMaxForCo > 0 ? cia1HeaderMaxForCo : cia1DefaultMaxForCo;
+                    if (anyCiaForCo) {
+                      ciaMark = ciaAcc;
+                    }
+                  }
+                } else if (labCia1) {
                   const coData = labCia1.get(student.id, coNum);
                   if (coData) {
                     ciaMark = coData.value;
@@ -2070,34 +2252,48 @@ export default function CQIEntry({
                 ssaMax = coNum === 3 ? maxes.ssa2.co3 : maxes.ssa2.co4;
 
                 if (cia2Data) {
-                  const cia2ById = cia2Data.rowsByStudentId || {};
-                  const cia2Row = cia2ById[String(student.id)] || {};
-                  const qObj = (cia2Row as any)?.q && typeof (cia2Row as any).q === 'object' ? (cia2Row as any).q : (cia2Row as any);
+                  if (isEnglishLike) {
+                    // ENGLISH/FLC: CIA2 questions can be tagged any CO 1-5
+                    const cia2Co = readCiaCoFromPattern(cia2Data, cia2Questions, student.id, coNum);
+                    ciaMax = cia2Co.max;
+                    if (cia2Co.hasAny) ciaMark = cia2Co.mark;
+                  } else {
+                    const cia2ById = cia2Data.rowsByStudentId || {};
+                    const cia2Row = cia2ById[String(student.id)] || {};
+                    const qObj = (cia2Row as any)?.q && typeof (cia2Row as any).q === 'object' ? (cia2Row as any).q : (cia2Row as any);
 
-                  let anyCiaForCo = false;
-                  let ciaAcc = 0;
+                    let anyCiaForCo = false;
+                    let ciaAcc = 0;
 
-                  cia2Questions.forEach((q: any, idxQ: number) => {
-                    const qMax = Number(q?.max || 0);
-                    const w = effectiveCia2Weights(cia2Questions, idxQ);
-                    const wCo = coNum === 4 ? w.co4 : w.co3;
+                    cia2Questions.forEach((q: any, idxQ: number) => {
+                      const qMax = Number(q?.max || 0);
+                      const w = effectiveCia2Weights(cia2Questions, idxQ);
+                      const wCo = coNum === 4 ? w.co4 : w.co3;
 
-                    const raw = toNumOrNull(qObj?.[q.key]);
-                    if (raw == null) return;
-                    if (wCo <= 0) return;
-                    anyCiaForCo = true;
-                    const mark = qMax > 0 ? clamp(raw, 0, qMax) : raw;
-                    ciaAcc += mark * wCo;
-                  });
+                      const raw = toNumOrNull(qObj?.[q.key]);
+                      if (raw == null) return;
+                      if (wCo <= 0) return;
+                      anyCiaForCo = true;
+                      const mark = qMax > 0 ? clamp(raw, 0, qMax) : raw;
+                      ciaAcc += mark * wCo;
+                    });
 
-                  // Always set ciaMax from config so absent students get mark=0 with full weight
-                  const cia2HeaderMaxForCo = coNum === 3 ? cia2HeaderMax.co3 : cia2HeaderMax.co4;
-                  const cia2DefaultMaxForCo = coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
-                  ciaMax = cia2HeaderMaxForCo > 0 ? cia2HeaderMaxForCo : cia2DefaultMaxForCo;
-                  if (anyCiaForCo) {
-                    ciaMark = ciaAcc;
+                    // Always set ciaMax from config so absent students get mark=0 with full weight
+                    const cia2HeaderMaxForCo = coNum === 3 ? cia2HeaderMax.co3 : cia2HeaderMax.co4;
+                    const cia2DefaultMaxForCo = coNum === 3 ? maxes.cia2.co3 : maxes.cia2.co4;
+                    ciaMax = cia2HeaderMaxForCo > 0 ? cia2HeaderMaxForCo : cia2DefaultMaxForCo;
+                    if (anyCiaForCo) {
+                      ciaMark = ciaAcc;
+                    }
+                    // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
                   }
-                  // If exam conducted but no marks for this student, ciaMark stays null → treated as 0
+                }
+
+                // ENGLISH/FLC: CIA1 also covers CO3/CO4
+                if (isEnglishLike && cia1Data) {
+                  const cia1Co = readCiaCoFromPattern(cia1Data, cia1Questions, student.id, coNum);
+                  ciaMax += cia1Co.max;
+                  if (cia1Co.hasAny) ciaMark = (ciaMark ?? 0) + cia1Co.mark;
                 }
 
                 // TCPR: Review2 replaces Formative2
@@ -2158,6 +2354,22 @@ export default function CQIEntry({
 
             // Build component list and breakdown (only include components present)
             const weights = weightsForCo(coNum);
+
+            if (isEnglishLike && !isProject && !isLabLike && !isTcpr && !isTcpl && coNum === 5) {
+              const cia1Co = readCiaCoFromPattern(cia1Data, cia1Questions, student.id, 5);
+              const cia2Co = readCiaCoFromPattern(cia2Data, cia2Questions, student.id, 5);
+              const conductedCount = (cia1Co.conducted ? 1 : 0) + (cia2Co.conducted ? 1 : 0);
+              const anyMark = cia1Co.hasAny || cia2Co.hasAny;
+
+              ciaMax = (cia1Co.conducted ? cia1Co.max : 0) + (cia2Co.conducted ? cia2Co.max : 0);
+              if (anyMark) {
+                ciaMark = cia1Co.mark + cia2Co.mark;
+              } else if (conductedCount > 0) {
+                ciaMark = 0;
+              }
+              // weights.cia for CO5 already equals cia1_per_co + cia2_per_co (e.g. 1.2+1.2=2.4)
+              // via getInternalMarkWeightSlotsForCo — no override needed.
+            }
             const components: Array<{ key: string; mark: number; max: number; w: number; }> = [];
 
             const isExamConducted = (res: any) => {
@@ -2175,9 +2387,11 @@ export default function CQIEntry({
               components.push({ key: 'ssa', mark: ssaMark ?? 0, max: ssaMax, w: weights.ssa });
             }
 
-            const ciaConducted = isExamConducted(coNum <= 2 ? cia1Data : cia2Data) || (isLabLike && isExamConducted(coNum <= 2 ? labCia1 : labCia2));
+            const ciaConducted = (isEnglishLike && coNum === 5)
+              ? (isExamConducted(cia1Data) || isExamConducted(cia2Data))
+              : (isExamConducted(coNum <= 2 ? cia1Data : cia2Data) || (isLabLike && isExamConducted(coNum <= 2 ? labCia1 : labCia2)));
             if ((ciaMark !== null || ciaConducted) && ciaMax > 0) {
-              components.push({ key: 'cia', mark: ciaMark ?? 0, max: ciaMax, w: weights.cia });
+              components.push({ key: 'cia', mark: ciaMark ?? 0, max: ciaMax, w: ciaWeightOverride ?? weights.cia });
             }
 
             const reviewConducted = isExamConducted(coNum <= 2 ? review1Res : review2Res);

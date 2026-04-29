@@ -69,6 +69,9 @@ function splitSubjectLabel(value: unknown): { code: string; name: string } {
 }
 
 function extractCourseCode(ta: any): string {
+  const fromElectiveParent = normalizeText(ta?.elective_subject_details?.parent_course_code);
+  if (fromElectiveParent) return fromElectiveParent.toUpperCase();
+
   const fromSubjectCode = normalizeText(ta?.subject_code);
   if (fromSubjectCode) return fromSubjectCode.toUpperCase();
 
@@ -85,6 +88,9 @@ function extractCourseCode(ta: any): string {
 }
 
 function extractCourseName(ta: any): string {
+  const fromElectiveParent = normalizeText(ta?.elective_subject_details?.parent_course_name);
+  if (fromElectiveParent) return fromElectiveParent;
+
   const fromSubjectName = normalizeText(ta?.subject_name);
   if (fromSubjectName) return fromSubjectName;
 

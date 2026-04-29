@@ -342,22 +342,24 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         # If this department row is linked to a master which is not editable,
-        # show core curriculum fields as read-only in admin to prevent edits.
+        # show structural curriculum fields as read-only in admin to prevent edits.
+        # NOTE: 'question_paper_type' is intentionally NOT locked here — it is also
+        # excluded from model-level protection so HODs/admins can always update it.
         ro = list(super().get_readonly_fields(request, obj))
-        if obj and obj.master and not getattr(obj.master, 'editable', False):
+        if obj and obj.master and not getattr(obj.master, 'editable', False) and not getattr(obj, 'editable', False):
             ro += [
                 'regulation', 'semester', 'course_code', 'mnemonic', 'course_name', 'category', 'is_elective', 'is_dept_core',
                 'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
-                'total_hours', 'question_paper_type',
+                'total_hours',
+                # 'question_paper_type' intentionally omitted — always editable by admin/HOD
             ]
         return ro
 
     def has_change_permission(self, request, obj=None):
-        # Allow viewing in admin but prevent save via admin form if master is not editable.
-        if obj and obj.master and not getattr(obj.master, 'editable', False):
-            # still allow access to change page (read-only), but block POSTs via form
-            if request.method != 'GET':
-                return False
+        # Allow full admin access (GET and POST). Structural fields are protected
+        # by get_readonly_fields (form level) and CurriculumDepartment.save()
+        # (model level), so blocking the entire POST here is unnecessary and
+        # prevents legitimate changes such as updating question_paper_type.
         return super().has_change_permission(request, obj=obj)
 
 

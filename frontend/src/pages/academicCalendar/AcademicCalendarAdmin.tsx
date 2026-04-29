@@ -114,19 +114,226 @@ export default function AcademicCalendarAdmin() {
 
   // ── excel parsing ──────────────────────────────────────────────────────────
 
+  const getCellValue = (cell?: XLSX.CellObject): string => {
+    if (!cell) return ''
+    const formatted = String((cell as any).w ?? '').trim()
+    const raw = cell.v
+    if (formatted) return formatted
+    if (raw === undefined || raw === null) return ''
+    return String(raw).trim()
+  }
+
   const getCellStr = (sheet: XLSX.WorkSheet, col: string, row: number): string => {
-    const cell = sheet[`${col}${row}`]
-    if (!cell || cell.v === undefined || cell.v === null) return ''
-    return String(cell.v)
+    const cell = sheet[`${col}${row}`] as XLSX.CellObject | undefined
+    return getCellValue(cell)
+  }
+
+  const getCellStrByIndex = (sheet: XLSX.WorkSheet, colIndex: number, row: number): string => {
+    const addr = XLSX.utils.encode_cell({ c: colIndex, r: row - 1 })
+    const cell = sheet[addr] as XLSX.CellObject | undefined
+    return getCellValue(cell)
+  }
+
+  const normHeader = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+
+  const isDateHeader = (v: string) => {
+    const n = normHeader(v)
+    return n === 'date' || n === 'dates'
+  }
+
+  const isDayHeader = (v: string) => {
+    const n = normHeader(v)
+    return n === 'day' || n === 'days'
+  }
+
+  const isWorkingDaysHeader = (v: string) => {
+    const n = normHeader(v)
+    if (n === 'working days' || n === 'working day') return true
+    const squashed = n.replace(/\s+/g, '')
+    if (squashed === 'workingdays' || squashed === 'workingday') return true
+    return n.includes('working') && n.includes('day')
+  }
+
+  const findHeaderRow = (sheet: XLSX.WorkSheet, maxScanRows = 20): number | null => {
+    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
+    const maxCol = range.e.c
+    for (let row = 1; row <= Math.min(maxScanRows, range.e.r + 1); row++) {
+      let hasDate = false
+      let hasDay = false
+      let hasWorkingDays = false
+      for (let c = 0; c <= maxCol; c++) {
+        const v = getCellStrByIndex(sheet, c, row)
+        if (isDateHeader(v)) hasDate = true
+        if (isDayHeader(v)) hasDay = true
+        if (isWorkingDaysHeader(v)) hasWorkingDays = true
+      }
+      if (hasDate && hasDay && hasWorkingDays) return row
+    }
+
+    // Template fallbacks: common templates place headers on row 3 (or occasionally row 4).
+    for (const r of [3, 4]) {
+      const b = getCellStr(sheet, 'B', r)
+      const c = getCellStr(sheet, 'C', r)
+      const d = getCellStr(sheet, 'D', r)
+      if (isDateHeader(b) && isDayHeader(c) && isWorkingDaysHeader(d)) return r
+    }
+
+    return null
+  }
+
+  const detectSheetForCalendar = (workbook: XLSX.WorkBook): XLSX.WorkSheet => {
+    const sheetName3 = workbook.SheetNames[2]
+    const candidate3 = sheetName3 ? workbook.Sheets[sheetName3] : undefined
+    if (candidate3) return candidate3
+    // Fallback: return the first available sheet.
+    const first = workbook.SheetNames[0]
+    if (!first) throw new Error('Excel file must have at least 1 sheet')
+    return workbook.Sheets[first]
+  }
+
+  const pickBestCalendarSheet = (workbook: XLSX.WorkBook): XLSX.WorkSheet => {
+    // Prefer the 3rd sheet, but if it doesn't look like the calendar layout, scan all sheets.
+    const preferred = detectSheetForCalendar(workbook)
+    const preferredHeaderRow = findHeaderRow(preferred)
+    if (preferredHeaderRow) return preferred
+
+    for (const name of workbook.SheetNames) {
+      const sheet = workbook.Sheets[name]
+      const headerRow = findHeaderRow(sheet)
+      if (headerRow) return sheet
+    }
+
+    return preferred
+  }
+
+  const parsePossiblyAmbiguousDateString = (raw: string): Date | null => {
+    const trimmed = (raw || '').trim()
+    if (!trimmed) return null
+
+    // Try existing parser first (d/m/y or yyyy-mm-dd)
+    const asDMY = parseCalDate(trimmed)
+    if (asDMY) return asDMY
+
+    // Heuristic for dd/mm/yy (with 2-digit year) and mm/dd/yyyy or mm-dd-yyyy
+    const parts = trimmed.split(/[\/\-]/)
+    if (parts.length !== 3) return null
+    const [p1, p2, p3] = parts.map(p => Number(p))
+    if ([p1, p2, p3].some(n => isNaN(n))) return null
+    let y = p3
+    if (y < 100) y = 2000 + y
+
+    const tryMake = (d: number, m: number) => {
+      if (y < 1900 || m < 1 || m > 12 || d < 1 || d > 31) return null
+      return new Date(y, m - 1, d)
+    }
+
+    // Prefer dd/mm first (matches your template)
+    return tryMake(p1, p2) ?? tryMake(p2, p1)
+  }
+
+  const formatExcelSerialToDMY = (serial: number, date1904: boolean): string => {
+    // Excel serials are day counts; using UTC getters avoids local timezone shifting the date.
+    const epochDays = date1904 ? 24107 : 25569
+    const utcMs = Math.round((serial - epochDays) * 86400 * 1000)
+    const dt = new Date(utcMs)
+    return `${dt.getUTCDate()}/${dt.getUTCMonth() + 1}/${dt.getUTCFullYear()}`
+  }
+
+  const formatExcelDateFromCell = (cell: XLSX.CellObject | undefined, date1904: boolean): string => {
+    if (!cell) return ''
+    const raw = (cell as any).v
+    if (raw instanceof Date) {
+      return `${raw.getUTCDate()}/${raw.getUTCMonth() + 1}/${raw.getUTCFullYear()}`
+    }
+    if (typeof raw === 'number') {
+      try {
+        const parsed = (XLSX as any).SSF?.parse_date_code?.(raw, { date1904 })
+        if (parsed?.y && parsed?.m && parsed?.d) return `${parsed.d}/${parsed.m}/${parsed.y}`
+      } catch {}
+      return formatExcelSerialToDMY(raw, date1904)
+    }
+
+    const formattedOrRaw = getCellValue(cell)
+    const parsed = parsePossiblyAmbiguousDateString(formattedOrRaw)
+    return parsed ? `${parsed.getDate()}/${parsed.getMonth() + 1}/${parsed.getFullYear()}` : formatExcelDate(formattedOrRaw)
+  }
+
+  const findColExact = (sheet: XLSX.WorkSheet, row: number, text: string): number | null => {
+    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
+    const maxCol = range.e.c
+    const want = text.trim().toLowerCase()
+    for (let c = 0; c <= maxCol; c++) {
+      const v = getCellStrByIndex(sheet, c, row).trim().toLowerCase()
+      if (v === want) return c
+    }
+    return null
+  }
+
+  const findColContains = (sheet: XLSX.WorkSheet, row: number, text: string): number | null => {
+    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
+    const maxCol = range.e.c
+    const want = text.trim().toLowerCase()
+    for (let c = 0; c <= maxCol; c++) {
+      const v = getCellStrByIndex(sheet, c, row).trim().toLowerCase()
+      if (v && v.includes(want)) return c
+    }
+    return null
+  }
+
+  const detectSemesterType = (sheet: XLSX.WorkSheet): 'ODD' | 'EVEN' => {
+    // The template usually has "ODD SEMESTER" or "EVEN SEMESTER" in row 2.
+    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
+    const maxCol = Math.min(range.e.c, 30)
+    for (let c = 0; c <= maxCol; c++) {
+      const v = getCellStrByIndex(sheet, c, 2).toUpperCase()
+      if (v.includes('ODD')) return 'ODD'
+      if (v.includes('EVEN')) return 'EVEN'
+    }
+    // Fallback to previous behavior
+    const b2 = getCellStr(sheet, 'B', 2).toUpperCase()
+    return b2.includes('ODD') ? 'ODD' : 'EVEN'
+  }
+
+  const detectCounterCol = (
+    sheet: XLSX.WorkSheet,
+    dataStartRow: number,
+    workingDaysCol: number,
+    nextBlockCol: number | null
+  ): number => {
+    const upper = nextBlockCol !== null ? nextBlockCol - 1 : workingDaysCol + 3
+    const end = Math.max(workingDaysCol + 1, upper)
+    // Choose the first mostly-numeric column after Working Days (template has 1..n counters)
+    for (let c = workingDaysCol + 1; c <= end; c++) {
+      let hits = 0
+      for (let r = dataStartRow; r < dataStartRow + 15; r++) {
+        const v = getCellStrByIndex(sheet, c, r).trim()
+        if (v !== '' && !isNaN(Number(v))) hits++
+      }
+      if (hits >= 3) return c
+    }
+    return workingDaysCol + 1
   }
 
   const formatExcelDate = (value: any): string => {
     if (typeof value === 'number') {
-      const jsDate = new Date(Math.round((value - 25569) * 86400 * 1000))
-      return `${jsDate.getUTCDate()}/${jsDate.getUTCMonth() + 1}/${jsDate.getUTCFullYear()}`
+      // Convert Excel serial to local date (no UTC shift — use local time methods)
+      const utcMs = Math.round((value - 25569) * 86400 * 1000)
+      const jsDate = new Date(utcMs)
+      return `${jsDate.getDate()}/${jsDate.getMonth() + 1}/${jsDate.getFullYear()}`
     }
     if (value instanceof Date) return `${value.getDate()}/${value.getMonth() + 1}/${value.getFullYear()}`
-    return value?.toString() || ''
+    // String fallback: normalize via parser to strip zero-padding and unify separators
+    if (value) {
+      const p = parseCalDate(String(value))
+      if (p) return `${p.getDate()}/${p.getMonth() + 1}/${p.getFullYear()}`
+      return String(value)
+    }
+    return ''
   }
 
   const parseExcelFile = (file: File): Promise<CalendarData> =>
@@ -134,40 +341,93 @@ export default function AcademicCalendarAdmin() {
       const reader = new FileReader()
       reader.onload = (e) => {
         try {
-          const workbook = XLSX.read(e.target?.result, { type: 'binary', cellDates: false })
-          const sheetName = workbook.SheetNames[2]
-          if (!sheetName) throw new Error('Excel file must have at least 3 sheets')
-          const sheet = workbook.Sheets[sheetName]
-          const b2 = getCellStr(sheet, 'B', 2).toUpperCase()
-          const semesterType: 'ODD' | 'EVEN' = b2.includes('ODD') ? 'ODD' : 'EVEN'
+          const workbook = XLSX.read(e.target?.result, { type: 'binary', cellDates: true })
+          if (workbook.SheetNames.length < 1) throw new Error('Excel file has no sheets')
+          const date1904 = !!(workbook as any)?.Workbook?.WBProps?.date1904
+          const sheet = pickBestCalendarSheet(workbook)
+
+          // Map columns from the template headers (matches the screenshot)
+          const headerRow = findHeaderRow(sheet)
+
+          let dateCol: number | null = null
+          let dayCol: number | null = null
+          let workingDaysCol: number | null = null
+          let iiYearCol: number | null = null
+          let iiiYearCol: number | null = null
+          let ivYearCol: number | null = null
+          let iYearCol: number | null = null
+          let dataStartRow = 4
+
+          if (headerRow) {
+            dateCol = findColExact(sheet, headerRow, 'Date')
+            dayCol = findColExact(sheet, headerRow, 'Day')
+            workingDaysCol = findColExact(sheet, headerRow, 'Working Days')
+
+            // Year blocks can be on headerRow (merged) or one row above.
+            const yrRowA = headerRow
+            const yrRowB = Math.max(1, headerRow - 1)
+            iiYearCol = findColContains(sheet, yrRowA, 'II Year') ?? findColContains(sheet, yrRowB, 'II Year')
+            iiiYearCol = findColContains(sheet, yrRowA, 'III Year') ?? findColContains(sheet, yrRowB, 'III Year')
+            ivYearCol = findColContains(sheet, yrRowA, 'IV Year') ?? findColContains(sheet, yrRowB, 'IV Year')
+            iYearCol = findColContains(sheet, yrRowA, 'I Year') ?? findColContains(sheet, yrRowB, 'I Year')
+            dataStartRow = headerRow + 1
+          }
+
+          // Fixed-template fallback for the 3rd sheet mapping shown in the screenshot.
+          if (dateCol === null || dayCol === null || workingDaysCol === null) {
+            dateCol = 1   // B
+            dayCol = 2    // C
+            workingDaysCol = 3 // D
+            iiYearCol = 6  // G
+            iiiYearCol = 8 // I
+            ivYearCol = 10 // K
+            iYearCol = 12 // M
+            dataStartRow = 4
+          }
+
+          const counterCol = detectCounterCol(sheet, dataStartRow, workingDaysCol, iiYearCol)
+
+          const semesterType: 'ODD' | 'EVEN' = detectSemesterType(sheet)
           const academicYear = `${startYear}-${String(startYear + 1).slice(-2)}`
-          const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:M500')
+          const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
           const maxRow = range.e.r + 1
           const dates: import('./calendarTypes').CalendarDate[] = []
           let consecutiveEmpty = 0
-          for (let rowIndex = 4; rowIndex <= maxRow; rowIndex++) {
-            const dateCell = sheet[`B${rowIndex}`]
-            if (!dateCell || dateCell.v === undefined || dateCell.v === null || dateCell.v === '') {
+          for (let rowIndex = dataStartRow; rowIndex <= maxRow; rowIndex++) {
+            const dateAddr = XLSX.utils.encode_cell({ c: dateCol, r: rowIndex - 1 })
+            const dateCell = sheet[dateAddr] as XLSX.CellObject | undefined
+            const dateStr = formatExcelDateFromCell(dateCell, date1904)
+            if (dateStr === '') {
               if (++consecutiveEmpty > 10) break
               continue
             }
             consecutiveEmpty = 0
             dates.push({
-              date: formatExcelDate(dateCell.v),
-              day: getCellStr(sheet, 'C', rowIndex),
-              workingDays: getCellStr(sheet, 'D', rowIndex),
-              counter: getCellStr(sheet, 'E', rowIndex),
-              iiYearEvent: getCellStr(sheet, 'G', rowIndex),
-              iiYearCount: getCellStr(sheet, 'H', rowIndex),
-              iiiYearEvent: getCellStr(sheet, 'I', rowIndex),
-              iiiYearCount: getCellStr(sheet, 'J', rowIndex),
-              ivYearEvent: getCellStr(sheet, 'K', rowIndex),
-              ivYearCount: getCellStr(sheet, 'L', rowIndex),
-              iYearText: getCellStr(sheet, 'M', rowIndex),
+              date: dateStr,
+              day: getCellStrByIndex(sheet, dayCol, rowIndex),
+              workingDays: getCellStrByIndex(sheet, workingDaysCol, rowIndex),
+              counter: getCellStrByIndex(sheet, counterCol, rowIndex),
+              iiYearEvent: iiYearCol !== null ? getCellStrByIndex(sheet, iiYearCol, rowIndex) : '',
+              iiYearCount: iiYearCol !== null ? getCellStrByIndex(sheet, iiYearCol + 1, rowIndex) : '',
+              iiiYearEvent: iiiYearCol !== null ? getCellStrByIndex(sheet, iiiYearCol, rowIndex) : '',
+              iiiYearCount: iiiYearCol !== null ? getCellStrByIndex(sheet, iiiYearCol + 1, rowIndex) : '',
+              ivYearEvent: ivYearCol !== null ? getCellStrByIndex(sheet, ivYearCol, rowIndex) : '',
+              ivYearCount: ivYearCol !== null ? getCellStrByIndex(sheet, ivYearCol + 1, rowIndex) : '',
+              iYearText: iYearCol !== null ? getCellStrByIndex(sheet, iYearCol, rowIndex) : '',
             })
           }
-          if (dates.length === 0)
-            throw new Error('No data rows found in the 3rd sheet. Dates must be in column B starting from row 4.')
+          if (dates.length === 0) {
+            const headerRowDebug = findHeaderRow(sheet)
+            const debugRows = [1, 2, 3, 4, 5, 6]
+            const debugCols = ['A','B','C','D','E','F','G','H','I','J','K','L','M']
+            const dump = debugRows.map(r => ({
+              row: r,
+              values: debugCols.map(c => getCellStr(sheet, c, r)),
+            }))
+            // eslint-disable-next-line no-console
+            console.warn('[AcademicCalendarImport] No data rows found; sheet preview:', { headerRowDebug, dump })
+            throw new Error('No data rows found in the calendar sheet. Please confirm Date values start under the Date column (usually column B) and try again. (Check console for a sheet preview.)')
+          }
           resolve({ id: Date.now().toString(), name: calendarName || file.name.replace(/\.[^.]+$/, ''), semesterType, academicYear, startYear, uploadedAt: new Date().toISOString(), dates })
         } catch (err: any) { reject(err) }
       }
@@ -175,12 +435,35 @@ export default function AcademicCalendarAdmin() {
       reader.readAsBinaryString(file)
     })
 
+  const countImportedEvents = (dates: import('./calendarTypes').CalendarDate[]) => {
+    const isEventText = (v: string) => {
+      const s = (v || '').trim()
+      if (!s) return false
+      const low = s.toLowerCase()
+      if (low === 'sat' || low === 'sun') return false
+      return isNaN(Number(s))
+    }
+
+    let count = 0
+    for (const d of dates) {
+      if (isEventText(d.iiYearEvent)) count++
+      if (isEventText(d.iiiYearEvent)) count++
+      if (isEventText(d.ivYearEvent)) count++
+      if (isEventText(d.iYearText)) count++
+    }
+    return count
+  }
+
   const handleCreateCalendar = async () => {
     if (!calendarName.trim()) { setCreateError('Please enter a calendar name'); return }
     if (!uploadedFile) { setCreateError('Please upload an Excel file'); return }
     setIsProcessing(true); setCreateError(null)
     try {
       const data = await parseExcelFile(uploadedFile)
+
+      const importedEvents = countImportedEvents(data.dates)
+      window.alert(`Imported ${data.dates.length} dates and ${importedEvents} events.`)
+
       const updated = [...calendars, data]
       saveCalendars(updated); setCalendars(updated)
       setCalendarName(''); setUploadedFile(null); setShowCreatePopup(false)

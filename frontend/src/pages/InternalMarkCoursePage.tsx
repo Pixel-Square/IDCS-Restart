@@ -49,6 +49,10 @@ import {
   getSpecialExamWeightConfig,
   SpecialExamWeights,
   DEFAULT_SPECIAL_EXAM_WEIGHTS,
+  isEnglishExamWeights,
+  isForeignLangExamWeights,
+  getNormalizedInternalMarkWeights,
+  getInternalMarkWeightSlotsForCo,
 } from '../utils/internalMarkWeights';
 
 type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null; questionPaperType?: string | null };
@@ -515,6 +519,18 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
     return { visible, header, cycles: cyc, labels: lab };
   }
 
+  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+    // English / foreign language courses should be displayed as combined CO totals.
+    // The underlying weight configuration is still the 17-slot theory mapping,
+    // but faculty expect one consolidated column per CO.
+    return {
+      visible: [0, 1, 2, 3, 4],
+      header: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
+      cycles: ['Total', 'Total', 'Total', 'Total', 'Total'],
+      labels: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'],
+    };
+  }
+
   if (ct === 'SPECIAL') {
     // SPECIAL uses exam-level columns: SSA1, SSA2, CIA1, CIA2, MODEL
     // Each scaled to its configured weight (e.g. 10, 10, 5, 5, 10 = 40).
@@ -661,6 +677,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const [weights, setWeights] = useState<{ ssa1: number; cia1: number; formative1: number }>({ ssa1: 1.5, cia1: 3, formative1: 2.5 });
   const [internalMarkWeights, setInternalMarkWeights] = useState<number[]>([...DEFAULT_INTERNAL_MAPPING.weights]);
+  // Raw weight item (with internal_mark_weights field) — used by getInternalMarkWeightSlotsForCo for English
+  const [rawClassTypeWeightItem, setRawClassTypeWeightItem] = useState<{ internal_mark_weights?: any } | null>(null);
   const [labCycleWeightsCfg, setLabCycleWeightsCfg] = useState<LabCycleWeights | null>(null);
   const [projectWeightsCfg, setProjectWeightsCfg] = useState<ProjectWeights | ProjectPrblWeights | null>(null);
   const [specialExamWeightsCfg, setSpecialExamWeightsCfg] = useState<SpecialExamWeights | null>(null);
@@ -864,6 +882,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           const cia1W = Number.isFinite(Number(w.cia1)) ? Number(w.cia1) : 3;
           const fa1W = Number.isFinite(Number(w.formative1)) ? Number(w.formative1) : 2.5;
           setWeights({ ssa1: ssa1W, cia1: cia1W, formative1: fa1W });
+          // Store the raw weight item so English CO totals can be derived via getInternalMarkWeightSlotsForCo
+          setRawClassTypeWeightItem(w);
 
           const im = (w as any).internal_mark_weights;
 
@@ -886,6 +906,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           if (isSpecialExamWeights(im)) {
             setSpecialExamWeightsCfg(getSpecialExamWeightConfig(im));
             setInternalMarkWeights([...DEFAULT_INTERNAL_MAPPING.weights]);
+            return true;
+          }
+
+          if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+            const mapped = getNormalizedInternalMarkWeights(ct, { internal_mark_weights: im });
+            const slotLen = DEFAULT_INTERNAL_MAPPING.weights.length;
+            while (mapped.length < slotLen) mapped.push(DEFAULT_INTERNAL_MAPPING.weights[mapped.length] ?? 0);
+            setInternalMarkWeights(mapped.slice(0, slotLen));
             return true;
           }
 
@@ -1366,9 +1394,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           // Fall back to the model payload's qpType if available.
           const modelQpType = qpTypeNorm || modelQpTypeRaw || null;
           const modelClass = String((ct || '')).toUpperCase();
+          const shouldSendQpType = modelClass === 'THEORY' || modelClass === 'ENGLISH' || modelClass === 'FOREIGN_LANG';
           const modelPatternRes: any = await fetchIqacQpPattern({
             class_type: modelClass,
-            question_paper_type: modelClass === 'THEORY' ? modelQpType : null,
+            question_paper_type: shouldSendQpType ? modelQpType : null,
             exam: 'MODEL',
           });
           const pattern = modelPatternRes?.pattern;
@@ -1440,6 +1469,16 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
     }
 
+    if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+      // Use the same getInternalMarkWeightSlotsForCo utility that CQIEntry.tsx uses so that
+      // weights are always identical between the CQI page and the Internal Mark page.
+      const coTotals = [1, 2, 3, 4, 5].map((coNum) => {
+        const s = getInternalMarkWeightSlotsForCo(ct, rawClassTypeWeightItem, coNum);
+        return round2(s.ssa + s.cia + s.fa + s.ciaExam + s.me);
+      });
+      return { header: schema.header, weights: coTotals, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+    }
+
     // SPECIAL: use structured per-exam weights
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
@@ -1458,7 +1497,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       ? QP1FINAL_WEIGHTS
       : schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg]);
+  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg, rawClassTypeWeightItem]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -1607,29 +1646,32 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const idx = effMapping.visible[i];
       if (idx < wFull.length) wFull[idx] = Number(effMapping.weights[i]) || 0;
     }
+    const slotWeights = (ct === 'ENGLISH' || ct === 'FOREIGN_LANG')
+      ? (Array.isArray(internalMarkWeights) && internalMarkWeights.length ? internalMarkWeights : DEFAULT_INTERNAL_MAPPING.weights)
+      : wFull;
     // TCPL 21-slot: CO1=[0..3], CO2=[4..7], CO3=[8..11], CO4=[12..15], ME=[16..20]
     // Other 17-slot: CO1=[0..2], CO2=[3..5], CO3=[6..8], CO4=[9..11], ME=[12..16]
-    const wCo1Ssa = wFull[0] || 0;
-    const wCo1Cia = wFull[1] || 0;
-    const wCo1Fa = wFull[2] || 0;
-    const wCo1CiaExam = isTcpl ? (wFull[3] || 0) : 0;
-    const wCo2Ssa = wFull[isTcpl ? 4 : 3] || 0;
-    const wCo2Cia = wFull[isTcpl ? 5 : 4] || 0;
-    const wCo2Fa = wFull[isTcpl ? 6 : 5] || 0;
-    const wCo2CiaExam = isTcpl ? (wFull[7] || 0) : 0;
-    const wCo3Ssa = wFull[isTcpl ? 8 : 6] || 0;
-    const wCo3Cia = wFull[isTcpl ? 9 : 7] || 0;
-    const wCo3Fa = wFull[isTcpl ? 10 : 8] || 0;
-    const wCo3CiaExam = isTcpl ? (wFull[11] || 0) : 0;
-    const wCo4Ssa = wFull[isTcpl ? 12 : 9] || 0;
-    const wCo4Cia = wFull[isTcpl ? 13 : 10] || 0;
-    const wCo4Fa = wFull[isTcpl ? 14 : 11] || 0;
-    const wCo4CiaExam = isTcpl ? (wFull[15] || 0) : 0;
-    const wMeCo1 = wFull[isTcpl ? 16 : 12] || 0;
-    const wMeCo2 = wFull[isTcpl ? 17 : 13] || 0;
-    const wMeCo3 = wFull[isTcpl ? 18 : 14] || 0;
-    const wMeCo4 = wFull[isTcpl ? 19 : 15] || 0;
-    const wMeCo5 = wFull[isTcpl ? 20 : 16] || 0;
+    const wCo1Ssa = slotWeights[0] || 0;
+    const wCo1Cia = slotWeights[1] || 0;
+    const wCo1Fa = slotWeights[2] || 0;
+    const wCo1CiaExam = isTcpl ? (slotWeights[3] || 0) : 0;
+    const wCo2Ssa = slotWeights[isTcpl ? 4 : 3] || 0;
+    const wCo2Cia = slotWeights[isTcpl ? 5 : 4] || 0;
+    const wCo2Fa = slotWeights[isTcpl ? 6 : 5] || 0;
+    const wCo2CiaExam = isTcpl ? (slotWeights[7] || 0) : 0;
+    const wCo3Ssa = slotWeights[isTcpl ? 8 : 6] || 0;
+    const wCo3Cia = slotWeights[isTcpl ? 9 : 7] || 0;
+    const wCo3Fa = slotWeights[isTcpl ? 10 : 8] || 0;
+    const wCo3CiaExam = isTcpl ? (slotWeights[11] || 0) : 0;
+    const wCo4Ssa = slotWeights[isTcpl ? 12 : 9] || 0;
+    const wCo4Cia = slotWeights[isTcpl ? 13 : 10] || 0;
+    const wCo4Fa = slotWeights[isTcpl ? 14 : 11] || 0;
+    const wCo4CiaExam = isTcpl ? (slotWeights[15] || 0) : 0;
+    const wMeCo1 = slotWeights[isTcpl ? 16 : 12] || 0;
+    const wMeCo2 = slotWeights[isTcpl ? 17 : 13] || 0;
+    const wMeCo3 = slotWeights[isTcpl ? 18 : 14] || 0;
+    const wMeCo4 = slotWeights[isTcpl ? 19 : 15] || 0;
+    const wMeCo5 = slotWeights[isTcpl ? 20 : 16] || 0;
 
     const cia1Snap = published.cia1 && typeof published.cia1 === 'object' ? published.cia1 : null;
     const cia2Snap = published.cia2 && typeof published.cia2 === 'object' ? published.cia2 : null;
@@ -1913,10 +1955,26 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     const modelPayload = publishedModel && typeof publishedModel === 'object' ? publishedModel : null;
     const modelSheet = (() => {
       if (modelPayload) {
-        const payloadClassType = normalizeClassType((modelPayload as any)?.classType);
+        const payload = (modelPayload as any)?.sheet && typeof (modelPayload as any).sheet === 'object'
+          ? (modelPayload as any).sheet
+          : modelPayload;
+
+        const payloadClassType = normalizeClassType((payload as any)?.classType || (modelPayload as any)?.classType);
         const payloadTcplLike = payloadClassType === 'TCPL' || payloadClassType === 'TCPR';
-        const fromPayload = payloadTcplLike ? (modelPayload as any)?.tcplSheet : (modelPayload as any)?.theorySheet;
-        if (fromPayload && typeof fromPayload === 'object') return fromPayload;
+
+        const primaryKey = payloadTcplLike ? 'tcplSheet' : 'theorySheet';
+        const fallbackKey = payloadTcplLike ? 'theorySheet' : 'tcplSheet';
+
+        const primary = (payload as any)?.[primaryKey];
+        if (primary && typeof primary === 'object') return primary;
+
+        const fallback = (payload as any)?.[fallbackKey];
+        if (fallback && typeof fallback === 'object') return fallback;
+
+        if (payload && typeof payload === 'object') {
+          const hasPrefixedRows = Object.keys(payload).some((k) => k.startsWith('id:') || k.startsWith('reg:'));
+          if (hasPrefixedRows) return payload;
+        }
       }
 
       const k1 = `model_theory_sheet_${courseId}_${taKey}`;
@@ -1953,7 +2011,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
       const absent = Boolean((row as any).absent);
       const absentKind = String((row as any).absentKind || 'AL').toUpperCase();
-      const q = (row as any).q && typeof (row as any).q === 'object' ? (row as any).q : {};
+      const q = (row as any).q && typeof (row as any).q === 'object' ? (row as any).q : (row as any);
       const labRaw = toNumOrNull((row as any).lab);
 
       let hasAny = false;
@@ -2140,16 +2198,13 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
       const wMap = cfg.weights;
-      // Derive max marks for each exam from QP patterns or defaults
-      const ssaMaxFromPattern = (pattern: IqacPattern | null) => {
-        if (pattern?.marks?.length) return pattern.marks.reduce((s, m) => s + Number(m || 0), 0);
-        return 10;
-      };
       const ciaMaxFromQuestions = (qs: Array<{ max: number }>) => {
         return qs.reduce((s, q) => s + (q.max || 0), 0) || 60;
       };
-      const ssa1Max = ssaMaxFromPattern(iqacCiaPattern?.cia1 ? null : null) || 10;
-      const ssa2Max = ssa1Max;
+      // CSD (SPECIAL) SSA sheets are out of 20 total (10 per CO). Convert to the exam weight
+      // via scale(mark, 20, weight) so a full-marks student scores exactly the weight value.
+      const ssa1Max = 20;
+      const ssa2Max = 20;
       const cia1Max = ciaMaxFromQuestions(cia1Questions);
       const cia2Max = ciaMaxFromQuestions(cia2Questions);
       // MODEL max from published model pattern
@@ -2651,6 +2706,141 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const meCo4 = ct === 'PROJECT' ? null : scale(model.co4, model.max.co4, wMeCo4);
       const meCo5 = ct === 'PROJECT' ? (isPrbl ? scale(prblModelTotal, prblCfg?.model.max ?? 50, prblCfg?.model.weight ?? 30) : null) : scale(model.co5, model.max.co5, wMeCo5);
 
+      if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+        // Derive per-slot weights fresh from rawClassTypeWeightItem (never rely on internalMarkWeights
+        // state which may still hold defaults when the English config hasn't flushed yet).
+        const engNorm = getNormalizedInternalMarkWeights(ct, rawClassTypeWeightItem);
+        // 17-slot layout for English:
+        //  [0]=ssa1/nCos  [1]=cia1/5  [2]=fa1/nCos
+        //  [3]=ssa1/nCos  [4]=cia1/5  [5]=fa1/nCos
+        //  [6]=ssa2/nCos  [7]=cia2/5  [8]=fa2/nCos
+        //  [9]=ssa2/nCos  [10]=cia2/5 [11]=fa2/nCos
+        //  [12..16] = ME per CO1..CO5
+        const eSSA1 = engNorm[0] || 0;   // ssa1 weight per CO1/CO2
+        const eCIA1 = engNorm[1] || 0;   // cia1 weight per CO (= cia1.weight/5)
+        const eFA1  = engNorm[2] || 0;   // fa1 weight per CO1/CO2
+        const eSSA2 = engNorm[6] || 0;   // ssa2 weight per CO3/CO4
+        const eCIA2 = engNorm[7] || 0;   // cia2 weight per CO (= cia2.weight/5)
+        const eFA2  = engNorm[8] || 0;   // fa2 weight per CO3/CO4
+        const eME   = [engNorm[12]||0, engNorm[13]||0, engNorm[14]||0, engNorm[15]||0, engNorm[16]||0];
+
+        const cia1Absent_en = Boolean((cia1ById[String(s.id)] as any)?.absent);
+        const cia2Absent_en = Boolean((cia2ById[String(s.id)] as any)?.absent);
+
+        // ENGLISH/FOREIGN_LANG CIA per-CO: read each question's mark and route by its IQAC CO tag (1-5).
+        // This matches CQIEntry.tsx readCiaCoFromPattern logic exactly.
+        const readEngCiaForCo = (
+          snap: any,
+          pattern: { marks?: any[]; cos?: any[] } | null | undefined,
+          absent: boolean,
+          targetCo: number,
+        ): { mark: number | null; max: number } => {
+          if (absent || !snap || !Array.isArray(pattern?.marks) || !pattern.marks.length) {
+            return { mark: absent ? 0 : null, max: 0 };
+          }
+          const studentRow = (snap.rowsByStudentId || {})[String(s.id)];
+          if (!studentRow) return { mark: null, max: 0 };
+          const qObj = (studentRow as any)?.q && typeof (studentRow as any).q === 'object'
+            ? (studentRow as any).q
+            : studentRow;
+          let mark = 0, max = 0, hasAny = false;
+          for (let qi = 0; qi < pattern.marks.length; qi++) {
+            const qMax = Number(pattern.marks[qi]) || 0;
+            if (qMax <= 0) continue;
+            const coRaw = Array.isArray(pattern.cos) ? pattern.cos[qi] : null;
+            // Parse CO number 1-5 from the raw tag (e.g. "CO3", 3, "3")
+            const coNum = coRaw != null
+              ? (Number(String(coRaw).replace(/[^0-9]/g, '').slice(0, 1)) || 0)
+              : 0;
+            if (coNum !== targetCo) continue;
+            max += qMax;
+            const n = toNumOrNull((qObj as any)?.[`q${qi + 1}`]);
+            if (n != null) { hasAny = true; mark += clamp(n, 0, qMax); }
+          }
+          return { mark: hasAny ? mark : null, max };
+        };
+
+        // Get raw CIA snaps (rowsByStudentId lookup objects)
+        const cia1SnapRaw = cia1Snap;
+        const cia2SnapRaw = cia2Snap;
+        const iqacCia1Pattern = iqacCiaPattern?.cia1 as { marks?: any[]; cos?: any[] } | null | undefined;
+        const iqacCia2Pattern = iqacCiaPattern?.cia2 as { marks?: any[]; cos?: any[] } | null | undefined;
+
+        // Compute per-CO CIA marks using IQAC pattern (like CQI page does).
+        // CIA1 and CIA2 both cover all 5 COs for ENGLISH.
+        const engCiaPerCo = (targetCo: number): number | null => {
+          const c1 = readEngCiaForCo(cia1SnapRaw, iqacCia1Pattern, cia1Absent_en, targetCo);
+          const c2 = readEngCiaForCo(cia2SnapRaw, iqacCia2Pattern, cia2Absent_en, targetCo);
+          // Scale each: (mark / max) * (ciaWeight/5)
+          const s1 = (c1.mark != null && c1.max > 0)
+            ? clamp((c1.mark / c1.max) * eCIA1, 0, eCIA1)
+            : (c1.mark === 0 ? 0 : null);
+          const s2 = (c2.mark != null && c2.max > 0)
+            ? clamp((c2.mark / c2.max) * eCIA2, 0, eCIA2)
+            : (c2.mark === 0 ? 0 : null);
+          // If IQAC pattern has no questions tagged for this CO, fall back to flat equal distribution
+          const useFlatCia1 = !iqacCia1Pattern?.marks?.length || c1.max === 0;
+          const useFlatCia2 = !iqacCia2Pattern?.marks?.length || c2.max === 0;
+          const flat1 = (() => {
+            const cia1TotalRaw = cia1Absent_en ? null
+              : (ciaCo1 != null || ciaCo2 != null) ? ((ciaCo1 ?? 0) + (ciaCo2 ?? 0)) : null;
+            const maxCia1Total = (maxes.cia1.co1 + maxes.cia1.co2) || 60;
+            return cia1TotalRaw == null ? null : clamp((cia1TotalRaw / maxCia1Total) * eCIA1, 0, eCIA1);
+          })();
+          const flat2 = (() => {
+            const cia2TotalRaw = cia2Absent_en ? null
+              : (ciaCo3 != null || ciaCo4 != null) ? ((ciaCo3 ?? 0) + (ciaCo4 ?? 0)) : null;
+            const maxCia2Total = (maxes.cia2.co3 + maxes.cia2.co4) || 60;
+            return cia2TotalRaw == null ? null : clamp((cia2TotalRaw / maxCia2Total) * eCIA2, 0, eCIA2);
+          })();
+          const final1 = useFlatCia1 ? flat1 : s1;
+          const final2 = useFlatCia2 ? flat2 : s2;
+          const vals = [final1, final2].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+          return vals.length ? round2(vals.reduce((a, b) => a + b, 0)) : null;
+        };
+
+        const sumOrNull = (...vals: Array<number | null | undefined>) => {
+          const nums = vals.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+          return nums.length ? round2(nums.reduce((s, n) => s + n, 0)) : null;
+        };
+
+        // For formatives, use the raw f1/f2 marks (not the pre-scaled co1Fa/co2Fa which used wrong weights)
+        const f1Row_en = (published.f1 || {})[String(s.id)] || {};
+        const f2Row_en = (published.f2 || {})[String(s.id)] || {};
+        const ef1Co1 = toNumOrNull((f1Row_en as any)?.skill1) != null && toNumOrNull((f1Row_en as any)?.att1) != null
+          ? clamp(Number((f1Row_en as any).skill1) + Number((f1Row_en as any).att1), 0, maxes.f1.co1) : null;
+        const ef1Co2 = toNumOrNull((f1Row_en as any)?.skill2) != null && toNumOrNull((f1Row_en as any)?.att2) != null
+          ? clamp(Number((f1Row_en as any).skill2) + Number((f1Row_en as any).att2), 0, maxes.f1.co2) : null;
+        const ef2Co3 = toNumOrNull((f2Row_en as any)?.skill1) != null && toNumOrNull((f2Row_en as any)?.att1) != null
+          ? clamp(Number((f2Row_en as any).skill1) + Number((f2Row_en as any).att1), 0, maxes.f2.co3) : null;
+        const ef2Co4 = toNumOrNull((f2Row_en as any)?.skill2) != null && toNumOrNull((f2Row_en as any)?.att2) != null
+          ? clamp(Number((f2Row_en as any).skill2) + Number((f2Row_en as any).att2), 0, maxes.f2.co4) : null;
+
+        const coTotals = [
+          // CO1: SSA1/nCos + CIA(CO1) + FA1/nCos + ME-CO1
+          sumOrNull(scale(ssa1Co1Mark, maxes.ssa1.co1, eSSA1), engCiaPerCo(1), scale(ef1Co1, maxes.f1.co1, eFA1), scale(model.co1, model.max.co1, eME[0])),
+          // CO2: SSA1/nCos + CIA(CO2) + FA1/nCos + ME-CO2
+          sumOrNull(scale(ssa1Co2Mark, maxes.ssa1.co2, eSSA1), engCiaPerCo(2), scale(ef1Co2, maxes.f1.co2, eFA1), scale(model.co2, model.max.co2, eME[1])),
+          // CO3: SSA2/nCos + CIA(CO3) + FA2/nCos + ME-CO3
+          sumOrNull(scale(ssa2Co3Mark, maxes.ssa2.co3, eSSA2), engCiaPerCo(3), scale(ef2Co3, maxes.f2.co3, eFA2), scale(model.co3, model.max.co3, eME[2])),
+          // CO4: SSA2/nCos + CIA(CO4) + FA2/nCos + ME-CO4
+          sumOrNull(scale(ssa2Co4Mark, maxes.ssa2.co4, eSSA2), engCiaPerCo(4), scale(ef2Co4, maxes.f2.co4, eFA2), scale(model.co4, model.max.co4, eME[3])),
+          // CO5: CIA(CO5) + ME-CO5
+          sumOrNull(engCiaPerCo(5), scale(model.co5, model.max.co5, eME[4])),
+        ];
+        const any = coTotals.some((p) => typeof p === 'number' && Number.isFinite(p));
+        const total = any ? round2(coTotals.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+        const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
+
+        return {
+          sno: idx + 1,
+          ...s,
+          cells: coTotals,
+          total,
+          pct,
+        };
+      }
+
       // TCPL uses 21-slot partsFull (SSA/CIA/LAB/CIAExam per CO + ME×5).
       // All other class types use the standard 17-slot layout.
       const partsFull = ct === 'TCPL' ? [
@@ -2691,7 +2881,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         pct,
       };
     });
-  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, scaledMax, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg]);
+  }, [effMapping, published, publishedReview, publishedPrblModel, publishedLab, publishedTcplLab, publishedModel, students, weights, maxTotal, scaledMax, courseId, selectedTaId, masterCfg, effectiveClassType, isPrbl, isQp1Final, iqacCiaPattern, iqacModelPattern, ssaCoSplits, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg, internalMarkWeights, rawClassTypeWeightItem]);
 
   const header = displayCols.map((c) => c.header);
   const cycles = displayCols.map((c) => c.cycle);

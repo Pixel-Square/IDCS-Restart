@@ -275,11 +275,11 @@ function normalizeReviewComponents(raw: unknown, projectMode = false, maxTotal =
     const item: any = src[i] && typeof src[i] === 'object' ? src[i] : {};
     const id = String(item.id || '').trim() || makeReviewComponentId();
     const titleRaw = String(item.title || '').trim();
-    const max = clampInt(Number(item.max ?? 0), 0, REVIEW_TOTAL_MAX);
+    const max = clampInt(Number(item.max ?? 0), 0, maxTotal);
     out.push({ id, title: titleRaw || `Title ${i + 1}`, max });
   }
   if (!out.length) {
-    out.push({ id: makeReviewComponentId(), title: 'Title 1', max: REVIEW_TOTAL_MAX });
+    out.push({ id: makeReviewComponentId(), title: 'Title 1', max: maxTotal });
   }
   return out;
 }
@@ -289,6 +289,7 @@ function normalizeReviewComponentMarks(
   reviewComponents: ReviewComponent[],
   projectMode = false,
   fallbackTotal?: unknown,
+  projectMaxTotal = REVIEW_TOTAL_MAX,
 ): Record<string, number | ''> {
   if (projectMode) {
     const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -301,7 +302,7 @@ function normalizeReviewComponentMarks(
       total = Number.isFinite(fb) ? fb : NaN;
     }
     return {
-      [PROJECT_REVIEW_COMPONENT_ID]: Number.isFinite(total) ? clampInt(total, 0, REVIEW_TOTAL_MAX) : '',
+      [PROJECT_REVIEW_COMPONENT_ID]: Number.isFinite(total) ? clampInt(total, 0, projectMaxTotal) : '',
     };
   }
 
@@ -641,7 +642,7 @@ export default function LabEntry({
             const ciaParsed = rawCia === '' || rawCia == null ? '' : Number(rawCia);
             const ciaExam = ciaParsed === '' ? '' : Number.isFinite(ciaParsed) ? ciaParsed : '';
             const rawComponentMarks = row.reviewComponentMarks && typeof row.reviewComponentMarks === 'object' ? row.reviewComponentMarks : {};
-            const reviewComponentMarks = normalizeReviewComponentMarks(rawComponentMarks, reviewComponents, isProjectReviewMode, row.ciaExam);
+            const reviewComponentMarks = normalizeReviewComponentMarks(rawComponentMarks, reviewComponents, isProjectReviewMode, row.ciaExam, effectiveReviewMax);
             normalizedRows[String(sid)] = {
               ...row,
               studentId: Number.isFinite(Number(row.studentId)) ? Number(row.studentId) : Number(sid),
@@ -797,7 +798,7 @@ export default function LabEntry({
         const k = String(s.id);
         const existing = rowsByStudentId[k];
         if (!existing) {
-          const reviewComponentMarks = normalizeReviewComponentMarks({}, reviewComponents, isProjectReviewMode, '');
+          const reviewComponentMarks = normalizeReviewComponentMarks({}, reviewComponents, isProjectReviewMode, '', effectiveReviewMax);
           rowsByStudentId[k] = {
             studentId: s.id,
             marksA: Array.from({ length: expCountA }, () => ''),
@@ -815,7 +816,7 @@ export default function LabEntry({
           const rawComponentMarks = (existing as any).reviewComponentMarks && typeof (existing as any).reviewComponentMarks === 'object'
             ? (existing as any).reviewComponentMarks
             : {};
-          const reviewComponentMarks = normalizeReviewComponentMarks(rawComponentMarks, reviewComponents, isProjectReviewMode, ciaExam);
+          const reviewComponentMarks = normalizeReviewComponentMarks(rawComponentMarks, reviewComponents, isProjectReviewMode, ciaExam, effectiveReviewMax);
           const caaExamByCo = normalizeCaaByCo((existing as any).caaExamByCo);
           rowsByStudentId[k] = {
             ...existing,
@@ -854,7 +855,7 @@ export default function LabEntry({
     const nextComponents = constrainReviewComponentsTotal(normalizeReviewComponents((draft.sheet as any).reviewComponents, true, effectiveReviewMax), effectiveReviewMax);
     const nextRowsByStudentId: Record<string, LabRowState> = {};
     for (const [sid, row] of Object.entries(draft.sheet.rowsByStudentId || {})) {
-      const nextMarks = normalizeReviewComponentMarks((row as any)?.reviewComponentMarks, nextComponents, true, (row as any)?.ciaExam);
+      const nextMarks = normalizeReviewComponentMarks((row as any)?.reviewComponentMarks, nextComponents, true, (row as any)?.ciaExam, effectiveReviewMax);
       const total = nextMarks[PROJECT_REVIEW_COMPONENT_ID];
       nextRowsByStudentId[sid] = {
         ...(row as LabRowState),
@@ -1118,8 +1119,8 @@ export default function LabEntry({
       const components = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents));
       const target = components.find((component) => component.id === componentId);
       if (!target) return p;
-      const othersTotal = components.reduce((sum, component) => sum + (component.id === componentId ? 0 : clampInt(Number(component.max), 0, REVIEW_TOTAL_MAX)), 0);
-      const allowed = Math.max(0, REVIEW_TOTAL_MAX - othersTotal);
+      const othersTotal = components.reduce((sum, component) => sum + (component.id === componentId ? 0 : clampInt(Number(component.max), 0, effectiveReviewMax)), 0);
+      const allowed = Math.max(0, effectiveReviewMax - othersTotal);
       const nextMax = clampInt(Number(nextRaw), 0, allowed);
       const nextComponents = components.map((component) => (component.id === componentId ? { ...component, max: nextMax } : component));
 
@@ -1159,10 +1160,10 @@ export default function LabEntry({
       return;
     }
     const othersTotal = reviewComponents.reduce(
-      (sum, component) => sum + (component.id === componentId ? 0 : clampInt(Number(component.max), 0, REVIEW_TOTAL_MAX)),
+      (sum, component) => sum + (component.id === componentId ? 0 : clampInt(Number(component.max), 0, effectiveReviewMax)),
       0,
     );
-    const allowed = Math.max(0, REVIEW_TOTAL_MAX - othersTotal);
+    const allowed = Math.max(0, effectiveReviewMax - othersTotal);
     const normalizedValue = clampInt(nextValue, 0, allowed);
     setReviewComponentMaxInputs((prev) => ({ ...prev, [componentId]: String(normalizedValue) }));
     setReviewComponentMax(componentId, normalizedValue);
@@ -1173,8 +1174,8 @@ export default function LabEntry({
     setDraft((p) => {
       if (p.sheet.markManagerLocked) return p;
       const components = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents));
-      const used = components.reduce((sum, component) => sum + clampInt(Number(component.max), 0, REVIEW_TOTAL_MAX), 0);
-      const remaining = Math.max(0, REVIEW_TOTAL_MAX - used);
+      const used = components.reduce((sum, component) => sum + clampInt(Number(component.max), 0, effectiveReviewMax), 0);
+      const remaining = Math.max(0, effectiveReviewMax - used);
       if (remaining <= 0) return p;
       const id = makeReviewComponentId();
       const nextComponents = [...components, { id, title: `Title ${components.length + 1}`, max: remaining }];
@@ -1209,7 +1210,7 @@ export default function LabEntry({
 
   function setProjectReviewMark(studentId: number, componentId: string, value: number | '') {
     setDraft((p) => {
-      const components = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents));
+      const components = constrainReviewComponentsTotal(normalizeReviewComponents((p.sheet as any).reviewComponents, isProjectReviewMode, effectiveReviewMax), effectiveReviewMax);
       const component = components.find((item) => item.id === componentId);
       if (!component) return p;
       const sid = String(studentId);
@@ -1232,7 +1233,7 @@ export default function LabEntry({
           ...p.sheet,
           rowsByStudentId: {
             ...p.sheet.rowsByStudentId,
-            [sid]: { ...existing, reviewComponentMarks: marks, ciaExam: clampInt(total, 0, REVIEW_TOTAL_MAX) },
+            [sid]: { ...existing, reviewComponentMarks: marks, ciaExam: clampInt(total, 0, effectiveReviewMax) },
           },
         },
       };
@@ -1491,7 +1492,7 @@ export default function LabEntry({
             (existing as any).reviewComponentMarks && typeof (existing as any).reviewComponentMarks === 'object'
               ? { ...(existing as any).reviewComponentMarks }
               : {};
-          const nextComponentMarks = normalizeReviewComponentMarks(priorComponentMarks, reviewComponents, true, (existing as any).ciaExam);
+          const nextComponentMarks = normalizeReviewComponentMarks(priorComponentMarks, reviewComponents, true, (existing as any).ciaExam, effectiveReviewMax);
           let importedProjectMark = false;
 
           for (const c of projectComponentCols) {
@@ -1514,7 +1515,7 @@ export default function LabEntry({
           }, 0);
 
           nextRow.reviewComponentMarks = nextComponentMarks;
-          nextRow.ciaExam = clampInt(importedTotal, 0, REVIEW_TOTAL_MAX);
+          nextRow.ciaExam = clampInt(importedTotal, 0, effectiveReviewMax);
         }
 
         if (absentIdx != null) {
@@ -1685,12 +1686,12 @@ export default function LabEntry({
 
   function markManagerSnapshotOf(sheet: LabSheet): string {
     if (isProjectReviewMode) {
-      const components = constrainReviewComponentsTotal(normalizeReviewComponents((sheet as any).reviewComponents, true)).map((component) => ({
+      const components = constrainReviewComponentsTotal(normalizeReviewComponents((sheet as any).reviewComponents, true, effectiveReviewMax), effectiveReviewMax).map((component) => ({
         id: component.id,
         title: 'CO1',
-        max: clampInt(Number(component.max), 0, REVIEW_TOTAL_MAX),
+        max: clampInt(Number(component.max), 0, effectiveReviewMax),
       }));
-      return JSON.stringify({ total: REVIEW_TOTAL_MAX, components });
+      return JSON.stringify({ total: effectiveReviewMax, components });
     }
 
     const cfgs = buildCoConfigs(sheet, selectableCosArr, coA, coB);

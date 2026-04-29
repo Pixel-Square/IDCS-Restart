@@ -38,7 +38,6 @@ export default function CourseOBEPage(): JSX.Element {
       return v ? String(v).trim() : null;
     } catch { return null; }
   });
-  const [classTypeLockedFromTA, setClassTypeLockedFromTA] = React.useState(false);
   // courseMetaLoaded becomes true once the dept-rows DB fetch completes (success or error).
   const [courseMetaLoaded, setCourseMetaLoaded] = React.useState(false);
   // QP type derived from the teaching assignment API (reliable for cross-dept staff).
@@ -99,8 +98,6 @@ export default function CourseOBEPage(): JSX.Element {
     let mounted = true;
     (async () => {
       try {
-        // reset TA lock on course change
-        if (mounted) setClassTypeLockedFromTA(false);
         const list = await fetchMyTeachingAssignments();
         if (!mounted) return;
         const matches = (list || []).filter((a) => String(a.subject_code) === String(courseId));
@@ -124,8 +121,9 @@ export default function CourseOBEPage(): JSX.Element {
 
         const taCt = String((picked as any)?.class_type || '').trim();
         if (taCt) {
+          // TA value is a fast provisional fallback; curriculum/elective DB metadata
+          // should still be allowed to override it when available.
           setCourseClassType(taCt);
-          setClassTypeLockedFromTA(true);
           try { localStorage.setItem(`obe_class_type_${courseId}`, taCt); } catch {}
         }
         // Capture QP type from the teaching assignment (cross-department staff
@@ -176,11 +174,11 @@ export default function CourseOBEPage(): JSX.Element {
         // Holds QP type found via elective fallback (used for courses with no CurriculumDepartment row).
         let electiveQpType = '';
 
-        if (!classTypeLockedFromTA && pick && (pick as any).class_type) {
+        if (pick && (pick as any).class_type) {
           const ct = String((pick as any).class_type || '').trim();
           setCourseClassType(ct || null);
           if (ct) { try { localStorage.setItem(`obe_class_type_${courseId}`, ct); } catch {} }
-        } else if (!classTypeLockedFromTA) {
+        } else {
           // If we couldn't find class_type on the curriculum row, check elective subjects
           try {
             const electives = await fetchElectives();
@@ -202,20 +200,6 @@ export default function CourseOBEPage(): JSX.Element {
             }
           } catch (e) {
             // ignore elective fetch errors
-          }
-        } else if (!pick) {
-          // classTypeLockedFromTA is true but no dept curriculum row found.
-          // Fetch elective to get the QP type for this course.
-          try {
-            const electives = await fetchElectives();
-            if (!mounted) return;
-            const match = (Array.isArray(electives) ? electives : (electives.results || [])).find((e: any) => String(e.course_code || '').trim().toUpperCase() === codeU);
-            if (match) {
-              const eqp = String((match as any).question_paper_type || (match as any).qp_type || '').trim().toUpperCase();
-              if (eqp && eqp !== 'TCPR') electiveQpType = eqp;
-            }
-          } catch {
-            // ignore
           }
         }
         // DB always wins for QP type — save back to localStorage as updated cache.

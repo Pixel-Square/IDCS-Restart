@@ -770,15 +770,13 @@ ENGLISH_DEFAULT_WEIGHTS = {
     'ssa2': {'max': 20, 'weight': 3.0,  'cos': [3, 4]},
     'fa2':  {'max': 20, 'weight': 5.0,  'cos': [3, 4]},
     'cia2': {'max': 60, 'weight': 6.0},           # split equally across 5 COs → 1.2 each
-    # Cycle 3 (Model) – per-CO weights sum to 32; each CO max reaches 12 total
+    # Cycle 3 (Model) – per-CO weights sum to 12; grand total reaches 40
     'model': {
         'max_per_co': 20,
-        'co_weights': [5.6, 5.6, 5.6, 5.6, 9.6],  # CO1-CO5
+        'co_weights': [2.4, 2.4, 2.4, 2.4, 2.4],  # CO1-CO5
     },
 }
-# Verify grand total: 3+5+6 + 3+5+6 + (5.6*4+9.6) = 28 + 32 = 60 ✓
-# Each CO max: CO1/2 = 1.5+2.5+1.2+1.2+5.6=12; CO3/4 same; CO5 = 1.2+1.2+9.6=12 ✓
-
+# Verify grand total: 3+5+6 + 3+5+6 + (2.4*5) = 28 + 12 = 40 ✓
 
 def _get_english_exam_weights():
     """Return english_exam_weights dict from ClassTypeWeights, or the built-in
@@ -815,7 +813,7 @@ def _extract_cia_total_for_student(sheet, sid):
     return None
 
 
-def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=False):
+def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=False, _weight_cfg=None, _class_type='ENGLISH'):
     """Compute Final Internal Mark for ENGLISH class-type.
 
     Three-cycle structure (all marks map to CO1–CO5):
@@ -824,8 +822,8 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
     Cycle 2: SSA2 (CO3+CO4) + FA2 (CO3+CO4) + CIA2 (CO1–CO5 equal)
     Cycle 3: Model  (CO1–CO5 per-column, each 20 marks)
 
-    Grand total = 60; each CO max = 12.
-    Displayed as /100 via the standard 60→100 scaling on the Internal Mark page.
+    Grand total = 40.
+    Displayed as /100 via the standard 40→100 scaling on the Internal Mark page.
     """
     from OBE.models import (
         Ssa1Mark, Ssa2Mark,
@@ -834,7 +832,7 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
         ObeCqiPublished,
     )
 
-    cfg = _get_english_exam_weights()
+    cfg = _weight_cfg if _weight_cfg is not None else _get_english_exam_weights()
 
     def _wcfg(key):
         return cfg.get(key) or {}
@@ -866,7 +864,7 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
     # ── Cycle 3 (Model) config ──
     model_cfg       = _wcfg('model')
     max_per_co      = float(model_cfg.get('max_per_co', 20))
-    co_weights_list = model_cfg.get('co_weights', [5.6, 5.6, 5.6, 5.6, 9.6])
+    co_weights_list = model_cfg.get('co_weights', [2.4, 2.4, 2.4, 2.4, 2.4])
     model_co_w      = {
         co + 1: float(co_weights_list[co]) if co < len(co_weights_list) else 0.0
         for co in range(5)
@@ -896,14 +894,20 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
     # ── Model per-CO ──
     batch_id     = getattr(getattr(ta, 'section', None), 'batch_id', None)
     qp_type_en   = _resolve_qp_type(ta)   # e.g. 'ELECTIVE1' or None
-    model_patt   = _get_qp_pattern(class_type='ENGLISH', qp_type=qp_type_en, exam='MODEL', batch_id=batch_id)
+    model_patt   = _get_qp_pattern(class_type=_class_type, qp_type=qp_type_en, exam='MODEL', batch_id=batch_id)
     if not model_patt:
         # Built-in default: 5 columns, one per CO, 20 marks each
         model_patt = {'marks': [20, 20, 20, 20, 20], 'cos': [1, 2, 3, 4, 5]}
-    model_sheet    = _get_model_sheet_data(subject.id, ta_id, 'ENGLISH')
+    model_sheet    = _get_model_sheet_data(subject.id, ta_id, _class_type)
     model_co_marks = _extract_model_co_marks_for_student(
         model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_patt,
     )
+    model_co_max = {}
+    if isinstance(model_co_marks, dict):
+        _mx = model_co_marks.get('max')
+        if isinstance(_mx, dict):
+            for co in range(1, 6):
+                model_co_max[co] = _safe_float(_mx.get(f'co{co}'))
 
     # ── Per-CO accumulation ──
     # co_parts[co] = list of scaled values that have data
@@ -973,7 +977,10 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
             co_max_w[co] += w_co
             raw = _safe_float(model_co_marks.get(f'co{co}'))
             if raw is not None:
-                v = _scale(raw, max_per_co, w_co)
+                out_of = model_co_max.get(co)
+                if out_of is None or out_of <= 0:
+                    out_of = max_per_co
+                v = _scale(raw, out_of, w_co)
                 if v is not None:
                     co_parts[co].append(v)
 
@@ -1087,9 +1094,50 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
             'co5': _safe_float(cqi_add_by_co.get(5)),
         },
         'is_qp1_final': False,
-        'class_type':   'ENGLISH',
+        'class_type':   _class_type,
         'qp_type':      None,
     }
+
+
+# ─── FOREIGN_LANG Class-type Support ─────────────────────────────────────────
+# Foreign Language courses share the same 3-cycle structure as ENGLISH but
+# use a separate class-type key so their QP patterns and weights are independent.
+
+FOREIGN_LANG_DEFAULT_WEIGHTS = {
+    **{k: v for k, v in ENGLISH_DEFAULT_WEIGHTS.items() if k != 'type'},
+    'type': 'foreign_lang_exam_weights',
+}
+
+
+def _get_foreign_lang_exam_weights():
+    """Return foreign_lang_exam_weights dict from ClassTypeWeights, or the
+    built-in default.  Never returns None so callers always get a usable config.
+    """
+    from OBE.models import ClassTypeWeights
+
+    row = ClassTypeWeights.objects.filter(class_type='FOREIGN_LANG').first()
+    im = getattr(row, 'internal_mark_weights', None) if row else None
+    if isinstance(im, dict) and im.get('type') == 'foreign_lang_exam_weights':
+        return im
+    return FOREIGN_LANG_DEFAULT_WEIGHTS
+
+
+def _compute_foreign_lang_final_total(*, ta, subject, student, ta_id, return_details=False):
+    """Compute Final Internal Mark for FOREIGN_LANG class-type.
+
+    Shares the same 3-cycle computation as ENGLISH (SSA1+FA1+CIA1 /
+    SSA2+FA2+CIA2 / Model) but resolves weights and QP patterns under
+    class_type='FOREIGN_LANG'.
+    """
+    return _compute_english_final_total(
+        ta=ta,
+        subject=subject,
+        student=student,
+        ta_id=ta_id,
+        return_details=return_details,
+        _weight_cfg=_get_foreign_lang_exam_weights(),
+        _class_type='FOREIGN_LANG',
+    )
 
 
 def _extract_ssa_co_splits_for_ta(subject_id, ta_id, assessment_key, co_keys):
@@ -1127,6 +1175,46 @@ def _extract_ssa_co_splits_for_ta(subject_id, ta_id, assessment_key, co_keys):
     return out
 
 
+def _extract_tcpr_review_co_splits_for_ta(subject_id, ta_id, assessment_key, co_keys):
+    from OBE.models import AssessmentDraft
+    rows = list(
+        AssessmentDraft.objects.filter(subject_id=subject_id, assessment=assessment_key)
+        .order_by('-updated_at')
+    )
+    draft = _pick_scoped_row(rows, ta_id)
+    out = {}
+    if not draft or not isinstance(getattr(draft, 'data', None), dict):
+        return out
+    sheet = draft.data.get('sheet') if isinstance(draft.data.get('sheet'), dict) else draft.data
+    rows_list = sheet.get('rows') if isinstance(sheet, dict) else draft.data.get('rows') if isinstance(draft.data, dict) else None
+    if not isinstance(rows_list, list):
+        return out
+
+    for row in rows_list:
+        if not isinstance(row, dict):
+            continue
+        sid = _safe_int(row.get('studentId'))
+        if sid is None:
+            continue
+        entry = {}
+        for ck in co_keys:
+            raw_co_marks = (row.get('reviewCoMarks') or {}).get(ck) if isinstance(row.get('reviewCoMarks'), dict) else None
+            if isinstance(raw_co_marks, list):
+                total = 0.0
+                for v in raw_co_marks:
+                    parsed = _safe_float(v)
+                    if parsed is not None:
+                        total += parsed
+                entry[ck] = total
+            else:
+                n = _safe_float(row.get(ck))
+                if n is not None:
+                    entry[ck] = n
+        if entry:
+            out[int(sid)] = entry
+    return out
+
+
 def _get_cia_sheet_data(subject_id, ta_id, which):
     from OBE.models import Cia1PublishedSheet, Cia2PublishedSheet
 
@@ -1145,12 +1233,16 @@ def _get_model_sheet_data(subject_id, ta_id, class_type):
     if not isinstance(data, dict):
         return {}
 
+    payload = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+    if not isinstance(payload, dict):
+        return {}
+
     ct = _safe_text(class_type).upper()
     if ct in {'TCPL', 'TCPR'}:
-        sheet = data.get('tcplSheet')
+        sheet = payload.get('tcplSheet')
         return sheet if isinstance(sheet, dict) else {}
-    sheet = data.get('theorySheet')
-    return sheet if isinstance(sheet, dict) else (data if isinstance(data, dict) else {})
+    sheet = payload.get('theorySheet')
+    return sheet if isinstance(sheet, dict) else (payload if isinstance(payload, dict) else {})
 
 
 def _extract_model_co_marks_for_student(*, model_sheet, student_id, reg_no, model_pattern):
@@ -1163,7 +1255,9 @@ def _extract_model_co_marks_for_student(*, model_sheet, student_id, reg_no, mode
     if not isinstance(row, dict):
         return None
 
-    q = row.get('q') if isinstance(row.get('q'), dict) else {}
+    q = row.get('q') if isinstance(row.get('q'), dict) else row
+    if not isinstance(q, dict):
+        q = {}
 
     pattern = model_pattern if isinstance(model_pattern, dict) else {}
     marks = pattern.get('marks') if isinstance(pattern.get('marks'), list) else []
@@ -1243,7 +1337,8 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     )
 
     class_type = _resolve_class_type(ta)
-    if class_type not in {'THEORY', 'SPECIAL'}:
+    # THEORY_PMBL is structurally identical to THEORY (same 17-slot weighted path)
+    if class_type not in {'THEORY', 'SPECIAL', 'THEORY_PMBL'}:
         return None
 
     # SPECIAL with structured per-exam weights → dedicated computation path
@@ -1909,6 +2004,921 @@ def _resolve_subject_for_ta(ta):
     return Subject.objects.filter(code__iexact=code).first()
 
 
+
+# ─── TCPR Class-type (Theory + Reviews instead of Formatives) ────────────────
+
+def _compute_tcpr_final_total(*, ta, subject, student, ta_id, return_details=False):
+    """Compute Final Internal Mark for TCPR class-type.
+
+    TCPR is identical to THEORY except it uses Review1/Review2 marks in place
+    of Formative1/Formative2 for the FA columns.  The 17-slot weight schema is
+    the same as THEORY/SPECIAL.
+    """
+    from OBE.models import (
+        Review1Mark,
+        Review2Mark,
+        ObeCqiPublished,
+    )
+
+    sid = int(student['id'])
+    reg_no = _safe_text(student.get('reg_no', ''))
+    class_type = 'TCPR'
+    batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+    qp_type = None  # TCPR does not use question-paper types
+
+    weights = _get_internal_weight_slots(class_type)
+    max_total = float(sum(weights))
+
+    w_co1_ssa, w_co1_cia, w_co1_fa = weights[0], weights[1], weights[2]
+    w_co2_ssa, w_co2_cia, w_co2_fa = weights[3], weights[4], weights[5]
+    w_co3_ssa, w_co3_cia, w_co3_fa = weights[6], weights[7], weights[8]
+    w_co4_ssa, w_co4_cia, w_co4_fa = weights[9], weights[10], weights[11]
+    w_me1, w_me2, w_me3 = weights[12], weights[13], weights[14]
+    w_me4 = weights[15] if len(weights) > 15 else 0.0
+    w_me5 = weights[16] if len(weights) > 16 else 0.0
+
+    ssa1_map = _assessment_map(
+        __import__('OBE.models', fromlist=['Ssa1Mark']).Ssa1Mark,
+        'mark', subject.id, [sid], ta_id,
+    )
+    ssa2_map = _assessment_map(
+        __import__('OBE.models', fromlist=['Ssa2Mark']).Ssa2Mark,
+        'mark', subject.id, [sid], ta_id,
+    )
+
+    ssa1_total = ssa1_map.get(sid)
+    ssa2_total = ssa2_map.get(sid)
+
+    ssa1_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa1', ['co1', 'co2']).get(sid, {})
+    ssa2_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa2', ['co3', 'co4']).get(sid, {})
+
+    ssa1_co1 = _safe_float(ssa1_splits.get('co1')) if ssa1_splits else ((_safe_float(ssa1_total) / 2.0) if ssa1_total is not None else None)
+    ssa1_co2 = _safe_float(ssa1_splits.get('co2')) if ssa1_splits else ((_safe_float(ssa1_total) / 2.0) if ssa1_total is not None else None)
+    ssa2_co3 = _safe_float(ssa2_splits.get('co3')) if ssa2_splits else ((_safe_float(ssa2_total) / 2.0) if ssa2_total is not None else None)
+    ssa2_co4 = _safe_float(ssa2_splits.get('co4')) if ssa2_splits else ((_safe_float(ssa2_total) / 2.0) if ssa2_total is not None else None)
+
+    # TCPR: CIA sheets (standard theory pattern)
+    cia1_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia1')
+    cia2_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia2')
+    cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+    cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+    def _build_cia_q(sheet, pattern, is_cia1=True):
+        qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+        p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+        p_cos   = pattern.get('cos')   if isinstance(pattern, dict) and isinstance(pattern.get('cos'),   list) else []
+        out = []
+        for i in range(max(len(qs), len(p_marks))):
+            q   = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+            key = _safe_text(q.get('key')) or f'q{i + 1}'
+            mx  = _safe_float(p_marks[i] if i < len(p_marks) else q.get('max')) or 0.0
+            co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+            co  = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+            out.append({'key': key, 'max': float(mx), 'co': co})
+        return out
+
+    cia1_questions = _build_cia_q(cia1_sheet, cia1_pattern, True)
+    cia2_questions = _build_cia_q(cia2_sheet, cia2_pattern, False)
+
+    cia1_rows = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+    cia2_rows = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+    cia1_row  = cia1_rows.get(str(sid)) or cia1_rows.get(sid) or {}
+    cia2_row  = cia2_rows.get(str(sid)) or cia2_rows.get(sid) or {}
+
+    def _cia_co_split(row, questions, is_cia1=True):
+        if not isinstance(row, dict) or bool(row.get('absent')):
+            return (None, None, 0.0, 0.0)
+        qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+        a, b, ma, mb = 0.0, 0.0, 0.0, 0.0
+        has = False
+        for q in questions:
+            mx = float(q.get('max') or 0)
+            n = _safe_float(qvals.get(q.get('key')))
+            wa, wb = _co_weights_12(q.get('co')) if is_cia1 else _co_weights_34(q.get('co'))
+            ma += mx * wa; mb += mx * wb
+            if n is None:
+                continue
+            has = True
+            m = _clamp(n, 0, mx)
+            a += m * wa; b += m * wb
+        if not has:
+            return (None, None, ma, mb)
+        return (_clamp(a, 0, ma), _clamp(b, 0, mb), ma, mb)
+
+    cia1_co1, cia1_co2, max_cia1_co1, max_cia1_co2 = _cia_co_split(cia1_row, cia1_questions, True)
+    cia2_co3, cia2_co4, max_cia2_co3, max_cia2_co4 = _cia_co_split(cia2_row, cia2_questions, False)
+
+    # TCPR FA = Review1 / Review2 (per CO half-split like THEORY FA).
+    review1_map = _assessment_map(Review1Mark, 'mark', subject.id, [sid], ta_id)
+    review2_map = _assessment_map(Review2Mark, 'mark', subject.id, [sid], ta_id)
+    rev1_total = _safe_float(review1_map.get(sid))
+    rev2_total = _safe_float(review2_map.get(sid))
+
+    rev1_splits = _extract_tcpr_review_co_splits_for_ta(subject.id, ta_id, 'review1', ['co1', 'co2']).get(sid, {})
+    rev2_splits = _extract_tcpr_review_co_splits_for_ta(subject.id, ta_id, 'review2', ['co3', 'co4']).get(sid, {})
+
+    rev1_co1 = _safe_float(rev1_splits.get('co1')) if 'co1' in rev1_splits else (rev1_total / 2.0 if rev1_total is not None else None)
+    rev1_co2 = _safe_float(rev1_splits.get('co2')) if 'co2' in rev1_splits else (rev1_total / 2.0 if rev1_total is not None else None)
+    rev2_co3 = _safe_float(rev2_splits.get('co3')) if 'co3' in rev2_splits else (rev2_total / 2.0 if rev2_total is not None else None)
+    rev2_co4 = _safe_float(rev2_splits.get('co4')) if 'co4' in rev2_splits else (rev2_total / 2.0 if rev2_total is not None else None)
+
+    # Model marks
+    model_sheet   = _get_model_sheet_data(subject.id, ta_id, class_type)
+    model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern)
+
+    def _scale(mark, max_mark, out_of):
+        if mark is None or not max_mark or not out_of:
+            return None
+        return _clamp((float(mark) / float(max_mark)) * float(out_of), 0, float(out_of))
+
+    maxes = {
+        'ssa1_co1': 10.0, 'ssa1_co2': 10.0,
+        'ssa2_co3': 10.0, 'ssa2_co4': 10.0,
+        'f1_co1':   15.0, 'f1_co2':   15.0,
+        'f2_co3':   15.0, 'f2_co4':   15.0,
+        'cia1_co1': max_cia1_co1 or 30.0, 'cia1_co2': max_cia1_co2 or 30.0,
+        'cia2_co3': max_cia2_co3 or 30.0, 'cia2_co4': max_cia2_co4 or 30.0,
+    }
+
+    parts_dict = {
+        'co1_ssa': _scale(ssa1_co1, maxes['ssa1_co1'], w_co1_ssa),
+        'co1_cia': _scale(cia1_co1, maxes['cia1_co1'], w_co1_cia),
+        'co1_fa':  _scale(rev1_co1, maxes['f1_co1'],   w_co1_fa),
+        'co2_ssa': _scale(ssa1_co2, maxes['ssa1_co2'], w_co2_ssa),
+        'co2_cia': _scale(cia1_co2, maxes['cia1_co2'], w_co2_cia),
+        'co2_fa':  _scale(rev1_co2, maxes['f1_co2'],   w_co2_fa),
+        'co3_ssa': _scale(ssa2_co3, maxes['ssa2_co3'], w_co3_ssa),
+        'co3_cia': _scale(cia2_co3, maxes['cia2_co3'], w_co3_cia),
+        'co3_fa':  _scale(rev2_co3, maxes['f2_co3'],   w_co3_fa),
+        'co4_ssa': _scale(ssa2_co4, maxes['ssa2_co4'], w_co4_ssa),
+        'co4_cia': _scale(cia2_co4, maxes['cia2_co4'], w_co4_cia),
+        'co4_fa':  _scale(rev2_co4, maxes['f2_co4'],   w_co4_fa),
+        'me1': _scale(model_marks['co1'], model_marks['max']['co1'], w_me1) if model_marks else None,
+        'me2': _scale(model_marks['co2'], model_marks['max']['co2'], w_me2) if model_marks else None,
+        'me3': _scale(model_marks['co3'], model_marks['max']['co3'], w_me3) if model_marks else None,
+        'me4': _scale(model_marks['co4'], model_marks['max']['co4'], w_me4) if model_marks else None,
+        'me5': _scale(model_marks['co5'], model_marks['max']['co5'], w_me5) if model_marks else None,
+    }
+
+    parts = [v for v in parts_dict.values() if v is not None]
+    if not parts:
+        return None
+
+    # Group by CO for CQI
+    co_vals_raw = {
+        1: sum(v for v in (parts_dict['co1_ssa'], parts_dict['co1_cia'], parts_dict['co1_fa'], parts_dict['me1']) if v is not None) if any(v is not None for v in (parts_dict['co1_ssa'], parts_dict['co1_cia'], parts_dict['co1_fa'], parts_dict['me1'])) else None,
+        2: sum(v for v in (parts_dict['co2_ssa'], parts_dict['co2_cia'], parts_dict['co2_fa'], parts_dict['me2']) if v is not None) if any(v is not None for v in (parts_dict['co2_ssa'], parts_dict['co2_cia'], parts_dict['co2_fa'], parts_dict['me2'])) else None,
+        3: sum(v for v in (parts_dict['co3_ssa'], parts_dict['co3_cia'], parts_dict['co3_fa'], parts_dict['me3']) if v is not None) if any(v is not None for v in (parts_dict['co3_ssa'], parts_dict['co3_cia'], parts_dict['co3_fa'], parts_dict['me3'])) else None,
+        4: sum(v for v in (parts_dict['co4_ssa'], parts_dict['co4_cia'], parts_dict['co4_fa'], parts_dict['me4']) if v is not None) if any(v is not None for v in (parts_dict['co4_ssa'], parts_dict['co4_cia'], parts_dict['co4_fa'], parts_dict['me4'])) else None,
+        5: parts_dict['me5'],
+    }
+    co_max_w = {
+        1: w_co1_ssa + w_co1_cia + w_co1_fa + w_me1,
+        2: w_co2_ssa + w_co2_cia + w_co2_fa + w_me2,
+        3: w_co3_ssa + w_co3_cia + w_co3_fa + w_me3,
+        4: w_co4_ssa + w_co4_cia + w_co4_fa + w_me4,
+        5: w_me5,
+    }
+    base_total = _round2(sum(v for v in co_vals_raw.values() if v is not None))
+
+    # CQI
+    cqi_rows = list(
+        ObeCqiPublished.objects.filter(subject_id=subject.id)
+        .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+        .order_by('-published_at')
+    )
+    cqi_row = _pick_scoped_row(cqi_rows, ta_id)
+    cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+    cqi_nums = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
+    cqi_co_set = {int(n) for n in cqi_nums if _safe_int(n) is not None}
+    cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+
+    total_add = 0.0
+    cqi_add = {}
+    for co in range(1, 6):
+        if co not in cqi_co_set:
+            continue
+        base = co_vals_raw.get(co)
+        if base is None:
+            continue
+        inp = _safe_float((cqi_student or {}).get(f'co{co}'))
+        add = _compute_cqi_add(co_value=base, co_max=co_max_w[co], input_mark=inp)
+        total_add += add
+        cqi_add[co] = _round2(add)
+
+    total = _round2(base_total + total_add)
+    if max_total > 0:
+        pct = (base_total / max_total) * 100.0
+        if pct < THRESHOLD_PERCENT:
+            total_cap = _round2((max_total * THRESHOLD_PERCENT) / 100.0)
+            total = min(total, total_cap)
+    total = _clamp(total, 0.0, max_total)
+    final_total = _round2(total)
+
+    if not return_details:
+        return final_total
+
+    _raw_100 = (final_total / max_total) * 100.0 if max_total > 0 else None
+    _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
+    _raw_base_100 = (base_total / max_total) * 100.0 if max_total > 0 else None
+    _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
+    final_co_vals = {}
+    base_co_vals = {}
+    for co in range(1, 6):
+        b = co_vals_raw.get(co)
+        base_co_vals[co] = _round2(b) if b is not None else None
+        if b is not None:
+            v = _round2(b + cqi_add.get(co, 0.0))
+            v = _clamp(v, 0.0, co_max_w[co]) if co_max_w.get(co) else v
+            final_co_vals[co] = _round2(v)
+        else:
+            final_co_vals[co] = None
+
+    return {
+        'total_40': final_total,
+        'total_100': _total_100,
+        'base_total_100': _base_total_100,
+        'scaled_max': 100.0,
+        'base_total_40': _round2(base_total),
+        'base_co_values_40': {f'co{c}': base_co_vals.get(c) for c in range(1, 6)},
+        'co_values_40': {f'co{c}': final_co_vals.get(c) for c in range(1, 6)},
+        'co_max_40': {f'co{c}': _safe_float(co_max_w.get(c)) for c in range(1, 6)},
+        'cqi_add_40': {f'co{c}': _safe_float(cqi_add.get(c)) for c in range(1, 6)},
+        'is_qp1_final': False,
+        'class_type': 'TCPR',
+        'qp_type': None,
+    }
+
+
+# ─── PROJECT Class-type ────────────────────────────────────────────────────────
+
+def _get_project_exam_weights():
+    """Return project_reviews config from ClassTypeWeights or the default."""
+    from OBE.models import ClassTypeWeights
+
+    row = ClassTypeWeights.objects.filter(class_type='PROJECT').first()
+    im = getattr(row, 'internal_mark_weights', None) if row else None
+    if isinstance(im, dict) and im.get('type') == 'project_reviews':
+        return im
+    # Default: Review1=50, Review2=50, total=100
+    return {'type': 'project_reviews', 'review1': {'weight': 50, 'max': 50}, 'review2': {'weight': 50, 'max': 50}}
+
+
+def _compute_project_final_total(*, ta, subject, student, ta_id, return_details=False):
+    """Compute Final Internal Mark for PROJECT class-type.
+
+    Uses Review1 and Review2 marks only.  Max total = 100 by default.
+    CQI is applied once as a combined single-CO mark.
+    """
+    from OBE.models import Review1Mark, Review2Mark, ObeCqiPublished
+
+    sid = int(student['id'])
+
+    cfg = _get_project_exam_weights()
+    w_r1   = float((cfg.get('review1') or {}).get('weight') or 50)
+    max_r1 = float((cfg.get('review1') or {}).get('max') or 50)
+    w_r2   = float((cfg.get('review2') or {}).get('weight') or 50)
+    max_r2 = float((cfg.get('review2') or {}).get('max') or 50)
+    max_total = w_r1 + w_r2  # normally 100
+
+    if max_total <= 0:
+        return None
+
+    review1_map = _assessment_map(Review1Mark, 'mark', subject.id, [sid], ta_id)
+    review2_map = _assessment_map(Review2Mark, 'mark', subject.id, [sid], ta_id)
+    rev1 = _safe_float(review1_map.get(sid))
+    rev2 = _safe_float(review2_map.get(sid))
+
+    def _scale(mark, from_max, to_weight):
+        if mark is None or not from_max or not to_weight:
+            return None
+        return _clamp((float(mark) / float(from_max)) * float(to_weight), 0, float(to_weight))
+
+    s_r1 = _scale(rev1, max_r1, w_r1)
+    s_r2 = _scale(rev2, max_r2, w_r2)
+    parts = [v for v in (s_r1, s_r2) if v is not None]
+    if not parts:
+        return None
+
+    base_total = _round2(sum(parts))
+
+    # CQI: project uses a single combined measure → treat as CO1 if in CQI set
+    PROJECT_CQI_RATE = 0.6
+    RAW_THRESHOLD_PCT = 58.0
+    cqi_rows = list(
+        ObeCqiPublished.objects.filter(subject_id=subject.id)
+        .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+        .order_by('-published_at')
+    )
+    cqi_row = _pick_scoped_row(cqi_rows, ta_id)
+    cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+    cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+    cqi_add = 0.0
+
+    pct_raw = (base_total / max_total) * 100.0 if max_total else 0.0
+    if pct_raw < RAW_THRESHOLD_PCT and base_total > 0:
+        cqi_mark = _safe_float((cqi_student or {}).get('co1')) or _safe_float((cqi_student or {}).get('project_combined'))
+        if cqi_mark and cqi_mark > 0:
+            raw_add = cqi_mark * PROJECT_CQI_RATE
+            max_allowed = max(0.0, (max_total * RAW_THRESHOLD_PCT / 100.0) - base_total)
+            cqi_add = _round2(min(raw_add, max_allowed))
+
+    total = _clamp(_round2(base_total + cqi_add), 0.0, max_total)
+    final_total = _round2(total)
+
+    if not return_details:
+        return final_total
+
+    _raw_100 = (final_total / max_total) * 100.0 if max_total > 0 else None
+    _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
+    _raw_base_100 = (base_total / max_total) * 100.0 if max_total > 0 else None
+    _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
+
+    return {
+        'total_40': final_total,   # note: actually /100 for project but field name kept for compat
+        'total_100': _total_100,
+        'base_total_100': _base_total_100,
+        'scaled_max': 100.0,
+        'base_total_40': _round2(base_total),
+        'base_co_values_40': {'co1': _safe_float(s_r1), 'co2': _safe_float(s_r2), 'co3': None, 'co4': None, 'co5': None},
+        'co_values_40': {'co1': _safe_float(s_r1), 'co2': _safe_float(s_r2), 'co3': None, 'co4': None, 'co5': None},
+        'co_max_40': {'co1': w_r1, 'co2': w_r2, 'co3': None, 'co4': None, 'co5': None},
+        'cqi_add_40': {'co1': _round2(cqi_add), 'co2': None, 'co3': None, 'co4': None, 'co5': None},
+        'is_qp1_final': False,
+        'class_type': 'PROJECT',
+        'qp_type': None,
+    }
+
+
+# ─── LAB / PRACTICAL Class-type ───────────────────────────────────────────────
+
+def _get_lab_cycle_weight_config():
+    """Return lab_cycles ClassTypeWeights for LAB, or default."""
+    from OBE.models import ClassTypeWeights
+
+    row = ClassTypeWeights.objects.filter(class_type='LAB').first()
+    im = getattr(row, 'internal_mark_weights', None) if row else None
+    if isinstance(im, dict) and im.get('type') == 'lab_cycles':
+        return im
+    # Default: CO1-3 in cycle1, CO3-5 in cycle2 (example defaults matching frontend)
+    return {
+        'type': 'lab_cycles',
+        'cycle1': {'1': {'exp': 9, 'cia': 3}, '2': {'exp': 9, 'cia': 3}, '3': {'exp': 4.5, 'cia': 1.5}},
+        'cycle2': {'3': {'exp': 4.5, 'cia': 1.5}, '4': {'exp': 9, 'cia': 3}, '5': {'exp': 9, 'cia': 3}},
+    }
+
+
+def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', return_details=False):
+    """Compute Final Internal Mark for LAB / PRACTICAL class-type.
+
+    Mark structure:
+      Two cycles (cia1, cia2) each stored in LabPublishedSheet.
+      Per CO in each cycle: experiment average scaled to exp weight + CIA exam scaled to cia weight.
+      Total = sum across all CO contributions from both cycles.
+    """
+    from OBE.models import LabPublishedSheet, ObeCqiPublished
+
+    sid = int(student['id'])
+    cfg = _get_lab_cycle_weight_config()
+    cycle1_cfg = cfg.get('cycle1') or {}
+    cycle2_cfg = cfg.get('cycle2') or {}
+
+    def _cycle_total_weight(cyc):
+        total = 0.0
+        for v in cyc.values():
+            total += float(v.get('exp') or 0) + float(v.get('cia') or 0)
+        return total
+
+    max_total = _cycle_total_weight(cycle1_cfg) + _cycle_total_weight(cycle2_cfg)
+    if max_total <= 0:
+        return None
+
+    def _get_lab_sheet(assessment):
+        rows = list(
+            LabPublishedSheet.objects.filter(subject_id=subject.id, assessment=assessment)
+            .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+            .order_by('-updated_at')
+        )
+        row = _pick_scoped_row(rows, ta_id)
+        return row.data if row and isinstance(getattr(row, 'data', None), dict) else {}
+
+    cia1_data = _get_lab_sheet('cia1')
+    cia2_data = _get_lab_sheet('cia2')
+
+    CIA_EXAM_MAX = 30.0
+
+    def _read_co_from_cycle(sheet_data, cycle_config):
+        """Return {co_str: scaled_contribution} for a single cycle."""
+        sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
+        if not isinstance(sheet, dict):
+            # Try treating sheet_data itself as the sheet
+            sheet = sheet_data if isinstance(sheet_data, dict) else {}
+        rows_by_sid = sheet.get('rowsByStudentId') if isinstance(sheet, dict) else {}
+        if not isinstance(rows_by_sid, dict):
+            rows_by_sid = {}
+        co_configs = sheet.get('coConfigs') if isinstance(sheet, dict) else {}
+        if not isinstance(co_configs, dict):
+            co_configs = {}
+        cia_enabled = sheet.get('ciaExamEnabled', True) if isinstance(sheet, dict) else True
+        cia_max = float(sheet.get('ciaExamMax') or CIA_EXAM_MAX) if isinstance(sheet, dict) else CIA_EXAM_MAX
+
+        student_row = rows_by_sid.get(str(sid)) or rows_by_sid.get(sid) or {}
+        if not isinstance(student_row, dict):
+            return {}
+
+        marks_by_co = student_row.get('marksByCo') if isinstance(student_row, dict) else {}
+        if not isinstance(marks_by_co, dict):
+            marks_by_co = {}
+        cia_exam_raw = _safe_float(student_row.get('ciaExam'))
+        cia_exam = _clamp(cia_exam_raw, 0, cia_max) if cia_exam_raw is not None else None
+
+        sorted_co_keys = sorted(cycle_config.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+        result = {}
+        has_any = False
+
+        for co_key in sorted_co_keys:
+            w = cycle_config[co_key]
+            exp_weight = float(w.get('exp') or 0)
+            cia_weight = float(w.get('cia') or 0)
+            co_num = int(co_key) if str(co_key).isdigit() else 0
+
+            # Get co-config from sheet (expMax, expCount, enabled)
+            co_cfg = co_configs.get(str(co_num)) or {}
+            enabled = co_cfg.get('enabled', True) if isinstance(co_cfg, dict) else True
+            exp_max = float(co_cfg.get('expMax') or 25) if isinstance(co_cfg, dict) else 25.0
+            exp_count = int(co_cfg.get('expCount') or 0) if isinstance(co_cfg, dict) else 0
+
+            if not enabled:
+                result[co_key] = 0.0
+                continue
+
+            # Experiment marks
+            raw_marks = marks_by_co.get(str(co_num)) or marks_by_co.get(co_key) or []
+            if not isinstance(raw_marks, list):
+                raw_marks = []
+            marks_arr = [_safe_float(x) for x in raw_marks[:exp_count or len(raw_marks)] if _safe_float(x) is not None]
+            avg_exp = (sum(marks_arr) / len(marks_arr)) if marks_arr else None
+
+            exp_scaled = _clamp((avg_exp / exp_max) * exp_weight, 0, exp_weight) if (avg_exp is not None and exp_max > 0 and exp_weight > 0) else None
+
+            # CIA exam contribution
+            cia_scaled = None
+            if cia_enabled and cia_exam is not None and cia_max > 0 and cia_weight > 0:
+                cia_scaled = _clamp((cia_exam / cia_max) * cia_weight, 0, cia_weight)
+
+            if exp_scaled is not None or cia_scaled is not None:
+                has_any = True
+                result[co_key] = (exp_scaled or 0.0) + (cia_scaled or 0.0)
+            else:
+                result[co_key] = None
+
+        if not has_any:
+            return {}
+        return result
+
+    c1_marks = _read_co_from_cycle(cia1_data, cycle1_cfg)
+    c2_marks = _read_co_from_cycle(cia2_data, cycle2_cfg)
+
+    all_parts = list(c1_marks.values()) + list(c2_marks.values())
+    valid_parts = [v for v in all_parts if v is not None]
+    if not valid_parts:
+        return None
+
+    base_total = _round2(sum(valid_parts))
+
+    # CQI: use combined mark, treated as single CO1
+    cqi_rows = list(
+        ObeCqiPublished.objects.filter(subject_id=subject.id)
+        .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+        .order_by('-published_at')
+    )
+    cqi_row = _pick_scoped_row(cqi_rows, ta_id)
+    cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+    cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+    cqi_nums = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
+    cqi_co_set = {int(n) for n in cqi_nums if _safe_int(n) is not None}
+    total_add = 0.0
+    if cqi_co_set and base_total > 0:
+        inp = _safe_float((cqi_student or {}).get('co1'))
+        add = _compute_cqi_add(co_value=base_total, co_max=max_total, input_mark=inp)
+        total_add = add
+
+    total = _clamp(_round2(base_total + total_add), 0.0, max_total)
+    final_total = _round2(total)
+
+    if not return_details:
+        return final_total
+
+    _raw_100 = (final_total / max_total) * 100.0 if max_total > 0 else None
+    _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
+    _raw_base_100 = (base_total / max_total) * 100.0 if max_total > 0 else None
+    _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
+
+    return {
+        'total_40': final_total,
+        'total_100': _total_100,
+        'base_total_100': _base_total_100,
+        'scaled_max': 100.0,
+        'base_total_40': _round2(base_total),
+        'base_co_values_40': {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None},
+        'co_values_40': {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None},
+        'co_max_40': {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None},
+        'cqi_add_40': {'co1': _round2(total_add), 'co2': None, 'co3': None, 'co4': None, 'co5': None},
+        'is_qp1_final': False,
+        'class_type': class_type,
+        'qp_type': None,
+    }
+
+
+# ─── TCPL Class-type ──────────────────────────────────────────────────────────
+
+def _get_tcpl_weight_slots():
+    """Return 21-slot weight list for TCPL from ClassTypeWeights or defaults."""
+    from OBE.models import ClassTypeWeights
+
+    # Default 21-slot TCPL weights (mirrors frontend DEFAULT_INTERNAL_MARK_WEIGHTS_TCPL_21)
+    DEFAULT_TCPL_21 = [
+        1.0, 3.25, 2.0, 1.5,   # CO1: SSA, CIA, LAB, CIAExam
+        1.0, 3.25, 2.0, 1.5,   # CO2
+        1.0, 3.25, 2.0, 1.5,   # CO3
+        1.0, 3.25, 2.0, 1.5,   # CO4
+        3.0, 3.0, 3.0, 3.0, 7.0,  # ME-CO1..CO5
+    ]
+    row = ClassTypeWeights.objects.filter(class_type='TCPL').first()
+    arr = getattr(row, 'internal_mark_weights', None) if row else None
+    if not isinstance(arr, list) or not arr:
+        return list(DEFAULT_TCPL_21)
+    # Handle legacy 17-slot → upgrade to 21-slot by splitting slot[2] into lab+ciaExam
+    if len(arr) == 17:
+        out = []
+        for co in range(4):
+            base = co * 3
+            total_slot = float(arr[base + 2] or 0)
+            lab_ratio = 2.0 / 3.5
+            lab = round(total_slot * lab_ratio, 4)
+            cia_exam = round(total_slot - lab, 4)
+            out.extend([float(arr[base] or 0), float(arr[base + 1] or 0), lab, cia_exam])
+        out.extend([float(x or 0) for x in arr[12:17]])
+        return out
+    vals = [float(x or 0) for x in arr[:21]]
+    while len(vals) < 21:
+        vals.append(DEFAULT_TCPL_21[len(vals)] if len(vals) < len(DEFAULT_TCPL_21) else 0.0)
+    return vals
+
+
+def _compute_tcpl_final_total(*, ta, subject, student, ta_id, return_details=False):
+    """Compute Final Internal Mark for TCPL class-type.
+
+    21-slot schema per CO (CO1-CO4):
+      SSA (w[base+0])  – from SSA1Mark (CO1/CO2) or SSA2Mark (CO3/CO4)
+      CIA (w[base+1])  – from Cia1/Cia2PublishedSheet
+      LAB (w[base+2])  – experiment average from LabPublishedSheet (formative1/formative2)
+      CIAExam(w[base+3]) – CIA Exam raw/30 from same LabPublishedSheet
+    Plus ME-CO1..CO5 (slots 16-20) from ModelPublishedSheet.
+    """
+    from OBE.models import LabPublishedSheet, ObeCqiPublished
+
+    sid = int(student['id'])
+    reg_no = _safe_text(student.get('reg_no', ''))
+    class_type = 'TCPL'
+    batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+    qp_type = None
+
+    weights = _get_tcpl_weight_slots()
+    max_total = float(sum(weights))
+
+    # Unpack weights by slot index
+    w = weights
+    # CO1: idxs 0-3, CO2: 4-7, CO3: 8-11, CO4: 12-15, ME: 16-20
+    w_ssa = [w[0], w[4], w[8],  w[12]]
+    w_cia = [w[1], w[5], w[9],  w[13]]
+    w_lab = [w[2], w[6], w[10], w[14]]
+    w_ce  = [w[3], w[7], w[11], w[15]]
+    w_me  = [w[16], w[17], w[18], w[19], w[20] if len(w) > 20 else 0.0]
+
+    # ── SSA marks ──
+    ssa1_map = _assessment_map(__import__('OBE.models', fromlist=['Ssa1Mark']).Ssa1Mark, 'mark', subject.id, [sid], ta_id)
+    ssa2_map = _assessment_map(__import__('OBE.models', fromlist=['Ssa2Mark']).Ssa2Mark, 'mark', subject.id, [sid], ta_id)
+    ssa1_total = _safe_float(ssa1_map.get(sid))
+    ssa2_total = _safe_float(ssa2_map.get(sid))
+    ssa1_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa1', ['co1', 'co2']).get(sid, {})
+    ssa2_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa2', ['co3', 'co4']).get(sid, {})
+    ssa_co = [
+        _safe_float(ssa1_splits.get('co1')) if ssa1_splits else (ssa1_total / 2.0 if ssa1_total is not None else None),
+        _safe_float(ssa1_splits.get('co2')) if ssa1_splits else (ssa1_total / 2.0 if ssa1_total is not None else None),
+        _safe_float(ssa2_splits.get('co3')) if ssa2_splits else (ssa2_total / 2.0 if ssa2_total is not None else None),
+        _safe_float(ssa2_splits.get('co4')) if ssa2_splits else (ssa2_total / 2.0 if ssa2_total is not None else None),
+    ]
+    SSA_MAX = 10.0  # each CO's SSA max
+
+    # ── CIA marks (per CO split) ──
+    cia1_sheet   = _get_cia_sheet_data(subject.id, ta_id, 'cia1')
+    cia2_sheet   = _get_cia_sheet_data(subject.id, ta_id, 'cia2')
+    cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+    cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+    def _build_cia_q(sheet, pattern, is_cia1=True):
+        qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+        p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+        p_cos   = pattern.get('cos')   if isinstance(pattern, dict) and isinstance(pattern.get('cos'),   list) else []
+        out = []
+        for i in range(max(len(qs), len(p_marks))):
+            q   = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+            key = _safe_text(q.get('key')) or f'q{i + 1}'
+            mx  = _safe_float(p_marks[i] if i < len(p_marks) else q.get('max')) or 0.0
+            co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+            co  = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+            out.append({'key': key, 'max': float(mx), 'co': co})
+        return out
+
+    def _cia_split(row, questions, is_cia1=True):
+        if not isinstance(row, dict) or bool(row.get('absent')):
+            return (None, None, 0.0, 0.0)
+        qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+        a, b, ma, mb = 0.0, 0.0, 0.0, 0.0
+        has = False
+        for q in questions:
+            mx = float(q.get('max') or 0)
+            n = _safe_float(qvals.get(q.get('key')))
+            wa, wb = _co_weights_12(q.get('co')) if is_cia1 else _co_weights_34(q.get('co'))
+            ma += mx * wa; mb += mx * wb
+            if n is None:
+                continue
+            has = True
+            m = _clamp(n, 0, mx)
+            a += m * wa; b += m * wb
+        if not has:
+            return (None, None, ma, mb)
+        return (_clamp(a, 0, ma), _clamp(b, 0, mb), ma, mb)
+
+    cia1_questions = _build_cia_q(cia1_sheet, cia1_pattern, True)
+    cia2_questions = _build_cia_q(cia2_sheet, cia2_pattern, False)
+    cia1_rows = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+    cia2_rows = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+    cia1_row  = cia1_rows.get(str(sid)) or cia1_rows.get(sid) or {}
+    cia2_row  = cia2_rows.get(str(sid)) or cia2_rows.get(sid) or {}
+    cia1_co1, cia1_co2, max_cia1_co1, max_cia1_co2 = _cia_split(cia1_row, cia1_questions, True)
+    cia2_co3, cia2_co4, max_cia2_co3, max_cia2_co4 = _cia_split(cia2_row, cia2_questions, False)
+    cia_co = [cia1_co1, cia1_co2, cia2_co3, cia2_co4]
+    cia_max = [max_cia1_co1 or 30.0, max_cia1_co2 or 30.0, max_cia2_co3 or 30.0, max_cia2_co4 or 30.0]
+
+    # ── Lab marks (LabPublishedSheet with assessment='formative1' / 'formative2') ──
+    def _get_lab_sheet_tcpl(assessment):
+        rows = list(
+            LabPublishedSheet.objects.filter(subject_id=subject.id, assessment=assessment)
+            .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+            .order_by('-updated_at')
+        )
+        row = _pick_scoped_row(rows, ta_id)
+        return row.data if row and isinstance(getattr(row, 'data', None), dict) else {}
+
+    lab1_data = _get_lab_sheet_tcpl('formative1')  # CO1+CO2 lab
+    lab2_data = _get_lab_sheet_tcpl('formative2')  # CO3+CO4 lab
+
+    CIA_EXAM_MAX = 30.0
+    LAB_EXP_MAX  = 2.0   # standard max per experiment mark for TCPL
+
+    def _read_tcpl_co_from_lab(sheet_data, co_num, co_letter='A'):
+        """Return (lab_avg, cia_exam) for one CO from a TCPL lab sheet."""
+        sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
+        if not isinstance(sheet, dict):
+            sheet = sheet_data if isinstance(sheet_data, dict) else {}
+
+        rows_by_sid = sheet.get('rowsByStudentId') if isinstance(sheet, dict) else {}
+        if not isinstance(rows_by_sid, dict):
+            rows_by_sid = {}
+        student_row = rows_by_sid.get(str(sid)) or rows_by_sid.get(sid) or {}
+        if not isinstance(student_row, dict):
+            return (None, None)
+
+        marks_by_co = student_row.get('marksByCo') if isinstance(student_row, dict) else {}
+        if not isinstance(marks_by_co, dict):
+            marks_by_co = {}
+
+        # Per-CO config
+        co_configs = sheet.get('coConfigs') if isinstance(sheet, dict) else {}
+        co_cfg = (co_configs or {}).get(str(co_num)) or {}
+        enabled = co_cfg.get('enabled', True) if isinstance(co_cfg, dict) else True
+        exp_count = int(co_cfg.get('expCount') or 0) if isinstance(co_cfg, dict) else 0
+        exp_max = float(co_cfg.get('expMax') or LAB_EXP_MAX) if isinstance(co_cfg, dict) else LAB_EXP_MAX
+
+        # Legacy fall-back
+        cia_enabled = sheet.get('ciaExamEnabled', True) if isinstance(sheet, dict) else True
+        cia_max = float(sheet.get('ciaExamMax') or CIA_EXAM_MAX) if isinstance(sheet, dict) else CIA_EXAM_MAX
+
+        if not enabled:
+            return (None, None)
+
+        raw_marks = marks_by_co.get(str(co_num)) \
+            or (student_row.get(f'marks{co_letter}') if isinstance(student_row, dict) else None) \
+            or []
+        if not isinstance(raw_marks, list):
+            raw_marks = []
+        marks_arr = [_safe_float(x) for x in raw_marks[:exp_count or len(raw_marks)] if _safe_float(x) is not None]
+        avg  = (sum(marks_arr) / len(marks_arr)) if marks_arr else None
+
+        cia_raw = _safe_float(student_row.get('ciaExam'))
+        cia_exam = _clamp(cia_raw, 0, cia_max) if cia_raw is not None else None
+
+        if not cia_enabled:
+            cia_exam = None
+
+        return (avg, cia_exam, exp_max, cia_max)
+
+    # lab1_data: CO1 (letter A) and CO2 (letter B)
+    # lab2_data: CO3 (letter A) and CO4 (letter B)
+    lab_results = [
+        _read_tcpl_co_from_lab(lab1_data, 1, 'A'),
+        _read_tcpl_co_from_lab(lab1_data, 2, 'B'),
+        _read_tcpl_co_from_lab(lab2_data, 3, 'A'),
+        _read_tcpl_co_from_lab(lab2_data, 4, 'B'),
+    ]
+
+    def _scale(mark, from_max, to_weight):
+        if mark is None or not from_max or not to_weight:
+            return None
+        return _clamp((float(mark) / float(from_max)) * float(to_weight), 0, float(to_weight))
+
+    # ── Model marks ──
+    model_sheet   = _get_model_sheet_data(subject.id, ta_id, class_type)
+    model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern)
+
+    # ── Model LAB column contribution (30-mark LAB/REVIEW field) ──
+    # The frontend stores per-student lab value and optional record marks for CO5.
+    # TCPR: lab goes entirely to CO5 (handled as review). TCPL: equal split OR record-mode.
+    _model_row_raw = {}
+    if isinstance(model_sheet, dict):
+        _key_id  = f'id:{sid}'
+        _key_reg = f'reg:{reg_no}'
+        _raw = model_sheet.get(_key_id) or model_sheet.get(_key_reg) or {}
+        if isinstance(_raw, dict):
+            _model_row_raw = _raw
+
+    _lab_raw_m = _safe_float(_model_row_raw.get('lab'))
+    _LAB_MODEL_MAX = 30.0
+    _lab_m = _clamp(_lab_raw_m, 0.0, _LAB_MODEL_MAX) if _lab_raw_m is not None else None
+
+    if _lab_m is not None:
+        # Check if record-marks-for-CO5 mode is enabled (stored at sheet level)
+        _record_cfg = model_sheet.get('recordMarksForCo5') if isinstance(model_sheet, dict) else {}
+        _record_en = isinstance(_record_cfg, dict) and bool(_record_cfg.get('enabled'))
+        _record_exp_n = int(_record_cfg.get('expCount') or 0) if isinstance(_record_cfg, dict) else 0
+        _record_max_pe = float(_record_cfg.get('maxPerExp') or 10.0) if isinstance(_record_cfg, dict) else 10.0
+
+        if model_marks is None:
+            model_marks = {
+                'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0,
+                'max': {'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0},
+            }
+
+        _tcpr_mode = (class_type or '').upper() in ('TCPR',)
+        if _tcpr_mode:
+            # TCPR: entire LAB (REVIEW) → CO5 only
+            model_marks['co5'] = (model_marks.get('co5') or 0.0) + _lab_m
+            model_marks['max']['co5'] = (model_marks['max'].get('co5') or 0.0) + _LAB_MODEL_MAX
+        elif _record_en:
+            # TCPL record mode: CO1-CO4 equal, CO5 = CIA(lab*4/30) + record-avg*(2/maxPerExp)
+            _equal_share = _LAB_MODEL_MAX / 5.0
+            for _cn in range(1, 5):
+                _ck = f'co{_cn}'
+                model_marks[_ck] = (model_marks.get(_ck) or 0.0) + (_lab_m / 5.0)
+                model_marks['max'][_ck] = (model_marks['max'].get(_ck) or 0.0) + _equal_share
+            _cia_co5 = (_lab_m / _LAB_MODEL_MAX) * 4.0
+            _rec_marks_raw = _model_row_raw.get('recordMarksCo5')
+            _rec_val = 0.0
+            if isinstance(_rec_marks_raw, list):
+                _sliced = _rec_marks_raw[:_record_exp_n] if _record_exp_n else _rec_marks_raw
+                _valid_recs = [_safe_float(x) for x in _sliced if _safe_float(x) is not None]
+                if _valid_recs:
+                    _avg_rec = sum(_valid_recs) / len(_valid_recs)
+                    _rec_val = _clamp(_avg_rec / _record_max_pe, 0.0, 1.0) * 2.0
+            model_marks['co5'] = (model_marks.get('co5') or 0.0) + _cia_co5 + _rec_val
+            model_marks['max']['co5'] = (model_marks['max'].get('co5') or 0.0) + 4.0 + 2.0
+        else:
+            # TCPL standard: equal split across all 5 COs
+            _equal_share = _LAB_MODEL_MAX / 5.0
+            for _cn in range(1, 6):
+                _ck = f'co{_cn}'
+                model_marks[_ck] = (model_marks.get(_ck) or 0.0) + (_lab_m / 5.0)
+                model_marks['max'][_ck] = (model_marks['max'].get(_ck) or 0.0) + _equal_share
+
+    # ── Assemble per-CO slots ──
+    co_parts = {}
+    for co_idx in range(4):
+        co_num = co_idx + 1
+        lr = lab_results[co_idx]
+        avg_exp = lr[0] if lr and len(lr) >= 1 else None
+        cia_e   = lr[1] if lr and len(lr) >= 2 else None
+        exp_m   = lr[2] if lr and len(lr) >= 3 else LAB_EXP_MAX
+        cia_m   = lr[3] if lr and len(lr) >= 4 else CIA_EXAM_MAX
+
+        ssa_part = _scale(ssa_co[co_idx], SSA_MAX, w_ssa[co_idx])
+        cia_part = _scale(cia_co[co_idx], cia_max[co_idx], w_cia[co_idx])
+        lab_part = _scale(avg_exp, exp_m, w_lab[co_idx])
+        ce_part  = _scale(cia_e,   cia_m, w_ce[co_idx])
+        co_parts[co_num] = {
+            'ssa': ssa_part, 'cia': cia_part, 'lab': lab_part, 'ce': ce_part,
+        }
+
+    me_parts = [
+        _scale(model_marks['co1'], model_marks['max']['co1'], w_me[0]) if model_marks else None,
+        _scale(model_marks['co2'], model_marks['max']['co2'], w_me[1]) if model_marks else None,
+        _scale(model_marks['co3'], model_marks['max']['co3'], w_me[2]) if model_marks else None,
+        _scale(model_marks['co4'], model_marks['max']['co4'], w_me[3]) if model_marks else None,
+        _scale(model_marks['co5'], model_marks['max']['co5'], w_me[4]) if model_marks else None,
+    ]
+
+    # CO total = SSA + CIA + LAB + CIAExam + ME for that CO
+    co_totals = {}
+    co_max_w  = {}
+    for co_num in range(1, 5):
+        p = co_parts[co_num]
+        idx = co_num - 1
+        vals = [v for v in (p['ssa'], p['cia'], p['lab'], p['ce'], me_parts[idx]) if v is not None]
+        co_totals[co_num] = _round2(sum(vals)) if vals else None
+        co_max_w[co_num]  = w_ssa[idx] + w_cia[idx] + w_lab[idx] + w_ce[idx] + w_me[idx]
+
+    # CO5 → only ME-CO5
+    me5_val = me_parts[4]
+    co_totals[5] = me5_val
+    co_max_w[5]  = w_me[4]
+
+    all_vals = [v for v in co_totals.values() if v is not None]
+    if not all_vals:
+        return None
+
+    base_total = _round2(sum(all_vals))
+
+    # ── CQI ──
+    cqi_rows = list(
+        ObeCqiPublished.objects.filter(subject_id=subject.id)
+        .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+        .order_by('-published_at')
+    )
+    cqi_row = _pick_scoped_row(cqi_rows, ta_id)
+    cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+    cqi_nums    = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
+    cqi_co_set  = {int(n) for n in cqi_nums if _safe_int(n) is not None}
+    cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+
+    total_add = 0.0
+    cqi_add = {}
+    for co in range(1, 6):
+        if co not in cqi_co_set:
+            continue
+        base = co_totals.get(co)
+        if base is None:
+            continue
+        inp = _safe_float((cqi_student or {}).get(f'co{co}'))
+        add = _compute_cqi_add(co_value=base, co_max=co_max_w[co], input_mark=inp)
+        total_add += add
+        cqi_add[co] = _round2(add)
+
+    total = _round2(base_total + total_add)
+    if max_total > 0 and (base_total / max_total) * 100.0 < THRESHOLD_PERCENT:
+        total = min(total, _round2((max_total * THRESHOLD_PERCENT) / 100.0))
+    total = _clamp(total, 0.0, max_total)
+    final_total = _round2(total)
+
+    if not return_details:
+        return final_total
+
+    _raw_100 = (final_total / max_total) * 100.0 if max_total > 0 else None
+    _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
+    _raw_base_100 = (base_total / max_total) * 100.0 if max_total > 0 else None
+    _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
+    final_co = {}
+    base_co  = {}
+    for co in range(1, 6):
+        b = co_totals.get(co)
+        base_co[co] = _round2(b) if b is not None else None
+        if b is not None:
+            v = _round2(b + cqi_add.get(co, 0.0))
+            v = _clamp(v, 0.0, co_max_w[co]) if co_max_w.get(co) else v
+            final_co[co] = _round2(v)
+        else:
+            final_co[co] = None
+
+    return {
+        'total_40': final_total,
+        'total_100': _total_100,
+        'base_total_100': _base_total_100,
+        'scaled_max': 100.0,
+        'base_total_40': _round2(base_total),
+        'base_co_values_40': {f'co{c}': base_co.get(c)  for c in range(1, 6)},
+        'co_values_40':      {f'co{c}': final_co.get(c) for c in range(1, 6)},
+        'co_max_40':         {f'co{c}': _safe_float(co_max_w.get(c)) for c in range(1, 6)},
+        'cqi_add_40':        {f'co{c}': _safe_float(cqi_add.get(c)) for c in range(1, 6)},
+        'is_qp1_final': False,
+        'class_type': 'TCPL',
+        'qp_type': None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
     from academics.models import TeachingAssignment
     from OBE.models import (
@@ -2027,24 +3037,76 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                 if english_result is not None:
                     total = english_result
 
-            if total is None:
-                parts = [
-                    formative1.get(sid),
-                    formative2.get(sid),
-                    ssa1.get(sid),
-                    ssa2.get(sid),
-                    review1.get(sid),
-                    review2.get(sid),
-                    cia1.get(sid),
-                    cia2.get(sid),
-                    model_map.get(sid),
-                ]
-                parts = [p for p in parts if p is not None]
-                total = round(sum(parts), 2) if parts else None
-                if total is not None:
-                    total = max(0.0, min(40.0, total))
+            # FOREIGN_LANG: same 3-cycle structure as ENGLISH, separate class-type
+            if total is None and ta_class_type == 'FOREIGN_LANG':
+                fl_result = _compute_foreign_lang_final_total(
+                    ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                )
+                if fl_result is not None:
+                    total = fl_result
 
-            prbl_max_mark = 60 if ta_class_type in {'PRBL', 'ENGLISH'} else 40
+            # TCPR: Theory-like but with Review1/Review2 instead of Formatives
+            if total is None and ta_class_type == 'TCPR':
+                tcpr_result = _compute_tcpr_final_total(
+                    ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                )
+                if tcpr_result is not None:
+                    total = tcpr_result
+
+            # PROJECT: Review1 + Review2 weighted (total /100)
+            if total is None and ta_class_type == 'PROJECT':
+                proj_result = _compute_project_final_total(
+                    ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                )
+                if proj_result is not None:
+                    total = proj_result
+
+            # LAB / PRACTICAL: lab cycle experiment+CIA marks
+            if total is None and ta_class_type in ('LAB', 'PRACTICAL'):
+                lab_result = _compute_lab_final_total(
+                    ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                    class_type=ta_class_type,
+                )
+                if lab_result is not None:
+                    total = lab_result
+
+            # TCPL: 21-slot schema (SSA+CIA+Lab+CIAExam per CO + Model)
+            if total is None and ta_class_type == 'TCPL':
+                tcpl_result = _compute_tcpl_final_total(
+                    ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                )
+                if tcpl_result is not None:
+                    total = tcpl_result
+
+            if total is None:
+                # Raw-sum fallback is only valid for THEORY-like courses whose
+                # component marks are already on the 0-40 scale.
+                # All other types now have dedicated compute functions above; skip fallback for them.
+                _skip_fallback_types = {'TCPL', 'LAB', 'PRACTICAL', 'TCPR', 'PROJECT'}
+                if ta_class_type not in _skip_fallback_types:
+                    parts = [
+                        formative1.get(sid),
+                        formative2.get(sid),
+                        ssa1.get(sid),
+                        ssa2.get(sid),
+                        review1.get(sid),
+                        review2.get(sid),
+                        cia1.get(sid),
+                        cia2.get(sid),
+                        model_map.get(sid),
+                    ]
+                    parts = [p for p in parts if p is not None]
+                    total = round(sum(parts), 2) if parts else None
+                    if total is not None:
+                        total = max(0.0, min(40.0, total))
+
+            # max_mark: PROJECT uses 100, PRBL/ENGLISH/FOREIGN_LANG use 60, others use 40
+            if ta_class_type == 'PROJECT':
+                prbl_max_mark = 100
+            elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG'}:
+                prbl_max_mark = 60
+            else:
+                prbl_max_mark = 40
 
             FinalInternalMark.objects.update_or_create(
                 subject=subject,

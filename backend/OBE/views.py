@@ -187,22 +187,12 @@ def _get_students_for_teaching_assignment(ta):
                 .select_related('student__user', 'student__section')
             )
             if getattr(ta, 'academic_year_id', None):
-                # Prefer exact academic_year_id match.
+                # Restrict by academic year only when it does not truncate
+                # the active elective roster. Legacy/migrated data can spread
+                # valid choices across year rows for the same elective.
                 year_qs = eqs.filter(academic_year_id=ta.academic_year_id)
-                if not year_qs.exists():
-                    # Fallback: some deployments store elective choices under a
-                    # different AcademicYear row (e.g., ODD/EVEN parity split)
-                    # but with the same year name.
-                    try:
-                        ay_name = str(getattr(getattr(ta, 'academic_year', None), 'name', '') or '').strip()
-                    except Exception:
-                        ay_name = ''
-                    if ay_name:
-                        year_qs = eqs.filter(academic_year__name=ay_name)
-                # As a last resort, allow NULL year choices.
-                if not year_qs.exists():
-                    year_qs = eqs.filter(academic_year__isnull=True)
-                eqs = year_qs
+                if year_qs.exists() and year_qs.count() == eqs.count():
+                    eqs = year_qs
             for c in eqs:
                 sp = getattr(c, 'student', None)
                 if not sp:
@@ -1897,8 +1887,8 @@ def _normalise_class_type_weights_array(class_type: str, arr):
     expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
     defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
 
-    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH – pass through as-is
-    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights'):
+    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG – pass through as-is
+    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights'):
         return arr
 
     if not isinstance(arr, list):
@@ -2287,6 +2277,17 @@ def cqi_publish(request, subject_id: str):
     except Exception:
         pass
 
+    try:
+        recompute_final_internal_marks(
+            actor_user_id=getattr(getattr(request, 'user', None), 'id', None),
+            filters={
+                'subject_code': subject.code,
+                'teaching_assignment_id': ta_id,
+            },
+        )
+    except Exception:
+        logger.exception('cqi_publish: recompute_final_internal_marks failed for subject=%s ta=%s', subject.code, ta_id)
+
     return Response(
         {
             'status': 'ok',
@@ -2329,8 +2330,8 @@ def class_type_weights_upsert(request):
             im = None
             try:
                 im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
-                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH – store as-is
-                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights'):
+                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG – store as-is
+                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights'):
                     im = im_raw
                 elif isinstance(im_raw, list):
                     im = []
@@ -2876,6 +2877,7 @@ def internal_mark_mapping_upsert(request, subject_id: str):
 def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_notification: bool = False) -> dict:
     from .models import AssessmentDraft
     from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet
+    from .models import ObeCqiDraft, ObeCqiPublished
     from .models import Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark, Formative1Mark, Formative2Mark, Cia1Mark, Cia2Mark, ProjectMark
     from .models import ObeMarkTableLock
 
@@ -3044,11 +3046,29 @@ def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_
                     strict_scope=strict_scope,
                     assessment='model',
                 )
+            elif assessment_key == 'cqi':
+                deleted['draft'] += _delete_scoped_obe_json_rows(
+                    ObeCqiDraft,
+                    subject=subject,
+                    teaching_assignment=ta,
+                    strict_scope=strict_scope,
+                )
+                deleted['published'] += _delete_scoped_obe_json_rows(
+                    ObeCqiPublished,
+                    subject=subject,
+                    teaching_assignment=ta,
+                    strict_scope=strict_scope,
+                )
         except Exception:
             pass
 
         try:
-            deleted['lock'] = int(ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0)
+            if assessment_key == 'cqi':
+                deleted['lock'] = int(
+                    ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment__startswith='cqi_').delete()[0] or 0
+                )
+            else:
+                deleted['lock'] = int(ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0)
         except Exception:
             deleted['lock'] = 0
 
@@ -3093,6 +3113,7 @@ def _normalize_reset_assessment_key(value: str) -> str:
         'fa2': 'formative2',
         'model': 'model',
         'modelexam': 'model',
+        'cqi': 'cqi',
         'cdap': 'cdap',
         'articulation': 'articulation',
         'lca': 'lca',
@@ -3121,7 +3142,7 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
         return auth
 
     assessment_key = _normalize_reset_assessment_key(assessment)
-    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cdap', 'articulation', 'lca'}:
+    if assessment_key not in {'ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cqi', 'cdap', 'articulation', 'lca'}:
         return Response({'detail': 'Invalid assessment.'}, status=status.HTTP_400_BAD_REQUEST)
 
     subject = _get_subject(subject_id, request)
@@ -5773,6 +5794,17 @@ def model_publish_sheet(request, subject_id: str):
         )
     except OperationalError:
         pass
+
+    try:
+        recompute_final_internal_marks(
+            actor_user_id=getattr(getattr(request, 'user', None), 'id', None),
+            filters={
+                'subject_code': subject.code,
+                'teaching_assignment_id': ta_id,
+            },
+        )
+    except Exception:
+        logger.exception('model_publish_sheet: recompute_final_internal_marks failed for subject=%s ta=%s', subject.code, ta_id)
 
     return Response({'status': 'published'})
 

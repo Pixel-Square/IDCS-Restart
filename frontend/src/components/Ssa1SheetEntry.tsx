@@ -34,6 +34,7 @@ import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo } from '../utils/excelImport';
 import { normalizeObeClassType } from '../constants/classTypes';
+import { matrixToClipboardText, parseClipboardMatrix } from '../utils/clipboardMatrix';
 
 type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1'; classType?: string | null; questionPaperType?: string | null; /** When true (e.g. PRBL courses), lock to a single CO1 — hides the second CO column entirely. */ forceSingleCo?: boolean; };
 
@@ -353,6 +354,141 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
   const [excelBusy, setExcelBusy] = useState(false);
   const [excelImportHelpOpen, setExcelImportHelpOpen] = useState(false);
+
+  type QpGridPos = { r: number; c: number };
+  type QpGridSel = { a: QpGridPos; b: QpGridPos };
+  const [qpGridSel, setQpGridSel] = useState<QpGridSel | null>(null);
+  const qpGridDraggingRef = useRef(false);
+
+  useEffect(() => {
+    const onUp = () => { qpGridDraggingRef.current = false; };
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
+
+  useEffect(() => {
+    if (!useQpQEntry) setQpGridSel(null);
+  }, [useQpQEntry]);
+
+  const normalizeQpSel = (sel: QpGridSel) => {
+    const r0 = Math.min(sel.a.r, sel.b.r);
+    const r1 = Math.max(sel.a.r, sel.b.r);
+    const c0 = Math.min(sel.a.c, sel.b.c);
+    const c1 = Math.max(sel.a.c, sel.b.c);
+    return { r0, r1, c0, c1 };
+  };
+
+  const isQpCellSelected = (r: number, c: number) => {
+    if (!qpGridSel) return false;
+    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
+    return r >= r0 && r <= r1 && c >= c0 && c <= c1;
+  };
+
+  const onQpCellMouseDown = (r: number, c: number, shiftKey: boolean) => {
+    if (!useQpQEntry) return;
+    qpGridDraggingRef.current = true;
+    setQpGridSel((prev) => {
+      if (shiftKey && prev) return { a: prev.a, b: { r, c } };
+      return { a: { r, c }, b: { r, c } };
+    });
+  };
+
+  const onQpCellMouseEnter = (r: number, c: number) => {
+    if (!useQpQEntry) return;
+    if (!qpGridDraggingRef.current) return;
+    setQpGridSel((prev) => {
+      if (!prev) return { a: { r, c }, b: { r, c } };
+      return { a: prev.a, b: { r, c } };
+    });
+  };
+
+  const onQpGridCopyCapture = (e: React.ClipboardEvent) => {
+    if (!useQpQEntry || !qpGridSel) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !active.closest('.ssa-modern-table')) return;
+
+    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
+    const out: Array<Array<string>> = [];
+    for (let r = r0; r <= r1; r++) {
+      const row = rowsToRender[r];
+      if (!row) continue;
+      const baseRowIdx = resolveBaseRowIndex(row, r);
+      const qm = Array.isArray((sheet.rows[baseRowIdx] as any)?.qMarks) ? ((sheet.rows[baseRowIdx] as any).qMarks as Array<number | ''>) : [];
+      const line: string[] = [];
+      for (let c = c0; c <= c1; c++) {
+        const v = qm[c];
+        line.push(typeof v === 'number' ? String(v) : '');
+      }
+      out.push(line);
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.clipboardData.setData('text/plain', matrixToClipboardText(out));
+  };
+
+  const onQpGridPasteCapture = (e: React.ClipboardEvent) => {
+    if (!useQpQEntry || !qpGridSel) return;
+    if (marksEditDisabled) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !active.closest('.ssa-modern-table')) return;
+
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    const matrix = parseClipboardMatrix(text);
+    if (!matrix.length) return;
+
+    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
+    const baseRowIdxByVisRow: Array<number | null> = [];
+    for (let r = r0; r <= r1; r++) {
+      const row = rowsToRender[r];
+      if (!row) { baseRowIdxByVisRow.push(null); continue; }
+      baseRowIdxByVisRow.push(resolveBaseRowIndex(row, r));
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setSheet((prev) => {
+      const rowsCopy = prev.rows.slice();
+      for (let vr = r0; vr <= r1; vr++) {
+        const baseRowIdx = baseRowIdxByVisRow[vr - r0];
+        if (typeof baseRowIdx !== 'number' || baseRowIdx < 0 || baseRowIdx >= rowsCopy.length) continue;
+        const existing = rowsCopy[baseRowIdx];
+        if (!existing) continue;
+
+        const qm: Array<number | ''> = Array.isArray((existing as any).qMarks) ? [...((existing as any).qMarks as Array<number | ''>)] : [];
+        while (qm.length < qpQuestions.length) qm.push('');
+
+        const sourceRow = matrix[Math.min(vr - r0, matrix.length - 1)] || [];
+        for (let vc = c0; vc <= c1; vc++) {
+          const sourceCell = sourceRow[Math.min(vc - c0, sourceRow.length - 1)] ?? '';
+          const raw = String(sourceCell ?? '').trim();
+          if (!raw) continue; // Safe paste: never overwrite with blanks
+          const parsed = parseMarkInput(raw);
+          if (parsed == null) continue;
+          const q = qpQuestions[vc];
+          if (!q) continue;
+          if (parsed < 0 || parsed > q.max) continue;
+          qm[vc] = round1(clamp(parsed, 0, q.max));
+        }
+
+        const hasAny = qm.some((v) => v !== '');
+        let c1sum = 0;
+        let c2sum = 0;
+        qpQuestions.forEach((q, i) => {
+          const v = typeof qm[i] === 'number' ? (qm[i] as number) : 0;
+          if (q.coKey === 'co1') c1sum += v;
+          else c2sum += v;
+        });
+        const newCo1: number | '' = hasAny ? round1(clamp(c1sum, 0, CO_MAX.co1)) : '';
+        const newCo2: number | '' = hasAny ? round1(clamp(c2sum, 0, CO_MAX.co2)) : '';
+        const newTotal: number | '' = hasAny ? round1(clamp(c1sum + c2sum, 0, MAX_ASMT1)) : '';
+        rowsCopy[baseRowIdx] = { ...(existing as any), qMarks: qm, co1: newCo1, co2: newCo2, total: newTotal } as Ssa1Row;
+      }
+      return { ...prev, rows: rowsCopy };
+    });
+  };
 
 
   useEffect(() => {
@@ -2917,7 +3053,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
       <div style={{ marginTop: 14 }}>
         {showNameList ? (
-          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
+          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }} onCopyCapture={onQpGridCopyCapture} onPasteCapture={onQpGridPasteCapture}>
             <PublishLockOverlay
               locked={Boolean(globalLocked || publishedEditLocked || (isPublished && lockStatusUnknown))}
               title={globalLocked ? 'Locked by IQAC' : publishedEditLocked ? 'Published — Locked' : 'Table Locked'}
@@ -3173,8 +3309,20 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                             : useQpQEntry
                               ? (qpQuestions.map((q, i) => {
                                   const qMarkVal = Array.isArray((r as any).qMarks) ? (r as any).qMarks[i] : undefined;
+                                  const selected = isQpCellSelected(idx, i);
                                   return (
-                                    <td key={`qi-${idx}-${i}`} style={{ ...cellTd, textAlign: 'center', minWidth: 72 }}>
+                                    <td
+                                      key={`qi-${idx}-${i}`}
+                                      style={{
+                                        ...cellTd,
+                                        textAlign: 'center',
+                                        minWidth: 72,
+                                        background: selected ? '#ecfdf5' : (cellTd as any).background,
+                                        boxShadow: selected ? 'inset 0 0 0 2px #16a34a' : undefined,
+                                      }}
+                                      onMouseDown={(e) => onQpCellMouseDown(idx, i, e.shiftKey)}
+                                      onMouseEnter={() => onQpCellMouseEnter(idx, i)}
+                                    >
                                       {marksEditDisabled ? (
                                         <span>{typeof qMarkVal === 'number' ? qMarkVal : ''}</span>
                                       ) : (

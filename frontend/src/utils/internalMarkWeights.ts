@@ -42,12 +42,47 @@ export function defaultInternalWeightsForClassType(classType: string | null | un
 
 export function getNormalizedInternalMarkWeights(
   classType: string | null | undefined,
-  weightItem?: { internal_mark_weights?: Array<number | string> | null } | null,
+  weightItem?: { internal_mark_weights?: Array<number | string> | Record<string, any> | null } | null,
 ): number[] {
   const expected = internalWeightsExpectedLen(classType);
   const base = defaultInternalWeightsForClassType(classType);
   const ct = normalizeClassType(classType || '');
-  let raw = Array.isArray(weightItem?.internal_mark_weights) ? weightItem!.internal_mark_weights! : [];
+  const rawWeights = weightItem?.internal_mark_weights;
+
+  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+    const cfg = ct === 'ENGLISH' ? getEnglishExamWeightConfig(rawWeights) : getForeignLangExamWeightConfig(rawWeights);
+    const perCo = (entry: EnglishCycleEntry, fallbackCos: number[]) => {
+      const cos = Array.isArray(entry?.cos) && entry.cos.length ? entry.cos : fallbackCos;
+      const n = Math.max(1, cos.length);
+      return Number(entry?.weight || 0) / n;
+    };
+
+    const ssa1Per = perCo(cfg.ssa1, [1, 2]);
+    const fa1Per = perCo(cfg.fa1, [1, 2]);
+    const ssa2Per = perCo(cfg.ssa2, [3, 4]);
+    const fa2Per = perCo(cfg.fa2, [3, 4]);
+    const cia1Per = Number(cfg.cia1?.weight || 0) / 5;
+    const cia2Per = Number(cfg.cia2?.weight || 0) / 5;
+    const meCo = Array.isArray(cfg.model?.co_weights) && cfg.model.co_weights.length === 5
+      ? cfg.model.co_weights
+      : [2.4, 2.4, 2.4, 2.4, 2.4];
+
+    const englishLike17 = [
+      ssa1Per, cia1Per, fa1Per,
+      ssa1Per, cia1Per, fa1Per,
+      ssa2Per, cia2Per, fa2Per,
+      ssa2Per, cia2Per, fa2Per,
+      Number(meCo[0] || 0), Number(meCo[1] || 0), Number(meCo[2] || 0), Number(meCo[3] || 0), Number(meCo[4] || 0),
+    ];
+
+    while (englishLike17.length < expected) englishLike17.push(base[englishLike17.length] ?? 0);
+    return englishLike17.slice(0, expected).map((n, idx) => {
+      const v = Number(n);
+      return Number.isFinite(v) ? v : (base[idx] ?? 0);
+    });
+  }
+
+  let raw = Array.isArray(rawWeights) ? rawWeights : [];
 
   if (ct === 'TCPL' && raw.length === 17) {
     const upgraded: Array<number | string> = [];
@@ -71,7 +106,7 @@ export function getNormalizedInternalMarkWeights(
 
 export function getInternalMarkWeightSlotsForCo(
   classType: string | null | undefined,
-  weightItem: { internal_mark_weights?: Array<number | string> | null } | null | undefined,
+  weightItem: { internal_mark_weights?: Array<number | string> | Record<string, any> | null } | null | undefined,
   coNum: number,
 ): InternalMarkWeightSlots {
   const ct = normalizeClassType(classType || '');
@@ -109,6 +144,46 @@ export function getInternalMarkWeightSlotsForCo(
     }
   }
 
+  // ENGLISH / FOREIGN_LANG: both CIA1 and CIA2 contribute to ALL 5 COs
+  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+    const rawWeights = weightItem?.internal_mark_weights;
+    const cfg = ct === 'ENGLISH'
+      ? getEnglishExamWeightConfig(rawWeights)
+      : getForeignLangExamWeightConfig(rawWeights);
+    const cia1Per = Number(cfg.cia1?.weight || 0) / 5;
+    const cia2Per = Number(cfg.cia2?.weight || 0) / 5;
+    const bothCia = cia1Per + cia2Per;
+    const meCoWeights = Array.isArray(cfg.model?.co_weights) && cfg.model.co_weights.length === 5
+      ? cfg.model.co_weights
+      : [2.4, 2.4, 2.4, 2.4, 2.4];
+    const getEntryPerCo = (entry: EnglishCycleEntry, coNum_: number, fallbackCos: number[]) => {
+      const cos = Array.isArray(entry?.cos) && entry.cos.length ? entry.cos : fallbackCos;
+      return cos.includes(coNum_) ? Number(entry?.weight || 0) / Math.max(1, cos.length) : 0;
+    };
+    if (coNum >= 1 && coNum <= 2) {
+      return {
+        ssa: getEntryPerCo(cfg.ssa1, coNum, [1, 2]),
+        cia: bothCia,
+        fa: getEntryPerCo(cfg.fa1, coNum, [1, 2]),
+        ciaExam: 0,
+        me: Number(meCoWeights[coNum - 1] || 0),
+      };
+    }
+    if (coNum >= 3 && coNum <= 4) {
+      return {
+        ssa: getEntryPerCo(cfg.ssa2, coNum, [3, 4]),
+        cia: bothCia,
+        fa: getEntryPerCo(cfg.fa2, coNum, [3, 4]),
+        ciaExam: 0,
+        me: Number(meCoWeights[coNum - 1] || 0),
+      };
+    }
+    if (coNum === 5) {
+      return { ssa: 0, cia: bothCia, fa: 0, ciaExam: 0, me: Number(meCoWeights[4] || 0) };
+    }
+    return { ssa: 0, cia: 0, fa: 0, ciaExam: 0, me: 0 };
+  }
+
   if (coNum >= 1 && coNum <= 4) {
     const base = (coNum - 1) * 3;
     return {
@@ -129,7 +204,7 @@ export function getInternalMarkWeightSlotsForCo(
 
 export function getCycleOneWeightsFromInternal(
   classType: string | null | undefined,
-  weightItem?: { internal_mark_weights?: Array<number | string> | null } | null,
+  weightItem?: { internal_mark_weights?: Array<number | string> | Record<string, any> | null } | null,
 ): { ssa1: number; cia1: number; formative1: number } {
   const slots = getInternalMarkWeightSlotsForCo(classType, weightItem, 1);
   return {
@@ -309,13 +384,13 @@ export type EnglishExamWeights = {
   model: EnglishModelEntry;
 };
 
-/** Default weights that produce each CO max = 12, grand total = 60.
+/** Default weights that produce each CO max = 8 (?), grand total = 40.
  *
  *  Breakdown:
  *   Cycle 1 – CO1+CO2:  SSA1(3) + FA1(5) + CIA1(6) = 14
  *   Cycle 2 – CO3+CO4:  SSA2(3) + FA2(5) + CIA2(6) = 14
- *   Cycle 3 – all COs:  Model(5.6×4 + 9.6) = 32
- *   Total = 60;  each CO max = 12 ✓
+ *   Cycle 3 – all COs:  Model(2.4×5) = 12
+ *   Total = 40
  */
 export const DEFAULT_ENGLISH_EXAM_WEIGHTS: EnglishExamWeights = {
   type: 'english_exam_weights',
@@ -325,7 +400,7 @@ export const DEFAULT_ENGLISH_EXAM_WEIGHTS: EnglishExamWeights = {
   ssa2:  { max: 20, weight: 3.0,  cos: [3, 4] },
   fa2:   { max: 20, weight: 5.0,  cos: [3, 4] },
   cia2:  { max: 60, weight: 6.0 },
-  model: { max_per_co: 20, co_weights: [5.6, 5.6, 5.6, 5.6, 9.6] },
+  model: { max_per_co: 20, co_weights: [2.4, 2.4, 2.4, 2.4, 2.4] },
 };
 
 export function isEnglishExamWeights(w: any): w is EnglishExamWeights {
@@ -335,4 +410,37 @@ export function isEnglishExamWeights(w: any): w is EnglishExamWeights {
 export function getEnglishExamWeightConfig(raw: any): EnglishExamWeights {
   if (isEnglishExamWeights(raw)) return raw;
   return JSON.parse(JSON.stringify(DEFAULT_ENGLISH_EXAM_WEIGHTS));
+}
+
+// ─── FOREIGN LANGUAGE Exam Weights (same 3-cycle structure as ENGLISH) ────────
+
+export type ForeignLangExamWeights = {
+  type: 'foreign_lang_exam_weights';
+  ssa1:  EnglishCycleEntry;
+  fa1:   EnglishCycleEntry;
+  cia1:  EnglishCycleEntry;
+  ssa2:  EnglishCycleEntry;
+  fa2:   EnglishCycleEntry;
+  cia2:  EnglishCycleEntry;
+  model: EnglishModelEntry;
+};
+
+export const DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS: ForeignLangExamWeights = {
+  type: 'foreign_lang_exam_weights',
+  ssa1:  { max: 20, weight: 3.0,  cos: [1, 2] },
+  fa1:   { max: 20, weight: 5.0,  cos: [1, 2] },
+  cia1:  { max: 60, weight: 6.0 },
+  ssa2:  { max: 20, weight: 3.0,  cos: [3, 4] },
+  fa2:   { max: 20, weight: 5.0,  cos: [3, 4] },
+  cia2:  { max: 60, weight: 6.0 },
+  model: { max_per_co: 20, co_weights: [2.4, 2.4, 2.4, 2.4, 2.4] },
+};
+
+export function isForeignLangExamWeights(w: any): w is ForeignLangExamWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'foreign_lang_exam_weights';
+}
+
+export function getForeignLangExamWeightConfig(raw: any): ForeignLangExamWeights {
+  if (isForeignLangExamWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS));
 }

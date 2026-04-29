@@ -3,7 +3,12 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  build: { outDir: 'build' },
+  build: {
+    outDir: 'build',
+    // Debug aid: enable sourcemaps only when explicitly requested.
+    // Usage: VITE_SOURCEMAP=true npm run build
+    sourcemap: process.env.VITE_SOURCEMAP === 'true',
+  },
   server: {
     host: true,
     allowedHosts: ['idcs.krgi.co.in', "idcs.zynix.us"],

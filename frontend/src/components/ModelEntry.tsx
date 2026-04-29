@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
-import { normalizeObeClassType } from '../constants/classTypes';
+import { normalizeObeClassType, isEnglishOrForeignLangClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import * as OBE from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
@@ -35,6 +35,7 @@ type TcplRowEntry = {
   absentKind?: AbsenceKind;
   lab?: CellNumber;
   q?: Record<string, CellNumber>;
+  recordMarksCo5?: (number | '')[];
 };
 
 type TcplSheetState = Record<string, TcplRowEntry>;
@@ -101,7 +102,7 @@ function normalizeHeaderCell(v: any): string {
 }
 
 export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType, customQuestions: customQuestionsProp }: Props) {
-  const visibleBtls = useMemo(() => [1, 2, 3, 4, 5, 6] as const, []);
+  
 
   const normalizeAbsenceKind = (value: unknown): AbsenceKind => {
     const s = String(value ?? 'AL')
@@ -110,6 +111,12 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (s === 'ML' || s === 'MALPRACTICE') return 'ML';
     if (s === 'SKL' || s === 'SICK' || s === 'SICKLEAVE' || s === 'SL') return 'SKL';
     return 'AL';
+  };
+
+  const showMarkLimitPopup = (input: HTMLInputElement, message: string, student?: { name?: string; reg_no?: string }) => {
+    const who = student ? `${student.name || 'Student'} (${student.reg_no || ''}) — ` : '';
+    setLimitDialog({ title: 'Mark Limit Exceeded', message: `${who}${message}` });
+    input.setCustomValidity('');
   };
 
   const cellTh: React.CSSProperties = {
@@ -174,6 +181,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
   const [tcplSheet, setTcplSheet] = useState<TcplSheetState>({});
   const [theorySheet, setTheorySheet] = useState<TcplSheetState>({});
+  const [tcplModelRecordEnabled, setTcplModelRecordEnabled] = useState(false);
+  const [tcplModelRecordExpCount, setTcplModelRecordExpCount] = useState(3);
+  const [tcplModelRecordMaxPerExp, setTcplModelRecordMaxPerExp] = useState(10);
+  const [tcplModelRecordLocked, setTcplModelRecordLocked] = useState(true);
   const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
   const [iqacPatternLoading, setIqacPatternLoading] = useState(false);
   const [iqacPatternError, setIqacPatternError] = useState<string | null>(null);
@@ -193,6 +204,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
   const isSpecial = normalizedClassType === 'SPECIAL';
+  const isEnglishLike = isEnglishOrForeignLangClassType(normalizedClassType);
 
   const {
     data: publishWindow,
@@ -376,7 +388,93 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     return DEFAULT_MODEL_QUESTIONS;
   }, [iqacPattern, customQuestionsProp]);
 
-  const colSpan = 4 + questions.length + 1 + 4 + visibleBtls.length * 2;
+  /** Unique CO numbers derived from iqacPattern.cos for the blank template (ENGLISH etc.) */
+  const blankTemplateCos = useMemo((): number[] => {
+    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    if (!cos || !cos.length) return [1, 2];
+    const unique: number[] = [];
+    for (const c of cos) {
+      const n = Number(c);
+      if (n >= 1 && n <= 6 && !unique.includes(n)) unique.push(n);
+    }
+    unique.sort((a, b) => a - b);
+    return unique.length ? unique : [1, 2];
+  }, [iqacPattern]);
+
+  /** Per-CO max marks for blank template (ENGLISH etc.) */
+
+  const blankTemplateQuestionBtlStorageKey = useMemo(() => `model_blank_questionBtl_${subjectId}_${String(teachingAssignmentId ?? 'none')}`, [subjectId, teachingAssignmentId]);
+  const defaultBlankTemplateQuestionBtl = useMemo(() => {
+    return Object.fromEntries(
+      questions.map((q) => [q.key, '' as BtlValue])
+    ) as Record<string, BtlValue>;
+  }, [questions]);
+
+  const [blankTemplateQuestionBtl, setBlankTemplateQuestionBtl] = useState<Record<string, BtlValue>>(defaultBlankTemplateQuestionBtl);
+
+  useEffect(() => {
+    if (!isSpecial && !isEnglishLike) return; // blank template (SPECIAL / ENGLISH / FOREIGN_LANG)
+    const stored = lsGet<Record<string, BtlValue>>(blankTemplateQuestionBtlStorageKey);
+    if (stored && typeof stored === 'object') {
+      setBlankTemplateQuestionBtl({
+        ...defaultBlankTemplateQuestionBtl,
+        ...stored,
+      });
+    } else {
+      setBlankTemplateQuestionBtl(defaultBlankTemplateQuestionBtl);
+    }
+  }, [isSpecial, isEnglishLike, blankTemplateQuestionBtlStorageKey, defaultBlankTemplateQuestionBtl]);
+
+  const setBlankTemplateBtl = (qKey: string, value: BtlValue) => {
+    setBlankTemplateQuestionBtl((prev) => {
+      const next = { ...(prev || {}), [qKey]: value };
+      lsSet(blankTemplateQuestionBtlStorageKey, next);
+      return next;
+    });
+  };
+
+  const blankTemplateBtlRow = useMemo(() => {
+    return questions.map((q) => {
+      const v = (blankTemplateQuestionBtl || ({} as any))[q.key];
+      if (v === '' || v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) return v;
+      return '' as BtlValue;
+    });
+  }, [questions, blankTemplateQuestionBtl]);
+
+  const blankTemplateBtlMaxRow = useMemo(() => {
+    const btlMax: number[] = [0, 0, 0, 0, 0, 0];
+    questions.forEach((q, i) => {
+      const b = blankTemplateBtlRow[i];
+      if (typeof b === 'number' && b >= 1 && b <= 6) btlMax[b - 1] += q.max;
+    });
+    return btlMax;
+  }, [questions, blankTemplateBtlRow]);
+
+  const visibleBtls = useMemo(() => {
+    const set = new Set<number>();
+    questions.forEach((q) => {
+      const b = (blankTemplateQuestionBtl || ({} as any))[q.key] ?? '';
+      if (b === 1 || b === 2 || b === 3 || b === 4 || b === 5 || b === 6) set.add(b);
+    });
+    if (set.size === 0) return [1, 2, 3, 4, 5, 6] as const;
+    return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n)) as Array<1 | 2 | 3 | 4 | 5 | 6>;
+  }, [questions, blankTemplateQuestionBtl]);
+
+
+const blankTemplateCoMax = useMemo((): Record<number, number> => {
+    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
+    const sums: Record<number, number> = {};
+    for (const c of blankTemplateCos) sums[c] = 0;
+    if (!cos || !marks) return sums;
+    for (let i = 0; i < Math.min(cos.length, marks.length, questions.length); i++) {
+      const c = Number(cos[i]);
+      if (c >= 1 && c <= 6 && sums[c] != null) sums[c] += Number(marks[i] || 0);
+    }
+    return sums;
+  }, [iqacPattern, blankTemplateCos, questions.length]);
+
+  const colSpan = 4 + questions.length + 1 + blankTemplateCos.length * 2 + visibleBtls.length * 2;
 
   const activeSheet: TcplSheetState = isTcplLike ? (tcplSheet || {}) : (theorySheet || {});
 
@@ -425,9 +523,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     classType: string;
     tcplLikeKind: 'TCPR' | 'TCPL';
     theoryQuestionBtl: Record<string, BtlValue>;
+    blankTemplateQuestionBtl?: Record<string, BtlValue>;
     tcplQuestionBtl: Record<string, BtlValue>;
     theorySheet: TcplSheetState;
     tcplSheet: TcplSheetState;
+    recordMarksForCo5?: { enabled: boolean; expCount: number; maxPerExp: number } | null;
   };
 
   const buildPayload = (): ModelDraftPayload => {
@@ -437,9 +537,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       classType: String(normalizedClassType ?? ''),
       tcplLikeKind,
       theoryQuestionBtl: (theoryQuestionBtl || {}) as Record<string, BtlValue>,
+      blankTemplateQuestionBtl: (blankTemplateQuestionBtl || {}) as Record<string, BtlValue>,
       tcplQuestionBtl: (tcplQuestionBtl || {}) as Record<string, BtlValue>,
       theorySheet: (theorySheet || {}) as TcplSheetState,
       tcplSheet: (tcplSheet || {}) as TcplSheetState,
+      recordMarksForCo5: isTcplLike && !tcplReviewIsCo5
+        ? { enabled: tcplModelRecordEnabled, expCount: tcplModelRecordExpCount, maxPerExp: tcplModelRecordMaxPerExp }
+        : null,
     };
   };
 
@@ -474,6 +578,19 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       } catch {
         // ignore
       }
+    }
+
+    if (raw.blankTemplateQuestionBtl && typeof raw.blankTemplateQuestionBtl === 'object') {
+      setBlankTemplateQuestionBtl({
+        ...defaultBlankTemplateQuestionBtl,
+        ...(raw.blankTemplateQuestionBtl as Record<string, BtlValue>),
+      });
+      try {
+        lsSet(blankTemplateQuestionBtlStorageKey, {
+          ...defaultBlankTemplateQuestionBtl,
+          ...(raw.blankTemplateQuestionBtl as Record<string, BtlValue>),
+        });
+      } catch {}
     }
 
     if (raw.theoryQuestionBtl && typeof raw.theoryQuestionBtl === 'object') {
@@ -513,6 +630,15 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       } catch {
         // ignore
       }
+    }
+
+    if (raw.recordMarksForCo5 && typeof raw.recordMarksForCo5 === 'object') {
+      setTcplModelRecordEnabled(Boolean((raw.recordMarksForCo5 as any).enabled));
+      const ec = Number((raw.recordMarksForCo5 as any).expCount);
+      setTcplModelRecordExpCount(Number.isFinite(ec) && ec >= 1 ? Math.floor(ec) : 3);
+      const mpe = Number((raw.recordMarksForCo5 as any).maxPerExp);
+      setTcplModelRecordMaxPerExp(Number.isFinite(mpe) && mpe > 0 ? mpe : 10);
+      setTcplModelRecordLocked(true); // Always lock by default when loading from saved state
     }
 
     if (raw.theorySheet && typeof raw.theorySheet === 'object') {
@@ -591,6 +717,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const saveLocal = () => {
     try {
       lsSet(qpTypeStorageKey, String(qpType ?? ''));
+      lsSet(blankTemplateQuestionBtlStorageKey, blankTemplateQuestionBtl);
       lsSet(theoryQuestionBtlStorageKey, theoryQuestionBtl);
       lsSet(tcplQuestionBtlStorageKey, tcplQuestionBtl);
       lsSet(tcplSheetStorageKey, tcplSheet);
@@ -637,7 +764,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       for (const s of students) {
         const sid = String(s.id);
         clearedTheory[sid] = { absent: false, absentKind: undefined, q: { ...emptyTheoryQ } };
-        clearedTcpl[sid] = { absent: false, absentKind: undefined, lab: '', q: { ...emptyTcplQ } };
+        clearedTcpl[sid] = { absent: false, absentKind: undefined, lab: '', q: { ...emptyTcplQ }, recordMarksCo5: [] };
       }
 
       setTheorySheet(clearedTheory);
@@ -764,6 +891,14 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           });
           if (tcplReviewIsCo5) {
             coMark[4] += labNum;
+          } else if (tcplModelRecordEnabled) {
+            // Record mode: CO1-CO4 equal LAB share; CO5 = CIA(lab×4/30) + (avg/maxPerExp)×2
+            for (let i = 0; i < 4; i++) coMark[i] += labNum / tcplCoCount;
+            coMark[4] += (labNum / tcplLabMax) * 4.0;
+            const _recRaw = ((row.recordMarksCo5 ?? []) as (number | '')[]);
+            const _recValid = _recRaw.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+            const _recAvg = _recValid.length > 0 ? _recValid.reduce((a, b) => a + b, 0) / _recValid.length : 0;
+            coMark[4] += (_recAvg / tcplModelRecordMaxPerExp) * 2.0;
           } else {
             for (let i = 0; i < coCount; i++) coMark[i] += labNum / coCount;
           }
@@ -1449,6 +1584,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       });
 
       const q10Col = normalizedQpType === 'QP2' ? headerRow.findIndex((h) => extractQLabel(h) === 'Q10') : -1;
+      const hasSeparateQ10Def = defs.some((d) => {
+        const key = String(d.key || '').trim().toLowerCase();
+        const label = String(d.label || '').trim().toUpperCase();
+        return key === 'q10' || label === 'Q10';
+      });
 
       const labCol = isTcplLike
         ? findCol((h) => h === String(tcplLabLabel || '').toLowerCase() || h.startsWith(String(tcplLabLabel || '').toLowerCase()))
@@ -1488,8 +1628,9 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           qObj[q.key] = Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
         });
 
-        // QP2: template has Q9 (8) and Q10 (8) but UI has only Q9 (16).
-        if (normalizedQpType === 'QP2' && q10Col >= 0) {
+        // Legacy QP2 templates can split Q9/Q10 in Excel while UI has only collapsed Q9.
+        // Merge only when this sheet does not already define a separate Q10 field.
+        if (normalizedQpType === 'QP2' && q10Col >= 0 && !hasSeparateQ10Def) {
           const q9 = defs.find((d) => String(d.key || '').toLowerCase() === 'q9' || String(d.label || '').trim().toUpperCase() === 'Q9');
           if (q9) {
             const add = Number(rowArr[q10Col]);
@@ -1605,7 +1746,10 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   };
 
   // BTL attainment columns are dynamic (only enabled/used BTLs are shown, like CIA sheets).
-  const tcplColSpan = 4 + tcplQuestions.length + 1 + 1 + tcplCoCount * 2 + tcplVisibleBtls.length * 2;
+  const tcplRecordExtraCols = (isTcplLike && !tcplReviewIsCo5 && tcplModelRecordEnabled) ? tcplModelRecordExpCount : 0;
+  // +1 for 'Total Average' display column when record mode is active
+  const tcplRecordAvgCol = tcplRecordExtraCols > 0 ? 1 : 0;
+  const tcplColSpan = 4 + tcplQuestions.length + 1 + 1 + tcplRecordExtraCols + tcplRecordAvgCol + tcplCoCount * 2 + tcplVisibleBtls.length * 2;
   const theoryVisibleBtls = useMemo(() => {
     const set = new Set<number>();
     theoryQuestions.forEach((q) => {
@@ -2199,6 +2343,109 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
           </div>
         ) : null}
 
+        {isTcplLike && !tcplReviewIsCo5 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '10px 16px', background: '#fef3c7', border: '1px solid #d97706', borderRadius: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1, minWidth: '300px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, cursor: tcplModelRecordLocked ? 'not-allowed' : 'pointer', opacity: tcplModelRecordLocked ? 0.8 : 1 }}>
+                <input
+                  type="checkbox"
+                  disabled={tcplModelRecordLocked}
+                  checked={tcplModelRecordEnabled}
+                  onChange={(e) => setTcplModelRecordEnabled(e.target.checked)}
+                />
+                Enable Record Marks for CO5 (Model Lab)
+              </label>
+              {tcplModelRecordEnabled && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: tcplModelRecordLocked ? 0.7 : 1 }}>
+                  No. of Experiments:
+                  <select
+                    disabled={tcplModelRecordLocked}
+                    value={tcplModelRecordExpCount}
+                    onChange={(e) => setTcplModelRecordExpCount(Number(e.target.value))}
+                    style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706', cursor: tcplModelRecordLocked ? 'not-allowed' : 'default' }}
+                  >
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {tcplModelRecordEnabled && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: tcplModelRecordLocked ? 0.7 : 1 }}>
+                  Max mark / experiment:
+                  <input
+                    type="number"
+                    disabled={tcplModelRecordLocked}
+                    min={1}
+                    step={1}
+                    value={tcplModelRecordMaxPerExp}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v >= 1) setTcplModelRecordMaxPerExp(v);
+                    }}
+                    style={{ width: 70, fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706', cursor: tcplModelRecordLocked ? 'not-allowed' : 'default' }}
+                  />
+                </label>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              {tcplModelRecordEnabled && (
+                <span style={{ fontSize: 12, color: '#92400e', fontWeight: 500 }}>
+                  CO1–CO4: LAB/5 each (≤6) | CO5: CIA {`(LAB×4/30)`} + (avg/{tcplModelRecordMaxPerExp})×2
+                </span>
+              )}
+
+              {tcplModelRecordLocked ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isPublished) {
+                      setPublishedEditModalOpen(true);
+                    } else {
+                      setTcplModelRecordLocked(false);
+                    }
+                  }}
+                  className="obe-btn"
+                  style={{ 
+                    padding: '6px 14px', 
+                    fontSize: 12, 
+                    background: '#d97706', 
+                    color: '#fff', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 6,
+                    height: 'fit-content'
+                  }}
+                  title={isPublished ? 'Record configuration is locked because marks are published. Request edit to change.' : 'Unlock configuration'}
+                >
+                  <i className="fas fa-edit"></i>
+                  Edit
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setTcplModelRecordLocked(true)}
+                  className="obe-btn"
+                  style={{ 
+                    padding: '6px 14px', 
+                    fontSize: 12, 
+                    background: '#059669', 
+                    color: '#fff', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: 6,
+                    height: 'fit-content'
+                  }}
+                >
+                  <i className="fas fa-save"></i>
+                  Save
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
           <table
             className="obe-table"
@@ -2601,13 +2848,21 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                                         const next = Number(raw);
                                         if (!Number.isFinite(next)) return;
                                         if (next > q.max) {
-                                          e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
-                                          e.currentTarget.reportValidity();
-                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                          showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                          setQ(q.key, '', q.max);
                                           return;
                                         }
                                         e.currentTarget.setCustomValidity('');
                                         setQ(q.key, raw, q.max);
+                                      }}
+                                      onBlur={(e) => {
+                                        const raw = e.target.value;
+                                        if (raw === '') return;
+                                        const next = Number(raw);
+                                        if (!Number.isFinite(next) || next < 0 || next > q.max) {
+                                          showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                          setQ(q.key, '', q.max);
+                                        }
                                       }}
                                       onFocus={(e) => e.currentTarget.select()}
                                       onKeyDown={onCellKeyDown(q.key)}
@@ -2648,26 +2903,26 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                       </th>
                     </tr>
                     <tr>
-                      <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }} rowSpan={3}>
+                      <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }} rowSpan={4}>
                         S.No
                       </th>
-                      <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
+                      <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }} rowSpan={4}>
                         R.No
                       </th>
-                      <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
+                      <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={4}>
                         Name of the Students
                       </th>
-                      <th style={{ ...cellTh, minWidth: 32 }} rowSpan={3}>
+                      <th style={{ ...cellTh, minWidth: 32 }} rowSpan={4}>
                         AB
                       </th>
 
                       <th style={cellTh} colSpan={questions.length}>
                         QUESTIONS
                       </th>
-                      <th style={cellTh} rowSpan={3}>
+                      <th style={cellTh} rowSpan={4}>
                         Total
                       </th>
-                      <th style={cellTh} colSpan={4}>
+                      <th style={cellTh} colSpan={blankTemplateCos.length * 2}>
                         CO ATTAINMENT
                       </th>
                       <th style={cellTh} colSpan={visibleBtls.length * 2}>
@@ -2680,16 +2935,73 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           {q.label}
                         </th>
                       ))}
-                      <th style={cellTh} colSpan={2}>
-                        CO-1
-                      </th>
-                      <th style={cellTh} colSpan={2}>
-                        CO-2
-                      </th>
+                      {blankTemplateCos.map((c) => (
+                        <th key={`co-head-${c}`} style={cellTh} colSpan={2}>CO-{c}</th>
+                      ))}
                       {visibleBtls.map((n) => (
                         <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                           BTL-{n}
                         </th>
+                      ))}
+                    </tr>
+                    <tr>
+                      {questions.map((q) => {
+                        const v = (blankTemplateQuestionBtl || ({} as any))[q.key] ?? '';
+                        const display = v === '' ? '-' : String(v);
+                        return (
+                          <th key={`blank-btl-sel-${q.key}`} style={{ ...cellTh, width: 46, minWidth: 46, padding: 0 }}>
+                            <div style={{ position: 'relative', minWidth: 40 }}>
+                              <div
+                                style={{
+                                  width: '100%',
+                                  fontSize: 11,
+                                  padding: '4px 4px',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: 8,
+                                  background: '#fff',
+                                  textAlign: 'center',
+                                  userSelect: 'none',
+                                  margin: 2,
+                                }}
+                                title={`BTL: ${display}`}
+                              >
+                                {display}
+                              </div>
+                              <select
+                                style={{
+                                  position: 'absolute',
+                                  inset: 0,
+                                  width: '100%',
+                                  height: '100%',
+                                  opacity: 0,
+                                  cursor: 'pointer',
+                                }}
+                                value={v}
+                                onChange={(e) => {
+                                  if (publishedEditLocked) return;
+                                  const val = e.target.value;
+                                  if (val === '') setBlankTemplateBtl(q.key, '');
+                                  else setBlankTemplateBtl(q.key, Number(val) as BtlValue);
+                                }}
+                                disabled={publishedEditLocked}
+                              >
+                                <option value="">-</option>
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                                <option value="6">6</option>
+                              </select>
+                            </div>
+                          </th>
+                        );
+                      })}
+                      {Array.from({ length: blankTemplateCos.length + visibleBtls.length }).flatMap((_, i) => (
+                        <React.Fragment key={`btlsel-spacer-${i}`}>
+                          <th style={cellTh}></th>
+                          <th style={cellTh}></th>
+                        </React.Fragment>
                       ))}
                     </tr>
                     <tr>
@@ -2698,7 +3010,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           {q.max}
                         </th>
                       ))}
-                      {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
+                      {Array.from({ length: blankTemplateCos.length + visibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={i}>
                           <th style={{ ...cellTh, minWidth: 52 }}>
                             <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
@@ -2886,13 +3198,21 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                                     const next = Number(raw);
                                     if (!Number.isFinite(next)) return;
                                     if (next > q.max) {
-                                      e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
-                                      e.currentTarget.reportValidity();
-                                      window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                      showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                      setQ(q.key, '', q.max);
                                       return;
                                     }
                                     e.currentTarget.setCustomValidity('');
                                     setQ(q.key, raw, q.max);
+                                  }}
+                                  onBlur={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') return;
+                                    const next = Number(raw);
+                                    if (!Number.isFinite(next) || next < 0 || next > q.max) {
+                                      showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                      setQ(q.key, '', q.max);
+                                    }
                                   }}
                                   onFocus={(e) => e.currentTarget.select()}
                                   onKeyDown={onCellKeyDown(q.key)}
@@ -2903,21 +3223,47 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           })}
 
                           <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{fmt1(assignedTotal != null ? assignedTotal : total)}</td>
+                          {blankTemplateCos.map((c) => {
+                            const patternCos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
+                            let coMark = 0;
+                            if (patternCos) {
+                              for (let qi = 0; qi < questions.length; qi++) {
+                                if (Number(patternCos[qi]) === c) coMark += qMarks[questions[qi].key] || 0;
+                              }
+                            }
+                            const coMaxVal = blankTemplateCoMax[c] || 0;
+                            return (
+                              <React.Fragment key={`co-cell-${idx}-${c}`}>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{coMark}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{coMaxVal > 0 ? `${Math.round((coMark / coMaxVal) * 100)}%` : '\u2014'}</span></td>
+                              </React.Fragment>
+                            );
+                          })}
+
+                          {visibleBtls.flatMap((n) => {
+                            let btlMark = 0;
+                            for (let qi = 0; qi < questions.length; qi++) {
+                              const assignedBtl = blankTemplateBtlRow[qi];
+                              if (assignedBtl === n) btlMark += qMarks[questions[qi].key] || 0;
+                            }
+                            const maxForBtl = blankTemplateBtlMaxRow[n - 1] || 0;
+                            let btlPct = 0;
+                            if (!absent && maxForBtl > 0) btlPct = (btlMark / maxForBtl) * 100;
+                            let cTd = cellTd;
+                            if (!absent && maxForBtl > 0) {
+                              if (btlPct >= 60) cTd = { ...cellTd, backgroundColor: '#d4edda', color: '#155724' };
+                              else cTd = { ...cellTd, backgroundColor: '#f8d7da', color: '#721c24' };
+                            }
+                            return (
+                              <React.Fragment key={`${idx}-btl-${n}`}>
+                                <td style={{ ...cTd, textAlign: 'center' }}>{absent || maxForBtl === 0 ? '-' : fmt1(btlMark)}</td>
+                                <td style={{ ...cTd, textAlign: 'center' }}>{absent || maxForBtl === 0 ? '-' : `${Math.round(btlPct)}%`}</td>
+                              </React.Fragment>
+                            );
+                          })}
                         </>
                       );
                     })()}
-
-                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-
-                    {visibleBtls.flatMap((n) => (
-                      <React.Fragment key={`${idx}-btl-${n}`}>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
-                      </React.Fragment>
-                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -2958,6 +3304,17 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                   <th style={{ ...cellTh, minWidth: 56 }} rowSpan={3}>
                     {tcplLabLabel}
                   </th>
+
+                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
+                    <th key={`rec-head1-${i}`} style={{ ...cellTh, minWidth: 52, background: '#fef3c7', color: '#92400e' }} rowSpan={3}>
+                      RE{i + 1}<br /><span style={{ fontSize: 10 }}>/{tcplModelRecordMaxPerExp}</span>
+                    </th>
+                  ))}
+                  {tcplRecordAvgCol > 0 && (
+                    <th style={{ ...cellTh, minWidth: 60, background: '#fde68a', color: '#78350f' }} rowSpan={3}>
+                      Total<br />Avg<br /><span style={{ fontSize: 10 }}>/2</span>
+                    </th>
+                  )}
 
                   <th style={cellTh} colSpan={tcplCoCount * 2}>
                     CO ATTAINMENT
@@ -3005,6 +3362,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                   </th>
                   <th style={cellTh}>&nbsp;</th>
                   <th style={cellTh}>&nbsp;</th>
+
+                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
+                    <th key={`rec-btl4-${i}`} style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>
+                  ))}
+                  {tcplRecordAvgCol > 0 && <th style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>}
 
                   {/* CO mark/% + BTL mark/% labels */}
                   {Array.from({ length: tcplCoCount + tcplVisibleBtls.length }).flatMap((_, i) => (
@@ -3074,6 +3436,11 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                   <th style={cellTh}>&nbsp;</th>
                   <th style={cellTh}>&nbsp;</th>
 
+                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
+                    <th key={`rec-btl5-${i}`} style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>
+                  ))}
+                  {tcplRecordAvgCol > 0 && <th style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>}
+
                   {/* Max marks are shown in the 'Name / Max Marks' row (Excel-style). */}
                   {Array.from({ length: tcplCoCount * 2 + tcplVisibleBtls.length * 2 }).map((_, i) => (
                     <th key={`tailblank-${i}`} style={cellTh}>
@@ -3097,6 +3464,13 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
                   <th style={cellTh}>{tcplTotalMax}</th>
                   <th style={cellTh}>30</th>
+
+                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
+                    <th key={`rec-maxrow-${i}`} style={{ ...cellTh, background: '#fef3c7', color: '#92400e' }}>{tcplModelRecordMaxPerExp}</th>
+                  ))}
+                  {tcplRecordAvgCol > 0 && (
+                    <th style={{ ...cellTh, background: '#fde68a', color: '#78350f' }}>2</th>
+                  )}
 
                   {/* CO max marks + % */}
                   {tcplCoMaxRow.flatMap((max, i) => (
@@ -3148,6 +3522,14 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                       if (tcplReviewIsCo5) {
                         // TCPR: add REVIEW only to CO5.
                         coMark[4] += labNum;
+                      } else if (tcplModelRecordEnabled) {
+                        // Record mode: CO1-CO4 equal LAB share; CO5 = CIA(lab×4/30) + (avg/maxPerExp)×2
+                        for (let i = 0; i < 4; i++) coMark[i] += labNum / tcplCoCount;
+                        coMark[4] += (labNum / tcplLabMax) * 4.0;
+                        const _recRawRow = ((row.recordMarksCo5 ?? []) as (number | '')[]);
+                        const _recValidRow = _recRawRow.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
+                        const _recAvgRow = _recValidRow.length > 0 ? _recValidRow.reduce((a, b) => a + b, 0) / _recValidRow.length : 0;
+                        coMark[4] += (_recAvgRow / tcplModelRecordMaxPerExp) * 2.0;
                       } else {
                         // TCPL: add equal LAB share to each CO.
                         for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
@@ -3203,6 +3585,18 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           ...row,
                           lab: clampCell(raw, tcplLabMax),
                         });
+                      };
+
+                      const setRecordMark = (expIdx: number, raw: string) => {
+                        if (absent && !canEditAbsent) return;
+                        const next = Number(raw);
+                        const nextVal: number | '' = raw === '' ? '' : (Number.isFinite(next) ? Math.max(0, Math.min(tcplModelRecordMaxPerExp, next)) : '');
+                        const currentRecs: (number | '')[] = Array.from({ length: tcplModelRecordExpCount }, (_, i) => {
+                          const v = (row.recordMarksCo5 ?? [])[i];
+                          return typeof v === 'number' ? v : '';
+                        });
+                        currentRecs[expIdx] = nextVal;
+                        setTcplCell(rowKey, { ...row, recordMarksCo5: currentRecs });
                       };
 
                       const setQ = (qKey: string, raw: string, max: number) => {
@@ -3337,13 +3731,21 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                               const next = Number(raw);
                               if (!Number.isFinite(next)) return;
                               if (next > q.max) {
-                                e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
-                                e.currentTarget.reportValidity();
-                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                                showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                setQ(q.key, '', q.max);
                                 return;
                               }
                               e.currentTarget.setCustomValidity('');
                               setQ(q.key, raw, q.max);
+                            }}
+                            onBlur={(e) => {
+                              const raw = e.target.value;
+                              if (raw === '') return;
+                              const next = Number(raw);
+                              if (!Number.isFinite(next) || next < 0 || next > q.max) {
+                                showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
+                                setQ(q.key, '', q.max);
+                              }
                             }}
                             onFocus={(e) => e.currentTarget.select()}
                             onKeyDown={onCellKeyDown(q.key)}
@@ -3373,19 +3775,87 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
                           const next = Number(raw);
                           if (!Number.isFinite(next)) return;
                           if (next > tcplLabMax) {
-                            e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${tcplLabMax}`);
-                            e.currentTarget.reportValidity();
-                            window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
+                            showMarkLimitPopup(e.currentTarget, `LAB mark cannot be higher than ${tcplLabMax}`, s as any);
+                            setLab('');
                             return;
                           }
                           e.currentTarget.setCustomValidity('');
                           setLab(raw);
+                        }}
+                        onBlur={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') return;
+                          const next = Number(raw);
+                          if (!Number.isFinite(next) || next < 0 || next > tcplLabMax) {
+                            showMarkLimitPopup(e.currentTarget, `LAB mark cannot be higher than ${tcplLabMax}`, s as any);
+                            setLab('');
+                          }
                         }}
                         onFocus={(e) => e.currentTarget.select()}
                         onKeyDown={onCellKeyDown('lab')}
                         style={excelInputStyle}
                       />
                     </td>
+
+                    {/* Record experiment marks for CO5 (when enabled) */}
+                    {tcplRecordExtraCols > 0 && (() => {
+                      const recRaw = (row.recordMarksCo5 ?? []) as (number | '')[];
+                      const recNums = Array.from({ length: tcplModelRecordExpCount }, (_, i) => {
+                        const v = recRaw[i];
+                        return typeof v === 'number' && Number.isFinite(v) ? v : null;
+                      });
+                      const recValid = recNums.filter((x): x is number => x !== null);
+                      const recAvg = recValid.length > 0 ? recValid.reduce((a, b) => a + b, 0) / recValid.length : null;
+                      const recScaled = recAvg !== null ? (recAvg / tcplModelRecordMaxPerExp) * 2.0 : null;
+                      return (
+                        <>
+                          {Array.from({ length: tcplRecordExtraCols }).map((_, expIdx) => {
+                            const recVal = recRaw[expIdx];
+                            const displayVal = typeof recVal === 'number' ? String(recVal) : '';
+                            return (
+                              <td key={`rec-${idx}-${expIdx}`} style={{ ...cellTd, textAlign: 'center', background: '#fef9e7' }}>
+                                <input
+                                  ref={registerRef(`${rowKey}|rec${expIdx}`)}
+                                  type="text"
+                                  inputMode="decimal"
+                                  disabled={absent && !canEditAbsent}
+                                  value={displayVal}
+                                  title={`Record Exp ${expIdx + 1} (Max: ${tcplModelRecordMaxPerExp})`}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') { setRecordMark(expIdx, ''); return; }
+                                    const next = Number(raw);
+                                    if (!Number.isFinite(next)) return;
+                                    if (next > tcplModelRecordMaxPerExp) {
+                                      showMarkLimitPopup(e.currentTarget, `Record mark cannot exceed ${tcplModelRecordMaxPerExp}`, s as any);
+                                      setRecordMark(expIdx, '');
+                                      return;
+                                    }
+                                    setRecordMark(expIdx, raw);
+                                  }}
+                                  onBlur={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '') return;
+                                    const next = Number(raw);
+                                    if (!Number.isFinite(next) || next < 0 || next > tcplModelRecordMaxPerExp) {
+                                      showMarkLimitPopup(e.currentTarget, `Record mark cannot exceed ${tcplModelRecordMaxPerExp}`, s as any);
+                                      setRecordMark(expIdx, '');
+                                    }
+                                  }}
+                                  onFocus={(e) => e.currentTarget.select()}
+                                  onKeyDown={onCellKeyDown(`rec${expIdx}`)}
+                                  style={{ ...excelInputStyle, background: 'transparent' }}
+                                />
+                              </td>
+                            );
+                          })}
+                          {/* Total Average column: avg scaled to /2 */}
+                          <td style={{ ...cellTd, textAlign: 'center', background: '#fde68a', color: '#78350f', fontWeight: 700 }}>
+                            {recScaled !== null ? fmt1(recScaled) : ''}
+                          </td>
+                        </>
+                      );
+                    })()}
 
                     {/* CO attainment: MARK + % */}
                     {coMark.flatMap((m, i) => (

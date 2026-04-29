@@ -5,7 +5,7 @@ import {
   fetchTeachingAssignmentEnabledAssessmentsInfo,
   iqacResetAssessment,
   setTeachingAssignmentEnabledAssessmentsInfo,
-  DraftAssessmentKey,
+  IqacResetAssessmentKey,
 } from '../../services/obe';
 import { clearLocalDraftCache } from '../../utils/obeDraftCache';
 import { normalizeClassType } from '../../constants/classTypes';
@@ -142,7 +142,7 @@ export default function AcademicControllerCoursePage(): JSX.Element {
     if (!teachingAssignmentId) return;
     const ok = window.confirm('Resetting this course will delete all entered exam data for this teaching assignment. This cannot be undone. Proceed?');
     if (!ok) return;
-    const assessments: DraftAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'];
+    const assessments: IqacResetAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cqi'];
     try {
       // sequentially reset each assessment; ignore errors for individual ones but surface at end
       for (const a of assessments) {
