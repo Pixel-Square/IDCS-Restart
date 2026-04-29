@@ -138,13 +138,22 @@ class RequestTemplateDetailSerializer(RequestTemplateSerializer):
 
 class ApplicantSerializer(serializers.ModelSerializer):
     """Minimal user serializer for applicant info"""
+    name = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     staff_id = serializers.SerializerMethodField()
+    department = serializers.SerializerMethodField()
+    date_of_join = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name', 'staff_id']
+        fields = [
+            'id', 'username', 'email', 'name', 'full_name',
+            'first_name', 'last_name', 'staff_id', 'department', 'date_of_join',
+        ]
         read_only_fields = fields
+
+    def get_name(self, obj):
+        return obj.get_full_name() or obj.username
     
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
@@ -156,6 +165,24 @@ class ApplicantSerializer(serializers.ModelSerializer):
             return profile.staff_id if profile else obj.username
         except Exception:
             return obj.username
+
+    def get_department(self, obj):
+        try:
+            profile = getattr(obj, 'staff_profile', None)
+            if profile and profile.department:
+                return profile.department.name or profile.department.short_name or ''
+        except Exception:
+            pass
+        return ''
+
+    def get_date_of_join(self, obj):
+        try:
+            profile = getattr(obj, 'staff_profile', None)
+            if profile and profile.date_of_join:
+                return profile.date_of_join
+        except Exception:
+            pass
+        return None
 
 
 class ApproverSerializer(serializers.ModelSerializer):

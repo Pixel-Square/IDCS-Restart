@@ -50,6 +50,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   hr_staff_salary: Wallet,
   staff_salary: Wallet,
   staff_requests_approvals: Bell,
+  event_attending: FileText,
   requests_hub: Bell,
   applications_admin: Layout,
   applications_inbox: ClipboardList,
@@ -605,6 +606,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   
   if (canAccessPendingApprovals && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
+  }
+
+  // Event Attending: visible to all staff, HR, and other approvers
+  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PRINCIPAL', 'PS', 'HOD', 'AHOD', 'ADMIN'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
+    items.push({ key: 'event_attending', label: 'Event Attending', to: '/staff-requests/event-attending' });
   }
 
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission

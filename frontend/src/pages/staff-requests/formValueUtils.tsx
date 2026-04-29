@@ -111,11 +111,12 @@ function isPdfFile(filename: string, href: string): boolean {
   return getFileExtension(filename, href) === 'pdf';
 }
 
-function FilePreviewLink({ filename, href }: { filename: string; href: string }) {
+export function FilePreviewLink({ filename, href, className, children }: { filename: string; href: string; className?: string; children?: React.ReactNode }) {
   const [open, setOpen] = React.useState(false);
   const imageMode = isImageFile(filename, href);
   const pdfMode = isPdfFile(filename, href);
-  const previewable = imageMode || pdfMode;
+  const isDataUrlImage = String(href).startsWith('data:image');
+  const previewable = imageMode || pdfMode || isDataUrlImage;
 
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (!previewable) return;
@@ -130,9 +131,9 @@ function FilePreviewLink({ filename, href }: { filename: string; href: string })
         target={previewable ? undefined : '_blank'}
         rel={previewable ? undefined : 'noreferrer'}
         onClick={onClick}
-        className="text-blue-700 underline hover:text-blue-900"
+        className={className || "text-blue-700 underline hover:text-blue-900"}
       >
-        {filename}
+        {children || filename}
       </a>
 
       {open && (
@@ -160,7 +161,7 @@ function FilePreviewLink({ filename, href }: { filename: string; href: string })
             </div>
 
             <div className="flex-1 min-h-[55vh] bg-gray-100">
-              {imageMode ? (
+              {imageMode || isDataUrlImage ? (
                 <div className="w-full h-full overflow-auto flex items-center justify-center p-3">
                   <img src={href} alt={filename} className="max-w-full max-h-full object-contain" />
                 </div>

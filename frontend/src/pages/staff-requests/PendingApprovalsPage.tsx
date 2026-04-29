@@ -96,10 +96,10 @@ export default function PendingApprovalsPage() {
         comments: actionComment.trim(),
       });
       setQuickAction(null);
-      load();
-      loadHistory();
+      await Promise.all([load(), loadHistory()]);
     } catch (e: any) {
       setActionError(e?.response?.data?.detail || `Failed to ${quickAction.type} request`);
+    } finally {
       setSubmitting(false);
     }
   };

@@ -35,6 +35,7 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { path: '/staff/pbas',                 label: 'PBAS Submission',               icon: 'PenLine',       group: 'Staff',    roles: ['STAFF'] },
   { path: '/my-requests',                label: 'My Requests',                   icon: 'ClipboardList', group: 'Staff',    roles: ['STAFF'] },
   { path: '/pending-approvals',          label: 'Pending Approvals',             icon: 'CheckSquare',   group: 'Staff',    roles: ['STAFF', 'HOD'] },
+  { path: '/staff-requests/event-attending', label: 'Event Attending',            icon: 'FileText',      group: 'Staff',    roles: ['STAFF', 'HOD', 'AHOD', 'IQAC', 'HAA', 'PRINCIPAL', 'HR', 'PS', 'ADMIN'] },
 
   // ── Common / Shared ───────────────────────────────────────────────────────
   { path: '/feedback',                   label: 'Feedback',                      icon: 'Star',          group: 'Common',   roles: ['STAFF', 'IQAC'] },

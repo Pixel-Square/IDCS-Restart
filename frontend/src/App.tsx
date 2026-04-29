@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
@@ -78,6 +78,7 @@ import ExtStaffProfilesPage from './pages/EXTStaff/ExtStaffProfilesPage';
 import SalaryPage from './pages/staff/SalaryPage';
 import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
+import EventAttendingPage from './pages/staff-requests/EventAttendingPage';
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
 import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
 import ApplicationsPage from './pages/applications/ApplicationsPage';
@@ -654,6 +655,10 @@ export default function App() {
                 <Route
                   path="/staff-requests/pending-approvals"
                   element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                />
+                <Route
+                  path="/staff-requests/event-attending"
+                  element={<ProtectedRoute user={user} element={<EventAttendingPage />} />}
                 />
                 
                 <Route

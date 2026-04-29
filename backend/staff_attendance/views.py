@@ -454,17 +454,66 @@ class HolidayViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, StaffAttendanceConfigPermission]
     ordering = ['-date']
 
+    def get_permissions(self):
+        """
+        Override permissions per action:
+        - Safe read-only actions (list, retrieve, my_holidays, departments):
+          any authenticated user can access so staff calendars show holidays.
+        - All write/admin actions: require StaffAttendanceConfigPermission.
+        """
+        read_only_actions = {'list', 'retrieve', 'my_holidays', 'departments'}
+        if self.action in read_only_actions:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), StaffAttendanceConfigPermission()]
+
     def get_serializer_class(self):
         if self.action == 'create':
             return HolidayCreateSerializer
         return HolidaySerializer
 
+
     @action(detail=False, methods=['get'])
     def departments(self, request):
-        """Get list of departments for holiday assignment"""
+        """Get list of all departments (teaching and non-teaching) for holiday assignment"""
         from academics.models import Department
-        depts = Department.objects.filter(is_teaching=True).values('id', 'name', 'code', 'short_name').order_by('code')
+        depts = Department.objects.all().values('id', 'name', 'code', 'short_name', 'is_teaching').order_by('is_teaching', 'code')
         return Response(list(depts))
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_holidays(self, request):
+        """Get holidays that apply to the requesting user's department.
+
+        Rules:
+          - A holiday with no departments assigned applies to ALL staff.
+          - A holiday with specific departments assigned only applies to staff
+            whose department is in that list.
+        """
+        # Determine the requesting user's department
+        user_department = None
+        try:
+            profile = getattr(request.user, 'staff_profile', None)
+            if profile:
+                if hasattr(profile, 'get_current_department'):
+                    user_department = profile.get_current_department()
+                if not user_department:
+                    user_department = getattr(profile, 'department', None)
+        except Exception:
+            user_department = None
+
+        if user_department:
+            # Return holidays that are either global (no dept assigned, i.e. empty M2M)
+            # or include this specific department.
+            # For M2M, departments__isnull=True matches rows with no related dept records.
+            qs = Holiday.objects.filter(
+                Q(departments__isnull=True) | Q(departments=user_department)
+            ).distinct().order_by('-date')
+        else:
+            # No department info — only return global (all-department) holidays
+            qs = Holiday.objects.filter(departments__isnull=True).distinct().order_by('-date')
+
+        serializer = HolidaySerializer(qs, many=True)
+        return Response(serializer.data)
+
 
     @action(detail=False, methods=['post'])
     def generate_sundays(self, request):
