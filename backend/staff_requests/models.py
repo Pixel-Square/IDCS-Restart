@@ -543,3 +543,227 @@ class ApprovalLog(models.Model):
     
     def __str__(self):
         return f"Step {self.step_order}: {self.action} by {self.approver.get_full_name() or self.approver.username}"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Event Attending Module
+# ══════════════════════════════════════════════════════════════════════
+
+class EventAttendingForm(models.Model):
+    """
+    Staff expense reimbursement form linked to an approved On Duty request.
+    Stores itemised travel, food, other expenses and advance details.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    staff = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='event_attending_forms',
+    )
+    on_duty_request = models.ForeignKey(
+        StaffRequest,
+        on_delete=models.CASCADE,
+        related_name='event_attending_forms',
+    )
+
+    # Itemised expenses stored as JSON arrays
+    travel_expenses = models.JSONField(default=list, help_text='Array of travel expense rows')
+    food_expenses = models.JSONField(default=list, help_text='Array of food expense rows')
+    other_expenses = models.JSONField(default=list, help_text='Array of other expense rows')
+
+    total_fees_spend = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0, null=True, blank=True,
+    )
+    advance_amount_received = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0, blank=True,
+    )
+    advance_date = models.DateField(null=True, blank=True)
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    current_step = models.IntegerField(default=1)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Event Attending Form'
+        verbose_name_plural = 'Event Attending Forms'
+        indexes = [
+            models.Index(fields=['staff', 'status'], name='ea_staff_status_idx'),
+        ]
+
+    # ── computed helpers ──────────────────────────────────────────────
+
+    @property
+    def travel_total(self):
+        return sum(float(row.get('amount') or 0) for row in (self.travel_expenses or []))
+
+    @property
+    def food_total(self):
+        return sum(float(row.get('amount') or 0) for row in (self.food_expenses or []))
+
+    @property
+    def other_total(self):
+        return sum(float(row.get('amount') or 0) for row in (self.other_expenses or []))
+
+    @property
+    def grand_total(self):
+        return round(self.travel_total + self.food_total + self.other_total + float(self.total_fees_spend or 0), 2)
+
+    @property
+    def balance(self):
+        """Positive = to be received, negative = to be refunded."""
+        return round(self.grand_total - float(self.advance_amount_received or 0), 2)
+
+    def get_applicable_workflow_steps(self):
+        """Return the ordered approval steps applicable to this form's staff role."""
+        user = self.staff
+        role = _resolve_staff_primary_role(user)
+        return EventAttendingApprovalWorkflow.objects.filter(
+            applicant_role__iexact=role, is_active=True,
+        ).order_by('step_order')
+
+    def get_current_approval_step(self):
+        steps = self.get_applicable_workflow_steps()
+        try:
+            return steps.get(step_order=self.current_step)
+        except EventAttendingApprovalWorkflow.DoesNotExist:
+            return None
+
+    def is_final_step(self):
+        steps = self.get_applicable_workflow_steps()
+        max_step = steps.aggregate(models.Max('step_order'))['step_order__max']
+        return self.current_step >= (max_step or 0)
+
+    def __str__(self):
+        return f"EventForm #{self.pk} by {self.staff.get_full_name() or self.staff.username} — {self.status}"
+
+
+def _resolve_staff_primary_role(user):
+    """Determine the highest-priority role for workflow resolution."""
+    SPL_PRIORITY = ['HAA', 'IQAC', 'HOD', 'AHOD']
+    role_names = set()
+    if hasattr(user, 'user_roles'):
+        role_names = set(user.user_roles.values_list('role__name', flat=True))
+    for r in SPL_PRIORITY:
+        if r in role_names:
+            return r
+    return 'STAFF'
+
+
+class EventAttendingFile(models.Model):
+    """
+    File uploads associated with an EventAttendingForm expense row.
+    """
+    EXPENSE_TYPE_CHOICES = [
+        ('travel', 'Travel'),
+        ('food', 'Food'),
+        ('other', 'Other'),
+        ('fees', 'Fees'),
+    ]
+
+    event_form = models.ForeignKey(
+        EventAttendingForm,
+        on_delete=models.CASCADE,
+        related_name='files',
+    )
+    expense_type = models.CharField(max_length=20, choices=EXPENSE_TYPE_CHOICES)
+    expense_index = models.IntegerField(default=0, help_text='Row index within the expense type')
+    file = models.FileField(upload_to='event_attending_proofs/')
+    original_filename = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['expense_type', 'expense_index']
+        verbose_name = 'Event Attending File'
+        verbose_name_plural = 'Event Attending Files'
+
+    def __str__(self):
+        return f"{self.expense_type}[{self.expense_index}] — {self.original_filename}"
+
+
+class EventAttendingApprovalLog(models.Model):
+    """Audit trail for Event Attending form approvals/rejections."""
+    ACTION_CHOICES = [
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    event_form = models.ForeignKey(
+        EventAttendingForm,
+        on_delete=models.CASCADE,
+        related_name='approval_logs',
+    )
+    approver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='event_attending_approval_logs',
+    )
+    step_order = models.IntegerField()
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    comments = models.TextField(blank=True)
+    action_date = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['step_order', 'action_date']
+        verbose_name = 'Event Attending Approval Log'
+        verbose_name_plural = 'Event Attending Approval Logs'
+
+    def __str__(self):
+        return f"Step {self.step_order}: {self.action} by {self.approver.get_full_name() or self.approver.username}"
+
+
+class EventAttendingApprovalWorkflow(models.Model):
+    """
+    Configurable approval workflow for Event Attending forms.
+    Rows define which approver_role reviews at which step, per applicant_role.
+    IQAC may edit these via the Settings tab.
+    """
+    applicant_role = models.CharField(
+        max_length=50,
+        help_text="Applicant's role, e.g. STAFF, HOD, IQAC, HAA",
+    )
+    step_order = models.IntegerField()
+    approver_role = models.CharField(max_length=50)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['applicant_role', 'step_order']
+        unique_together = [['applicant_role', 'step_order']]
+        verbose_name = 'Event Attending Approval Workflow'
+        verbose_name_plural = 'Event Attending Approval Workflows'
+
+    def __str__(self):
+        return f"{self.applicant_role} step {self.step_order} → {self.approver_role}"
+
+
+class StaffEventDeclaration(models.Model):
+    """
+    IQAC-managed per-staff budget allocation for event reimbursement.
+    normal_events_budget covers Seminar/Workshop/FDP/STTP/Online course/Others.
+    conference_budget covers Conference events.
+    """
+    staff = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='event_declaration',
+    )
+    normal_events_budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    conference_budget = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['staff__first_name', 'staff__last_name']
+        verbose_name = 'Staff Event Declaration'
+        verbose_name_plural = 'Staff Event Declarations'
+
+    def __str__(self):
+        return f"{self.staff.get_full_name() or self.staff.username} — Normal: {self.normal_events_budget}, Conf: {self.conference_budget}"

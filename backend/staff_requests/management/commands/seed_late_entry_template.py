@@ -29,6 +29,13 @@ class Command(BaseCommand):
                 'is_active': True,
                 'form_schema': [
                     {
+                        'name': 'reason',
+                        'type': 'textarea',
+                        'label': 'Reason',
+                        'required': True,
+                        'help_text': 'Reason for late entry'
+                    },
+                    {
                         'name': 'date',
                         'type': 'date',
                         'label': 'Date',
@@ -41,31 +48,21 @@ class Command(BaseCommand):
                         'label': 'Shift',
                         'required': True,
                         'options': [
-                            {'value': 'morning', 'label': 'Morning'},
-                            {'value': 'evening', 'label': 'Evening'}
+                            {'value': 'FN', 'label': 'FN'},
+                            {'value': 'AN', 'label': 'AN'}
                         ],
-                        'help_text': 'Which shift you will be late for'
+                        'help_text': 'FN for forenoon, AN for afternoon'
                     },
                     {
                         'name': 'late_duration',
                         'type': 'select',
-                        'label': 'Expected Late Duration',
+                        'label': 'Late Duration',
                         'required': True,
                         'options': [
-                            {'value': '10', 'label': '10 minutes'},
-                            {'value': '30', 'label': '30 minutes'},
-                            {'value': '60', 'label': '1 hour'},
-                            {'value': '90', 'label': '1.5 hours'},
-                            {'value': '120', 'label': '2 hours'}
+                            {'value': '10 mins', 'label': '10 mins'},
+                            {'value': '1 hr', 'label': '1 hr'}
                         ],
-                        'help_text': 'How late you expect to be'
-                    },
-                    {
-                        'name': 'reason',
-                        'type': 'textarea',
-                        'label': 'Reason',
-                        'required': True,
-                        'help_text': 'Reason for late entry'
+                        'help_text': '10 mins is FN-only and auto-approves'
                     }
                 ],
                 'allowed_roles': ['STAFF', 'FACULTY', 'HOD', 'ASSISTANT', 'CLERK'],
@@ -81,7 +78,7 @@ class Command(BaseCommand):
                     'apply_to_dates': ['date'],  # Apply to the 'date' field
                     'date_format': 'YYYY-MM-DD',
                     'add_notes': True,
-                    'notes_template': 'Late Entry Permission: {shift} shift, {late_duration} mins late'
+                    'notes_template': 'Late Entry Permission: {shift} shift, {late_duration} late'
                 }
             }
         )

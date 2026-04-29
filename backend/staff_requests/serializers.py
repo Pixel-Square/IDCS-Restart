@@ -1,6 +1,10 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog
+from .models import (
+    RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog,
+    EventAttendingForm, EventAttendingFile, EventAttendingApprovalLog,
+    EventAttendingApprovalWorkflow, StaffEventDeclaration,
+)
 
 User = get_user_model()
 
@@ -359,3 +363,172 @@ class ApprovalStepCreateSerializer(serializers.ModelSerializer):
             })
         
         return attrs
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Event Attending Serializers
+# ══════════════════════════════════════════════════════════════════════
+
+class EventAttendingFileSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EventAttendingFile
+        fields = ['id', 'expense_type', 'expense_index', 'file', 'file_url', 'original_filename', 'uploaded_at']
+        read_only_fields = ['id', 'uploaded_at']
+
+    def get_file_url(self, obj):
+        request = self.context.get('request')
+        if obj.file and request:
+            return request.build_absolute_uri(obj.file.url)
+        return None
+
+
+class EventAttendingApprovalLogSerializer(serializers.ModelSerializer):
+    approver = ApproverSerializer(read_only=True)
+
+    class Meta:
+        model = EventAttendingApprovalLog
+        fields = ['id', 'step_order', 'action', 'comments', 'approver', 'action_date']
+        read_only_fields = fields
+
+
+class EventAttendingFormListSerializer(serializers.ModelSerializer):
+    applicant = ApplicantSerializer(source='staff', read_only=True)
+    on_duty_form_data = serializers.SerializerMethodField()
+    travel_total = serializers.FloatField(read_only=True)
+    food_total = serializers.FloatField(read_only=True)
+    other_total = serializers.FloatField(read_only=True)
+    grand_total = serializers.FloatField(read_only=True)
+    balance = serializers.FloatField(read_only=True)
+
+    class Meta:
+        model = EventAttendingForm
+        fields = [
+            'id', 'applicant', 'status', 'current_step',
+            'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
+            'on_duty_form_data', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_on_duty_form_data(self, obj):
+        return obj.on_duty_request.form_data if obj.on_duty_request else {}
+
+
+class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
+    applicant = ApplicantSerializer(source='staff', read_only=True)
+    on_duty_form_data = serializers.SerializerMethodField()
+    on_duty_template_name = serializers.CharField(source='on_duty_request.template.name', read_only=True)
+    files = EventAttendingFileSerializer(many=True, read_only=True)
+    approval_logs = EventAttendingApprovalLogSerializer(many=True, read_only=True)
+    travel_total = serializers.FloatField(read_only=True)
+    food_total = serializers.FloatField(read_only=True)
+    other_total = serializers.FloatField(read_only=True)
+    grand_total = serializers.FloatField(read_only=True)
+    balance = serializers.FloatField(read_only=True)
+    workflow_progress = serializers.SerializerMethodField()
+    current_approver_role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EventAttendingForm
+        fields = [
+            'id', 'applicant', 'on_duty_request_id', 'on_duty_form_data', 'on_duty_template_name',
+            'travel_expenses', 'food_expenses', 'other_expenses',
+            'total_fees_spend', 'advance_amount_received', 'advance_date',
+            'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
+            'status', 'current_step', 'current_approver_role',
+            'files', 'approval_logs', 'workflow_progress',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_on_duty_form_data(self, obj):
+        return obj.on_duty_request.form_data if obj.on_duty_request else {}
+
+    def get_current_approver_role(self, obj):
+        step = obj.get_current_approval_step()
+        return step.approver_role if step else None
+
+    def get_workflow_progress(self, obj):
+        steps = obj.get_applicable_workflow_steps()
+        logs = {log.step_order: log for log in obj.approval_logs.all()}
+        result = []
+        for step in steps:
+            info = {
+                'step_order': step.step_order,
+                'approver_role': step.approver_role,
+                'is_current': step.step_order == obj.current_step and obj.status == 'pending',
+                'is_completed': step.step_order in logs,
+                'status': None,
+                'approver': None,
+                'comments': None,
+                'action_date': None,
+            }
+            if step.step_order in logs:
+                log = logs[step.step_order]
+                info.update({
+                    'status': log.action,
+                    'approver': ApproverSerializer(log.approver).data,
+                    'comments': log.comments,
+                    'action_date': log.action_date,
+                })
+            result.append(info)
+        return result
+
+
+class EventAttendingApprovalWorkflowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventAttendingApprovalWorkflow
+        fields = ['id', 'applicant_role', 'step_order', 'approver_role', 'is_active']
+        read_only_fields = ['id']
+
+
+class StaffEventDeclarationSerializer(serializers.ModelSerializer):
+    staff_id_display = serializers.SerializerMethodField()
+    staff_name = serializers.SerializerMethodField()
+    department_name = serializers.SerializerMethodField()
+    designation = serializers.SerializerMethodField()
+    experience_years = serializers.SerializerMethodField()
+    user_id = serializers.IntegerField(source='staff.id', read_only=True)
+
+    class Meta:
+        model = StaffEventDeclaration
+        fields = [
+            'id', 'user_id', 'staff_id_display', 'staff_name', 'department_name', 'designation',
+            'experience_years', 'normal_events_budget', 'conference_budget', 'updated_at',
+        ]
+        read_only_fields = ['id', 'user_id', 'staff_id_display', 'staff_name', 'department_name', 'designation', 'experience_years', 'updated_at']
+
+    def get_staff_id_display(self, obj):
+        try:
+            return obj.staff.staff_profile.staff_id
+        except Exception:
+            return obj.staff.username
+
+    def get_staff_name(self, obj):
+        return obj.staff.get_full_name() or obj.staff.username
+
+    def get_department_name(self, obj):
+        try:
+            return obj.staff.staff_profile.department.name or ''
+        except Exception:
+            return ''
+
+    def get_designation(self, obj):
+        try:
+            return obj.staff.staff_profile.designation or ''
+        except Exception:
+            return ''
+
+    def get_experience_years(self, obj):
+        try:
+            from django.utils import timezone
+            doj = obj.staff.staff_profile.date_of_join
+            if not doj:
+                return 0
+            today = timezone.localdate()
+            diff = today - doj
+            return round(diff.days / 365.25, 1)
+        except Exception:
+            return 0
+
