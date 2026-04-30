@@ -2874,6 +2874,307 @@ def internal_mark_mapping_upsert(request, subject_id: str):
     })
 
 
+# ---------------------------------------------------------------------------
+# Template Apply — helpers
+# ---------------------------------------------------------------------------
+
+_ALLOWED_CO_STRINGS = {'both', '1&2', '3&4', '1&2&3&4&5'}
+_MAX_DECIMAL_PLACES = 2
+
+
+def _decimal_places(v: float) -> int:
+    s = f'{v:.10f}'.rstrip('0')
+    if '.' in s:
+        return len(s.split('.')[1])
+    return 0
+
+
+def _validate_internal_mark_mapping_for_apply(mapping: dict, class_type: str) -> list:
+    errors = []
+    if not isinstance(mapping, dict):
+        return ['internal_mark_mapping must be an object']
+    weights = mapping.get('weights')
+    if not isinstance(weights, list):
+        errors.append('internal_mark_mapping.weights must be an array')
+        return errors
+    ct = str(class_type or '').strip().upper()
+    expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
+    if len(weights) != expected:
+        errors.append(
+            f'internal_mark_mapping.weights has {len(weights)} slots; '
+            f'{ct} requires exactly {expected}'
+        )
+    for i, w in enumerate(weights):
+        try:
+            fv = float(w)
+        except (TypeError, ValueError):
+            errors.append(f'weights[{i}] is not a number')
+            continue
+        if fv < 0:
+            errors.append(f'weights[{i}] is negative ({fv})')
+        if _decimal_places(fv) > _MAX_DECIMAL_PLACES:
+            errors.append(f'weights[{i}] has more than {_MAX_DECIMAL_PLACES} decimal places')
+    if not errors and sum(float(w) for w in weights) <= 0:
+        errors.append('internal_mark_mapping.weights must sum to a positive value')
+    return errors
+
+
+def _validate_qp_pattern_for_apply(pattern: dict) -> list:
+    errors = []
+    if not isinstance(pattern, dict):
+        return ['pattern must be an object']
+    marks_raw = pattern.get('marks')
+    if not isinstance(marks_raw, list) or not marks_raw:
+        return ['pattern.marks must be a non-empty array']
+    marks = []
+    for i, m in enumerate(marks_raw):
+        try:
+            fv = float(m)
+        except (TypeError, ValueError):
+            errors.append(f'pattern.marks[{i}] is not a number')
+            continue
+        if fv < 0:
+            errors.append(f'pattern.marks[{i}] is negative ({fv})')
+        if _decimal_places(fv) > _MAX_DECIMAL_PLACES:
+            errors.append(f'pattern.marks[{i}] has more than {_MAX_DECIMAL_PLACES} decimal places')
+        marks.append(fv)
+    cos_raw = pattern.get('cos')
+    if cos_raw is not None:
+        if not isinstance(cos_raw, list):
+            errors.append('pattern.cos must be an array when provided')
+        elif len(cos_raw) != len(marks_raw):
+            errors.append(
+                f'pattern.cos length ({len(cos_raw)}) must match '
+                f'pattern.marks length ({len(marks_raw)})'
+            )
+        else:
+            for i, c in enumerate(cos_raw):
+                if isinstance(c, str) and c in _ALLOWED_CO_STRINGS:
+                    continue
+                try:
+                    iv = int(c)
+                    if iv <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    errors.append(
+                        f'pattern.cos[{i}] must be a positive integer or one of '
+                        f'{sorted(_ALLOWED_CO_STRINGS)}'
+                    )
+    return errors
+
+
+def _build_config_snapshot(subject, class_type: str, relevant_exams: list) -> dict:
+    """Return current DB state for snapshot recording (non-locking read)."""
+    from .models import InternalMarkMapping, ObeQpPatternConfig
+    try:
+        imm = InternalMarkMapping.objects.filter(subject=subject).first()
+        mapping_val = imm.mapping if imm else None
+    except Exception:
+        mapping_val = None
+    ct = str(class_type or '').strip().upper()
+    qp_rows = []
+    for exam, qp_type in relevant_exams:
+        try:
+            row = ObeQpPatternConfig.objects.filter(
+                class_type__iexact=ct,
+                question_paper_type=qp_type,
+                exam__iexact=exam,
+            ).first()
+            qp_rows.append({
+                'exam': exam,
+                'question_paper_type': qp_type,
+                'pattern': row.pattern if row else None,
+            })
+        except Exception:
+            qp_rows.append({'exam': exam, 'question_paper_type': qp_type, 'pattern': None})
+    return {'internal_mark_mapping': mapping_val, 'qp_patterns': qp_rows}
+
+
+# ---------------------------------------------------------------------------
+# Template Apply — endpoint
+# ---------------------------------------------------------------------------
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def obe_template_apply(request):
+    """Apply an OBE template preset to one or more courses.
+
+    Body: { "template_id": int, "subject_codes": list[str], "dry_run": bool }
+
+    Only targets InternalMarkMapping and ObeQpPatternConfig (config models).
+    Never writes to student mark tables or final_internal_marks.
+    """
+    denied = _require_obe_master_permission(request)
+    if denied is not None:
+        return denied
+
+    data = request.data if isinstance(request.data, dict) else {}
+    template_id = data.get('template_id')
+    subject_codes = data.get('subject_codes')
+    dry_run = bool(data.get('dry_run', True))
+
+    if not template_id:
+        return Response({'detail': 'template_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(subject_codes, list) or not subject_codes:
+        return Response(
+            {'detail': 'subject_codes must be a non-empty list'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from .models import ObeTemplatePreset, ObeAuditChange, InternalMarkMapping, ObeQpPatternConfig
+    from academics.models import Subject
+
+    try:
+        template = ObeTemplatePreset.objects.get(pk=template_id)
+    except ObeTemplatePreset.DoesNotExist:
+        return Response(
+            {'detail': f'Template {template_id} not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    payload = template.payload if isinstance(template.payload, dict) else {}
+    tpl_mapping = payload.get('internal_mark_mapping')
+    tpl_qp_patterns = payload.get('qp_patterns') or []
+    tpl_class_types_raw = payload.get('target_class_types')
+    tpl_class_types = (
+        {str(ct).strip().upper() for ct in tpl_class_types_raw if ct}
+        if isinstance(tpl_class_types_raw, list)
+        else None
+    )
+
+    user = getattr(request, 'user', None)
+    user_id = getattr(user, 'id', None)
+    results = []
+
+    for raw_code in subject_codes:
+        code = str(raw_code or '').strip()
+        if not code:
+            results.append({'subject_code': raw_code, 'status': 'error', 'errors': ['empty subject code']})
+            continue
+
+        try:
+            subject = Subject.objects.get(code=code)
+        except Subject.DoesNotExist:
+            results.append({'subject_code': code, 'status': 'error', 'errors': ['subject not found']})
+            continue
+
+        class_type = str(getattr(subject, 'class_type', '') or '').strip().upper() or 'THEORY'
+
+        if tpl_class_types and class_type not in tpl_class_types:
+            results.append({
+                'subject_code': code,
+                'status': 'skipped',
+                'reason': f'template targets {sorted(tpl_class_types)}, subject class_type is {class_type}',
+            })
+            continue
+
+        # Determine applicable QP patterns for this class_type
+        applicable_patterns = []
+        for pat in tpl_qp_patterns:
+            if not isinstance(pat, dict):
+                continue
+            pat_ct = str(pat.get('class_type') or '').strip().upper()
+            if pat_ct and pat_ct != class_type:
+                continue
+            applicable_patterns.append(pat)
+
+        # Validate
+        all_errors = []
+        if tpl_mapping is not None:
+            all_errors.extend(_validate_internal_mark_mapping_for_apply(tpl_mapping, class_type))
+        for pat in applicable_patterns:
+            errs = _validate_qp_pattern_for_apply(pat.get('pattern') or {})
+            if errs:
+                exam_label = pat.get('exam', '?')
+                all_errors.extend(f'qp_pattern({exam_label}): {e}' for e in errs)
+
+        if all_errors:
+            results.append({'subject_code': code, 'status': 'error', 'errors': all_errors})
+            continue
+
+        relevant_exams = [
+            (str(p.get('exam', '')).strip().upper(), p.get('question_paper_type'))
+            for p in applicable_patterns
+            if p.get('exam')
+        ]
+
+        before_snapshot = _build_config_snapshot(subject, class_type, relevant_exams)
+
+        # Build the after snapshot from template values (not yet written)
+        after_qp = []
+        for p in applicable_patterns:
+            exam_val = str(p.get('exam', '')).strip().upper()
+            if exam_val:
+                after_qp.append({
+                    'exam': exam_val,
+                    'question_paper_type': p.get('question_paper_type'),
+                    'pattern': p.get('pattern'),
+                })
+        after_snapshot = {
+            'internal_mark_mapping': tpl_mapping if tpl_mapping is not None else before_snapshot['internal_mark_mapping'],
+            'qp_patterns': after_qp if after_qp else before_snapshot['qp_patterns'],
+        }
+
+        if dry_run:
+            results.append({
+                'subject_code': code,
+                'status': 'dry_run',
+                'class_type': class_type,
+                'before': before_snapshot,
+                'after': after_snapshot,
+            })
+            continue
+
+        # Live run — per-subject atomic block so one failure doesn't roll back others
+        try:
+            with transaction.atomic():
+                if tpl_mapping is not None:
+                    InternalMarkMapping.objects.select_for_update().filter(subject=subject)
+                    InternalMarkMapping.objects.update_or_create(
+                        subject=subject,
+                        defaults={'mapping': tpl_mapping, 'updated_by': user_id},
+                    )
+
+                for pat in applicable_patterns:
+                    exam_val = str(pat.get('exam', '')).strip().upper()
+                    if not exam_val:
+                        continue
+                    qp_type = pat.get('question_paper_type')
+                    pattern_val = pat.get('pattern')
+                    ct_key = class_type
+                    ObeQpPatternConfig.objects.select_for_update().filter(
+                        class_type__iexact=ct_key,
+                        question_paper_type=qp_type,
+                        exam__iexact=exam_val,
+                    )
+                    ObeQpPatternConfig.objects.update_or_create(
+                        class_type=ct_key,
+                        question_paper_type=qp_type,
+                        exam=exam_val,
+                        defaults={'pattern': pattern_val, 'updated_by': user_id},
+                    )
+
+                ObeAuditChange.objects.create(
+                    subject_code=code,
+                    template=template,
+                    before_snapshot=before_snapshot,
+                    after_snapshot=after_snapshot,
+                    changed_by=user,
+                )
+
+            results.append({'subject_code': code, 'status': 'applied', 'class_type': class_type})
+        except Exception as exc:
+            results.append({'subject_code': code, 'status': 'error', 'errors': [str(exc)]})
+
+    return Response({
+        'status': 'ok',
+        'dry_run': dry_run,
+        'template_id': template_id,
+        'results': results,
+    })
+
+
 def _reset_assessment_rows(*, request, assessment_key: str, subject, ta, create_notification: bool = False) -> dict:
     from .models import AssessmentDraft
     from .models import LabPublishedSheet, Cia1PublishedSheet, Cia2PublishedSheet

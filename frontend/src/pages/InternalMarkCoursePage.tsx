@@ -39,6 +39,7 @@ import {
   labCycleCoKeys,
   labCycleSchemaWeights,
   DEFAULT_LAB_CYCLE_WEIGHTS,
+  LAB_6CO_WEIGHTS,
   isProjectWeights,
   isProjectPrblWeights,
   getProjectWeightConfig,
@@ -1437,7 +1438,28 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     return () => { mounted = false; };
   }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter, qpTypeNorm]);
 
-  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet, isPrbl, isQp1Final, labCycleWeightsCfg), [effectiveClassType, enabledSet, isPrbl, isQp1Final, labCycleWeightsCfg]);
+  // 6-CO LAB mode: active when any published/draft lab sheet carries is6CoMode flag.
+  // We check both .sheet.is6CoMode (when draft is wrapped in { sheet: {...} }) and
+  // top-level .is6CoMode (when data is returned directly), plus the model sheet.
+  const is6CoLab = effectiveClassType === 'LAB' && !!(
+    publishedLab.cia1?.sheet?.is6CoMode ||
+    publishedLab.cia1?.is6CoMode ||
+    publishedLab.cia2?.sheet?.is6CoMode ||
+    publishedLab.cia2?.is6CoMode ||
+    publishedLab.model?.sheet?.is6CoMode ||
+    publishedLab.model?.is6CoMode
+  );
+
+  // When 6-CO mode is active, override the IQAC cycle config with the fixed per-sheet weights.
+  // effectiveLabCfg must be declared BEFORE schema and effMapping that depend on it.
+  const effectiveLabCfg = useMemo(
+    () => is6CoLab ? LAB_6CO_WEIGHTS : labCycleWeightsCfg,
+    [is6CoLab, labCycleWeightsCfg],
+  );
+
+  // NOTE: effectiveLabCfg must be used here (not labCycleWeightsCfg) so the schema
+  // reflects CO6 columns when 6-CO mode is active.
+  const schema = useMemo(() => buildInternalSchema(effectiveClassType, enabledSet, isPrbl, isQp1Final, effectiveLabCfg), [effectiveClassType, enabledSet, isPrbl, isQp1Final, effectiveLabCfg]);
 
   // QP1 FINAL YEAR fixed weights: CO1(2+4+3)=9, CO2(1+2+2+1+2+2)=10, CO3(2+4+3)=9, ME(4+4+4)=12.  Total=40.
   const QP1FINAL_WEIGHTS = [2, 4, 3, 1, 2, 2, 1, 2, 2, 2, 4, 3, 4, 4, 4];
@@ -1445,9 +1467,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const effMapping = useMemo(() => {
     const ct = effectiveClassType;
 
-    // LAB / PRACTICAL: use structured cycle weights
+    // LAB / PRACTICAL: use structured cycle weights.
+    // Use effectiveLabCfg (not labCycleWeightsCfg) so 6-CO mode gets LAB_6CO_WEIGHTS.
     if (ct === 'LAB' || ct === 'PRACTICAL') {
-      const cfg = labCycleWeightsCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
+      const cfg = effectiveLabCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
       const weights = labCycleSchemaWeights(cfg);
       return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
     }
@@ -1497,7 +1520,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       ? QP1FINAL_WEIGHTS
       : schema.visible.map((i) => weightsAll[i] ?? 0);
     return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
-  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final, labCycleWeightsCfg, projectWeightsCfg, specialExamWeightsCfg, rawClassTypeWeightItem]);
+  }, [internalMarkWeights, schema, effectiveClassType, isPrbl, isQp1Final, effectiveLabCfg, projectWeightsCfg, specialExamWeightsCfg, rawClassTypeWeightItem]);
 
   const maxTotal = useMemo(() => {
     const w = effMapping.weights.map((x: any) => Number(x) || 0);
@@ -1506,6 +1529,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   // OE Theory (QP1FINAL) courses convert final mark to 60 instead of 100
   const scaledMax = isQp1Final ? 60 : 100;
+
 
   const publishedCoSet = useMemo(() => {
     const nums = (cqiPublished?.coNumbers || [])
@@ -2069,7 +2093,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
     // LAB/PRACTICAL: compute from lab-style cycle-based sheets
     if (ct === 'LAB' || ct === 'PRACTICAL') {
-      const labCfg = labCycleWeightsCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
+      // Use effectiveLabCfg so 6-CO mode uses LAB_6CO_WEIGHTS (10 marks/CO)
+      // instead of the IQAC default 5-CO config (12 marks/CO).
+      const labCfg = effectiveLabCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
       const c1CoKeys = labCycleCoKeys(labCfg.cycle1);
       const c2CoKeys = labCycleCoKeys(labCfg.cycle2);
       const CIA_EXAM_MAX = 30; // standard CIA exam maximum
@@ -3397,6 +3423,46 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
       <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 10 }}>
         <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+          {is6CoLab && labCycleWeightsCfg ? (() => {
+            const cfg6 = labCycleWeightsCfg;
+            const c1Exp = Object.values(cfg6.cycle1).reduce((s, w) => s + (w.exp || 0), 0);
+            const c1Cia = Object.values(cfg6.cycle1).reduce((s, w) => s + (w.cia || 0), 0);
+            const c2Exp = Object.values(cfg6.cycle2).reduce((s, w) => s + (w.exp || 0), 0);
+            const c2Cia = Object.values(cfg6.cycle2).reduce((s, w) => s + (w.cia || 0), 0);
+            const fmt = (n: number) => Math.round(n * 100) / 100;
+            const thFixed: React.CSSProperties = { border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', textAlign: 'center' };
+            const thData: React.CSSProperties = { border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6', textAlign: 'center' };
+            const thLabel: React.CSSProperties = { border: '1px solid #e5e7eb', padding: 8, background: '#fff', textAlign: 'center', fontWeight: 800 };
+            return (
+              <thead>
+                <tr>
+                  <th rowSpan={4} style={thFixed}>S.No</th>
+                  <th rowSpan={4} style={thFixed}>Register No.</th>
+                  <th rowSpan={4} style={thFixed}>Name</th>
+                  <th colSpan={3} style={{ ...thData, fontWeight: 800 }}>Cycle 1 (Total: {fmt(c1Exp + c1Cia)})</th>
+                  <th colSpan={3} style={{ ...thData, fontWeight: 800 }}>Cycle 2 (Total: {fmt(c2Exp + c2Cia)})</th>
+                  <th rowSpan={4} style={thFixed}>{fmt(maxTotal)}</th>
+                  <th rowSpan={4} style={thFixed}>{scaledMax}</th>
+                </tr>
+                <tr>
+                  {[1, 2, 3].map((co) => (
+                    <th key={co} style={thData}>CO{co} /10</th>
+                  ))}
+                  {[4, 5, 6].map((co) => (
+                    <th key={co} style={thData}>CO{co} /10</th>
+                  ))}
+                </tr>
+                <tr>
+                  <th colSpan={3} style={thLabel}>Individual Experiment Completion ({fmt(c1Exp)})</th>
+                  <th colSpan={3} style={thLabel}>Individual Experiment Completion ({fmt(c2Exp)})</th>
+                </tr>
+                <tr>
+                  <th colSpan={3} style={thLabel}>Cycle Exam ({fmt(c1Cia)})</th>
+                  <th colSpan={3} style={thLabel}>Cycle Exam ({fmt(c2Cia)})</th>
+                </tr>
+              </thead>
+            );
+          })() : (
           <thead>
             <tr>
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>S.No</th>
@@ -3452,6 +3518,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
               <th style={{ border: '1px solid #e5e7eb', padding: 8, background: '#fff' }} />
             </tr>
           </thead>
+          )}
           <tbody>
             {effectiveRows.map((r: any) => (
               <tr key={r.id}>

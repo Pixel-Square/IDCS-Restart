@@ -1363,3 +1363,58 @@ class IqacResetNotification(models.Model):
         indexes = [
             models.Index(fields=['teaching_assignment', 'is_read']),
         ]
+
+
+class ObeTemplatePreset(models.Model):
+    """IQAC-managed reusable configuration template for batch-applying OBE configs.
+
+    payload keys:
+      internal_mark_mapping  – dict {header, cycles, weights} applied per subject
+      qp_patterns            – list of {exam, question_paper_type, class_type, pattern}
+      target_class_types     – optional list; subjects outside it are skipped
+      co_count               – optional int hint for CO-count validation
+    """
+
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    payload = models.JSONField(default=dict)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='obe_template_presets',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_template_preset'
+        ordering = ['-created_at']
+
+
+class ObeAuditChange(models.Model):
+    """One record per subject successfully modified by an obe_template_apply run."""
+
+    subject_code = models.CharField(max_length=64)
+    template = models.ForeignKey(
+        ObeTemplatePreset,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='audit_changes',
+    )
+    before_snapshot = models.JSONField(default=dict)
+    after_snapshot = models.JSONField(default=dict)
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='obe_audit_changes',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_audit_change'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['subject_code', 'created_at']),
+            models.Index(fields=['template', 'created_at']),
+        ]

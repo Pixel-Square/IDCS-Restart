@@ -38,6 +38,7 @@ import {
   getLabCycleWeightConfig,
   labCycleCoKeys,
   DEFAULT_LAB_CYCLE_WEIGHTS,
+  LAB_6CO_WEIGHTS,
   LabCycleWeights,
 } from '../utils/internalMarkWeights';
 
@@ -96,6 +97,8 @@ type LabSheet = {
   markManagerLocked?: boolean;
   markManagerSnapshot?: string | null;
   markManagerApprovalUntil?: string | null;
+  // 6-CO scheme: cycle1 = CO1-CO3, cycle2 = CO4-CO6
+  is6CoMode?: boolean;
 };
 
 type LabDraftPayload = {
@@ -388,7 +391,7 @@ export default function LabCourseMarksEntry({
     const raw = Array.isArray(initialEnabledCos) && initialEnabledCos.length
       ? initialEnabledCos
       : ([coA, coB].filter((v): v is number => typeof v === 'number' && Number.isFinite(v)) as number[]);
-    const normalized = raw.map((n) => clampInt(Number(n), 1, 5));
+    const normalized = raw.map((n) => clampInt(Number(n), 1, 6));
     return Array.from(new Set(normalized)).sort((a, b) => a - b);
   }, [coA, coB, initialEnabledCos]);
 
@@ -495,8 +498,8 @@ export default function LabCourseMarksEntry({
     sheet: {
       termLabel: 'KRCT AY25-26',
       batchLabel: String(subjectId || ''),
-      coANum: clampInt(Number(coA ?? 1), 1, 5),
-      coBNum: coB == null ? null : clampInt(Number(coB), 1, 5),
+      coANum: clampInt(Number(coA ?? 1), 1, 6),
+      coBNum: coB == null ? null : clampInt(Number(coB), 1, 6),
       coAEnabled: true,
       coBEnabled: Boolean(coB),
       ciaExamEnabled: ciaAvailable ? true : false,
@@ -512,7 +515,7 @@ export default function LabCourseMarksEntry({
           ? initialEnabledCos
           : ([coA, coB].filter((v): v is number => typeof v === 'number' && Number.isFinite(v)) as number[])
         )
-          .map((n) => clampInt(Number(n), 1, 5))
+          .map((n) => clampInt(Number(n), 1, 6))
           .filter((n, i, arr) => arr.indexOf(n) === i)
           .map((n) => [
             String(n),
@@ -602,12 +605,19 @@ export default function LabCourseMarksEntry({
     return null;
   }, [currentClassTypeWeight]);
 
+  const is6CoMode = normalizedClassType === 'LAB' && Boolean((draft.sheet as any).is6CoMode);
+
+  const effectiveLabCycleConfig = useMemo((): LabCycleWeights | null => {
+    if (is6CoMode) return LAB_6CO_WEIGHTS;
+    return labCycleConfig;
+  }, [is6CoMode, labCycleConfig]);
+
   const strictLabExpWeightByCo = useMemo(() => {
     // If structured lab cycle weights are configured, extract per-CO exp weights
-    if (labCycleConfig) {
+    if (effectiveLabCycleConfig) {
       const out: Record<number, number> = {};
-      for (const [k, w] of Object.entries(labCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
-      for (const [k, w] of Object.entries(labCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
+      for (const [k, w] of Object.entries(effectiveLabCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
+      for (const [k, w] of Object.entries(effectiveLabCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.exp || 0);
       return out;
     }
     // Fallback to flat array format
@@ -618,19 +628,19 @@ export default function LabCourseMarksEntry({
       if (Number.isFinite(slotWeight) && slotWeight > 0) out[coNum] = slotWeight;
     }
     return out;
-  }, [normalizedClassType, currentClassTypeWeight, assessmentKey, labCycleConfig]);
+  }, [normalizedClassType, currentClassTypeWeight, assessmentKey, effectiveLabCycleConfig]);
 
   /** Per-CO CIA weights for proportional CIA exam distribution. */
   const strictLabCiaWeightByCo = useMemo((): Record<number, number> => {
-    if (labCycleConfig) {
+    if (effectiveLabCycleConfig) {
       const out: Record<number, number> = {};
-      for (const [k, w] of Object.entries(labCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
-      for (const [k, w] of Object.entries(labCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
+      for (const [k, w] of Object.entries(effectiveLabCycleConfig.cycle1 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
+      for (const [k, w] of Object.entries(effectiveLabCycleConfig.cycle2 || {})) out[Number(k)] = (out[Number(k)] || 0) + (w.cia || 0);
       return out;
     }
     // Default: even distribution (legacy behavior)
     return { 1: 3, 2: 3, 3: 3, 4: 3, 5: 3 };
-  }, [labCycleConfig]);
+  }, [effectiveLabCycleConfig]);
 
   const tcplInternalLabWeight = useMemo(() => {
     const slots = getInternalMarkWeightSlotsForCo('TCPL', currentClassTypeWeight as any, 1);
@@ -716,8 +726,8 @@ export default function LabCourseMarksEntry({
           // IMPORTANT: for LAB assessments, the CO pair is fixed by the page (props coA/coB)
           // (CIA1: 1&2, CIA2: 3&4, MODEL: 5). Do not trust a previously-saved coANum/coBNum
           // as it can cause CO3/CO4 selections to persist as CO1/CO2.
-          const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
-          const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+          const fixedCoA = clampInt(Number(coA ?? 1), 1, 6);
+          const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 6);
           const coANum = fixedCoA;
           const coBNum = fixedCoB;
 
@@ -839,6 +849,7 @@ export default function LabCourseMarksEntry({
               markManagerLocked: loadedLocked,
               markManagerSnapshot: loadedSnapshot,
               markManagerApprovalUntil: loadedApprovalUntil,
+              is6CoMode: Boolean((d.sheet as any).is6CoMode),
             },
           });
           // set saved metadata if backend provided it
@@ -863,8 +874,8 @@ export default function LabCourseMarksEntry({
           // No server draft — initialize a fresh sheet for this assessmentKey/subject using the page's CO props.
           const stored = key ? (lsGet<any>(key) as any) : null;
           const rowsByStudentId = stored?.rowsByStudentId && typeof stored.rowsByStudentId === 'object' ? stored.rowsByStudentId : {};
-          const aNum = clampInt(Number(coA ?? 1), 1, 5);
-          const bNum = coB == null ? null : clampInt(Number(coB), 1, 5);
+          const aNum = clampInt(Number(coA ?? 1), 1, 6);
+          const bNum = coB == null ? null : clampInt(Number(coB), 1, 6);
           const expCountA = DEFAULT_EXPERIMENTS;
           const expCountB = bNum != null ? DEFAULT_EXPERIMENTS : 0;
           const expMaxA = DEFAULT_EXPERIMENT_MAX;
@@ -1050,15 +1061,15 @@ export default function LabCourseMarksEntry({
     }
   }, [markLock?.exists]);
 
-  const coANum = clampInt(Number(draft.sheet.coANum ?? coA ?? 1), 1, 5);
+  const coANum = clampInt(Number(draft.sheet.coANum ?? coA ?? 1), 1, 6);
   const coBNumRaw = (draft.sheet as any).coBNum ?? coB ?? null;
-  const coBNum = coBNumRaw == null ? null : clampInt(Number(coBNumRaw), 1, 5);
+  const coBNum = coBNumRaw == null ? null : clampInt(Number(coBNumRaw), 1, 6);
 
   // Pure-lab cycles are single-CO sheets. Old drafts may still carry extra enabled CO configs,
   // which shifts BTL cells under the wrong headers. Restrict those pages to the fixed page COs.
   const allowedCoNumbers = useMemo(
-    () => (normalizedClassType === 'PURE_LAB' ? initialEnabledCoNums : [1, 2, 3, 4, 5]),
-    [normalizedClassType, initialEnabledCoNums],
+    () => normalizedClassType === 'PURE_LAB' ? initialEnabledCoNums : (is6CoMode ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]),
+    [normalizedClassType, initialEnabledCoNums, is6CoMode],
   );
   const allowedCoSet = useMemo(() => new Set(allowedCoNumbers.map((n) => String(n))), [allowedCoNumbers]);
 
@@ -1331,7 +1342,8 @@ export default function LabCourseMarksEntry({
   function ensureCoConfigs(sheet: LabSheet): NonNullable<LabSheet['coConfigs']> {
     const existing = (sheet.coConfigs && typeof sheet.coConfigs === 'object' ? sheet.coConfigs : {}) as NonNullable<LabSheet['coConfigs']>;
     const out: NonNullable<LabSheet['coConfigs']> = { ...existing };
-    for (const n of [1, 2, 3, 4, 5]) {
+    const coList = Boolean((sheet as any).is6CoMode) ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5];
+    for (const n of coList) {
       const k = String(n);
       const cur = out[k];
       if (!cur) {
@@ -1358,7 +1370,7 @@ export default function LabCourseMarksEntry({
     const enabled = Object.entries(cfgs)
       .filter(([k, v]) => allowedCoSet.has(String(k)) && Boolean(v?.enabled))
       .map(([k, v]) => ({
-        co: clampInt(Number(k), 1, 5),
+        co: clampInt(Number(k), 1, 6),
         expCount: clampInt(Number(v?.expCount ?? 0), 0, 12),
         expMax: clampInt(Number(v?.expMax ?? 0), 0, 100),
       }))
@@ -1372,7 +1384,7 @@ export default function LabCourseMarksEntry({
       const parsed = JSON.parse(String(snapshot));
       const enabledList = Array.isArray(parsed?.enabled) ? parsed.enabled : [];
       const out: any = {};
-      for (const n of [1, 2, 3, 4, 5]) {
+      for (const n of [1, 2, 3, 4, 5, 6]) {
         out[String(n)] = {
           enabled: false,
           expCount: DEFAULT_EXPERIMENTS,
@@ -1381,7 +1393,7 @@ export default function LabCourseMarksEntry({
         };
       }
       for (const item of enabledList) {
-        const co = clampInt(Number(item?.co), 1, 5);
+        const co = clampInt(Number(item?.co), 1, 6);
         out[String(co)] = {
           ...out[String(co)],
           enabled: true,
@@ -1424,7 +1436,7 @@ export default function LabCourseMarksEntry({
   function enabledCosFromCfg(cfg: NonNullable<LabSheet['coConfigs']>) {
     return Object.entries(cfg)
       .filter(([k, v]) => allowedCoSet.has(String(k)) && Boolean((v as any)?.enabled))
-      .map(([k]) => clampInt(Number(k), 1, 5))
+      .map(([k]) => clampInt(Number(k), 1, 6))
       .sort((a, b) => a - b);
   }
 
@@ -1433,7 +1445,7 @@ export default function LabCourseMarksEntry({
     const added: number[] = [];
     const removed: number[] = [];
     const changed: number[] = [];
-    for (const n of [1, 2, 3, 4, 5]) {
+    for (const n of [1, 2, 3, 4, 5, 6]) {
       const k = String(n);
       const o = oldCfg[k];
       const ni = newCfg[k];
@@ -1491,6 +1503,18 @@ export default function LabCourseMarksEntry({
       if (!ciaAvailable) return p;
       if (p.sheet.markManagerLocked) return p;
       return { ...p, sheet: { ...p.sheet, ciaExamEnabled: Boolean(enabled) } };
+    });
+  }
+
+  function set6CoMode(enabled: boolean) {
+    setDraft((p) => {
+      if (p.sheet.markManagerLocked) return p;
+      if (!enabled) {
+        const existing = ((p.sheet.coConfigs && typeof p.sheet.coConfigs === 'object' ? p.sheet.coConfigs : {}) as any);
+        const newConfigs = { ...existing, '6': { ...(existing['6'] || {}), enabled: false } };
+        return { ...p, sheet: { ...p.sheet, is6CoMode: false, coConfigs: newConfigs } };
+      }
+      return { ...p, sheet: { ...p.sheet, is6CoMode: true } };
     });
   }
 
@@ -1576,7 +1600,7 @@ export default function LabCourseMarksEntry({
   }
 
   function toggleCoSelection(coNumber: number, nextChecked: boolean) {
-    const n = clampInt(Number(coNumber), 1, 5);
+    const n = clampInt(Number(coNumber), 1, 6);
     setDraft((p) => {
       if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
@@ -1593,9 +1617,9 @@ export default function LabCourseMarksEntry({
         btl,
       };
 
-      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 5);
+      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 6);
       const bNumRaw = (p.sheet as any).coBNum ?? coB ?? null;
-      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 5);
+      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 6);
 
       const nextSheet: any = { ...p.sheet, coConfigs: configs };
       if (n === aNum) nextSheet.coAEnabled = Boolean(nextChecked);
@@ -1682,8 +1706,8 @@ export default function LabCourseMarksEntry({
     setMarkManagerBusy(true);
     setMarkManagerError(null);
     try {
-      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
-      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+      const fixedCoA = clampInt(Number(coA ?? 1), 1, 6);
+      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 6);
 
       // Snapshot the full coConfigs (allow CO1..CO5 to be used and saved).
       const snapshot = markManagerSnapshotOf(coConfigs, ciaExamEnabled);
@@ -1707,7 +1731,7 @@ export default function LabCourseMarksEntry({
       const nextBtlB = fixedCoB == null ? [] : normalizeBtlArray((cfgB as any)?.btl ?? (draft.sheet as any).btlB, nextExpCountB, 1);
 
       const resetSet = new Set(
-        resetMode === 'full' ? [1, 2, 3, 4, 5].map(String) : resetMode === 'partial' ? resetCos.map((n) => String(clampInt(Number(n), 1, 5))) : [],
+        resetMode === 'full' ? [1, 2, 3, 4, 5, 6].map(String) : resetMode === 'partial' ? resetCos.map((n) => String(clampInt(Number(n), 1, 6))) : [],
       );
 
       const normalizeMarksByCo = (row: any, coKey: string, len: number) => {
@@ -1908,9 +1932,9 @@ export default function LabCourseMarksEntry({
       };
 
       // keep legacy A/B fields in sync if this CO matches them
-      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 5);
+      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 6);
       const bNumRaw = (p.sheet as any).coBNum ?? coB ?? null;
-      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 5);
+      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 6);
 
       const rowsByStudentId: Record<string, LabRowState> = { ...(p.sheet.rowsByStudentId || {}) };
       for (const k of Object.keys(rowsByStudentId)) {
@@ -1955,9 +1979,9 @@ export default function LabCourseMarksEntry({
       };
 
       // keep legacy A/B in sync for max values
-      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 5);
+      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 6);
       const bNumRaw = (p.sheet as any).coBNum ?? coB ?? null;
-      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 5);
+      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 6);
 
       const expMaxA2 = coNumber === aNum ? next : clampInt(Number(p.sheet.expMaxA ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
       const expMaxB2 = coNumber === bNum ? next : clampInt(Number(p.sheet.expMaxB ?? 0), 0, 100);
@@ -2011,7 +2035,7 @@ export default function LabCourseMarksEntry({
     setDraft((p) => {
       if (p.sheet.markManagerLocked) return p;
       const configs = ensureCoConfigs(p.sheet);
-      const key = String(clampInt(Number(coNumber), 1, 5));
+      const key = String(clampInt(Number(coNumber), 1, 6));
       const existing = configs[key];
       const expCount = clampInt(Number(existing?.expCount ?? DEFAULT_EXPERIMENTS), 0, 12);
       const btl = normalizeBtlArray(existing?.btl ?? [], expCount, 1);
@@ -2024,9 +2048,9 @@ export default function LabCourseMarksEntry({
       };
 
       // keep legacy A/B fields in sync if this CO matches them
-      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 5);
+      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 6);
       const bNumRaw = (p.sheet as any).coBNum ?? coB ?? null;
-      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 5);
+      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 6);
 
       return {
         ...p,
@@ -2056,7 +2080,7 @@ export default function LabCourseMarksEntry({
       }
 
       const configs = ensureCoConfigs(p.sheet);
-      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const coKey = String(clampInt(Number(coNumber), 1, 6));
       const cfg = configs[coKey];
       const expCount = clampInt(Number(cfg?.expCount ?? 0), 0, 12);
       const expMax = clampInt(Number(cfg?.expMax ?? DEFAULT_EXPERIMENT_MAX), 0, 100);
@@ -2068,9 +2092,9 @@ export default function LabCourseMarksEntry({
       marksByCo[coKey] = marks;
 
       // keep legacy A/B marks in sync if this CO matches them
-      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 5);
+      const aNum = clampInt(Number((p.sheet as any).coANum ?? coA ?? 1), 1, 6);
       const bNumRaw = (p.sheet as any).coBNum ?? coB ?? null;
-      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 5);
+      const bNum = bNumRaw == null ? null : clampInt(Number(bNumRaw), 1, 6);
 
       const nextRow: any = { ...existing, marksByCo };
       if (coNumber === aNum) nextRow.marksA = normalizeMarksArray((existing as any).marksA, expCount).map((m, i) => (i === expIndex ? nextValue : m));
@@ -2180,7 +2204,7 @@ export default function LabCourseMarksEntry({
         if (absent && !canEditAbsent) return p;
       }
 
-      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const coKey = String(clampInt(Number(coNumber), 1, 6));
       const maxRaw = Number(TCPL_REVIEW_CAA_RAW_MAX[Number(coKey)] || 0);
       const nextValue = value === '' ? '' : clampNumber(Number(value), 0, maxRaw > 0 ? maxRaw : 0);
       const caaExamByCo: Record<string, number | ''> = {
@@ -2218,7 +2242,7 @@ export default function LabCourseMarksEntry({
         if (absent && !canEditAbsent) return p;
       }
 
-      const coKey = String(clampInt(Number(coNumber), 1, 5));
+      const coKey = String(clampInt(Number(coNumber), 1, 6));
       const maxRaw = Number(LAB_CIA_MAX_BY_CO[Number(coKey)] || 0);
       if (maxRaw <= 0) return p;
 
@@ -3198,8 +3222,8 @@ export default function LabCourseMarksEntry({
                     const nextEnabled = enabledCosFromCfg(coConfigs);
                     const removed = prevEnabled.filter((n) => !nextEnabled.includes(n));
                     if (removed.length) {
-                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
-                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 6);
+                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 6);
                       const affected = countNonEmptyDraftMarksForCos(draft.sheet.rowsByStudentId as any, removed, fixedCoA, fixedCoB);
                       setPendingMarkManagerReset({ visible: true, removed, affected });
                       return;
@@ -3218,6 +3242,12 @@ export default function LabCourseMarksEntry({
           </div>
 
           <div style={{ width: '100%', display: 'flex', gap: isLabExamUi ? 8 : 10, flexWrap: 'wrap', marginTop: 8 }}>
+            {normalizedClassType === 'LAB' && (
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827', background: isLabExamUi ? '#ffffff' : 'transparent', border: isLabExamUi ? '1px solid #dbe7e2' : 'none', borderRadius: isLabExamUi ? 8 : 0, padding: isLabExamUi ? '5px 8px' : 0 }}>
+                <input type="checkbox" checked={is6CoMode} disabled={markManagerLocked} onChange={(e) => set6CoMode(e.target.checked)} style={bigCheckboxStyle} />
+                6-CO Scheme
+              </label>
+            )}
             {allowedCoNumbers.map((n) => {
               const cfg = coConfigs[String(n)];
               const checked = Boolean(cfg?.enabled);
@@ -4185,7 +4215,7 @@ export default function LabCourseMarksEntry({
                       {Object.entries(coConfigs)
                         .filter(([k, v]) => allowedCoSet.has(String(k)) && Boolean(v?.enabled))
                         .map(([k, v]) => ({
-                          co: clampInt(Number(k), 1, 5),
+                          co: clampInt(Number(k), 1, 6),
                           expCount: clampInt(Number(v?.expCount ?? 0), 0, 12),
                           expMax: clampInt(Number(v?.expMax ?? 0), 0, 100),
                         }))
@@ -4264,8 +4294,8 @@ export default function LabCourseMarksEntry({
                     const nextEnabled = enabledCosFromCfg(coConfigs);
                     const removed = prevEnabled.filter((n) => !nextEnabled.includes(n));
                     if (removed.length) {
-                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 5);
-                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 5);
+                      const fixedCoA = clampInt(Number(coA ?? 1), 1, 6);
+                      const fixedCoB = coB == null ? null : clampInt(Number(coB), 1, 6);
                       const affected = countNonEmptyDraftMarksForCos(draft.sheet.rowsByStudentId as any, removed, fixedCoA, fixedCoB);
                       setPendingMarkManagerReset({ visible: true, removed, affected });
                       return;

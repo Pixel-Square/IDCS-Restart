@@ -238,6 +238,21 @@ export const DEFAULT_LAB_CYCLE_WEIGHTS: LabCycleWeights = {
   },
 };
 
+/** 6-CO preset: Cycle 1 → CO1/CO2/CO3, Cycle 2 → CO4/CO5/CO6. Each CO = 10 (exp 7.5 + cia 2.5). Grand total = 60. */
+export const LAB_6CO_WEIGHTS: LabCycleWeights = {
+  type: 'lab_cycles',
+  cycle1: {
+    '1': { exp: 7.5, cia: 2.5 },
+    '2': { exp: 7.5, cia: 2.5 },
+    '3': { exp: 7.5, cia: 2.5 },
+  },
+  cycle2: {
+    '4': { exp: 7.5, cia: 2.5 },
+    '5': { exp: 7.5, cia: 2.5 },
+    '6': { exp: 7.5, cia: 2.5 },
+  },
+};
+
 export function isLabCycleWeights(w: any): w is LabCycleWeights {
   return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'lab_cycles';
 }

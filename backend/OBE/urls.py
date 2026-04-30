@@ -124,6 +124,7 @@ urlpatterns = [
     path('iqac/special-courses', views.iqac_special_courses_list),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
+    path('iqac/template-apply', views.obe_template_apply),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),
     path('iqac/final-internal-marks/student/<int:student_id>', views.final_internal_marks_by_student),
 

@@ -1036,6 +1036,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
         _parse_question_co_numbers, _qp1_final_question_weight,
         _co_weights_12, _co_weights_34, _clamp, _round2,
         _get_special_exam_weights, _get_project_exam_weights,
+        _get_lab_cycle_weight_config, _extract_tcpr_review_co_splits_for_ta,
+        _get_tcpl_weight_slots,
         recompute_final_internal_marks,
     )
     from .models import Subject as _SubjectModel
@@ -1655,6 +1657,443 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             ws.auto_filter.ref = f"A2:{sp_last}{ws.max_row}"
             ws.freeze_panes = 'A3'
 
+        elif class_type in ('LAB', 'PRACTICAL'):
+            # ── LAB / PRACTICAL: Cycle-based lab sheets ──
+            lab_cfg = _get_lab_cycle_weight_config()
+            cycle1_cfg = lab_cfg.get('cycle1') or {}
+            cycle2_cfg = lab_cfg.get('cycle2') or {}
+            c1_co_keys = sorted(cycle1_cfg.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+            c2_co_keys = sorted(cycle2_cfg.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+
+            def _get_lab_sheet_data(assessment):
+                if not subject_id:
+                    return {}
+                rows_qs = list(
+                    LabPublishedSheet.objects.filter(subject_id=subject_id, assessment=assessment)
+                    .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                    .order_by('-updated_at')
+                )
+                exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+                if exact and isinstance(getattr(exact, 'data', None), dict):
+                    return exact.data
+                legacy = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+                if legacy and isinstance(getattr(legacy, 'data', None), dict):
+                    return legacy.data
+                return rows_qs[0].data if rows_qs and isinstance(getattr(rows_qs[0], 'data', None), dict) else {}
+
+            lab_cia1_data = _get_lab_sheet_data('cia1')
+            lab_cia2_data = _get_lab_sheet_data('cia2')
+            CIA_EXAM_MAX = 30.0
+
+            def _read_lab_cycle(sheet_data, cycle_config):
+                sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
+                if not isinstance(sheet, dict):
+                    sheet = sheet_data if isinstance(sheet_data, dict) else {}
+                rows_by_sid = sheet.get('rowsByStudentId') if isinstance(sheet, dict) else {}
+                if not isinstance(rows_by_sid, dict):
+                    rows_by_sid = {}
+                co_cfgs = sheet.get('coConfigs') if isinstance(sheet, dict) else {}
+                if not isinstance(co_cfgs, dict):
+                    co_cfgs = {}
+                cia_enabled = sheet.get('ciaExamEnabled', True) if isinstance(sheet, dict) else True
+                cia_max = float(sheet.get('ciaExamMax') or CIA_EXAM_MAX) if isinstance(sheet, dict) else CIA_EXAM_MAX
+                sorted_keys = sorted(cycle_config.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+
+                def get(sid):
+                    s_row = rows_by_sid.get(str(sid)) or rows_by_sid.get(sid) or {}
+                    if not isinstance(s_row, dict):
+                        return {}
+                    marks_by_co = s_row.get('marksByCo') if isinstance(s_row, dict) else {}
+                    if not isinstance(marks_by_co, dict):
+                        marks_by_co = {}
+                    cia_exam_raw = _sf(s_row.get('ciaExam'))
+                    result = {}
+                    has_any = False
+                    for co_key in sorted_keys:
+                        w = cycle_config[co_key]
+                        exp_weight = float(w.get('exp') or 0)
+                        cia_weight = float(w.get('cia') or 0)
+                        co_num = int(co_key) if str(co_key).isdigit() else 0
+                        co_cfg = co_cfgs.get(str(co_num)) or {}
+                        exp_max = float(co_cfg.get('expMax') or 25) if isinstance(co_cfg, dict) else 25.0
+                        exp_count = int(co_cfg.get('expCount') or 0) if isinstance(co_cfg, dict) else 0
+                        raw_marks = marks_by_co.get(str(co_num)) or []
+                        if not isinstance(raw_marks, list):
+                            raw_marks = []
+                        marks = [_sf(x) for x in raw_marks[:exp_count]]
+                        nums = [m for m in marks if m is not None]
+                        avg = (sum(nums) / len(nums)) if nums else None
+                        exp_scaled = (avg / exp_max) * exp_weight if avg is not None and exp_max > 0 else 0
+                        cia_scaled = ((_clamp(cia_exam_raw, 0, cia_max) / cia_max) * cia_weight) if cia_enabled and cia_exam_raw is not None and cia_max > 0 else 0
+                        if avg is not None or cia_exam_raw is not None:
+                            has_any = True
+                        co_total = _clamp(exp_scaled + cia_scaled, 0, exp_weight + cia_weight)
+                        result[co_key] = _round2(co_total) if has_any else None
+                    if not has_any:
+                        for k in sorted_keys:
+                            result[k] = None
+                    return result
+                return get
+
+            cycle1_reader = _read_lab_cycle(lab_cia1_data, cycle1_cfg)
+            cycle2_reader = _read_lab_cycle(lab_cia2_data, cycle2_cfg)
+
+            scaled_label = str(int(scaled_max))
+            fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+            lab_section = ['', '', '']
+            lab_col = ['S.no', "Student's Name", 'Register Number']
+            for k in c1_co_keys:
+                lab_section.append('Cycle 1 LAB')
+                lab_col.append(f'CO{k}')
+            lab_section.append('Cycle 1 LAB')
+            lab_col.append('Total')
+            for k in c2_co_keys:
+                lab_section.append('Cycle 2 LAB')
+                lab_col.append(f'CO{k}')
+            lab_section.append('Cycle 2 LAB')
+            lab_col.append('Total')
+            for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+                for k in fim_co_keys:
+                    lab_section.append(label)
+                    lab_col.append(k.upper())
+                lab_section.append(label)
+                lab_col.append('40')
+                lab_section.append(label)
+                lab_col.append(scaled_label)
+
+            ws.append(lab_section)
+            ws.append(lab_col)
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(lab_section, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(lab_col) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            for idx_l, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+                c1 = cycle1_reader(sid)
+                c2 = cycle2_reader(sid)
+                c1_vals = [_v(c1.get(k)) for k in c1_co_keys]
+                c1_parts = [c1.get(k) for k in c1_co_keys]
+                c1_any = any(v is not None for v in c1_parts)
+                c1_total = _round2(sum(v for v in c1_parts if v is not None)) if c1_any else None
+                c1_vals.append(_v(c1_total))
+                c2_vals = [_v(c2.get(k)) for k in c2_co_keys]
+                c2_parts = [c2.get(k) for k in c2_co_keys]
+                c2_any = any(v is not None for v in c2_parts)
+                c2_total = _round2(sum(v for v in c2_parts if v is not None)) if c2_any else None
+                c2_vals.append(_v(c2_total))
+                before_vals = [_v(fim_row.get(f'base_{k}')) for k in fim_co_keys]
+                before_vals.append(_v(fim_row.get('base_fim')))
+                before_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+                after_vals = [_v(fim_row.get(k)) for k in fim_co_keys]
+                after_vals.append(_v(fim_row.get('fim')))
+                after_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+                ws.append([idx_l, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no'))] + c1_vals + c2_vals + before_vals + after_vals)
+
+            lab_last = get_column_letter(len(lab_col))
+            ws.auto_filter.ref = f"A2:{lab_last}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+        elif class_type == 'TCPL':
+            # ── TCPL: SSA + LAB + CIA per cycle, MODEL, FIM ──
+            scaled_label = str(int(scaled_max))
+            fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            def _get_lab_sheet_tcpl(assessment):
+                if not subject_id:
+                    return {}
+                rows_qs = list(
+                    LabPublishedSheet.objects.filter(subject_id=subject_id, assessment=assessment)
+                    .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                    .order_by('-updated_at')
+                )
+                exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+                if exact and isinstance(getattr(exact, 'data', None), dict):
+                    return exact.data
+                legacy = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+                if legacy and isinstance(getattr(legacy, 'data', None), dict):
+                    return legacy.data
+                return rows_qs[0].data if rows_qs and isinstance(getattr(rows_qs[0], 'data', None), dict) else {}
+
+            lab1_data = _get_lab_sheet_tcpl('formative1')
+            lab2_data = _get_lab_sheet_tcpl('formative2')
+
+            def _extract_lab_total(lab_data, sid):
+                if not isinstance(lab_data, dict):
+                    return None
+                sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else lab_data
+                rows_by = sheet.get('rowsByStudentId') if isinstance(sheet, dict) else {}
+                if not isinstance(rows_by, dict):
+                    return None
+                s_row = rows_by.get(str(sid)) or rows_by.get(sid)
+                if not isinstance(s_row, dict):
+                    return None
+                direct = _sf(s_row.get('ciaExam'))
+                if direct is not None:
+                    return _round2(_clamp(direct, 0, 30))
+                marks = s_row.get('marksByCo') or s_row.get('marksA') or []
+                if isinstance(marks, dict):
+                    total = 0.0
+                    has = False
+                    for co_marks in marks.values():
+                        if isinstance(co_marks, list):
+                            for m in co_marks:
+                                v = _sf(m)
+                                if v is not None:
+                                    total += v
+                                    has = True
+                    return _round2(total) if has else None
+                return None
+
+            model_co_keys_tcpl = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            tcpl_section = ['', '', '']
+            tcpl_col = ['S.no', "Student's Name", 'Register Number']
+            for lbl in ['CO1', 'CO2', 'Total']:
+                tcpl_section.append('SSA1')
+                tcpl_col.append(lbl)
+            tcpl_section.append('LAB 1')
+            tcpl_col.append('Total')
+            for lbl in ['CO1', 'CO2', 'Total']:
+                tcpl_section.append('CIA 1')
+                tcpl_col.append(lbl)
+            for lbl in ['CO3', 'CO4', 'Total']:
+                tcpl_section.append('SSA2')
+                tcpl_col.append(lbl)
+            tcpl_section.append('LAB 2')
+            tcpl_col.append('Total')
+            for lbl in ['CO3', 'CO4', 'Total']:
+                tcpl_section.append('CIA 2')
+                tcpl_col.append(lbl)
+            for k in model_co_keys_tcpl:
+                tcpl_section.append('MODEL')
+                tcpl_col.append(k.upper())
+            tcpl_section.append('MODEL')
+            tcpl_col.append('Total')
+            for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+                for k in fim_co_keys:
+                    tcpl_section.append(label)
+                    tcpl_col.append(k.upper())
+                tcpl_section.append(label)
+                tcpl_col.append('40')
+                tcpl_section.append(label)
+                tcpl_col.append(scaled_label)
+
+            ws.append(tcpl_section)
+            ws.append(tcpl_col)
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(tcpl_section, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(tcpl_col) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            for idx_t, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+                sp1 = ssa1_splits_all.get(sid, {})
+                s1_co1 = _sf(sp1.get('co1'))
+                s1_co2 = _sf(sp1.get('co2'))
+                s1_total = _sf(ssa1_totals.get(sid))
+                if s1_co1 is None and s1_co2 is None and s1_total is not None:
+                    s1_co1 = s1_total / 2.0
+                    s1_co2 = s1_total / 2.0
+                lab1_total = _extract_lab_total(lab1_data, sid)
+                c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+                c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+                sp2 = ssa2_splits_all.get(sid, {})
+                s2_co3 = _sf(sp2.get('co3'))
+                s2_co4 = _sf(sp2.get('co4'))
+                s2_total = _sf(ssa2_totals.get(sid))
+                if s2_co3 is None and s2_co4 is None and s2_total is not None:
+                    s2_co3 = s2_total / 2.0
+                    s2_co4 = s2_total / 2.0
+                lab2_total = _extract_lab_total(lab2_data, sid)
+                c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+                c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+                model_marks = _extract_model_co_marks_for_student(
+                    model_sheet=model_sheet, student_id=sid,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                ) if subject_id else None
+                model_vals = []
+                m_total = 0.0
+                m_has = False
+                for k in model_co_keys_tcpl:
+                    val = _sf(model_marks.get(k)) if model_marks else None
+                    model_vals.append(_v(val))
+                    if val is not None:
+                        m_total += val
+                        m_has = True
+                model_vals.append(_v(m_total) if m_has else '-')
+                before_vals = [_v(fim_row.get(f'base_{k}')) for k in fim_co_keys]
+                before_vals.append(_v(fim_row.get('base_fim')))
+                before_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+                after_vals = [_v(fim_row.get(k)) for k in fim_co_keys]
+                after_vals.append(_v(fim_row.get('fim')))
+                after_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+                row_data = [
+                    idx_t, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no')),
+                    _v(s1_co1), _v(s1_co2), _v(s1_total),
+                    _v(lab1_total),
+                    _v(c1_a), _v(c1_b), _v(c1_total),
+                    _v(s2_co3), _v(s2_co4), _v(s2_total),
+                    _v(lab2_total),
+                    _v(c2_a), _v(c2_b), _v(c2_total),
+                ] + model_vals + before_vals + after_vals
+                ws.append(row_data)
+
+            tcpl_last = get_column_letter(len(tcpl_col))
+            ws.auto_filter.ref = f"A2:{tcpl_last}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+        elif class_type == 'TCPR':
+            # ── TCPR: SSA + Review + CIA per cycle, MODEL, FIM ──
+            scaled_label = str(int(scaled_max))
+            fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+            model_co_keys_tcpr = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            export_sids = [int(s['id']) for s in student_id_list]
+            review1_map = _assessment_map(Review1Mark, 'mark', subject_id, export_sids, ta_id) if subject_id else {}
+            review2_map = _assessment_map(Review2Mark, 'mark', subject_id, export_sids, ta_id) if subject_id else {}
+
+            tcpr_section = ['', '', '']
+            tcpr_col = ['S.no', "Student's Name", 'Register Number']
+            for lbl in ['CO1', 'CO2', 'Total']:
+                tcpr_section.append('SSA1')
+                tcpr_col.append(lbl)
+            tcpr_section.append('Review 1')
+            tcpr_col.append('Total')
+            for lbl in ['CO1', 'CO2', 'Total']:
+                tcpr_section.append('CIA 1')
+                tcpr_col.append(lbl)
+            for lbl in ['CO3', 'CO4', 'Total']:
+                tcpr_section.append('SSA2')
+                tcpr_col.append(lbl)
+            tcpr_section.append('Review 2')
+            tcpr_col.append('Total')
+            for lbl in ['CO3', 'CO4', 'Total']:
+                tcpr_section.append('CIA 2')
+                tcpr_col.append(lbl)
+            for k in model_co_keys_tcpr:
+                tcpr_section.append('MODEL')
+                tcpr_col.append(k.upper())
+            tcpr_section.append('MODEL')
+            tcpr_col.append('Total')
+            for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+                for k in fim_co_keys:
+                    tcpr_section.append(label)
+                    tcpr_col.append(k.upper())
+                tcpr_section.append(label)
+                tcpr_col.append('40')
+                tcpr_section.append(label)
+                tcpr_col.append(scaled_label)
+
+            ws.append(tcpr_section)
+            ws.append(tcpr_col)
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(tcpr_section, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(tcpr_col) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            for idx_r, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+                sp1 = ssa1_splits_all.get(sid, {})
+                s1_co1 = _sf(sp1.get('co1'))
+                s1_co2 = _sf(sp1.get('co2'))
+                s1_total = _sf(ssa1_totals.get(sid))
+                if s1_co1 is None and s1_co2 is None and s1_total is not None:
+                    s1_co1 = s1_total / 2.0
+                    s1_co2 = s1_total / 2.0
+                rev1 = _sf(review1_map.get(sid))
+                c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+                c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+                sp2 = ssa2_splits_all.get(sid, {})
+                s2_co3 = _sf(sp2.get('co3'))
+                s2_co4 = _sf(sp2.get('co4'))
+                s2_total = _sf(ssa2_totals.get(sid))
+                if s2_co3 is None and s2_co4 is None and s2_total is not None:
+                    s2_co3 = s2_total / 2.0
+                    s2_co4 = s2_total / 2.0
+                rev2 = _sf(review2_map.get(sid))
+                c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+                c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+                model_marks = _extract_model_co_marks_for_student(
+                    model_sheet=model_sheet, student_id=sid,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                ) if subject_id else None
+                model_vals = []
+                m_total = 0.0
+                m_has = False
+                for k in model_co_keys_tcpr:
+                    val = _sf(model_marks.get(k)) if model_marks else None
+                    model_vals.append(_v(val))
+                    if val is not None:
+                        m_total += val
+                        m_has = True
+                model_vals.append(_v(m_total) if m_has else '-')
+                before_vals = [_v(fim_row.get(f'base_{k}')) for k in fim_co_keys]
+                before_vals.append(_v(fim_row.get('base_fim')))
+                before_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+                after_vals = [_v(fim_row.get(k)) for k in fim_co_keys]
+                after_vals.append(_v(fim_row.get('fim')))
+                after_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+                row_data = [
+                    idx_r, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no')),
+                    _v(s1_co1), _v(s1_co2), _v(s1_total),
+                    _v(rev1),
+                    _v(c1_a), _v(c1_b), _v(c1_total),
+                    _v(s2_co3), _v(s2_co4), _v(s2_total),
+                    _v(rev2),
+                    _v(c2_a), _v(c2_b), _v(c2_total),
+                ] + model_vals + before_vals + after_vals
+                ws.append(row_data)
+
+            tcpr_last = get_column_letter(len(tcpr_col))
+            ws.auto_filter.ref = f"A2:{tcpr_last}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
         else:
             # ── THEORY / QP1FINAL / others ──
             if is_qp1_final:
@@ -1822,9 +2261,11 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             ws.freeze_panes = 'A3'
 
     # ─────────────────────────────────────────────────────────
-    # SHEETS 2-4 — CO-wise breakdown (Cycle 1, Cycle 2, Model)
+    # SHEETS 2-4 — CO-wise breakdown (only for theory-like types)
     # ─────────────────────────────────────────────────────────
-    try:
+    _theory_like_breakdown = class_type not in ('LAB', 'PRACTICAL', 'TCPL', 'TCPR', 'PROJECT', 'SPECIAL')
+    if _theory_like_breakdown:
+      try:
         breakdown_students = sorted(
             [
                 {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
@@ -1833,7 +2274,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             key=lambda x: (_ms_safe_text(x.get('reg_no')), _ms_safe_text(x.get('name'))),
         )
         _ms_add_co_breakdown_sheets(wb, ta, subject_obj, breakdown_students)
-    except Exception:
+      except Exception:
         logging.getLogger(__name__).exception(
             '_build_detailed_internal_marks_workbook: CO-breakdown sheets failed for ta_id=%s', ta_id,
         )
