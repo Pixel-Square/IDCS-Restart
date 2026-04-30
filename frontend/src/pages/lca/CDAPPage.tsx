@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import CDAPUploader from '../../components/CDAPUploader';
 import CDAPEditor from '../../components/CDAPEditor';
 import { saveCdapRevision } from '../../services/cdapDb';
@@ -7,14 +7,30 @@ type Props = {
   courseId?: string;
   showHeader?: boolean;
   showCourseInput?: boolean;
+  /** Override: allow editing even when CDAP is published (IQAC role). */
+  isIqac?: boolean;
 };
 
-export default function CDAPPage({ courseId, showHeader = true, showCourseInput = true }: Props) {
+export default function CDAPPage({ courseId, showHeader = true, showCourseInput = true, isIqac: isIqacProp }: Props) {
   const [subject, setSubject] = useState<string>(courseId || '');
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [autoSaveMessage, setAutoSaveMessage] = useState<string | null>(null);
   const [publishedLocked, setPublishedLocked] = useState(false);
+
+  // Detect IQAC role from localStorage if not explicitly passed
+  const isIqac = useMemo(() => {
+    if (isIqacProp !== undefined) return isIqacProp;
+    try {
+      const raw = window.localStorage.getItem('roles');
+      const roles: any[] = raw ? JSON.parse(raw) : [];
+      return Array.isArray(roles) && roles.some(
+        (r) => String(r?.name || r || '').trim().toUpperCase() === 'IQAC'
+      );
+    } catch {
+      return false;
+    }
+  }, [isIqacProp]);
 
   const teachingAssignmentId = React.useMemo(() => {
     if (!subject) return undefined;
@@ -47,7 +63,8 @@ export default function CDAPPage({ courseId, showHeader = true, showCourseInput 
         </div>
       )}
 
-      {!publishedLocked ? (
+      {/* IQAC can always upload even when published; others are blocked by publishedLocked */}
+      {(!publishedLocked || isIqac) ? (
         <div style={{ marginBottom: 12 }}>
           <CDAPUploader
             subjectId={subject}
@@ -107,6 +124,7 @@ export default function CDAPPage({ courseId, showHeader = true, showCourseInput 
           subjectId={subject}
           imported={uploadResult?.revision || uploadResult}
           onLockChange={(locked) => setPublishedLocked(Boolean(locked))}
+          isIqac={isIqac}
         />
       </div>
     </div>

@@ -2076,8 +2076,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
               if (totalX != null) {
                 patch.total = round1(clamp(totalX, 0, MAX_ASMT1));
-              } else if (patch.co1 != null && patch.co2 != null) {
-                patch.total = round1(clamp((patch.co1 as number) + (patch.co2 as number), 0, MAX_ASMT1));
+              } else if (patch.co1 != null || patch.co2 != null) {
+                const v1 = typeof patch.co1 === "number" ? patch.co1 : 0;
+                const v2 = typeof patch.co2 === "number" ? patch.co2 : 0;
+                patch.total = round1(clamp(v1 + v2, 0, MAX_ASMT1));
               }
             }
           }

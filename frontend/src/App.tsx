@@ -13,6 +13,7 @@ import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
 import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
 import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
+import AcademicControllerCourseLcaPage from './pages/iqac/AcademicControllerCourseLcaPage';
 import InternalMarkPage from './pages/iqac/InternalMarkPage';
 import OBERequestsPage from './pages/obe/OBERequestsPage';
 import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
@@ -492,6 +493,10 @@ export default function App() {
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/marks/:taId"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
+                />
+                <Route
+                  path="/iqac/academic-controller/course/:courseCode/lca/:taId"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseLcaPage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"

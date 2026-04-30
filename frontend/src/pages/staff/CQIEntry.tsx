@@ -1378,7 +1378,7 @@ export default function CQIEntry({
           review2: isProject ? { co3: 50, co4: 0 } : { co3: Number(review2Cfg?.coMax?.co3 ?? review2Cfg?.coMax?.co1) || 15, co4: Number(review2Cfg?.coMax?.co4 ?? review2Cfg?.coMax?.co2) || 15 },
         };
 
-        const readReviewMarkByCo = (reviewRes: any, studentId: number, coKey: 'co1' | 'co2' | 'co3' | 'co4'): number | null => {
+        const readReviewMarkByCo = (reviewRes: any, studentId: number, coKey: 'co1' | 'co2' | 'co3' | 'co4', clampMax = 50): number | null => {
           if (isProject) {
             const draftSheet = reviewRes?.draft?.sheet && typeof reviewRes.draft.sheet === 'object'
               ? reviewRes.draft.sheet
@@ -2038,9 +2038,12 @@ export default function CQIEntry({
                 // Cycle 2: (review2/50)*12 + (ssa2/20)*3 = 15
                 // Cycle 3: (model/50)*30             = 30
                 // Total                              = 60
-                const review1Raw = readReviewMarkByCo(review1Res as any, student.id, 'co1');
-                const review2Raw = readReviewMarkByCo(review2Res as any, student.id, 'co3');
-                const modelRaw = readReviewMarkByCo(prblModelRes as any, student.id, 'co1');
+                const maxReview1 = Number(review1Cfg?.maxTotal) || 50;
+                const maxReview2 = Number(review2Cfg?.maxTotal) || 50;
+                const maxModel = Number(masterCfg?.assessments?.model?.maxTotal) || 50;
+                const review1Raw = readReviewMarkByCo(review1Res as any, student.id, 'co1', maxReview1);
+                const review2Raw = readReviewMarkByCo(review2Res as any, student.id, 'co3', maxReview2);
+                const modelRaw = readReviewMarkByCo(prblModelRes as any, student.id, 'co1', maxModel);
 
                 // SSA1 total mark (out of 20)
                 const ssa1Total = toNumOrNull((ssa1Res as any)?.marks?.[String(student.id)]);
@@ -2071,25 +2074,32 @@ export default function CQIEntry({
 
                 const hasSome = review1Raw != null || review2Raw != null || modelRaw != null || ssa1Val != null || ssa2Val != null;
                 if (hasSome) {
-                  const cycle1 = round2(((review1Raw ?? 0) / 50) * 12 + ((ssa1Val ?? 0) / 20) * 3);
-                  const cycle2 = round2(((review2Raw ?? 0) / 50) * 12 + ((ssa2Val ?? 0) / 20) * 3);
-                  const cycle3 = round2(((modelRaw ?? 0) / 50) * 30);
+                  const maxReview1 = Number(review1Cfg?.maxTotal) || 50;
+                const maxSsa1 = Number(ssa1Cfg?.maxTotal) || 20;
+                const cycle1 = round2(((review1Raw ?? 0) / maxReview1) * 12 + ((ssa1Val ?? 0) / maxSsa1) * 3);
+                  const maxReview2 = Number(review2Cfg?.maxTotal) || 50;
+                const maxSsa2 = Number(ssa2Cfg?.maxTotal) || 20;
+                const cycle2 = round2(((review2Raw ?? 0) / maxReview2) * 12 + ((ssa2Val ?? 0) / maxSsa2) * 3);
+                  const maxModel = Number(masterCfg?.assessments?.model?.maxTotal) || 50;
+                const cycle3 = round2(((modelRaw ?? 0) / maxModel) * 30);
                   reviewMark = round2(cycle1 + cycle2 + cycle3);
                   reviewMax = 60;
                 }
               } else {
                 if (coNum === 1 && reviewAssessment === 'review1') {
-                  const review1Mark = readReviewMarkByCo(review1Res as any, student.id, 'co1');
+                  const maxR1 = Number(review1Cfg?.maxTotal) || 50;
+                  const review1Mark = readReviewMarkByCo(review1Res as any, student.id, 'co1', maxR1);
                   if (review1Mark != null) {
                     reviewMark = review1Mark;
-                    reviewMax = 50;
+                    reviewMax = maxR1;
                   }
                 }
                 if (coNum === 1 && reviewAssessment === 'review2') {
-                  const review2Mark = readReviewMarkByCo(review2Res as any, student.id, 'co3');
+                  const maxR2 = Number(review2Cfg?.maxTotal) || 50;
+                  const review2Mark = readReviewMarkByCo(review2Res as any, student.id, 'co3', maxR2);
                   if (review2Mark != null) {
                     reviewMark = review2Mark;
-                    reviewMax = 50;
+                    reviewMax = maxR2;
                   }
                 }
               }

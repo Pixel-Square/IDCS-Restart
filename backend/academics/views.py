@@ -648,6 +648,1263 @@ class TeachingAssignmentStudentsView(APIView):
         })
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Shared helpers for IQAC Internal Marks exports (single-course + bulk)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _ms_safe_text(value):
+    return str(value or '').strip()
+
+
+def _ms_safe_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _ms_safe_filename(value: str) -> str:
+    allowed = []
+    for ch in str(value or ''):
+        if ch.isalnum() or ch in ('_', '-', '.', ' '):
+            allowed.append(ch)
+        else:
+            allowed.append('_')
+    out = ''.join(allowed).strip()
+    return out or 'internal_marks'
+
+
+def _ms_resolve_course_for_ta(ta):
+    code = ''
+    name = ''
+    subj = getattr(ta, 'subject', None)
+    if subj is not None:
+        code = _ms_safe_text(getattr(subj, 'code', ''))
+        name = _ms_safe_text(getattr(subj, 'name', ''))
+    if not code and getattr(ta, 'curriculum_row', None) is not None:
+        row = ta.curriculum_row
+        code = _ms_safe_text(getattr(row, 'course_code', ''))
+        name = _ms_safe_text(getattr(row, 'course_name', ''))
+    if not code and getattr(ta, 'elective_subject', None) is not None:
+        es = ta.elective_subject
+        code = _ms_safe_text(getattr(es, 'course_code', ''))
+        name = _ms_safe_text(getattr(es, 'course_name', ''))
+    code = code.upper()
+    return code, (name or code)
+
+
+def _ms_add_co_breakdown_sheets(wb, ta, subject, student_list):
+    """Append Cycle 1 / Cycle 2 / Model Exam CO-breakdown sheets to *wb*.
+
+    Module-level version of what was previously a method on
+    IqacInternalMarksCourseExportView. Produces three additional sheets:
+      - Cycle 1 (SSA1+CIA1+FA1)
+      - Cycle 2 (SSA2+CIA2+FA2)
+      - Model Exam
+    """
+    from django.db.models import Q
+    from OBE.models import Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark
+    from OBE.services.final_internal_marks import (
+        _resolve_class_type,
+        _resolve_qp_type,
+        _extract_ssa_co_splits_for_ta,
+        _get_cia_sheet_data,
+        _get_model_sheet_data,
+        _extract_model_co_marks_for_student,
+        _get_qp_pattern,
+        _safe_float as _sf,
+        _safe_text as _st,
+        _parse_co12,
+        _parse_co34,
+        _parse_question_co_numbers,
+        _qp1_final_question_weight,
+        _co_weights_12,
+        _co_weights_34,
+        _clamp,
+        _round2,
+        _assessment_map,
+    )
+
+    if not student_list or subject is None:
+        return
+
+    ta_id = ta.id
+    subject_id = subject.id
+    student_ids = [int(s['id']) for s in student_list]
+    reg_map = {int(s['id']): _ms_safe_text(s.get('reg_no', '')) for s in student_list}
+
+    class_type = _resolve_class_type(ta)
+    qp_type = _resolve_qp_type(ta)
+    batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+    is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+
+    def _v(x):
+        return _round2(x) if x is not None else '-'
+
+    # --- SSA totals + per-CO splits ---
+    ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id)
+    ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id)
+    ssa1_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', ['co1', 'co2'])
+    ssa2_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', ['co3', 'co4'])
+
+    # --- Formative marks (per-TA preferred, fall back to legacy) ---
+    def _fetch_formative(model_cls):
+        result = {}
+        qs = (
+            model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
+            .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+            .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+        )
+        for row in qs:
+            sid = int(row['student_id'])
+            is_ta = row.get('teaching_assignment_id') == ta_id
+            existing = result.get(sid)
+            if existing is None or (not existing.get('_is_ta') and is_ta):
+                result[sid] = {**row, '_is_ta': is_ta}
+        return result
+
+    f1_rows_all = _fetch_formative(Formative1Mark)
+    f2_rows_all = _fetch_formative(Formative2Mark)
+
+    # --- CIA sheets + patterns ---
+    cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1')
+    cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2')
+    cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+    cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+    def _build_questions(sheet, pattern, is_cia1):
+        qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+        p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+        p_cos = pattern.get('cos') if isinstance(pattern, dict) and isinstance(pattern.get('cos'), list) else []
+        out = []
+        count = max(len(qs), len(p_marks))
+        for i in range(count):
+            q = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+            key = _st(q.get('key')) or f'q{i + 1}'
+            mx = _sf(p_marks[i] if i < len(p_marks) else q.get('max'))
+            if mx is None:
+                mx = _sf(q.get('maxMarks'))
+            if mx is None:
+                mx = 0.0
+            co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+            if is_qp1_final:
+                co = co_raw
+            else:
+                co = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+            out.append({'key': key, 'max': float(mx), 'co': co})
+        return out
+
+    cia1_questions = _build_questions(cia1_sheet, cia1_pattern, True)
+    cia2_questions = _build_questions(cia2_sheet, cia2_pattern, False)
+
+    cia1_row_map = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+    cia2_row_map = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+
+    max_seen = 0
+    for qq in cia2_questions:
+        nums = _parse_question_co_numbers(qq.get('co'))
+        if nums:
+            max_seen = max(max_seen, max(nums))
+    qp1_cia2_offset = 1 if (is_qp1_final and max_seen > 0 and max_seen <= 2) else 0
+
+    def _cia_co_raw(row, questions, is_cia1):
+        if not isinstance(row, dict) or bool(row.get('absent')):
+            return None, None, None
+        qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+        c_a = 0.0
+        c_b = 0.0
+        has_any = False
+        for q in questions:
+            mx = float(q.get('max') or 0)
+            n = _sf(qvals.get(q.get('key')))
+            if is_qp1_final and is_cia1:
+                raw_nums = _parse_question_co_numbers(q.get('co'))
+                raw_num = raw_nums[0] if raw_nums else None
+                wa = 1.0 if raw_num == 1 else 0.0
+                wb_weight = 1.0 if raw_num == 2 else 0.0
+            elif is_qp1_final and not is_cia1:
+                wa = _qp1_final_question_weight(q.get('co'), 2, qp1_cia2_offset)
+                wb_weight = _qp1_final_question_weight(q.get('co'), 3, qp1_cia2_offset)
+            elif is_cia1:
+                wa, wb_weight = _co_weights_12(q.get('co'))
+            else:
+                wa, wb_weight = _co_weights_34(q.get('co'))
+            if n is None:
+                continue
+            has_any = True
+            mark = _clamp(n, 0, mx)
+            c_a += mark * wa
+            c_b += mark * wb_weight
+        if not has_any:
+            return None, None, None
+        return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
+
+    model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type)
+    model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+
+    if is_qp1_final:
+        c2_label_a, c2_label_b = 'CO2', 'CO3'
+        model_co_keys = ['co1', 'co2', 'co3']
+    else:
+        c2_label_a, c2_label_b = 'CO3', 'CO4'
+        model_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+    # ── Sheet: Cycle 1 (SSA1 + CIA1 + FA1) ──
+    ws1 = wb.create_sheet('Cycle 1 (SSA1+CIA1+FA1)')
+    ws1.append([
+        'S.no', "Student's Name", 'Register Number',
+        'SSA1 CO1', 'SSA1 CO2', 'SSA1 Total',
+        'CIA1 CO1', 'CIA1 CO2', 'CIA1 Total',
+        'FA1 CO1', 'FA1 CO2', 'FA1 Total',
+    ])
+    try:
+        from openpyxl.styles import Font as _Fc1
+        for ci in range(1, 13):
+            ws1.cell(row=1, column=ci).font = _Fc1(bold=True)
+    except Exception:
+        pass
+
+    for idx, s in enumerate(student_list, start=1):
+        sid = int(s['id'])
+        sp1 = ssa1_splits_all.get(sid, {})
+        s1_co1 = _sf(sp1.get('co1'))
+        s1_co2 = _sf(sp1.get('co2'))
+        s1_total = _sf(ssa1_totals.get(sid))
+        if s1_co1 is None and s1_co2 is None and s1_total is not None:
+            s1_co1 = s1_total / 2.0
+            s1_co2 = s1_total / 2.0
+
+        c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+        c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+
+        f1 = f1_rows_all.get(sid, {})
+        f1_co1 = None
+        f1_co2 = None
+        f1_total = _sf(f1.get('total'))
+        if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None:
+            f1_co1 = _round2(_sf(f1['skill1']) + _sf(f1['att1']))
+        if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None:
+            f1_co2 = _round2(_sf(f1['skill2']) + _sf(f1['att2']))
+
+        ws1.append([
+            idx,
+            _ms_safe_text(s.get('name')),
+            _ms_safe_text(s.get('reg_no')),
+            _v(s1_co1), _v(s1_co2), _v(s1_total),
+            _v(c1_a), _v(c1_b), _v(c1_total),
+            _v(f1_co1), _v(f1_co2), _v(f1_total),
+        ])
+    ws1.auto_filter.ref = f"A1:L{ws1.max_row}"
+    ws1.freeze_panes = 'A2'
+
+    # ── Sheet: Cycle 2 (SSA2 + CIA2 + FA2) ──
+    ws2 = wb.create_sheet('Cycle 2 (SSA2+CIA2+FA2)')
+    ws2.append([
+        'S.no', "Student's Name", 'Register Number',
+        f'SSA2 {c2_label_a}', f'SSA2 {c2_label_b}', 'SSA2 Total',
+        f'CIA2 {c2_label_a}', f'CIA2 {c2_label_b}', 'CIA2 Total',
+        f'FA2 {c2_label_a}', f'FA2 {c2_label_b}', 'FA2 Total',
+    ])
+    try:
+        from openpyxl.styles import Font as _Fc2
+        for ci in range(1, 13):
+            ws2.cell(row=1, column=ci).font = _Fc2(bold=True)
+    except Exception:
+        pass
+
+    for idx, s in enumerate(student_list, start=1):
+        sid = int(s['id'])
+        sp2 = ssa2_splits_all.get(sid, {})
+        s2_co_a = _sf(sp2.get('co3'))
+        s2_co_b = _sf(sp2.get('co4'))
+        s2_total = _sf(ssa2_totals.get(sid))
+        if s2_co_a is None and s2_co_b is None and s2_total is not None:
+            s2_co_a = s2_total / 2.0
+            s2_co_b = s2_total / 2.0
+        if is_qp1_final and sp2:
+            first_v = _sf(sp2.get('co2'))
+            if first_v is None:
+                first_v = _sf(sp2.get('co3'))
+            if first_v is not None:
+                s2_co_a = first_v
+            second_v = None
+            if sp2.get('co3') is not None and sp2.get('co2') is not None:
+                second_v = _sf(sp2.get('co3'))
+            if second_v is None:
+                second_v = _sf(sp2.get('co4'))
+            if second_v is not None:
+                s2_co_b = second_v
+
+        c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+        c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+
+        f2 = f2_rows_all.get(sid, {})
+        f2_co_a = None
+        f2_co_b = None
+        f2_total = _sf(f2.get('total'))
+        if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None:
+            f2_co_a = _round2(_sf(f2['skill1']) + _sf(f2['att1']))
+        if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None:
+            f2_co_b = _round2(_sf(f2['skill2']) + _sf(f2['att2']))
+
+        ws2.append([
+            idx,
+            _ms_safe_text(s.get('name')),
+            _ms_safe_text(s.get('reg_no')),
+            _v(s2_co_a), _v(s2_co_b), _v(s2_total),
+            _v(c2_a), _v(c2_b), _v(c2_total),
+            _v(f2_co_a), _v(f2_co_b), _v(f2_total),
+        ])
+    ws2.auto_filter.ref = f"A1:L{ws2.max_row}"
+    ws2.freeze_panes = 'A2'
+
+    # ── Sheet: Model Exam ──
+    ws3 = wb.create_sheet('Model Exam')
+    model_headers = ['S.no', "Student's Name", 'Register Number']
+    for k in model_co_keys:
+        model_headers.append(f'MODEL {k.upper()}')
+    model_headers.append('MODEL Total')
+    ws3.append(model_headers)
+    try:
+        from openpyxl.styles import Font as _Fm
+        for ci in range(1, len(model_headers) + 1):
+            ws3.cell(row=1, column=ci).font = _Fm(bold=True)
+    except Exception:
+        pass
+
+    for idx, s in enumerate(student_list, start=1):
+        sid = int(s['id'])
+        marks = _extract_model_co_marks_for_student(
+            model_sheet=model_sheet, student_id=sid,
+            reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+        ) if subject_id else None
+        row_vals = [idx, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no'))]
+        m_total = 0.0
+        m_has = False
+        for k in model_co_keys:
+            v = _sf(marks.get(k)) if marks else None
+            row_vals.append(_v(v))
+            if v is not None:
+                m_total += v
+                m_has = True
+        row_vals.append(_v(m_total) if m_has else '-')
+        ws3.append(row_vals)
+    try:
+        from openpyxl.utils import get_column_letter as _gcl_m
+        last_letter = _gcl_m(len(model_headers))
+        ws3.auto_filter.ref = f"A1:{last_letter}{ws3.max_row}"
+        ws3.freeze_panes = 'A2'
+    except Exception:
+        pass
+
+
+def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute=True):
+    """Build the full multi-sheet Internal Marks workbook for one teaching assignment.
+
+    Returns (xlsx_bytes, suggested_filename, meta).
+    Meta keys: course_code, course_name, section_name, batch_name,
+               dept_name, regulation, semester, student_count.
+
+    Sheets produced:
+      1. Internal Marks (comprehensive: Cycle 1/2/Model + FIM Before/After CQI)
+      2. Cycle 1 (SSA1+CIA1+FA1)
+      3. Cycle 2 (SSA2+CIA2+FA2)
+      4. Model Exam
+      5. Summary
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    from openpyxl.utils import get_column_letter
+    from django.db.models import Q as _Q
+    from OBE.models import (
+        FinalInternalMark, LabPublishedSheet, Review1Mark, Review2Mark,
+        Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark,
+    )
+    from OBE.services.final_internal_marks import (
+        _assessment_map,
+        _resolve_class_type, _resolve_qp_type,
+        _resolve_subject_for_ta, _students_for_ta,
+        _compute_weighted_final_total_theory_like, _compute_english_final_total,
+        _compute_foreign_lang_final_total, _compute_prbl_final_total,
+        _compute_tcpr_final_total, _compute_project_final_total,
+        _compute_lab_final_total, _compute_tcpl_final_total,
+        _extract_ssa_co_splits_for_ta, _get_cia_sheet_data, _get_model_sheet_data,
+        _extract_model_co_marks_for_student, _get_qp_pattern,
+        _safe_float as _sf, _safe_text as _st, _parse_co12, _parse_co34,
+        _parse_question_co_numbers, _qp1_final_question_weight,
+        _co_weights_12, _co_weights_34, _clamp, _round2,
+        _get_special_exam_weights, _get_project_exam_weights,
+        recompute_final_internal_marks,
+    )
+    from .models import Subject as _SubjectModel
+
+    ta_id = ta.id
+    course_code, course_name = _ms_resolve_course_for_ta(ta)
+    if not course_code:
+        raise ValueError('Unable to resolve course code for this teaching assignment.')
+
+    class_type = str(_resolve_class_type(ta) or '').upper()
+    is_project_course = class_type == 'PROJECT'
+    qp_type_raw = _resolve_qp_type(ta)
+    is_qp1_final = 'QP1FINAL' in str(qp_type_raw or '').upper().replace(' ', '')
+    scaled_max = 60.0 if is_qp1_final else 100.0
+
+    if recompute:
+        try:
+            recompute_final_internal_marks(
+                actor_user_id=actor_user_id,
+                filters={'teaching_assignment_id': ta_id},
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                '_build_detailed_internal_marks_workbook: recompute failed for ta_id=%s', ta_id,
+            )
+
+    subject_obj = _resolve_subject_for_ta(ta) or getattr(ta, 'subject', None)
+    if subject_obj is None:
+        subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
+
+    student_list = list(_students_for_ta(ta) or [])
+    if not student_list:
+        # Fall back to enumerating students from FinalInternalMark records.
+        seen = set()
+        fim_qs = (
+            FinalInternalMark.objects.filter(teaching_assignment_id=ta_id)
+            .select_related('student__user')
+            .order_by('student_id', 'id')
+        )
+        for fim in fim_qs:
+            sp = getattr(fim, 'student', None)
+            if sp is None:
+                continue
+            sid = int(getattr(sp, 'id', 0) or 0)
+            if sid <= 0 or sid in seen:
+                continue
+            seen.add(sid)
+            user = getattr(sp, 'user', None)
+            student_name = ' '.join([
+                _ms_safe_text(getattr(user, 'first_name', '')),
+                _ms_safe_text(getattr(user, 'last_name', '')),
+            ]).strip() if user else ''
+            if not student_name:
+                student_name = _ms_safe_text(getattr(user, 'username', '')) if user else ''
+            student_list.append({
+                'id': sid,
+                'reg_no': _ms_safe_text(getattr(sp, 'reg_no', '')),
+                'name': student_name,
+            })
+
+    # ── Per-student compute (Before + After CQI values) ──
+    student_rows = {}
+    for s in student_list:
+        sid = int(s.get('id', 0) or 0)
+        if sid <= 0:
+            continue
+        ref = {'id': sid, 'reg_no': _ms_safe_text(s.get('reg_no'))}
+        live = None
+        try:
+            if class_type in ('THEORY', 'SPECIAL', 'THEORY_PMBL'):
+                live = _compute_weighted_final_total_theory_like(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type == 'ENGLISH':
+                live = _compute_english_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type == 'FOREIGN_LANG':
+                live = _compute_foreign_lang_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type == 'PRBL':
+                live = _compute_prbl_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type == 'TCPR':
+                live = _compute_tcpr_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type == 'PROJECT':
+                live = _compute_project_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+            elif class_type in ('LAB', 'PRACTICAL'):
+                live = _compute_lab_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id,
+                    class_type=class_type, return_details=True,
+                )
+            elif class_type == 'TCPL':
+                live = _compute_tcpl_final_total(
+                    ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+                )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                '_build_detailed_internal_marks_workbook: compute error ta_id=%s sid=%s class_type=%s',
+                ta_id, sid, class_type,
+            )
+            live = None
+
+        co_vals = {f'co{i}': None for i in range(1, 6)}
+        base_co_vals = {f'co{i}': None for i in range(1, 6)}
+        final_mark = base_mark = total_100 = base_total_100 = None
+        if isinstance(live, dict):
+            final_mark = _ms_safe_float(live.get('total_40'))
+            total_100 = _ms_safe_float(live.get('total_100'))
+            base_mark = _ms_safe_float(live.get('base_total_40'))
+            base_total_100 = _ms_safe_float(live.get('base_total_100'))
+            cv = live.get('co_values_40') if isinstance(live.get('co_values_40'), dict) else {}
+            bv = live.get('base_co_values_40') if isinstance(live.get('base_co_values_40'), dict) else {}
+            for i in range(1, 6):
+                co_vals[f'co{i}'] = _ms_safe_float(cv.get(f'co{i}'))
+                base_co_vals[f'co{i}'] = _ms_safe_float(bv.get(f'co{i}'))
+
+        student_rows[sid] = {
+            'student_id': sid,
+            'name': _ms_safe_text(s.get('name')),
+            'reg_no': _ms_safe_text(s.get('reg_no')),
+            'co1': co_vals['co1'], 'co2': co_vals['co2'], 'co3': co_vals['co3'],
+            'co4': co_vals['co4'], 'co5': co_vals['co5'],
+            'fim': final_mark,
+            'total_100': total_100,
+            'base_co1': base_co_vals['co1'], 'base_co2': base_co_vals['co2'],
+            'base_co3': base_co_vals['co3'], 'base_co4': base_co_vals['co4'],
+            'base_co5': base_co_vals['co5'],
+            'base_fim': base_mark,
+            'base_total_100': base_total_100,
+        }
+
+    rows = sorted(
+        student_rows.values(),
+        key=lambda r: (_ms_safe_text(r.get('reg_no')), _ms_safe_text(r.get('name'))),
+    )
+    if not rows:
+        raise ValueError('No internal marks found for this teaching assignment.')
+
+    # ── PROJECT: read review marks from LabPublishedSheet to fill missing totals ──
+    if is_project_course:
+        def _pick_lab_published(key):
+            if subject_obj is None:
+                return {}
+            qs = list(
+                LabPublishedSheet.objects.filter(subject_id=subject_obj.id, assessment=key)
+                .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                .order_by('-updated_at')
+            )
+            exact = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+            if exact is not None and isinstance(getattr(exact, 'data', None), dict):
+                return exact.data
+            legacy = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+            if legacy is not None and isinstance(getattr(legacy, 'data', None), dict):
+                return legacy.data
+            first = qs[0] if qs else None
+            return first.data if first is not None and isinstance(getattr(first, 'data', None), dict) else {}
+
+        def _extract_review_from_lab(lab_data, sid):
+            if not isinstance(lab_data, dict):
+                return None
+            sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
+            rows_by_student = None
+            if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
+                rows_by_student = sheet['rowsByStudentId']
+            elif isinstance(lab_data.get('rowsByStudentId'), dict):
+                rows_by_student = lab_data['rowsByStudentId']
+            if not isinstance(rows_by_student, dict):
+                return None
+            srow = rows_by_student.get(str(sid)) or rows_by_student.get(sid)
+            if not isinstance(srow, dict):
+                return None
+            direct = _ms_safe_float(srow.get('ciaExam'))
+            if direct is not None:
+                return round(max(0.0, min(50.0, float(direct))), 2)
+            comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
+            total = 0.0
+            has_any = False
+            for raw in comps.values():
+                n = _ms_safe_float(raw)
+                if n is None:
+                    continue
+                has_any = True
+                total += float(n)
+            if not has_any:
+                return None
+            return round(max(0.0, min(50.0, total)), 2)
+
+        review1_lab = _pick_lab_published('review1')
+        review2_lab = _pick_lab_published('review2')
+        cfg_proj = _get_project_exam_weights() or {}
+        w_r1 = float((cfg_proj.get('review1') or {}).get('weight') or 50)
+        w_r2 = float((cfg_proj.get('review2') or {}).get('weight') or 50)
+        max_r1 = float((cfg_proj.get('review1') or {}).get('max') or 50)
+        max_r2 = float((cfg_proj.get('review2') or {}).get('max') or 50)
+
+        for row in rows:
+            if row.get('total_100') is not None:
+                continue
+            sid = int(row.get('student_id') or 0)
+            if sid <= 0:
+                continue
+            r1 = _extract_review_from_lab(review1_lab, sid)
+            r2 = _extract_review_from_lab(review2_lab, sid)
+            if r1 is None and r2 is None:
+                continue
+            s_r1 = round(max(0.0, min(w_r1, (float(r1) / max_r1) * w_r1)), 4) if r1 is not None else 0.0
+            s_r2 = round(max(0.0, min(w_r2, (float(r2) / max_r2) * w_r2)), 4) if r2 is not None else 0.0
+            row['total_100'] = round(s_r1 + s_r2, 2)
+            # Also populate base CO splits for the new CQI columns (project base = scaled review)
+            if row.get('base_co1') is None and r1 is not None:
+                row['base_co1'] = round(s_r1, 2)
+            if row.get('base_co2') is None and r2 is not None:
+                row['base_co2'] = round(s_r2, 2)
+            if row.get('co1') is None and r1 is not None:
+                row['co1'] = round(s_r1, 2)
+            if row.get('co2') is None and r2 is not None:
+                row['co2'] = round(s_r2, 2)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Internal Marks'
+
+    def _v(x):
+        return _round2(x) if x is not None else '-'
+
+    # ─────────────────────────────────────────────────────────
+    # SHEET 1 — Comprehensive Internal Marks
+    # ─────────────────────────────────────────────────────────
+
+    if is_project_course:
+        # PROJECT: Review1/Review2/100 + FIM (Before CQI) + FIM (After CQI)
+        review1_map = {}
+        review2_map = {}
+        review1_lab_data = {}
+        review2_lab_data = {}
+
+        def _pick_lab_data(assessment_key):
+            if subject_obj is None:
+                return {}
+            rows_qs = list(
+                LabPublishedSheet.objects.filter(subject_id=subject_obj.id, assessment=assessment_key)
+                .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                .order_by('-updated_at')
+            )
+            exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+            if exact is not None and isinstance(getattr(exact, 'data', None), dict):
+                return exact.data
+            legacy = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+            if legacy is not None and isinstance(getattr(legacy, 'data', None), dict):
+                return legacy.data
+            first = rows_qs[0] if rows_qs else None
+            return first.data if first is not None and isinstance(getattr(first, 'data', None), dict) else {}
+
+        def _extract_lab_review(lab_data, sid):
+            if not isinstance(lab_data, dict):
+                return None
+            sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
+            rows_by_student = None
+            if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
+                rows_by_student = sheet['rowsByStudentId']
+            elif isinstance(lab_data.get('rowsByStudentId'), dict):
+                rows_by_student = lab_data['rowsByStudentId']
+            if not isinstance(rows_by_student, dict):
+                return None
+            srow = rows_by_student.get(str(sid)) or rows_by_student.get(sid)
+            if not isinstance(srow, dict):
+                return None
+            direct = _ms_safe_float(srow.get('ciaExam'))
+            if direct is not None:
+                return round(max(0.0, min(50.0, float(direct))), 2)
+            comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
+            total = 0.0
+            has_any = False
+            for raw in comps.values():
+                n = _ms_safe_float(raw)
+                if n is None:
+                    continue
+                has_any = True
+                total += float(n)
+            if not has_any:
+                return None
+            return round(max(0.0, min(50.0, total)), 2)
+
+        export_student_ids = [int(r.get('student_id') or 0) for r in rows if int(r.get('student_id') or 0) > 0]
+        if subject_obj is not None and export_student_ids:
+            review1_map = _assessment_map(Review1Mark, 'mark', subject_obj.id, export_student_ids, ta_id)
+            review2_map = _assessment_map(Review2Mark, 'mark', subject_obj.id, export_student_ids, ta_id)
+            review1_lab_data = _pick_lab_data('review1')
+            review2_lab_data = _pick_lab_data('review2')
+
+        scaled_label = str(int(scaled_max))
+        proj_section_header = ['', '', '', '', '', '']
+        proj_col_header = ['S.no', 'Register number', "Student's name", 'Review 1', 'Review 2', '100']
+        # Append FIM (Before CQI) and FIM (After CQI) blocks: CO1, CO2, 40, scaled_max
+        for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+            for sub in ('CO1', 'CO2', '40', scaled_label):
+                proj_section_header.append(label)
+                proj_col_header.append(sub)
+
+        ws.append(proj_section_header)
+        ws.append(proj_col_header)
+
+        try:
+            section_ranges = {}
+            for ci, sec in enumerate(proj_section_header, start=1):
+                if sec:
+                    if sec not in section_ranges:
+                        section_ranges[sec] = [ci, ci]
+                    else:
+                        section_ranges[sec][1] = ci
+            for sec, (start_col, end_col) in section_ranges.items():
+                if start_col < end_col:
+                    ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                cell = ws.cell(row=1, column=start_col)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal='center')
+            for ci in range(1, len(proj_col_header) + 1):
+                ws.cell(row=2, column=ci).font = Font(bold=True)
+        except Exception:
+            pass
+
+        for idx, row in enumerate(rows, start=1):
+            sid = int(row.get('student_id') or 0)
+            r1 = _ms_safe_float(review1_map.get(sid))
+            r2 = _ms_safe_float(review2_map.get(sid))
+            if r1 is None:
+                r1 = _extract_lab_review(review1_lab_data, sid)
+            if r2 is None:
+                r2 = _extract_lab_review(review2_lab_data, sid)
+            if r1 is not None:
+                r1 = round(max(0.0, min(50.0, float(r1))), 2)
+            if r2 is not None:
+                r2 = round(max(0.0, min(50.0, float(r2))), 2)
+            proj_total = round((r1 or 0.0) + (r2 or 0.0), 2) if (r1 is not None or r2 is not None) else None
+
+            data_row = [
+                idx,
+                _ms_safe_text(row.get('reg_no')),
+                _ms_safe_text(row.get('name')),
+                r1 if r1 is not None else '-',
+                r2 if r2 is not None else '-',
+                proj_total if proj_total is not None else '-',
+                # FIM (Before CQI): CO1, CO2, 40, scaled
+                _v(row.get('base_co1')),
+                _v(row.get('base_co2')),
+                _v(row.get('base_fim')),
+                row.get('base_total_100') if row.get('base_total_100') is not None else '-',
+                # FIM (After CQI): CO1, CO2, 40, scaled
+                _v(row.get('co1')),
+                _v(row.get('co2')),
+                _v(row.get('fim')),
+                row.get('total_100') if row.get('total_100') is not None else '-',
+            ]
+            ws.append(data_row)
+
+        last_letter = get_column_letter(len(proj_col_header))
+        ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
+        ws.freeze_panes = 'A3'
+
+    else:
+        # THEORY / SPECIAL / others — comprehensive sheet with cycles, model, FIM Before/After CQI
+        subject_id = subject_obj.id if subject_obj else 0
+        student_id_list = [
+            {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
+            for sid, data in sorted(
+                student_rows.items(),
+                key=lambda x: (_ms_safe_text(x[1].get('reg_no')), _ms_safe_text(x[1].get('name'))),
+            )
+        ]
+        student_ids = [int(s['id']) for s in student_id_list]
+        reg_map = {int(s['id']): _ms_safe_text(s.get('reg_no', '')) for s in student_id_list}
+
+        qp_type = _resolve_qp_type(ta)
+        batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
+
+        ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+        ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+        ssa1_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', ['co1', 'co2']) if subject_id else {}
+        ssa2_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', ['co3', 'co4']) if subject_id else {}
+
+        def _fetch_formative_bulk(model_cls):
+            result = {}
+            if not subject_id:
+                return result
+            qs = (
+                model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
+                .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+            )
+            for row in qs:
+                sid = int(row['student_id'])
+                is_ta = row.get('teaching_assignment_id') == ta_id
+                existing = result.get(sid)
+                if existing is None or (not existing.get('_is_ta') and is_ta):
+                    result[sid] = {**row, '_is_ta': is_ta}
+            return result
+
+        f1_rows_all = _fetch_formative_bulk(Formative1Mark)
+        f2_rows_all = _fetch_formative_bulk(Formative2Mark)
+
+        cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
+        cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
+        cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+        cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+
+        def _build_questions(sheet, pattern, is_cia1):
+            qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
+            p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
+            p_cos = pattern.get('cos') if isinstance(pattern, dict) and isinstance(pattern.get('cos'), list) else []
+            out = []
+            count = max(len(qs), len(p_marks))
+            for i in range(count):
+                q = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
+                key = _st(q.get('key')) or f'q{i + 1}'
+                mx = _sf(p_marks[i] if i < len(p_marks) else q.get('max'))
+                if mx is None:
+                    mx = _sf(q.get('maxMarks'))
+                if mx is None:
+                    mx = 0.0
+                co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
+                if is_qp1_final:
+                    co = co_raw
+                else:
+                    co = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
+                out.append({'key': key, 'max': float(mx), 'co': co})
+            return out
+
+        cia1_questions = _build_questions(cia1_sheet, cia1_pattern, True)
+        cia2_questions = _build_questions(cia2_sheet, cia2_pattern, False)
+        cia1_row_map = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+        cia2_row_map = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+
+        max_seen = 0
+        for qq in cia2_questions:
+            nums = _parse_question_co_numbers(qq.get('co'))
+            if nums:
+                max_seen = max(max_seen, max(nums))
+        qp1_cia2_offset = 1 if (is_qp1_final and max_seen > 0 and max_seen <= 2) else 0
+
+        def _cia_co_raw(row, questions, is_cia1):
+            if not isinstance(row, dict) or bool(row.get('absent')):
+                return None, None, None
+            qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+            c_a = 0.0
+            c_b = 0.0
+            has_any = False
+            for q in questions:
+                mx = float(q.get('max') or 0)
+                n = _sf(qvals.get(q.get('key')))
+                if is_qp1_final and is_cia1:
+                    raw_nums = _parse_question_co_numbers(q.get('co'))
+                    raw_num = raw_nums[0] if raw_nums else None
+                    wa = 1.0 if raw_num == 1 else 0.0
+                    wb_weight = 1.0 if raw_num == 2 else 0.0
+                elif is_qp1_final and not is_cia1:
+                    wa = _qp1_final_question_weight(q.get('co'), 2, qp1_cia2_offset)
+                    wb_weight = _qp1_final_question_weight(q.get('co'), 3, qp1_cia2_offset)
+                elif is_cia1:
+                    wa, wb_weight = _co_weights_12(q.get('co'))
+                else:
+                    wa, wb_weight = _co_weights_34(q.get('co'))
+                if n is None:
+                    continue
+                has_any = True
+                mark = _clamp(n, 0, mx)
+                c_a += mark * wa
+                c_b += mark * wb_weight
+            if not has_any:
+                return None, None, None
+            return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
+
+        model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type) if subject_id else {}
+        model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+
+        if class_type == 'SPECIAL':
+            # ── SPECIAL: per-exam scaled marks + FIM (Before CQI) + FIM (After CQI) ──
+            sp_weights = _get_special_exam_weights() or {}
+            w_ssa1 = float(sp_weights.get('SSA1', 10))
+            w_ssa2 = float(sp_weights.get('SSA2', 10))
+            w_cia1 = float(sp_weights.get('CIA1', 5))
+            w_cia2 = float(sp_weights.get('CIA2', 5))
+            w_model_sp = float(sp_weights.get('MODEL', 10))
+            sp_max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_model_sp
+
+            ssa1_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA1', batch_id=batch_id)
+            ssa2_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA2', batch_id=batch_id)
+            ssa1_mx = sum(float(m) for m in ((ssa1_pat or {}).get('marks') or [])) or 10.0
+            ssa2_mx = sum(float(m) for m in ((ssa2_pat or {}).get('marks') or [])) or 10.0
+
+            cia1_qs_sp = cia1_sheet.get('questions') if isinstance(cia1_sheet.get('questions'), list) else []
+            cia2_qs_sp = cia2_sheet.get('questions') if isinstance(cia2_sheet.get('questions'), list) else []
+            cia1_mx = sum(float((q.get('max') or 0)) for q in cia1_qs_sp) or 60.0
+            cia2_mx = sum(float((q.get('max') or 0)) for q in cia2_qs_sp) or 60.0
+            cia1_rows_sp = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
+            cia2_rows_sp = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
+            model_mx = sum(float(m) for m in ((model_pattern or {}).get('marks') or [])) or 60.0
+
+            def _cia_total_sp(rows_map, sid):
+                row = rows_map.get(str(sid)) or rows_map.get(sid) or {}
+                if not isinstance(row, dict) or bool(row.get('absent')):
+                    return None
+                qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
+                total = 0.0
+                has_any = False
+                for v in qvals.values():
+                    n = _sf(v)
+                    if n is not None:
+                        total += n
+                        has_any = True
+                return _round2(total) if has_any else None
+
+            scaled_label = str(int(scaled_max))
+            sp_section = ['', '', '',
+                          '', '', '', '', '',          # raw marks
+                          '', '', '', '', '',          # scaled
+                          '', '']                       # 40, 100 (per-exam)
+            sp_col = ['S.no', "Student's Name", 'Register Number',
+                      'SSA1', 'SSA2', 'CIA1', 'CIA2', 'MODEL',
+                      'SSA1 Scaled', 'SSA2 Scaled', 'CIA1 Scaled', 'CIA2 Scaled', 'MODEL Scaled',
+                      str(int(sp_max_total)), scaled_label]
+            for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+                for sub in ('CO1', 'CO2', 'CO3', 'CO4', 'CO5', '40', scaled_label):
+                    sp_section.append(label)
+                    sp_col.append(sub)
+
+            ws.append(sp_section)
+            ws.append(sp_col)
+
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(sp_section, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(sp_col) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            def _sp_scale(raw, mx, out_of):
+                if raw is None or mx is None or not mx or not out_of:
+                    return None
+                return _round2(_clamp(float(raw) / float(mx) * float(out_of), 0, float(out_of)))
+
+            for idx_sp, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+                ssa1_raw = _sf(ssa1_totals.get(sid))
+                ssa2_raw = _sf(ssa2_totals.get(sid))
+                cia1_raw = _cia_total_sp(cia1_rows_sp, sid)
+                cia2_raw = _cia_total_sp(cia2_rows_sp, sid)
+                model_marks_sp = _extract_model_co_marks_for_student(
+                    model_sheet=model_sheet, student_id=sid,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                ) if subject_id else None
+                model_raw = None
+                if model_marks_sp:
+                    m_sum = 0.0
+                    m_has = False
+                    for k in ['co1', 'co2', 'co3', 'co4', 'co5']:
+                        v = _sf(model_marks_sp.get(k))
+                        if v is not None:
+                            m_sum += v
+                            m_has = True
+                    if m_has:
+                        model_raw = _round2(m_sum)
+
+                ssa1_sc = _sp_scale(ssa1_raw, ssa1_mx, w_ssa1)
+                ssa2_sc = _sp_scale(ssa2_raw, ssa2_mx, w_ssa2)
+                cia1_sc = _sp_scale(cia1_raw, cia1_mx, w_cia1)
+                cia2_sc = _sp_scale(cia2_raw, cia2_mx, w_cia2)
+                model_sc = _sp_scale(model_raw, model_mx, w_model_sp)
+
+                parts = [ssa1_sc, ssa2_sc, cia1_sc, cia2_sc, model_sc]
+                parts_valid = [p for p in parts if p is not None]
+                sp_total = _round2(sum(parts_valid)) if parts_valid else None
+                sp_pct = round(sp_total / sp_max_total * scaled_max) if sp_total is not None and sp_max_total else None
+
+                row_data = [
+                    idx_sp,
+                    _ms_safe_text(s.get('name')),
+                    _ms_safe_text(s.get('reg_no')),
+                    _v(ssa1_raw), _v(ssa2_raw), _v(cia1_raw), _v(cia2_raw), _v(model_raw),
+                    _v(ssa1_sc), _v(ssa2_sc), _v(cia1_sc), _v(cia2_sc), _v(model_sc),
+                    _v(sp_total), sp_pct if sp_pct is not None else '-',
+                    # FIM (Before CQI)
+                    _v(fim_row.get('base_co1')), _v(fim_row.get('base_co2')),
+                    _v(fim_row.get('base_co3')), _v(fim_row.get('base_co4')),
+                    _v(fim_row.get('base_co5')),
+                    _v(fim_row.get('base_fim')),
+                    fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-',
+                    # FIM (After CQI)
+                    _v(fim_row.get('co1')), _v(fim_row.get('co2')),
+                    _v(fim_row.get('co3')), _v(fim_row.get('co4')),
+                    _v(fim_row.get('co5')),
+                    _v(fim_row.get('fim')),
+                    fim_row.get('total_100') if fim_row.get('total_100') is not None else '-',
+                ]
+                ws.append(row_data)
+
+            sp_last = get_column_letter(len(sp_col))
+            ws.auto_filter.ref = f"A2:{sp_last}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+        else:
+            # ── THEORY / QP1FINAL / others ──
+            if is_qp1_final:
+                c2_label_a, c2_label_b = 'CO2', 'CO3'
+                model_co_keys = ['co1', 'co2', 'co3']
+                fim_co_keys = ['co1', 'co2', 'co3']
+            else:
+                c2_label_a, c2_label_b = 'CO3', 'CO4'
+                model_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+                fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            scaled_label = str(int(scaled_max))
+            header_sections = ['', '', '']
+            header_cols = ['S.no', "Student's Name", 'Register Number']
+
+            for lbl in ['SSA1 CO1', 'SSA1 CO2', 'SSA1 Total', 'CIA1 CO1', 'CIA1 CO2', 'CIA1 Total', 'FA1 CO1', 'FA1 CO2', 'FA1 Total']:
+                header_sections.append('Cycle 1')
+                header_cols.append(lbl)
+            for lbl in [f'SSA2 {c2_label_a}', f'SSA2 {c2_label_b}', 'SSA2 Total',
+                        f'CIA2 {c2_label_a}', f'CIA2 {c2_label_b}', 'CIA2 Total',
+                        f'FA2 {c2_label_a}', f'FA2 {c2_label_b}', 'FA2 Total']:
+                header_sections.append('Cycle 2')
+                header_cols.append(lbl)
+            for k in model_co_keys:
+                header_sections.append('Model Exam')
+                header_cols.append(f'MODEL {k.upper()}')
+            header_sections.append('Model Exam')
+            header_cols.append('MODEL Total')
+            for k in fim_co_keys:
+                header_sections.append('FIM (Before CQI)')
+                header_cols.append(k.upper())
+            header_sections.append('FIM (Before CQI)')
+            header_cols.append('40')
+            header_sections.append('FIM (Before CQI)')
+            header_cols.append(scaled_label)
+            for k in fim_co_keys:
+                header_sections.append('FIM (After CQI)')
+                header_cols.append(k.upper())
+            header_sections.append('FIM (After CQI)')
+            header_cols.append('40')
+            header_sections.append('FIM (After CQI)')
+            header_cols.append(scaled_label)
+
+            ws.append(header_sections)
+            ws.append(header_cols)
+
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(header_sections, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(header_cols) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            for idx, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+
+                # Cycle 1
+                sp1 = ssa1_splits_all.get(sid, {})
+                s1_co1 = _sf(sp1.get('co1'))
+                s1_co2 = _sf(sp1.get('co2'))
+                s1_total = _sf(ssa1_totals.get(sid))
+                if s1_co1 is None and s1_co2 is None and s1_total is not None:
+                    s1_co1 = s1_total / 2.0
+                    s1_co2 = s1_total / 2.0
+                c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
+                c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
+                f1 = f1_rows_all.get(sid, {})
+                f1_co1 = None
+                f1_co2 = None
+                f1_total = _sf(f1.get('total'))
+                if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None:
+                    f1_co1 = _round2(_sf(f1['skill1']) + _sf(f1['att1']))
+                if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None:
+                    f1_co2 = _round2(_sf(f1['skill2']) + _sf(f1['att2']))
+
+                # Cycle 2
+                sp2 = ssa2_splits_all.get(sid, {})
+                s2_co_a = _sf(sp2.get('co3'))
+                s2_co_b = _sf(sp2.get('co4'))
+                s2_total = _sf(ssa2_totals.get(sid))
+                if s2_co_a is None and s2_co_b is None and s2_total is not None:
+                    s2_co_a = s2_total / 2.0
+                    s2_co_b = s2_total / 2.0
+                if is_qp1_final and sp2:
+                    first_v = _sf(sp2.get('co2'))
+                    if first_v is None:
+                        first_v = _sf(sp2.get('co3'))
+                    if first_v is not None:
+                        s2_co_a = first_v
+                    second_v = None
+                    if sp2.get('co3') is not None and sp2.get('co2') is not None:
+                        second_v = _sf(sp2.get('co3'))
+                    if second_v is None:
+                        second_v = _sf(sp2.get('co4'))
+                    if second_v is not None:
+                        s2_co_b = second_v
+                c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
+                c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
+                f2 = f2_rows_all.get(sid, {})
+                f2_co_a = None
+                f2_co_b = None
+                f2_total = _sf(f2.get('total'))
+                if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None:
+                    f2_co_a = _round2(_sf(f2['skill1']) + _sf(f2['att1']))
+                if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None:
+                    f2_co_b = _round2(_sf(f2['skill2']) + _sf(f2['att2']))
+
+                # Model
+                model_marks = _extract_model_co_marks_for_student(
+                    model_sheet=model_sheet, student_id=sid,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                ) if subject_id else None
+                model_vals = []
+                m_total = 0.0
+                m_has = False
+                for k in model_co_keys:
+                    val = _sf(model_marks.get(k)) if model_marks else None
+                    model_vals.append(_v(val))
+                    if val is not None:
+                        m_total += val
+                        m_has = True
+                model_vals.append(_v(m_total) if m_has else '-')
+
+                before_co_vals = []
+                for k in fim_co_keys:
+                    before_co_vals.append(_v(fim_row.get(f'base_{k}')))
+                before_co_vals.append(_v(fim_row.get('base_fim')))
+                before_co_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+
+                after_co_vals = []
+                for k in fim_co_keys:
+                    after_co_vals.append(_v(fim_row.get(k)))
+                after_co_vals.append(_v(fim_row.get('fim')))
+                after_co_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+
+                row_data = [
+                    idx,
+                    _ms_safe_text(s.get('name')),
+                    _ms_safe_text(s.get('reg_no')),
+                    _v(s1_co1), _v(s1_co2), _v(s1_total),
+                    _v(c1_a), _v(c1_b), _v(c1_total),
+                    _v(f1_co1), _v(f1_co2), _v(f1_total),
+                    _v(s2_co_a), _v(s2_co_b), _v(s2_total),
+                    _v(c2_a), _v(c2_b), _v(c2_total),
+                    _v(f2_co_a), _v(f2_co_b), _v(f2_total),
+                ] + model_vals + before_co_vals + after_co_vals
+
+                ws.append(row_data)
+
+            last_letter = get_column_letter(len(header_cols))
+            ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
+    # ─────────────────────────────────────────────────────────
+    # SHEETS 2-4 — CO-wise breakdown (Cycle 1, Cycle 2, Model)
+    # ─────────────────────────────────────────────────────────
+    try:
+        breakdown_students = sorted(
+            [
+                {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
+                for sid, data in student_rows.items()
+            ],
+            key=lambda x: (_ms_safe_text(x.get('reg_no')), _ms_safe_text(x.get('name'))),
+        )
+        _ms_add_co_breakdown_sheets(wb, ta, subject_obj, breakdown_students)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            '_build_detailed_internal_marks_workbook: CO-breakdown sheets failed for ta_id=%s', ta_id,
+        )
+
+    # ─────────────────────────────────────────────────────────
+    # SHEET 5 — Summary
+    # ─────────────────────────────────────────────────────────
+    ws_sum = wb.create_sheet('Summary')
+    ws_sum.append(['Name', 'Register No.', 'Total'])
+    try:
+        for ci in range(1, 4):
+            ws_sum.cell(row=1, column=ci).font = Font(bold=True)
+    except Exception:
+        pass
+    for row in rows:
+        t100 = row.get('total_100')
+        ws_sum.append([
+            _ms_safe_text(row.get('name')),
+            _ms_safe_text(row.get('reg_no')),
+            t100 if t100 is not None else '-',
+        ])
+    ws_sum.auto_filter.ref = f"A1:C{ws_sum.max_row}"
+    ws_sum.freeze_panes = 'A2'
+
+    # ── Build meta + filename + bytes ──
+    section_obj = getattr(ta, 'section', None)
+    batch_obj = getattr(section_obj, 'batch', None) if section_obj is not None else None
+    dept_obj = getattr(getattr(batch_obj, 'course', None), 'department', None) if batch_obj is not None else None
+    reg_obj = getattr(batch_obj, 'regulation', None) if batch_obj is not None else None
+    section_name = _ms_safe_text(getattr(section_obj, 'name', ''))
+    batch_name = _ms_safe_text(getattr(batch_obj, 'name', ''))
+    dept_name = _ms_safe_text(
+        getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', None)
+        or getattr(dept_obj, 'name', None) or ''
+    )
+    reg_label = _ms_safe_text(getattr(reg_obj, 'code', None) or getattr(reg_obj, 'name', None) or '')
+    sem_no = getattr(getattr(section_obj, 'semester', None), 'number', None)
+
+    filename = f"{_ms_safe_filename(course_code)} {_ms_safe_filename(course_name)}.xlsx"
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+
+    meta = {
+        'course_code': course_code,
+        'course_name': course_name,
+        'section_name': section_name,
+        'batch_name': batch_name,
+        'dept_name': dept_name,
+        'regulation': reg_label,
+        'semester': sem_no,
+        'student_count': len(rows),
+    }
+    return out.read(), filename, meta
+
+
+def _ms_disambiguated_filename(ta, meta, seen):
+    parts = [p for p in (
+        meta.get('course_code'),
+        meta.get('course_name'),
+        meta.get('section_name'),
+        meta.get('batch_name'),
+    ) if p]
+    base = _ms_safe_filename('_'.join(parts))[:140]
+    candidate = base + '.xlsx'
+    if candidate in seen:
+        candidate = _ms_safe_filename('_'.join(parts) + f'_TA{ta.id}')[:140] + '.xlsx'
+    return candidate
+
+
 class IqacInternalMarksBulkExportView(APIView):
     """Download filtered internal marks as ZIP of per-course Excel files.
 
@@ -842,21 +2099,7 @@ class IqacInternalMarksBulkExportView(APIView):
         if not _user_is_iqac_admin(request.user):
             return Response({'detail': 'Only IQAC/OBE master can download this export.'}, status=403)
 
-        from openpyxl import Workbook
-        from OBE.models import FinalInternalMark
-        from OBE.services.final_internal_marks import (
-            _resolve_qp_type,
-            _compute_weighted_final_total_theory_like,
-            _compute_english_final_total,
-            _compute_foreign_lang_final_total,
-            _compute_prbl_final_total,
-            _compute_tcpr_final_total,
-            _compute_project_final_total,
-            _compute_lab_final_total,
-            _compute_tcpl_final_total,
-            _resolve_class_type,
-            recompute_final_internal_marks,
-        )
+        from OBE.services.final_internal_marks import recompute_final_internal_marks
 
         regulation = self._safe_text(request.query_params.get('regulation'))
         semester = self._safe_text(request.query_params.get('semester'))
@@ -968,288 +2211,35 @@ class IqacInternalMarksBulkExportView(APIView):
 
         zip_buffer = io.BytesIO()
         file_count = 0
-
-        grouped = {}
-        for ta in tas:
-            code, course_name = self._resolve_course(ta)
-            if not code:
-                continue
-            section_obj = getattr(ta, 'section', None)
-            batch_obj = getattr(section_obj, 'batch', None) if section_obj is not None else None
-            dept_obj = getattr(getattr(batch_obj, 'course', None), 'department', None) if batch_obj is not None else None
-            dept_id = getattr(dept_obj, 'id', None)
-            dept_name = self._safe_text(getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', None) or getattr(dept_obj, 'name', None) or 'N/A')
-            sem_no = getattr(getattr(section_obj, 'semester', None), 'number', None)
-            reg_obj = getattr(batch_obj, 'regulation', None) if batch_obj is not None else None
-            reg_label = self._safe_text(getattr(reg_obj, 'code', None) or getattr(reg_obj, 'name', None) or '')
-            batch_name = self._safe_text(getattr(batch_obj, 'name', None) or '')
-
-            key = (code, course_name, sem_no, dept_id, dept_name, reg_label, batch_name)
-            grouped.setdefault(key, []).append(ta)
+        seen_filenames = set()
+        errors = []
 
         with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-            for key, course_tas in grouped.items():
-                code, course_name, sem_no, _dept_id, dept_name, reg_label, batch_name = key
-                merged_students = {}
-                ta_ids_for_course = [int(t.id) for t in course_tas if getattr(t, 'id', None)]
-                if not ta_ids_for_course:
+            for ta in tas:
+                try:
+                    xlsx_bytes, _fname, meta = _build_detailed_internal_marks_workbook(
+                        ta,
+                        actor_user_id=getattr(request.user, 'id', None),
+                        recompute=False,  # bulk recompute already ran above
+                    )
+                except ValueError as exc:
+                    logging.getLogger(__name__).warning(
+                        'IqacInternalMarksBulkExportView: skipping ta %s: %s',
+                        getattr(ta, 'id', None), exc,
+                    )
+                    errors.append(getattr(ta, 'id', None))
+                    continue
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        'IqacInternalMarksBulkExportView: builder failed for ta %s',
+                        getattr(ta, 'id', None),
+                    )
+                    errors.append(getattr(ta, 'id', None))
                     continue
 
-                qp_type = ''
-                for ta in course_tas:
-                    qp_type = str(_resolve_qp_type(ta) or '').strip()
-                    if qp_type:
-                        break
-                scaled_max = 60 if 'QP1FINAL' in qp_type.upper().replace(' ', '') else 100
-
-                fim_qs = (
-                    FinalInternalMark.objects.filter(teaching_assignment_id__in=ta_ids_for_course)
-                    .select_related('student__user', 'teaching_assignment__section', 'subject')
-                    .order_by('student_id', 'teaching_assignment_id')
-                )
-
-                for fim in fim_qs:
-                    subj_code = self._safe_text(getattr(getattr(fim, 'subject', None), 'code', '')).upper()
-                    if subj_code and subj_code != code:
-                        continue
-
-                    sp = getattr(fim, 'student', None)
-                    if sp is None:
-                        continue
-
-                    sid = int(getattr(sp, 'id', 0) or 0)
-                    if sid <= 0:
-                        continue
-
-                    user = getattr(sp, 'user', None)
-                    name = ' '.join([
-                        self._safe_text(getattr(user, 'first_name', '')),
-                        self._safe_text(getattr(user, 'last_name', '')),
-                    ]).strip() if user else ''
-                    if not name:
-                        name = self._safe_text(getattr(user, 'username', '')) if user else ''
-
-                    ta_obj = getattr(fim, 'teaching_assignment', None)
-                    section_name = self._safe_text(getattr(getattr(ta_obj, 'section', None), 'name', None) or '-')
-                    class_type = str(_resolve_class_type(ta_obj) or '').upper()
-                    _student_ref = {'id': sid, 'reg_no': self._safe_text(getattr(sp, 'reg_no', ''))}
-                    _fim_subject = getattr(fim, 'subject', None)
-
-                    live = None
-                    try:
-                        if class_type in ('THEORY', 'SPECIAL', 'THEORY_PMBL'):
-                            live = _compute_weighted_final_total_theory_like(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type == 'ENGLISH':
-                            live = _compute_english_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type == 'FOREIGN_LANG':
-                            live = _compute_foreign_lang_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type == 'PRBL':
-                            live = _compute_prbl_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type == 'TCPR':
-                            live = _compute_tcpr_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type == 'PROJECT':
-                            live = _compute_project_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                        elif class_type in ('LAB', 'PRACTICAL'):
-                            live = _compute_lab_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), class_type=class_type, return_details=True,
-                            )
-                        elif class_type == 'TCPL':
-                            live = _compute_tcpl_final_total(
-                                ta=ta_obj, subject=_fim_subject, student=_student_ref,
-                                ta_id=getattr(ta_obj, 'id', None), return_details=True,
-                            )
-                    except Exception:
-                        import logging as _log_
-                        _log_.getLogger(__name__).exception(
-                            'IqacInternalMarksBulkExportView: compute error ta_id=%s student_id=%s class_type=%s',
-                            getattr(ta_obj, 'id', None), sid, class_type,
-                        )
-                        live = None
-
-                    total = None
-                    mark = None
-                    if isinstance(live, dict):
-                        total = self._safe_float(live.get('total_40'))
-                        mark = self._safe_float(live.get('total_100'))
-                        if mark is None:
-                            mark = self._safe_float(live.get('base_total_100'))
-
-                    if total is None:
-                        total = self._safe_float(getattr(fim, 'final_mark', None))
-
-                    if mark is None and total is not None:
-                        from decimal import Decimal as _D, ROUND_HALF_UP as _RHU
-                        if class_type == 'PRBL':
-                            _stored_max = self._safe_float(getattr(fim, 'max_mark', None)) or 60.0
-                            _denom = max(_stored_max, 1.0)
-                        elif class_type == 'PROJECT':
-                            _stored_max = self._safe_float(getattr(fim, 'max_mark', None)) or 100.0
-                            _denom = max(_stored_max, 1.0)
-                        else:
-                            _denom = 40.0
-                        _raw = (float(total) / _denom) * float(scaled_max)
-                        mark = int(_D(str(_raw)).quantize(_D('1'), rounding=_RHU))
-
-                    prev = merged_students.get(sid)
-                    if prev is None:
-                        merged_students[sid] = {
-                            'reg_no': self._safe_text(getattr(sp, 'reg_no', '')),
-                            'name': name,
-                            'section': section_name,
-                            'mark': mark,
-                        }
-                    else:
-                        if prev.get('mark') is None and mark is not None:
-                            prev['mark'] = mark
-                        if self._safe_text(prev.get('section')) in {'', '-'} and section_name not in {'', '-'}:
-                            prev['section'] = section_name
-
-                # ── For PROJECT and TCPR courses: ensure review marks are fetched accurately ──
-                _some_ta = course_tas[0] if course_tas else None
-                from OBE.services.final_internal_marks import _resolve_class_type
-                _class_type_main = str(_resolve_class_type(_some_ta) or '').upper() if _some_ta else ''
-                
-                if _class_type_main in ('PROJECT', 'TCPR') and ta_ids_for_course:
-                    from OBE.models import LabPublishedSheet, AssessmentDraft
-                    from OBE.services.final_internal_marks import _get_project_exam_weights, _extract_tcpr_review_co_splits_for_ta
-                    from django.db.models import Q
-                    
-                    def _pick_lab_published(subject_obj, key):
-                        if subject_obj is None: return {}
-                        qs = list(
-                            LabPublishedSheet.objects.filter(subject_id=subject_obj.id, assessment=key)
-                            .filter(Q(teaching_assignment_id__in=ta_ids_for_course) | Q(teaching_assignment__isnull=True))
-                            .order_by('updated_at')
-                        )
-                        merged = {}
-                        for r in qs:
-                            if isinstance(getattr(r, 'data', None), dict):
-                                sheet = r.data.get('sheet') if isinstance(r.data.get('sheet'), dict) else None
-                                rows_dict = None
-                                if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
-                                    rows_dict = sheet['rowsByStudentId']
-                                elif isinstance(r.data.get('rowsByStudentId'), dict):
-                                    rows_dict = r.data['rowsByStudentId']
-                                if isinstance(rows_dict, dict):
-                                    merged.update(rows_dict)
-                        return {'rowsByStudentId': merged}
-
-                    def _extract_review_from_lab(lab_data, student_id):
-                        if not isinstance(lab_data, dict): return None
-                        sid = str(student_id)
-                        rows_by_student = lab_data.get('rowsByStudentId')
-                        if not isinstance(rows_by_student, dict): return None
-                        srow = rows_by_student.get(sid) or rows_by_student.get(student_id)
-                        if not isinstance(srow, dict): return None
-                        direct = getattr(self, '_safe_float')(srow.get('ciaExam'))
-                        if direct is not None:
-                            return round(max(0.0, min(50.0, float(direct))), 2)
-                        comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
-                        total = 0.0
-                        has_any = False
-                        for raw in comps.values():
-                            n = getattr(self, '_safe_float')(raw)
-                            if n is None: continue
-                            has_any = True
-                            total += float(n)
-                        if not has_any: return None
-                        return round(max(0.0, min(50.0, total)), 2)
-
-                    _subj_obj_main = getattr(_some_ta, 'subject', None)
-                    if _subj_obj_main is None:
-                        from .models import Subject as _SubjModel
-                        _subj_obj_main = _SubjModel.objects.filter(code__iexact=code).first()
-
-                    if _class_type_main == 'PROJECT':
-                        _r1_lab = _pick_lab_published(_subj_obj_main, 'review1')
-                        _r2_lab = _pick_lab_published(_subj_obj_main, 'review2')
-
-                        cfg_proj = _get_project_exam_weights()
-                        _w_r1 = float((cfg_proj.get('review1') or {}).get('weight') or 50)
-                        _w_r2 = float((cfg_proj.get('review2') or {}).get('weight') or 50)
-                        _max_r1 = float((cfg_proj.get('review1') or {}).get('max') or 50)
-                        _max_r2 = float((cfg_proj.get('review2') or {}).get('max') or 50)
-                        _proj_max = _w_r1 + _w_r2
-
-                        for msid, msrow in merged_students.items():
-                            if msrow.get('mark') is not None: continue
-                            sid_proj = int(msid or 0)
-                            if sid_proj <= 0: continue
-                            r1 = _extract_review_from_lab(_r1_lab, sid_proj)
-                            r2 = _extract_review_from_lab(_r2_lab, sid_proj)
-                            if r1 is None and r2 is None: continue
-                            s_r1 = round(max(0.0, min(_w_r1, (float(r1) / _max_r1) * _w_r1)), 4) if r1 is not None else 0.0
-                            s_r2 = round(max(0.0, min(_w_r2, (float(r2) / _max_r2) * _w_r2)), 4) if r2 is not None else 0.0
-                            proj_total_100 = round(s_r1 + s_r2, 4) if _proj_max > 0 else None
-                            if proj_total_100 is not None:
-                                import decimal as _decimal
-                                msrow['mark'] = int(_decimal.Decimal(str(proj_total_100)).quantize(_decimal.Decimal('1'), rounding=_decimal.ROUND_HALF_UP))
-                    
-                    elif _class_type_main == 'TCPR':
-                        # For TCPR, ensure we use the explicit per-CO Review splits if marks are missing or mismatched
-                        # The computation above should have handled this, but we force consistency here if needed.
-                        for msid, msrow in merged_students.items():
-                            # For TCPR, marks might already be in 'mark' via _compute_tcpr_final_total.
-                            # We only overwrite if it's missing or if we want to ensure 100% parity with specific student extraction.
-                            if msrow.get('mark') is not None: continue
-                            sid_int = int(msid or 0)
-                            if sid_int <= 0: continue
-                            
-                            # Standard _compute_tcpr_final_total is usually accurate if recompute was successful.
-                            # If it's still missing, we could do a manual fetch here, but usually recompute covers it.
-                            pass
-
-                if not merged_students:
-                    continue
-
-                rows = sorted(merged_students.values(), key=lambda r: (self._safe_text(r.get('reg_no')), self._safe_text(r.get('name'))))
-
-                upload_rows = []
-                for row in rows:
-                    mark = self._safe_float(row.get('mark'))
-                    if mark is not None:
-                        try:
-                            mark = int(mark)
-                        except Exception:
-                            mark = None
-                    upload_rows.append({
-                        'reg_no': self._safe_text(row.get('reg_no')),
-                        'name': self._safe_text(row.get('name')),
-                        'mark': mark,
-                    })
-
-                meta = []
-                if reg_label:
-                    meta.append(reg_label)
-                if sem_no:
-                    meta.append(f"SEM{sem_no}")
-                if batch_name:
-                    meta.append(batch_name)
-                if dept_name:
-                    meta.append(dept_name)
-                base_name = f"{code}_{course_name}_{'_'.join(meta)}"
-                filename = f"{self._safe_filename(base_name)[:140]}.xlsx"
-
-                zf.writestr(filename, _build_mark_upload_workbook(rows=upload_rows))
+                disambig = _ms_disambiguated_filename(ta, meta, seen_filenames)
+                seen_filenames.add(disambig)
+                zf.writestr(disambig, xlsx_bytes)
                 file_count += 1
 
         if file_count == 0:
@@ -1643,7 +2633,7 @@ class IqacInternalMarksCourseExportView(APIView):
         if not _user_is_iqac_admin(request.user):
             return Response({'detail': 'Only IQAC/OBE master can download this export.'}, status=403)
 
-        ta_id_raw = self._safe_text(request.query_params.get('ta_id'))
+        ta_id_raw = _ms_safe_text(request.query_params.get('ta_id'))
         if not ta_id_raw:
             return Response({'detail': 'ta_id is required.'}, status=400)
         try:
@@ -1659,940 +2649,17 @@ class IqacInternalMarksCourseExportView(APIView):
         if ta is None:
             return Response({'detail': 'Teaching assignment not found.'}, status=404)
 
-        from openpyxl import Workbook
-        from OBE.models import FinalInternalMark, LabPublishedSheet, Review1Mark, Review2Mark
-        from OBE.services.final_internal_marks import (
-            _assessment_map,
-            _compute_weighted_final_total_theory_like,
-            _compute_english_final_total,
-            _compute_foreign_lang_final_total,
-            _compute_prbl_final_total,
-            _compute_tcpr_final_total,
-            _compute_project_final_total,
-            _compute_lab_final_total,
-            _compute_tcpl_final_total,
-            _resolve_class_type,
-            _resolve_qp_type as _rqp,
-            recompute_final_internal_marks,
-        )
-
-        course_code, course_name = self._resolve_course(ta)
-        if not course_code:
-            return Response({'detail': 'Unable to resolve course code for this assignment.'}, status=400)
-        class_type = str(_resolve_class_type(ta) or '').upper()
-        is_project_course = class_type == 'PROJECT'
-        _qp_type_raw = _rqp(ta)
-        is_qp1_final = 'QP1FINAL' in str(_qp_type_raw or '').upper().replace(' ', '')
-        # OE Theory (QP1FINAL) courses convert final mark to 60 instead of 100
-        scaled_max = 60.0 if is_qp1_final else 100.0
-
-        sync_result = {}
         try:
-            sync_result = recompute_final_internal_marks(
+            xlsx_bytes, filename, _meta = _build_detailed_internal_marks_workbook(
+                ta,
                 actor_user_id=getattr(request.user, 'id', None),
-                filters={'teaching_assignment_id': ta_id},
-            ) or {}
-        except Exception:
-            sync_result = {'error': 'recompute_failed'}
-
-        fim_qs = (
-            FinalInternalMark.objects.filter(teaching_assignment_id=ta_id)
-            .select_related('student__user', 'subject')
-            .order_by('student_id', 'id')
-        )
-
-        student_rows = {}
-        for fim in fim_qs:
-            subj_code = self._safe_text(getattr(getattr(fim, 'subject', None), 'code', '')).upper()
-            if subj_code and subj_code != course_code:
-                continue
-
-            sp = getattr(fim, 'student', None)
-            if sp is None:
-                continue
-            sid = int(getattr(sp, 'id', 0) or 0)
-            if sid <= 0:
-                continue
-
-            user = getattr(sp, 'user', None)
-            student_name = ' '.join([
-                self._safe_text(getattr(user, 'first_name', '')),
-                self._safe_text(getattr(user, 'last_name', '')),
-            ]).strip() if user else ''
-            if not student_name:
-                student_name = self._safe_text(getattr(user, 'username', '')) if user else ''
-
-            _student_ref = {'id': sid, 'reg_no': self._safe_text(getattr(sp, 'reg_no', ''))}
-            _fim_subject = getattr(fim, 'subject', None)
-            live = None
-            # Dispatch to the correct compute function based on course class type.
-            # Each branch is guarded so one bad student record does not crash the whole export.
-            try:
-                if class_type in ('THEORY', 'SPECIAL', 'THEORY_PMBL'):
-                    live = _compute_weighted_final_total_theory_like(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type == 'ENGLISH':
-                    live = _compute_english_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type == 'FOREIGN_LANG':
-                    live = _compute_foreign_lang_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type == 'PRBL':
-                    live = _compute_prbl_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type == 'TCPR':
-                    live = _compute_tcpr_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type == 'PROJECT':
-                    live = _compute_project_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                elif class_type in ('LAB', 'PRACTICAL'):
-                    live = _compute_lab_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, class_type=class_type, return_details=True,
-                    )
-                elif class_type == 'TCPL':
-                    live = _compute_tcpl_final_total(
-                        ta=ta, subject=_fim_subject, student=_student_ref,
-                        ta_id=ta_id, return_details=True,
-                    )
-                # else: live stays None → fallback to fim.final_mark below
-            except Exception:
-                import logging as _log_
-                _log_.getLogger(__name__).exception(
-                    'IqacInternalMarksCourseExportView: compute error ta_id=%s student_id=%s class_type=%s',
-                    ta_id, sid, class_type,
-                )
-                live = None  # fall back to stored fim.final_mark
-
-            co_vals = {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None}
-            base_co_vals = {'co1': None, 'co2': None, 'co3': None, 'co4': None, 'co5': None}
-            final_mark = None
-            total_100 = None
-            base_mark = None
-            base_total_100 = None
-            if isinstance(live, dict):
-                final_mark = self._safe_float(live.get('total_40'))
-                total_100 = self._safe_float(live.get('total_100'))
-                base_mark = self._safe_float(live.get('base_total_40'))
-                base_total_100 = self._safe_float(live.get('base_total_100'))
-                co_payload = live.get('co_values_40') if isinstance(live.get('co_values_40'), dict) else {}
-                co_vals = {
-                    'co1': self._safe_float(co_payload.get('co1')),
-                    'co2': self._safe_float(co_payload.get('co2')),
-                    'co3': self._safe_float(co_payload.get('co3')),
-                    'co4': self._safe_float(co_payload.get('co4')),
-                    'co5': self._safe_float(co_payload.get('co5')),
-                }
-                base_co_payload = live.get('base_co_values_40') if isinstance(live.get('base_co_values_40'), dict) else {}
-                base_co_vals = {
-                    'co1': self._safe_float(base_co_payload.get('co1')),
-                    'co2': self._safe_float(base_co_payload.get('co2')),
-                    'co3': self._safe_float(base_co_payload.get('co3')),
-                    'co4': self._safe_float(base_co_payload.get('co4')),
-                    'co5': self._safe_float(base_co_payload.get('co5')),
-                }
-
-            if final_mark is None:
-                final_mark = self._safe_float(getattr(fim, 'final_mark', None))
-            if total_100 is None and final_mark is not None:
-                from decimal import Decimal as _D, ROUND_HALF_UP as _RHU
-                # Determine denominator for final_mark → /100 conversion.
-                # PRBL final_mark is stored out of 60 (fim.max_mark=60 is correct).
-                # ENGLISH/FOREIGN_LANG final_mark is out of their weight-sum (~40) even
-                # though fim.max_mark is stored as 60 — use 40 for them.
-                # THEORY/SPECIAL: always 40.
-                # TCPL/LAB/PRACTICAL: fim.final_mark is None after our recompute fix,
-                # so this branch is not reached for those types.
-                if class_type == 'PRBL':
-                    _stored_max = self._safe_float(getattr(fim, 'max_mark', None)) or 60.0
-                    _denom = max(_stored_max, 1.0)
-                elif class_type == 'PROJECT':
-                    # PROJECT final_mark stored out of 100
-                    _stored_max = self._safe_float(getattr(fim, 'max_mark', None)) or 100.0
-                    _denom = max(_stored_max, 1.0)
-                else:
-                    _denom = 40.0
-                _raw = (float(final_mark) / _denom) * scaled_max
-                total_100 = int(_D(str(_raw)).quantize(_D('1'), rounding=_RHU))
-
-            prev = student_rows.get(sid)
-            if prev is None:
-                student_rows[sid] = {
-                    'student_id': sid,
-                    'name': student_name,
-                    'reg_no': self._safe_text(getattr(sp, 'reg_no', '')),
-                    'co1': co_vals['co1'],
-                    'co2': co_vals['co2'],
-                    'co3': co_vals['co3'],
-                    'co4': co_vals['co4'],
-                    'co5': co_vals['co5'],
-                    'fim': final_mark,
-                    'total_100': total_100,
-                    'base_co1': base_co_vals['co1'],
-                    'base_co2': base_co_vals['co2'],
-                    'base_co3': base_co_vals['co3'],
-                    'base_co4': base_co_vals['co4'],
-                    'base_co5': base_co_vals['co5'],
-                    'base_fim': base_mark,
-                    'base_total_100': base_total_100,
-                }
-                continue
-
-            if prev.get('fim') is None and final_mark is not None:
-                prev['fim'] = final_mark
-            if prev.get('total_100') is None and total_100 is not None:
-                prev['total_100'] = total_100
-            if prev.get('base_fim') is None and base_mark is not None:
-                prev['base_fim'] = base_mark
-            if prev.get('base_total_100') is None and base_total_100 is not None:
-                prev['base_total_100'] = base_total_100
-            for key in ('co1', 'co2', 'co3', 'co4', 'co5'):
-                if prev.get(key) is None and co_vals.get(key) is not None:
-                    prev[key] = co_vals.get(key)
-            for key in ('base_co1', 'base_co2', 'base_co3', 'base_co4', 'base_co5'):
-                if prev.get(key) is None and base_co_vals.get(key.replace('base_', '')) is not None:
-                    prev[key] = base_co_vals.get(key.replace('base_', ''))
-            if not self._safe_text(prev.get('name')) and student_name:
-                prev['name'] = student_name
-            if not self._safe_text(prev.get('reg_no')):
-                prev['reg_no'] = self._safe_text(getattr(sp, 'reg_no', ''))
-            if not prev.get('student_id'):
-                prev['student_id'] = sid
-
-        rows = sorted(student_rows.values(), key=lambda r: (self._safe_text(r.get('reg_no')), self._safe_text(r.get('name'))))
-        if not rows:
-            return Response({'detail': 'No internal marks found for this teaching assignment.'}, status=404)
-
-        # ── For PROJECT courses: fetch review marks from LabPublishedSheet ──
-        # Project review marks are stored in LabPublishedSheet (assessment='review1'/'review2'),
-        # NOT in Review1Mark/Review2Mark, so _compute_project_final_total returns None.
-        # Override the per-student mark here before building upload_rows.
-        if is_project_course:
-            from OBE.models import LabPublishedSheet
-            from OBE.services.final_internal_marks import _get_project_exam_weights
-
-            def _pick_lab_published(subject_obj, key):
-                if subject_obj is None:
-                    return {}
-                qs = list(
-                    LabPublishedSheet.objects.filter(subject_id=subject_obj.id, assessment=key)
-                    .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
-                    .order_by('-updated_at')
-                )
-                exact = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
-                if exact is not None and isinstance(getattr(exact, 'data', None), dict):
-                    return exact.data
-                legacy = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) is None), None)
-                if legacy is not None and isinstance(getattr(legacy, 'data', None), dict):
-                    return legacy.data
-                first = qs[0] if qs else None
-                return first.data if first is not None and isinstance(getattr(first, 'data', None), dict) else {}
-
-            def _extract_review_from_lab(lab_data, student_id):
-                if not isinstance(lab_data, dict):
-                    return None
-                sid = str(student_id)
-                sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
-                rows_by_student = None
-                if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
-                    rows_by_student = sheet['rowsByStudentId']
-                elif isinstance(lab_data.get('rowsByStudentId'), dict):
-                    rows_by_student = lab_data['rowsByStudentId']
-                if not isinstance(rows_by_student, dict):
-                    return None
-                srow = rows_by_student.get(sid) or rows_by_student.get(student_id)
-                if not isinstance(srow, dict):
-                    return None
-                direct = self._safe_float(srow.get('ciaExam'))
-                if direct is not None:
-                    return round(max(0.0, min(50.0, float(direct))), 2)
-                comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
-                total = 0.0
-                has_any = False
-                for raw in comps.values():
-                    n = self._safe_float(raw)
-                    if n is None:
-                        continue
-                    has_any = True
-                    total += float(n)
-                if not has_any:
-                    return None
-                return round(max(0.0, min(50.0, total)), 2)
-
-            _subj_obj_proj = ta.subject
-            from .models import Subject as _SubjModel
-            if _subj_obj_proj is None:
-                _subj_obj_proj = _SubjModel.objects.filter(code__iexact=course_code).first()
-
-            _review1_lab = _pick_lab_published(_subj_obj_proj, 'review1')
-            _review2_lab = _pick_lab_published(_subj_obj_proj, 'review2')
-
-            cfg_proj = _get_project_exam_weights()
-            _w_r1 = float((cfg_proj.get('review1') or {}).get('weight') or 50)
-            _w_r2 = float((cfg_proj.get('review2') or {}).get('weight') or 50)
-            _max_r1 = float((cfg_proj.get('review1') or {}).get('max') or 50)
-            _max_r2 = float((cfg_proj.get('review2') or {}).get('max') or 50)
-            _proj_max = _w_r1 + _w_r2  # normally 100
-
-            for row in rows:
-                if row.get('total_100') is not None:
-                    continue  # already computed — keep it
-                sid_proj = int(row.get('student_id') or 0)
-                if sid_proj <= 0:
-                    continue
-                r1 = _extract_review_from_lab(_review1_lab, sid_proj)
-                r2 = _extract_review_from_lab(_review2_lab, sid_proj)
-                if r1 is None and r2 is None:
-                    continue
-                s_r1 = round(max(0.0, min(_w_r1, (float(r1) / _max_r1) * _w_r1)), 4) if r1 is not None else 0.0
-                s_r2 = round(max(0.0, min(_w_r2, (float(r2) / _max_r2) * _w_r2)), 4) if r2 is not None else 0.0
-                proj_total_100 = round(s_r1 + s_r2, 4) if _proj_max > 0 else None
-                if proj_total_100 is not None:
-                    import decimal as _decimal
-                    row['total_100'] = int(
-                        _decimal.Decimal(str(proj_total_100)).quantize(
-                            _decimal.Decimal('1'), rounding=_decimal.ROUND_HALF_UP
-                        )
-                    )
-
-        upload_rows = []
-        for row in rows:
-            mark = row.get('total_100')
-            if mark is None:
-                mark = row.get('base_total_100')
-            if mark is None:
-                final_mark = self._safe_float(row.get('fim'))
-                if final_mark is not None:
-                    try:
-                        if is_project_course:
-                            # PROJECT final_mark is already /100; just round
-                            _proj_stored_max = self._safe_float(student_rows.get(row.get('student_id'), {}).get('fim')) and 100.0 or 100.0
-                            raw = float(final_mark)
-                        else:
-                            raw = (float(final_mark) / 40.0) * scaled_max
-                        mark = int(decimal.Decimal(str(raw)).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP))
-                    except Exception:
-                        mark = None
-            elif mark is not None:
-                try:
-                    mark = int(mark)
-                except Exception:
-                    mark = None
-
-            upload_rows.append({
-                'reg_no': self._safe_text(row.get('reg_no')),
-                'name': self._safe_text(row.get('name')),
-                'mark': mark,
-            })
-
-        filename = f"{self._safe_filename(course_code)} {self._safe_filename(course_name)}.xlsx"
-        response = HttpResponse(
-            _build_mark_upload_workbook(rows=upload_rows),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        )
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        return response
-
-        def _extract_review_mark_from_lab_data(lab_data, student_id):
-            if not isinstance(lab_data, dict):
-                return None
-            sid = str(student_id)
-            sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
-            rows_by_student = None
-            if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
-                rows_by_student = sheet.get('rowsByStudentId')
-            elif isinstance(lab_data.get('rowsByStudentId'), dict):
-                rows_by_student = lab_data.get('rowsByStudentId')
-            if not isinstance(rows_by_student, dict):
-                return None
-            row = rows_by_student.get(sid) or rows_by_student.get(student_id)
-            if not isinstance(row, dict):
-                return None
-
-            direct = self._safe_float(row.get('ciaExam'))
-            if direct is not None:
-                return round(max(0.0, min(50.0, float(direct))), 2)
-
-            comps = row.get('reviewComponentMarks') if isinstance(row.get('reviewComponentMarks'), dict) else {}
-            if not isinstance(comps, dict):
-                return None
-            total = 0.0
-            has_any = False
-            for raw in comps.values():
-                n = self._safe_float(raw)
-                if n is None:
-                    continue
-                has_any = True
-                total += float(n)
-            if not has_any:
-                return None
-            return round(max(0.0, min(50.0, total)), 2)
-
-        wb = Workbook()
-
-        # ════════════════════════════════════════════════════════════════
-        # SHEET 1 — Comprehensive Internal Marks (Cycle 1 + 2 + Model + FIM Before/After CQI)
-        # ════════════════════════════════════════════════════════════════
-        ws = wb.active
-        ws.title = 'Internal Marks'
-
-        if is_project_course:
-            # Project courses keep the simple layout
-            from .models import Subject as _SubjectModel
-
-            _subject_obj = ta.subject
-            if _subject_obj is None:
-                _subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
-
-            review1_map = {}
-            review2_map = {}
-            review1_lab_data = {}
-            review2_lab_data = {}
-
-            def _pick_lab_data(assessment_key):
-                if _subject_obj is None:
-                    return {}
-                rows_qs = list(
-                    LabPublishedSheet.objects.filter(subject_id=_subject_obj.id, assessment=assessment_key)
-                    .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
-                    .order_by('-updated_at')
-                )
-                exact = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
-                if exact is not None and isinstance(getattr(exact, 'data', None), dict):
-                    return exact.data
-                legacy = next((r for r in rows_qs if getattr(r, 'teaching_assignment_id', None) is None), None)
-                if legacy is not None and isinstance(getattr(legacy, 'data', None), dict):
-                    return legacy.data
-                first = rows_qs[0] if rows_qs else None
-                return first.data if first is not None and isinstance(getattr(first, 'data', None), dict) else {}
-
-            export_student_ids = []
-            for r in rows:
-                try:
-                    sid = int(r.get('student_id'))
-                except Exception:
-                    sid = 0
-                if sid > 0:
-                    export_student_ids.append(sid)
-
-            if _subject_obj is not None and export_student_ids:
-                review1_map = _assessment_map(Review1Mark, 'mark', _subject_obj.id, export_student_ids, ta_id)
-                review2_map = _assessment_map(Review2Mark, 'mark', _subject_obj.id, export_student_ids, ta_id)
-                review1_lab_data = _pick_lab_data('review1')
-                review2_lab_data = _pick_lab_data('review2')
-
-            ws.append(['S.no', 'Register number', "Student's name", 'Review 1', 'Review 2', '100'])
-
-            for idx, row in enumerate(rows, start=1):
-                sid = int(row.get('student_id') or 0)
-                r1 = self._safe_float(review1_map.get(sid))
-                r2 = self._safe_float(review2_map.get(sid))
-                if r1 is None:
-                    r1 = _extract_review_mark_from_lab_data(review1_lab_data, sid)
-                if r2 is None:
-                    r2 = _extract_review_mark_from_lab_data(review2_lab_data, sid)
-                if r1 is not None:
-                    r1 = round(max(0.0, min(50.0, float(r1))), 2)
-                if r2 is not None:
-                    r2 = round(max(0.0, min(50.0, float(r2))), 2)
-                proj_total = round((r1 or 0.0) + (r2 or 0.0), 2) if (r1 is not None or r2 is not None) else None
-                ws.append([
-                    idx,
-                    self._safe_text(row.get('reg_no')),
-                    self._safe_text(row.get('name')),
-                    r1 if r1 is not None else '-',
-                    r2 if r2 is not None else '-',
-                    proj_total if proj_total is not None else '-',
-                ])
-            ws.auto_filter.ref = f"A1:F{ws.max_row}"
-            ws.freeze_panes = 'A2'
-
-        else:
-            # ── Theory / Special courses: comprehensive all-in-one sheet ──
-            from django.db.models import Q as _Q
-            from OBE.models import Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark
-            from OBE.services.final_internal_marks import (
-                _resolve_qp_type as __rqp,
-                _extract_ssa_co_splits_for_ta,
-                _get_cia_sheet_data,
-                _get_model_sheet_data,
-                _extract_model_co_marks_for_student,
-                _get_qp_pattern,
-                _safe_float as _sf,
-                _safe_text as _st,
-                _parse_co12,
-                _parse_co34,
-                _parse_question_co_numbers,
-                _qp1_final_question_weight,
-                _co_weights_12,
-                _co_weights_34,
-                _clamp,
-                _round2,
+                recompute=True,
             )
-
-            from .models import Subject as _SubjectModel
-            _subject_obj = ta.subject
-            if _subject_obj is None:
-                _subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
-
-            subject_id = _subject_obj.id if _subject_obj else 0
-            _student_id_list = [
-                {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
-                for sid, data in sorted(
-                    student_rows.items(),
-                    key=lambda x: (self._safe_text(x[1].get('reg_no')), self._safe_text(x[1].get('name'))),
-                )
-            ]
-            student_ids = [int(s['id']) for s in _student_id_list]
-            reg_map = {int(s['id']): self._safe_text(s.get('reg_no', '')) for s in _student_id_list}
-
-            qp_type = __rqp(ta)
-            batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
-
-            def _v(x):
-                return _round2(x) if x is not None else '-'
-
-            # ── Fetch all raw assessment data ──
-            ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
-            ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
-            ssa1_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', ['co1', 'co2']) if subject_id else {}
-            ssa2_splits_all = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', ['co3', 'co4']) if subject_id else {}
-
-            def _fetch_formative_bulk(model_cls):
-                result = {}
-                if not subject_id:
-                    return result
-                qs = (
-                    model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
-                    .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
-                    .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
-                )
-                for row in qs:
-                    sid = int(row['student_id'])
-                    is_ta = row.get('teaching_assignment_id') == ta_id
-                    existing = result.get(sid)
-                    if existing is None or (not existing.get('_is_ta') and is_ta):
-                        result[sid] = {**row, '_is_ta': is_ta}
-                return result
-
-            f1_rows_all = _fetch_formative_bulk(Formative1Mark)
-            f2_rows_all = _fetch_formative_bulk(Formative2Mark)
-
-            cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
-            cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
-
-            cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
-            cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
-
-            def _build_questions(sheet, pattern, is_cia1):
-                qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
-                p_marks = pattern.get('marks') if isinstance(pattern, dict) and isinstance(pattern.get('marks'), list) else []
-                p_cos = pattern.get('cos') if isinstance(pattern, dict) and isinstance(pattern.get('cos'), list) else []
-                out = []
-                count = max(len(qs), len(p_marks))
-                for i in range(count):
-                    q = qs[i] if i < len(qs) and isinstance(qs[i], dict) else {}
-                    key = _st(q.get('key')) or f'q{i + 1}'
-                    mx = _sf(p_marks[i] if i < len(p_marks) else q.get('max'))
-                    if mx is None:
-                        mx = _sf(q.get('maxMarks'))
-                    if mx is None:
-                        mx = 0.0
-                    co_raw = p_cos[i] if i < len(p_cos) else q.get('co')
-                    if is_qp1_final:
-                        co = co_raw
-                    else:
-                        co = _parse_co12(co_raw) if is_cia1 else _parse_co34(co_raw)
-                    out.append({'key': key, 'max': float(mx), 'co': co})
-                return out
-
-            cia1_questions = _build_questions(cia1_sheet, cia1_pattern, True)
-            cia2_questions = _build_questions(cia2_sheet, cia2_pattern, False)
-
-            cia1_row_map = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
-            cia2_row_map = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
-
-            max_seen = 0
-            for qq in cia2_questions:
-                nums = _parse_question_co_numbers(qq.get('co'))
-                if nums:
-                    max_seen = max(max_seen, max(nums))
-            qp1_cia2_offset = 1 if (is_qp1_final and max_seen > 0 and max_seen <= 2) else 0
-
-            def _cia_co_raw(row, questions, is_cia1):
-                if not isinstance(row, dict) or bool(row.get('absent')):
-                    return None, None, None
-                qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
-                c_a = 0.0
-                c_b = 0.0
-                has_any = False
-                for q in questions:
-                    mx = float(q.get('max') or 0)
-                    n = _sf(qvals.get(q.get('key')))
-                    if is_qp1_final and is_cia1:
-                        raw_nums = _parse_question_co_numbers(q.get('co'))
-                        raw_num = raw_nums[0] if raw_nums else None
-                        wa = 1.0 if raw_num == 1 else 0.0
-                        wb_weight = 1.0 if raw_num == 2 else 0.0
-                    elif is_qp1_final and not is_cia1:
-                        wa = _qp1_final_question_weight(q.get('co'), 2, qp1_cia2_offset)
-                        wb_weight = _qp1_final_question_weight(q.get('co'), 3, qp1_cia2_offset)
-                    elif is_cia1:
-                        wa, wb_weight = _co_weights_12(q.get('co'))
-                    else:
-                        wa, wb_weight = _co_weights_34(q.get('co'))
-                    if n is None:
-                        continue
-                    has_any = True
-                    mark = _clamp(n, 0, mx)
-                    c_a += mark * wa
-                    c_b += mark * wb_weight
-                if not has_any:
-                    return None, None, None
-                return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
-
-            model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type) if subject_id else {}
-            model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
-
-            # ── SPECIAL: simpler exam-level export ──────────────────────────
-            if class_type == 'SPECIAL':
-                from OBE.services.final_internal_marks import _get_special_exam_weights
-                from OBE.models import Cia1PublishedSheet, Cia2PublishedSheet
-                sp_weights = _get_special_exam_weights() or {}
-                w_ssa1 = float(sp_weights.get('SSA1', 10))
-                w_ssa2 = float(sp_weights.get('SSA2', 10))
-                w_cia1 = float(sp_weights.get('CIA1', 5))
-                w_cia2 = float(sp_weights.get('CIA2', 5))
-                w_model_sp = float(sp_weights.get('MODEL', 10))
-                sp_max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_model_sp
-
-                ssa1_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA1', batch_id=batch_id)
-                ssa2_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA2', batch_id=batch_id)
-                ssa1_mx = sum(float(m) for m in ((ssa1_pat or {}).get('marks') or [])) or 10.0
-                ssa2_mx = sum(float(m) for m in ((ssa2_pat or {}).get('marks') or [])) or 10.0
-
-                cia1_sheet_sp = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
-                cia2_sheet_sp = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
-                cia1_qs_sp = cia1_sheet_sp.get('questions') if isinstance(cia1_sheet_sp.get('questions'), list) else []
-                cia2_qs_sp = cia2_sheet_sp.get('questions') if isinstance(cia2_sheet_sp.get('questions'), list) else []
-                cia1_mx = sum(float((q.get('max') or 0)) for q in cia1_qs_sp) or 60.0
-                cia2_mx = sum(float((q.get('max') or 0)) for q in cia2_qs_sp) or 60.0
-                cia1_rows_sp = cia1_sheet_sp.get('rowsByStudentId') if isinstance(cia1_sheet_sp.get('rowsByStudentId'), dict) else {}
-                cia2_rows_sp = cia2_sheet_sp.get('rowsByStudentId') if isinstance(cia2_sheet_sp.get('rowsByStudentId'), dict) else {}
-
-                model_mx = sum(float(m) for m in ((model_pattern or {}).get('marks') or [])) or 60.0
-
-                def _cia_total_sp(rows_map, sid):
-                    row = rows_map.get(str(sid)) or rows_map.get(sid) or {}
-                    if not isinstance(row, dict) or bool(row.get('absent')):
-                        return None
-                    qvals = row.get('q') if isinstance(row.get('q'), dict) else {}
-                    total = 0.0
-                    has_any = False
-                    for v in qvals.values():
-                        n = _sf(v)
-                        if n is not None:
-                            total += n
-                            has_any = True
-                    return _round2(total) if has_any else None
-
-                sp_scaled_label = str(int(scaled_max))
-                sp_header = ['S.no', "Student's Name", 'Register Number',
-                             'SSA1', 'SSA2', 'CIA1', 'CIA2', 'MODEL',
-                             'SSA1 Scaled', 'SSA2 Scaled', 'CIA1 Scaled', 'CIA2 Scaled', 'MODEL Scaled',
-                             str(int(sp_max_total)), sp_scaled_label]
-                ws.append(sp_header)
-                try:
-                    from openpyxl.styles import Font
-                    for ci in range(1, len(sp_header) + 1):
-                        ws.cell(row=1, column=ci).font = Font(bold=True)
-                except Exception:
-                    pass
-
-                for idx_sp, s in enumerate(_student_id_list, start=1):
-                    sid = int(s['id'])
-                    fim_row = student_rows.get(sid, {})
-                    ssa1_raw = _sf(ssa1_totals.get(sid))
-                    ssa2_raw = _sf(ssa2_totals.get(sid))
-                    cia1_raw = _cia_total_sp(cia1_rows_sp, sid)
-                    cia2_raw = _cia_total_sp(cia2_rows_sp, sid)
-                    model_marks_sp = _extract_model_co_marks_for_student(
-                        model_sheet=model_sheet, student_id=sid,
-                        reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
-                    ) if subject_id else None
-                    model_raw = None
-                    if model_marks_sp:
-                        m_sum = 0.0
-                        m_has = False
-                        for k in ['co1', 'co2', 'co3', 'co4', 'co5']:
-                            v = _sf(model_marks_sp.get(k))
-                            if v is not None:
-                                m_sum += v
-                                m_has = True
-                        if m_has:
-                            model_raw = _round2(m_sum)
-
-                    def _sp_scale(raw, mx, out_of):
-                        if raw is None or mx is None or not mx or not out_of:
-                            return None
-                        return _round2(_clamp(float(raw) / float(mx) * float(out_of), 0, float(out_of)))
-
-                    ssa1_sc = _sp_scale(ssa1_raw, ssa1_mx, w_ssa1)
-                    ssa2_sc = _sp_scale(ssa2_raw, ssa2_mx, w_ssa2)
-                    cia1_sc = _sp_scale(cia1_raw, cia1_mx, w_cia1)
-                    cia2_sc = _sp_scale(cia2_raw, cia2_mx, w_cia2)
-                    model_sc = _sp_scale(model_raw, model_mx, w_model_sp)
-
-                    parts = [ssa1_sc, ssa2_sc, cia1_sc, cia2_sc, model_sc]
-                    parts_valid = [p for p in parts if p is not None]
-                    sp_total = _round2(sum(parts_valid)) if parts_valid else None
-                    sp_pct = round(sp_total / sp_max_total * scaled_max) if sp_total is not None and sp_max_total else None
-
-                    ws.append([
-                        idx_sp,
-                        self._safe_text(s.get('name')),
-                        self._safe_text(s.get('reg_no')),
-                        _v(ssa1_raw), _v(ssa2_raw), _v(cia1_raw), _v(cia2_raw), _v(model_raw),
-                        _v(ssa1_sc), _v(ssa2_sc), _v(cia1_sc), _v(cia2_sc), _v(model_sc),
-                        _v(sp_total), sp_pct if sp_pct is not None else '-',
-                    ])
-
-                from openpyxl.utils import get_column_letter as _gcl_sp
-                sp_last = _gcl_sp(len(sp_header))
-                ws.auto_filter.ref = f"A1:{sp_last}{ws.max_row}"
-                ws.freeze_panes = 'A2'
-
-            elif is_qp1_final:
-                c2_label_a, c2_label_b = 'CO2', 'CO3'
-                model_co_keys = ['co1', 'co2', 'co3']
-                fim_co_keys = ['co1', 'co2', 'co3']
-            else:
-                c2_label_a, c2_label_b = 'CO3', 'CO4'
-                model_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
-                fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
-
-            if class_type != 'SPECIAL':
-                scaled_label = str(int(scaled_max))
-
-                # ── Build header rows ──
-                header_sections = ['', '', '']  # S.no, Name, Reg placeholders
-                header_cols = ['S.no', "Student's Name", 'Register Number']
-    
-                # Cycle 1
-                for lbl in ['SSA1 CO1', 'SSA1 CO2', 'SSA1 Total', 'CIA1 CO1', 'CIA1 CO2', 'CIA1 Total', 'FA1 CO1', 'FA1 CO2', 'FA1 Total']:
-                    header_sections.append('Cycle 1')
-                    header_cols.append(lbl)
-                # Cycle 2
-                for lbl in [f'SSA2 {c2_label_a}', f'SSA2 {c2_label_b}', 'SSA2 Total',
-                            f'CIA2 {c2_label_a}', f'CIA2 {c2_label_b}', 'CIA2 Total',
-                            f'FA2 {c2_label_a}', f'FA2 {c2_label_b}', 'FA2 Total']:
-                    header_sections.append('Cycle 2')
-                    header_cols.append(lbl)
-                # Model
-                for k in model_co_keys:
-                    header_sections.append('Model Exam')
-                    header_cols.append(f'MODEL {k.upper()}')
-                header_sections.append('Model Exam')
-                header_cols.append('MODEL Total')
-                # FIM Before CQI
-                for k in fim_co_keys:
-                    header_sections.append('FIM (Before CQI)')
-                    header_cols.append(k.upper())
-                header_sections.append('FIM (Before CQI)')
-                header_cols.append('40')
-                header_sections.append('FIM (Before CQI)')
-                header_cols.append(scaled_label)
-                # FIM After CQI
-                for k in fim_co_keys:
-                    header_sections.append('FIM (After CQI)')
-                    header_cols.append(k.upper())
-                header_sections.append('FIM (After CQI)')
-                header_cols.append('40')
-                header_sections.append('FIM (After CQI)')
-                header_cols.append(scaled_label)
-    
-                # Write section header row
-                ws.append(header_sections)
-                # Write column header row
-                ws.append(header_cols)
-    
-                # Merge section header cells
-                try:
-                    from openpyxl.styles import Font, Alignment, PatternFill
-                    section_ranges = {}
-                    for ci, sec in enumerate(header_sections, start=1):
-                        if sec:
-                            if sec not in section_ranges:
-                                section_ranges[sec] = [ci, ci]
-                            else:
-                                section_ranges[sec][1] = ci
-                    for sec, (start_col, end_col) in section_ranges.items():
-                        if start_col < end_col:
-                            ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-                        cell = ws.cell(row=1, column=start_col)
-                        cell.font = Font(bold=True)
-                        cell.alignment = Alignment(horizontal='center')
-                    # Bold the column headers
-                    for ci in range(1, len(header_cols) + 1):
-                        ws.cell(row=2, column=ci).font = Font(bold=True)
-                except Exception:
-                    pass
-    
-                # ── Write data rows ──
-                for idx, s in enumerate(_student_id_list, start=1):
-                    sid = int(s['id'])
-                    fim_row = student_rows.get(sid, {})
-    
-                    # Cycle 1
-                    sp1 = ssa1_splits_all.get(sid, {})
-                    s1_co1 = _sf(sp1.get('co1'))
-                    s1_co2 = _sf(sp1.get('co2'))
-                    s1_total = _sf(ssa1_totals.get(sid))
-                    if s1_co1 is None and s1_co2 is None and s1_total is not None:
-                        s1_co1 = s1_total / 2.0
-                        s1_co2 = s1_total / 2.0
-                    c1_row = cia1_row_map.get(str(sid)) or cia1_row_map.get(sid) or {}
-                    c1_a, c1_b, c1_total = _cia_co_raw(c1_row, cia1_questions, True)
-                    f1 = f1_rows_all.get(sid, {})
-                    f1_co1 = None
-                    f1_co2 = None
-                    f1_total = _sf(f1.get('total'))
-                    if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None:
-                        f1_co1 = _round2(_sf(f1['skill1']) + _sf(f1['att1']))
-                    if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None:
-                        f1_co2 = _round2(_sf(f1['skill2']) + _sf(f1['att2']))
-    
-                    # Cycle 2
-                    sp2 = ssa2_splits_all.get(sid, {})
-                    s2_co_a = _sf(sp2.get('co3'))
-                    s2_co_b = _sf(sp2.get('co4'))
-                    s2_total = _sf(ssa2_totals.get(sid))
-                    if s2_co_a is None and s2_co_b is None and s2_total is not None:
-                        s2_co_a = s2_total / 2.0
-                        s2_co_b = s2_total / 2.0
-                    if is_qp1_final and sp2:
-                        first_v = _sf(sp2.get('co2'))
-                        if first_v is None:
-                            first_v = _sf(sp2.get('co3'))
-                        if first_v is not None:
-                            s2_co_a = first_v
-                        second_v = None
-                        if sp2.get('co3') is not None and sp2.get('co2') is not None:
-                            second_v = _sf(sp2.get('co3'))
-                        if second_v is None:
-                            second_v = _sf(sp2.get('co4'))
-                        if second_v is not None:
-                            s2_co_b = second_v
-                    c2_row = cia2_row_map.get(str(sid)) or cia2_row_map.get(sid) or {}
-                    c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
-                    f2 = f2_rows_all.get(sid, {})
-                    f2_co_a = None
-                    f2_co_b = None
-                    f2_total = _sf(f2.get('total'))
-                    if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None:
-                        f2_co_a = _round2(_sf(f2['skill1']) + _sf(f2['att1']))
-                    if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None:
-                        f2_co_b = _round2(_sf(f2['skill2']) + _sf(f2['att2']))
-    
-                    # Model
-                    model_marks = _extract_model_co_marks_for_student(
-                        model_sheet=model_sheet,
-                        student_id=sid,
-                        reg_no=reg_map.get(sid, ''),
-                        model_pattern=model_pattern,
-                    ) if subject_id else None
-                    model_vals = []
-                    m_total = 0.0
-                    m_has = False
-                    for k in model_co_keys:
-                        val = _sf(model_marks.get(k)) if model_marks else None
-                        model_vals.append(_v(val))
-                        if val is not None:
-                            m_total += val
-                            m_has = True
-                    model_vals.append(_v(m_total) if m_has else '-')
-    
-                    # FIM Before CQI
-                    before_co_vals = []
-                    for k in fim_co_keys:
-                        before_co_vals.append(_v(fim_row.get(f'base_{k}')))
-                    before_co_vals.append(_v(fim_row.get('base_fim')))
-                    before_co_vals.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
-    
-                    # FIM After CQI
-                    after_co_vals = []
-                    for k in fim_co_keys:
-                        after_co_vals.append(_v(fim_row.get(k)))
-                    after_co_vals.append(_v(fim_row.get('fim')))
-                    after_co_vals.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
-    
-                    row_data = [
-                        idx,
-                        self._safe_text(s.get('name')),
-                        self._safe_text(s.get('reg_no')),
-                        # Cycle 1
-                        _v(s1_co1), _v(s1_co2), _v(s1_total),
-                        _v(c1_a), _v(c1_b), _v(c1_total),
-                        _v(f1_co1), _v(f1_co2), _v(f1_total),
-                        # Cycle 2
-                        _v(s2_co_a), _v(s2_co_b), _v(s2_total),
-                        _v(c2_a), _v(c2_b), _v(c2_total),
-                        _v(f2_co_a), _v(f2_co_b), _v(f2_total),
-                    ] + model_vals + before_co_vals + after_co_vals
-    
-                    ws.append(row_data)
-    
-                total_cols = len(header_cols)
-                last_letter = chr(ord('A') + min(total_cols - 1, 25)) if total_cols <= 26 else 'Z'
-                if total_cols > 26:
-                    # Handle columns beyond Z (AA, AB, etc.)
-                    from openpyxl.utils import get_column_letter
-                    last_letter = get_column_letter(total_cols)
-                ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
-                ws.freeze_panes = 'A3'
-    
-        # ════════════════════════════════════════════════════════════════
-        # SHEET 2 — Summary (Name, Register No., Total)
-        # ════════════════════════════════════════════════════════════════
-        ws2 = wb.create_sheet('Summary')
-        ws2.append(['Name', 'Register No.', 'Total'])
-        try:
-            from openpyxl.styles import Font as _F2
-            for ci in range(1, 4):
-                ws2.cell(row=1, column=ci).font = _F2(bold=True)
-        except Exception:
-            pass
-
-        for row in rows:
-            t100 = row.get('total_100')
-            ws2.append([
-                self._safe_text(row.get('name')),
-                self._safe_text(row.get('reg_no')),
-                t100 if t100 is not None else '-',
-            ])
-        ws2.auto_filter.ref = f"A1:C{ws2.max_row}"
-        ws2.freeze_panes = 'A2'
-
-        filename = f"{self._safe_filename(course_code)} {self._safe_filename(course_name)}.xlsx"
-        out = io.BytesIO()
-        wb.save(out)
-        out.seek(0)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=404)
 
         response = HttpResponse(
-            out.read(),
+            xlsx_bytes,
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'

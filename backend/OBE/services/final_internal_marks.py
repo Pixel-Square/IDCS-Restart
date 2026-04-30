@@ -624,8 +624,7 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
     """
     from OBE.models import (
         Ssa1Mark, Ssa2Mark,
-        Review1Mark, Review2Mark,
-        ModelPublishedSheet,
+        LabPublishedSheet, AssessmentDraft,
         ObeCqiPublished,
     )
 
@@ -659,23 +658,55 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
             return None
         return _clamp((float(raw) / float(out_of)) * float(weight), 0, float(weight))
 
+    def _get_prbl_lab_total(assessment_key, student_id):
+        """Read a PRBL Review/Model total from draft (if newer) or LabPublishedSheet."""
+        # Draft (preferred when newer than published or published is absent)
+        draft_rows = list(
+            AssessmentDraft.objects.filter(subject_id=subject.id, assessment=assessment_key)
+            .order_by('-updated_at')
+        )
+        draft_row = _pick_scoped_row(draft_rows, ta_id)
+        draft_data = draft_row.data if draft_row and isinstance(getattr(draft_row, 'data', None), dict) else None
+        draft_updated = getattr(draft_row, 'updated_at', None) if draft_row else None
+        draft_is_ta_scoped = draft_row is not None and getattr(draft_row, 'teaching_assignment_id', None) == ta_id
+
+        # LabPublishedSheet (the persistent published copy)
+        pub_rows = list(
+            LabPublishedSheet.objects.filter(subject_id=subject.id, assessment=assessment_key)
+            .order_by('-updated_at')
+        )
+        pub_row = _pick_scoped_row(pub_rows, ta_id)
+        pub_data = pub_row.data if pub_row and isinstance(getattr(pub_row, 'data', None), dict) else None
+        pub_updated = getattr(pub_row, 'updated_at', None) if pub_row else None
+        pub_is_ta_scoped = pub_row is not None and getattr(pub_row, 'teaching_assignment_id', None) == ta_id
+
+        use_draft = False
+        if isinstance(draft_data, dict):
+            if pub_data is None:
+                use_draft = True
+            elif draft_is_ta_scoped and not pub_is_ta_scoped:
+                use_draft = True
+            elif draft_updated and pub_updated and draft_updated > pub_updated:
+                use_draft = True
+
+        data = draft_data if use_draft else pub_data
+        if not isinstance(data, dict):
+            return None
+        return _extract_model_total_for_student(data, student_id)
+
     # ── Raw marks ──
-    ssa1_map    = _assessment_map(Ssa1Mark,    'mark', subject.id, [sid], ta_id)
-    ssa2_map    = _assessment_map(Ssa2Mark,    'mark', subject.id, [sid], ta_id)
-    review1_map = _assessment_map(Review1Mark, 'mark', subject.id, [sid], ta_id)
-    review2_map = _assessment_map(Review2Mark, 'mark', subject.id, [sid], ta_id)
+    ssa1_map = _assessment_map(Ssa1Mark, 'mark', subject.id, [sid], ta_id)
+    ssa2_map = _assessment_map(Ssa2Mark, 'mark', subject.id, [sid], ta_id)
 
     ssa1_raw    = _safe_float(ssa1_map.get(sid))
     ssa2_raw    = _safe_float(ssa2_map.get(sid))
-    review1_raw = _safe_float(review1_map.get(sid))
-    review2_raw = _safe_float(review2_map.get(sid))
+
+    # Review1/Review2/Model for PRBL are stored via LabEntry → LabPublishedSheet/AssessmentDraft
+    review1_raw = _get_prbl_lab_total('review1', sid)
+    review2_raw = _get_prbl_lab_total('review2', sid)
 
     # ── Model / Review 3 ──
-    model_total_raw = None
-    model_rows = list(ModelPublishedSheet.objects.filter(subject_id=subject.id).order_by('-updated_at'))
-    model_row = _pick_scoped_row(model_rows, ta_id)
-    if model_row and isinstance(getattr(model_row, 'data', None), dict):
-        model_total_raw = _extract_model_total_for_student(model_row.data, sid)
+    model_total_raw = _get_prbl_lab_total('model', sid)
 
     # ── Scale each component to its weight ──
     s_ssa1    = _scale(ssa1_raw,    max_ssa1,    w_ssa1)
@@ -1216,20 +1247,75 @@ def _extract_tcpr_review_co_splits_for_ta(subject_id, ta_id, assessment_key, co_
 
 
 def _get_cia_sheet_data(subject_id, ta_id, which):
-    from OBE.models import Cia1PublishedSheet, Cia2PublishedSheet
+    from OBE.models import Cia1PublishedSheet, Cia2PublishedSheet, AssessmentDraft
 
-    model = Cia1PublishedSheet if which == 'cia1' else Cia2PublishedSheet
-    rows = list(model.objects.filter(subject_id=subject_id).order_by('-updated_at'))
-    row = _pick_scoped_row(rows, ta_id)
-    return row.data if row and isinstance(getattr(row, 'data', None), dict) else {}
+    pub_model = Cia1PublishedSheet if which == 'cia1' else Cia2PublishedSheet
+    pub_rows = list(pub_model.objects.filter(subject_id=subject_id).order_by('-updated_at'))
+    pub_row = _pick_scoped_row(pub_rows, ta_id)
+    pub_data = pub_row.data if pub_row and isinstance(getattr(pub_row, 'data', None), dict) else None
+    pub_updated = getattr(pub_row, 'updated_at', None) if pub_row else None
+    pub_is_ta_scoped = pub_row is not None and getattr(pub_row, 'teaching_assignment_id', None) == ta_id
+
+    draft_rows = list(
+        AssessmentDraft.objects.filter(subject_id=subject_id, assessment=which)
+        .order_by('-updated_at')
+    )
+    draft_row = _pick_scoped_row(draft_rows, ta_id)
+    draft_data = None
+    draft_updated = None
+    draft_is_ta_scoped = False
+    if draft_row and isinstance(getattr(draft_row, 'data', None), dict):
+        raw = draft_row.data
+        inner = raw.get('data') if isinstance(raw.get('data'), dict) else None
+        draft_data = inner if inner is not None else raw
+        draft_updated = getattr(draft_row, 'updated_at', None)
+        draft_is_ta_scoped = getattr(draft_row, 'teaching_assignment_id', None) == ta_id
+
+    if isinstance(draft_data, dict):
+        if pub_data is None:
+            return draft_data
+        if draft_is_ta_scoped and not pub_is_ta_scoped:
+            return draft_data
+        if draft_updated and pub_updated and draft_updated > pub_updated:
+            return draft_data
+
+    return pub_data if isinstance(pub_data, dict) else {}
 
 
 def _get_model_sheet_data(subject_id, ta_id, class_type):
-    from OBE.models import ModelPublishedSheet
+    from OBE.models import ModelPublishedSheet, AssessmentDraft
 
-    rows = list(ModelPublishedSheet.objects.filter(subject_id=subject_id).order_by('-updated_at'))
-    row = _pick_scoped_row(rows, ta_id)
-    data = row.data if row and isinstance(getattr(row, 'data', None), dict) else {}
+    pub_rows = list(ModelPublishedSheet.objects.filter(subject_id=subject_id).order_by('-updated_at'))
+    pub_row = _pick_scoped_row(pub_rows, ta_id)
+    pub_raw = pub_row.data if pub_row and isinstance(getattr(pub_row, 'data', None), dict) else None
+    pub_updated = getattr(pub_row, 'updated_at', None) if pub_row else None
+    pub_is_ta_scoped = pub_row is not None and getattr(pub_row, 'teaching_assignment_id', None) == ta_id
+
+    draft_rows = list(
+        AssessmentDraft.objects.filter(subject_id=subject_id, assessment='model')
+        .order_by('-updated_at')
+    )
+    draft_row = _pick_scoped_row(draft_rows, ta_id)
+    draft_raw = None
+    draft_updated = None
+    draft_is_ta_scoped = False
+    if draft_row and isinstance(getattr(draft_row, 'data', None), dict):
+        raw = draft_row.data
+        inner = raw.get('data') if isinstance(raw.get('data'), dict) else None
+        draft_raw = inner if inner is not None else raw
+        draft_updated = getattr(draft_row, 'updated_at', None)
+        draft_is_ta_scoped = getattr(draft_row, 'teaching_assignment_id', None) == ta_id
+
+    use_draft = False
+    if isinstance(draft_raw, dict):
+        if pub_raw is None:
+            use_draft = True
+        elif draft_is_ta_scoped and not pub_is_ta_scoped:
+            use_draft = True
+        elif draft_updated and pub_updated and draft_updated > pub_updated:
+            use_draft = True
+
+    data = draft_raw if use_draft else pub_raw
     if not isinstance(data, dict):
         return {}
 
@@ -1809,14 +1895,6 @@ def _assessment_map(model, field_name, subject_id, student_ids, ta_id):
             out[sid] = {'value': val, 'is_ta': True}
         elif current.get('value') is None and val is not None:
             out[sid] = {'value': val, 'is_ta': False}
-
-    missing = [sid for sid in student_ids if sid not in out]
-    if missing:
-        for row in base.filter(student_id__in=missing).values('student_id', field_name):
-            sid = int(row.get('student_id'))
-            if sid in out:
-                continue
-            out[sid] = {'value': _safe_float(row.get(field_name)), 'is_ta': False}
 
     return {sid: data.get('value') for sid, data in out.items()}
 

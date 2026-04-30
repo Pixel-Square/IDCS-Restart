@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import * as XLSX from 'xlsx';
 import { getApiBase } from '../services/apiBase';
 
 const API_BASE = getApiBase();
@@ -19,6 +20,28 @@ function buildFriendlyUploadError(status: number, bodyText: string) {
   return `Upload failed with status ${status}. Please try again.`;
 }
 
+/**
+ * Reads the first sheet (INDEX) of an Excel file and extracts the course code
+ * from cell C7 (row 7, column C). Returns the trimmed string or null.
+ */
+async function extractCourseCodeFromExcel(file: File): Promise<string | null> {
+  try {
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: 'array' });
+    // First sheet is the INDEX sheet
+    const firstSheetName = wb.SheetNames[0];
+    if (!firstSheetName) return null;
+    const ws = wb.Sheets[firstSheetName];
+    // C7 in A1 notation
+    const cell = ws['C7'];
+    if (!cell) return null;
+    const val = String(cell.v ?? '').trim();
+    return val || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: string; onUpload?: (res: any) => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
@@ -30,6 +53,21 @@ export default function CDAPUploader({ subjectId, onUpload }: { subjectId?: stri
       setStatus('error');
       setMessage('Please choose an Excel file first.');
       return;
+    }
+
+    // Validate course code from INDEX sheet (C7) against selected subject
+    if (subjectId) {
+      const excelCourseCode = await extractCourseCodeFromExcel(file);
+      if (excelCourseCode !== null) {
+        const normalize = (s: string) => s.trim().toUpperCase().replace(/\s+/g, '');
+        if (normalize(excelCourseCode) !== normalize(subjectId)) {
+          setStatus('error');
+          setMessage(
+            `Course code mismatch: Excel file contains "${excelCourseCode}" (INDEX sheet, cell C7) but the selected course is "${subjectId}". Please upload the correct CDAP file for this course.`
+          );
+          return;
+        }
+      }
     }
 
     setStatus('uploading');

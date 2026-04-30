@@ -687,11 +687,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         triggerDownload(blob, `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`);
         return;
       } catch (singleErr: any) {
-        const shouldChunk = uniqueTaIds.length > 60;
+        const shouldChunk = uniqueTaIds.length > 40;
         if (!shouldChunk) throw singleErr;
       }
 
-      const taChunks = splitIntoChunks(uniqueTaIds, 40);
+      const taChunks = splitIntoChunks(uniqueTaIds, 25);
       const stamp = new Date().toISOString().slice(0, 10);
       for (let i = 0; i < taChunks.length; i += 1) {
         const blob = await fetchExport(taChunks[i]);
@@ -750,7 +750,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           <div style={{ fontSize: 13, color: '#6b7280' }}>Filter like Department Curriculum and download all selected course internal marks as ZIP.</div>
         </div>
         <button className="obe-btn obe-btn-primary" onClick={handleDownloadFilteredZip} disabled={downloading || exportableRows.length === 0}>
-          {downloading ? 'Preparing ZIP...' : `Download Filtered ZIP (${exportableRows.length})`}
+          {downloading ? 'Preparing ZIP...' : `Download Detailed Internal Marks ZIP (${exportableRows.length})`}
         </button>
       </div>
 

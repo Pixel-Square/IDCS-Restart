@@ -2132,8 +2132,10 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
               if (totalX != null) {
                 patch.total = round1(clamp(totalX, 0, MAX_ASMT2));
-              } else if (patch.co3 != null && patch.co4 != null) {
-                patch.total = round1(clamp((patch.co3 as number) + (patch.co4 as number), 0, MAX_ASMT2));
+              } else if (patch.co3 != null || patch.co4 != null) {
+                const v1 = typeof patch.co3 === "number" ? patch.co3 : 0;
+                const v2 = typeof patch.co4 === "number" ? patch.co4 : 0;
+                patch.total = round1(clamp(v1 + v2, 0, MAX_ASMT2));
               }
             }
           }
