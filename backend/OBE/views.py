@@ -2571,7 +2571,7 @@ def _normalize_exam_key(s) -> str:
 
 def _normalize_qp_type_key(value) -> str:
     qp = str(value or '').strip().upper().replace(' ', '')
-    return qp if qp in {'QP1', 'QP2'} else ''
+    return qp if qp in {'QP1', 'QP2', 'CSD', 'QP1FINAL'} else ''
 
 
 def _validate_qp_pattern_payload(pattern_raw):

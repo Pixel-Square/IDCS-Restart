@@ -681,22 +681,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
         return res.blob();
       };
 
-      // Try single request first (existing behavior). If server fails, fallback to chunked requests.
-      try {
-        const blob = await fetchExport(uniqueTaIds);
-        triggerDownload(blob, `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`);
-        return;
-      } catch (singleErr: any) {
-        const shouldChunk = uniqueTaIds.length > 40;
-        if (!shouldChunk) throw singleErr;
-      }
-
-      const taChunks = splitIntoChunks(uniqueTaIds, 25);
-      const stamp = new Date().toISOString().slice(0, 10);
-      for (let i = 0; i < taChunks.length; i += 1) {
-        const blob = await fetchExport(taChunks[i]);
-        triggerDownload(blob, `internal_marks_${stamp}_part_${i + 1}_of_${taChunks.length}.zip`);
-      }
+      const blob = await fetchExport(uniqueTaIds);
+      triggerDownload(blob, `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`);
     } catch (e: any) {
       setError(e?.message || 'Failed to download ZIP export');
     } finally {

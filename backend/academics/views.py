@@ -978,7 +978,7 @@ def _ms_add_co_breakdown_sheets(wb, ta, subject, student_list):
         sid = int(s['id'])
         marks = _extract_model_co_marks_for_student(
             model_sheet=model_sheet, student_id=sid,
-            reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+            reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
         ) if subject_id else None
         row_vals = [idx, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no'))]
         m_total = 0.0
@@ -1147,8 +1147,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             )
             live = None
 
-        co_vals = {f'co{i}': None for i in range(1, 6)}
-        base_co_vals = {f'co{i}': None for i in range(1, 6)}
+        co_vals = {f'co{i}': None for i in range(1, 7)}
+        base_co_vals = {f'co{i}': None for i in range(1, 7)}
         final_mark = base_mark = total_100 = base_total_100 = None
         if isinstance(live, dict):
             final_mark = _ms_safe_float(live.get('total_40'))
@@ -1157,7 +1157,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             base_total_100 = _ms_safe_float(live.get('base_total_100'))
             cv = live.get('co_values_40') if isinstance(live.get('co_values_40'), dict) else {}
             bv = live.get('base_co_values_40') if isinstance(live.get('base_co_values_40'), dict) else {}
-            for i in range(1, 6):
+            for i in range(1, 7):
                 co_vals[f'co{i}'] = _ms_safe_float(cv.get(f'co{i}'))
                 base_co_vals[f'co{i}'] = _ms_safe_float(bv.get(f'co{i}'))
 
@@ -1166,12 +1166,12 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             'name': _ms_safe_text(s.get('name')),
             'reg_no': _ms_safe_text(s.get('reg_no')),
             'co1': co_vals['co1'], 'co2': co_vals['co2'], 'co3': co_vals['co3'],
-            'co4': co_vals['co4'], 'co5': co_vals['co5'],
+            'co4': co_vals['co4'], 'co5': co_vals['co5'], 'co6': co_vals['co6'],
             'fim': final_mark,
             'total_100': total_100,
             'base_co1': base_co_vals['co1'], 'base_co2': base_co_vals['co2'],
             'base_co3': base_co_vals['co3'], 'base_co4': base_co_vals['co4'],
-            'base_co5': base_co_vals['co5'],
+            'base_co5': base_co_vals['co5'], 'base_co6': base_co_vals['co6'],
             'base_fim': base_mark,
             'base_total_100': base_total_100,
         }
@@ -1404,6 +1404,190 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
         ws.auto_filter.ref = f"A2:{last_letter}{ws.max_row}"
         ws.freeze_panes = 'A3'
 
+    elif class_type == 'PRBL':
+        # ── PRBL: SSA1 + Review1 (Cycle 1), SSA2 + Review2 (Cycle 2), Model/Review3 (Cycle 3), FIM ──
+        from OBE.services.final_internal_marks import _get_prbl_exam_weights as _get_prbl_weights
+
+        subject_id = subject_obj.id if subject_obj else 0
+        student_id_list = [
+            {'id': sid, 'name': data.get('name', ''), 'reg_no': data.get('reg_no', '')}
+            for sid, data in sorted(
+                student_rows.items(),
+                key=lambda x: (_ms_safe_text(x[1].get('reg_no')), _ms_safe_text(x[1].get('name'))),
+            )
+        ]
+        student_ids = [int(s['id']) for s in student_id_list]
+        reg_map = {int(s['id']): _ms_safe_text(s.get('reg_no', '')) for s in student_id_list}
+
+        # Fetch PRBL exam weights
+        prbl_cfg = _get_prbl_weights() or {}
+        w_ssa1      = float((prbl_cfg.get('ssa1') or {}).get('weight') or 3)
+        max_ssa1    = float((prbl_cfg.get('ssa1') or {}).get('max') or 20)
+        w_review1   = float((prbl_cfg.get('review1') or {}).get('weight') or 12)
+        max_review1 = float((prbl_cfg.get('review1') or {}).get('max') or 50)
+        w_ssa2      = float((prbl_cfg.get('ssa2') or {}).get('weight') or 3)
+        max_ssa2    = float((prbl_cfg.get('ssa2') or {}).get('max') or 20)
+        w_review2   = float((prbl_cfg.get('review2') or {}).get('weight') or 12)
+        max_review2 = float((prbl_cfg.get('review2') or {}).get('max') or 50)
+        w_model     = float((prbl_cfg.get('model') or {}).get('weight') or 30)
+        max_model   = float((prbl_cfg.get('model') or {}).get('max') or 100)
+        prbl_total_max = w_ssa1 + w_review1 + w_ssa2 + w_review2 + w_model  # normally 60
+        prbl_max_label = str(int(prbl_total_max))
+
+        # Fetch raw SSA marks
+        ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+        ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
+
+        # Fetch Review1 / Review2 / Model marks from LabPublishedSheet
+        def _pick_prbl_lab_data(assessment_key):
+            if not subject_id:
+                return {}
+            from OBE.models import LabPublishedSheet as _LPS
+            qs = list(
+                _LPS.objects.filter(subject_id=subject_id, assessment=assessment_key)
+                .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
+                .order_by('-updated_at')
+            )
+            exact = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+            if exact and isinstance(getattr(exact, 'data', None), dict):
+                return exact.data
+            legacy = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) is None), None)
+            if legacy and isinstance(getattr(legacy, 'data', None), dict):
+                return legacy.data
+            first = qs[0] if qs else None
+            return first.data if first and isinstance(getattr(first, 'data', None), dict) else {}
+
+        def _extract_prbl_mark(lab_data, sid, max_cap=50.0):
+            """Extract a single total mark from LabPublishedSheet data for a PRBL student."""
+            if not isinstance(lab_data, dict):
+                return None
+            sheet = lab_data.get('sheet') if isinstance(lab_data.get('sheet'), dict) else None
+            rows_by_student = None
+            if sheet and isinstance(sheet.get('rowsByStudentId'), dict):
+                rows_by_student = sheet['rowsByStudentId']
+            elif isinstance(lab_data.get('rowsByStudentId'), dict):
+                rows_by_student = lab_data['rowsByStudentId']
+            if not isinstance(rows_by_student, dict):
+                return None
+            srow = rows_by_student.get(str(sid)) or rows_by_student.get(sid)
+            if not isinstance(srow, dict):
+                return None
+            if bool(srow.get('absent')):
+                return None
+            direct = _ms_safe_float(srow.get('ciaExam'))
+            if direct is not None:
+                return round(max(0.0, min(max_cap, float(direct))), 2)
+            comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
+            total = 0.0
+            has_any = False
+            for raw in comps.values():
+                n = _ms_safe_float(raw)
+                if n is None:
+                    continue
+                has_any = True
+                total += float(n)
+            if not has_any:
+                return None
+            return round(max(0.0, min(max_cap, total)), 2)
+
+        review1_lab_data = _pick_prbl_lab_data('review1')
+        review2_lab_data = _pick_prbl_lab_data('review2')
+        model_lab_data   = _pick_prbl_lab_data('model')
+
+        def _prbl_scale(raw, raw_max, weight):
+            if raw is None or not raw_max or not weight:
+                return None
+            return round(max(0.0, min(float(weight), (float(raw) / float(raw_max)) * float(weight))), 2)
+
+        # ── Build PRBL headers ──
+        prbl_section = ['', '', '']
+        prbl_col     = ['S.no', "Student's Name", 'Register Number']
+
+        # Cycle 1: SSA1 + Review 1
+        prbl_section += ['Cycle 1', 'Cycle 1']
+        prbl_col     += ['SSA 1', 'Review 1']
+        # Cycle 2: SSA2 + Review 2
+        prbl_section += ['Cycle 2', 'Cycle 2']
+        prbl_col     += ['SSA 2', 'Review 2']
+        # Cycle 3: Model/Review 3
+        prbl_section += ['Cycle 3']
+        prbl_col     += ['Review 3 (Model)']
+
+        # Internal weightage sub-header (informational)
+        prbl_weight_row = ['', 'Internal Weightage', '',
+                           str(w_ssa1), str(w_review1),
+                           str(w_ssa2), str(w_review2),
+                           str(w_model)]
+
+        # FIM (Before CQI): CO1, /60, /100
+        for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+            prbl_section += [label, label, label]
+            prbl_col     += ['CO1', prbl_max_label, '100']
+
+        ws.append(prbl_section)
+        ws.append(prbl_col)
+
+        # Merge section headers
+        try:
+            section_ranges = {}
+            for ci, sec in enumerate(prbl_section, start=1):
+                if sec:
+                    if sec not in section_ranges:
+                        section_ranges[sec] = [ci, ci]
+                    else:
+                        section_ranges[sec][1] = ci
+            for sec, (start_col, end_col) in section_ranges.items():
+                if start_col < end_col:
+                    ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                cell = ws.cell(row=1, column=start_col)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal='center')
+            for ci in range(1, len(prbl_col) + 1):
+                ws.cell(row=2, column=ci).font = Font(bold=True)
+        except Exception:
+            pass
+
+        # ── Populate data rows ──
+        for idx, s in enumerate(student_id_list, start=1):
+            sid = int(s['id'])
+            fim_row = student_rows.get(sid, {})
+
+            # Raw marks
+            ssa1_raw  = _sf(ssa1_totals.get(sid))
+            ssa2_raw  = _sf(ssa2_totals.get(sid))
+            rev1_raw  = _extract_prbl_mark(review1_lab_data, sid, max_review1)
+            rev2_raw  = _extract_prbl_mark(review2_lab_data, sid, max_review2)
+            model_raw = _extract_prbl_mark(model_lab_data,   sid, max_model)
+
+            # Scale to weights
+            s_ssa1  = _prbl_scale(ssa1_raw,  max_ssa1,    w_ssa1)
+            s_rev1  = _prbl_scale(rev1_raw,  max_review1, w_review1)
+            s_ssa2  = _prbl_scale(ssa2_raw,  max_ssa2,    w_ssa2)
+            s_rev2  = _prbl_scale(rev2_raw,  max_review2, w_review2)
+            s_model = _prbl_scale(model_raw, max_model,   w_model)
+
+            row_data = [
+                idx,
+                _ms_safe_text(s.get('name')),
+                _ms_safe_text(s.get('reg_no')),
+                _v(s_ssa1), _v(s_rev1),
+                _v(s_ssa2), _v(s_rev2),
+                _v(s_model),
+                # FIM (Before CQI): CO1, /60, /100
+                _v(fim_row.get('base_co1')),
+                _v(fim_row.get('base_fim')),
+                fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-',
+                # FIM (After CQI): CO1, /60, /100
+                _v(fim_row.get('co1')),
+                _v(fim_row.get('fim')),
+                fim_row.get('total_100') if fim_row.get('total_100') is not None else '-',
+            ]
+            ws.append(row_data)
+
+        prbl_last = get_column_letter(len(prbl_col))
+        ws.auto_filter.ref = f"A2:{prbl_last}{ws.max_row}"
+        ws.freeze_panes = 'A3'
+
     else:
         # THEORY / SPECIAL / others — comprehensive sheet with cycles, model, FIM Before/After CQI
         subject_id = subject_obj.id if subject_obj else 0
@@ -1606,7 +1790,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 cia2_raw = _cia_total_sp(cia2_rows_sp, sid)
                 model_marks_sp = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
-                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
                 ) if subject_id else None
                 model_raw = None
                 if model_marks_sp:
@@ -1685,6 +1869,36 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             lab_cia2_data = _get_lab_sheet_data('cia2')
             CIA_EXAM_MAX = 30.0
 
+            # ── Detect CO6 scheme from actual sheet coConfigs ──
+            def _detect_lab_co6(sheet_data):
+                _sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
+                if not isinstance(_sheet, dict):
+                    return False
+                _co_cfgs = _sheet.get('coConfigs') if isinstance(_sheet, dict) else {}
+                if not isinstance(_co_cfgs, dict):
+                    return False
+                _co6 = _co_cfgs.get('6') or _co_cfgs.get(6)
+                return isinstance(_co6, dict) and _co6.get('enabled', False)
+
+            _lab_has_co6 = _detect_lab_co6(lab_cia1_data) or _detect_lab_co6(lab_cia2_data)
+            if _lab_has_co6:
+                # CO6 scheme: cycle1=CO1,2,3 cycle2=CO4,5,6 — each CO = 10 marks
+                cycle1_cfg = {
+                    '1': {'exp': 7.5, 'cia': 2.5},
+                    '2': {'exp': 7.5, 'cia': 2.5},
+                    '3': {'exp': 7.5, 'cia': 2.5},
+                }
+                cycle2_cfg = {
+                    '4': {'exp': 7.5, 'cia': 2.5},
+                    '5': {'exp': 7.5, 'cia': 2.5},
+                    '6': {'exp': 7.5, 'cia': 2.5},
+                }
+                c1_co_keys = sorted(cycle1_cfg.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+                c2_co_keys = sorted(cycle2_cfg.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
+
+            scaled_label = str(int(scaled_max))
+            fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5', 'co6'] if _lab_has_co6 else ['co1', 'co2', 'co3', 'co4', 'co5']
+
             def _read_lab_cycle(sheet_data, cycle_config):
                 sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
                 if not isinstance(sheet, dict):
@@ -1738,8 +1952,6 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             cycle1_reader = _read_lab_cycle(lab_cia1_data, cycle1_cfg)
             cycle2_reader = _read_lab_cycle(lab_cia2_data, cycle2_cfg)
 
-            scaled_label = str(int(scaled_max))
-            fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
             lab_section = ['', '', '']
             lab_col = ['S.no', "Student's Name", 'Register Number']
             for k in c1_co_keys:
@@ -1812,6 +2024,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
         elif class_type == 'TCPL':
             # ── TCPL: SSA + LAB + CIA per cycle, MODEL, FIM ──
             scaled_label = str(int(scaled_max))
+            tcpl_fim_max = int(sum(_get_tcpl_weight_slots()))
+            tcpl_fim_label = str(tcpl_fim_max)
             fim_co_keys = ['co1', 'co2', 'co3', 'co4', 'co5']
 
             def _get_lab_sheet_tcpl(assessment):
@@ -1890,7 +2104,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                     tcpl_section.append(label)
                     tcpl_col.append(k.upper())
                 tcpl_section.append(label)
-                tcpl_col.append('40')
+                tcpl_col.append(tcpl_fim_label)
                 tcpl_section.append(label)
                 tcpl_col.append(scaled_label)
 
@@ -1940,7 +2154,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
                 model_marks = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
-                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
                 ) if subject_id else None
                 model_vals = []
                 m_total = 0.0
@@ -2061,8 +2275,19 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 c2_a, c2_b, c2_total = _cia_co_raw(c2_row, cia2_questions, False)
                 model_marks = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
-                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
                 ) if subject_id else None
+                if class_type == 'TCPR' and isinstance(model_sheet, dict):
+                    _m_row = model_sheet.get(f'id:{sid}') or model_sheet.get(f'reg:{reg_map.get(sid, "")}') or {}
+                    if isinstance(_m_row, dict):
+                        _rev = _sf(_m_row.get('review'))
+                        if _rev is None:
+                            _rev = _sf(_m_row.get('lab'))
+                        if _rev is not None:
+                            _rev = max(0.0, min(float(_rev), 30.0))
+                            if model_marks is None:
+                                model_marks = {'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0}
+                            model_marks['co5'] = (model_marks.get('co5') or 0.0) + _rev
                 model_vals = []
                 m_total = 0.0
                 m_has = False
@@ -2217,7 +2442,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 # Model
                 model_marks = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
-                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
                 ) if subject_id else None
                 model_vals = []
                 m_total = 0.0
@@ -2263,7 +2488,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
     # ─────────────────────────────────────────────────────────
     # SHEETS 2-4 — CO-wise breakdown (only for theory-like types)
     # ─────────────────────────────────────────────────────────
-    _theory_like_breakdown = class_type not in ('LAB', 'PRACTICAL', 'TCPL', 'TCPR', 'PROJECT', 'SPECIAL')
+    _theory_like_breakdown = class_type not in ('LAB', 'PRACTICAL', 'TCPL', 'TCPR', 'PROJECT', 'SPECIAL', 'PRBL')
     if _theory_like_breakdown:
       try:
         breakdown_students = sorted(
@@ -2636,58 +2861,68 @@ class IqacInternalMarksBulkExportView(APIView):
         if not tas:
             return Response({'detail': 'No teaching assignments found for selected filters.'}, status=404)
 
-        # Ensure FinalInternalMark records are recomputed for the selected
-        # teaching assignments so the bulk export uses up-to-date computed values
-        # (matches per-course export behavior).
-        try:
-            recompute_final_internal_marks(
-                actor_user_id=getattr(request.user, 'id', None),
-                filters={'teaching_assignment_id__in': [int(t.id) for t in tas]},
-            )
-        except Exception:
-            import logging as _log_
-            _log_.getLogger(__name__).exception(
-                'IqacInternalMarksBulkExportView: recompute_final_internal_marks failed for selected tas'
-            )
+        from django.http import StreamingHttpResponse
 
-        zip_buffer = io.BytesIO()
-        file_count = 0
-        seen_filenames = set()
-        errors = []
+        class ZipBuffer:
+            def __init__(self):
+                self.buf = bytearray()
+                self.offset = 0
 
-        with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-            for ta in tas:
-                try:
-                    xlsx_bytes, _fname, meta = _build_detailed_internal_marks_workbook(
-                        ta,
-                        actor_user_id=getattr(request.user, 'id', None),
-                        recompute=False,  # bulk recompute already ran above
-                    )
-                except ValueError as exc:
-                    logging.getLogger(__name__).warning(
-                        'IqacInternalMarksBulkExportView: skipping ta %s: %s',
-                        getattr(ta, 'id', None), exc,
-                    )
-                    errors.append(getattr(ta, 'id', None))
-                    continue
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        'IqacInternalMarksBulkExportView: builder failed for ta %s',
-                        getattr(ta, 'id', None),
-                    )
-                    errors.append(getattr(ta, 'id', None))
-                    continue
+            def write(self, data):
+                self.buf.extend(data)
+                self.offset += len(data)
+                return len(data)
 
-                disambig = _ms_disambiguated_filename(ta, meta, seen_filenames)
-                seen_filenames.add(disambig)
-                zf.writestr(disambig, xlsx_bytes)
-                file_count += 1
+            def tell(self):
+                return self.offset
 
-        if file_count == 0:
-            return Response({'detail': 'No exportable internal marks found for selected filters.'}, status=404)
+            def flush(self):
+                pass
 
-        zip_buffer.seek(0)
-        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+            def pop(self):
+                d = bytes(self.buf)
+                self.buf.clear()
+                return d
+
+        def stream_zip():
+            zb = ZipBuffer()
+            seen_filenames = set()
+            with zipfile.ZipFile(zb, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for ta in tas:
+                    try:
+                        xlsx_bytes, _fname, meta = _build_detailed_internal_marks_workbook(
+                            ta,
+                            actor_user_id=getattr(request.user, 'id', None),
+                            recompute=False,  # Recomputing all takes too long, rely on staff saves
+                        )
+                    except ValueError as exc:
+                        import logging as _log_
+                        _log_.getLogger(__name__).warning(
+                            'IqacInternalMarksBulkExportView: skipping ta %s: %s',
+                            getattr(ta, 'id', None), exc,
+                        )
+                        continue
+                    except Exception:
+                        import logging as _log_
+                        _log_.getLogger(__name__).exception(
+                            'IqacInternalMarksBulkExportView: builder failed for ta %s',
+                            getattr(ta, 'id', None),
+                        )
+                        continue
+
+                    disambig = _ms_disambiguated_filename(ta, meta, seen_filenames)
+                    seen_filenames.add(disambig)
+                    zf.writestr(disambig, xlsx_bytes)
+                    
+                    chunk = zb.pop()
+                    if chunk:
+                        yield chunk
+            
+            final_chunk = zb.pop()
+            if final_chunk:
+                yield final_chunk
+
+        response = StreamingHttpResponse(stream_zip(), content_type='application/zip')
         response['Content-Disposition'] = 'attachment; filename="internal_marks_export.zip"'
         return response
 
@@ -3048,6 +3283,7 @@ class IqacInternalMarksCourseExportView(APIView):
                 student_id=sid,
                 reg_no=reg_no,
                 model_pattern=model_pattern,
+                class_type=class_type,
             )
 
             row_data = [idx, self._safe_text(s.get('name')), self._safe_text(s.get('reg_no'))]

@@ -184,7 +184,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const [tcplModelRecordEnabled, setTcplModelRecordEnabled] = useState(false);
   const [tcplModelRecordExpCount, setTcplModelRecordExpCount] = useState(3);
   const [tcplModelRecordMaxPerExp, setTcplModelRecordMaxPerExp] = useState(10);
-  const [tcplModelRecordLocked, setTcplModelRecordLocked] = useState(true);
   const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
   const [iqacPatternLoading, setIqacPatternLoading] = useState(false);
   const [iqacPatternError, setIqacPatternError] = useState<string | null>(null);
@@ -638,7 +637,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       setTcplModelRecordExpCount(Number.isFinite(ec) && ec >= 1 ? Math.floor(ec) : 3);
       const mpe = Number((raw.recordMarksForCo5 as any).maxPerExp);
       setTcplModelRecordMaxPerExp(Number.isFinite(mpe) && mpe > 0 ? mpe : 10);
-      setTcplModelRecordLocked(true); // Always lock by default when loading from saved state
     }
 
     if (raw.theorySheet && typeof raw.theorySheet === 'object') {
@@ -2346,23 +2344,21 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
         {isTcplLike && !tcplReviewIsCo5 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '10px 16px', background: '#fef3c7', border: '1px solid #d97706', borderRadius: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1, minWidth: '300px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, cursor: tcplModelRecordLocked ? 'not-allowed' : 'pointer', opacity: tcplModelRecordLocked ? 0.8 : 1 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
-                  disabled={tcplModelRecordLocked}
                   checked={tcplModelRecordEnabled}
                   onChange={(e) => setTcplModelRecordEnabled(e.target.checked)}
                 />
                 Enable Record Marks for CO5 (Model Lab)
               </label>
               {tcplModelRecordEnabled && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: tcplModelRecordLocked ? 0.7 : 1 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
                   No. of Experiments:
                   <select
-                    disabled={tcplModelRecordLocked}
                     value={tcplModelRecordExpCount}
                     onChange={(e) => setTcplModelRecordExpCount(Number(e.target.value))}
-                    style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706', cursor: tcplModelRecordLocked ? 'not-allowed' : 'default' }}
+                    style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706' }}
                   >
                     {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
                       <option key={n} value={n}>{n}</option>
@@ -2371,11 +2367,10 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                 </label>
               )}
               {tcplModelRecordEnabled && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: tcplModelRecordLocked ? 0.7 : 1 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
                   Max mark / experiment:
                   <input
                     type="number"
-                    disabled={tcplModelRecordLocked}
                     min={1}
                     step={1}
                     value={tcplModelRecordMaxPerExp}
@@ -2383,7 +2378,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                       const v = Number(e.target.value);
                       if (Number.isFinite(v) && v >= 1) setTcplModelRecordMaxPerExp(v);
                     }}
-                    style={{ width: 70, fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706', cursor: tcplModelRecordLocked ? 'not-allowed' : 'default' }}
+                    style={{ width: 70, fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706' }}
                   />
                 </label>
               )}
@@ -2394,53 +2389,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                 <span style={{ fontSize: 12, color: '#92400e', fontWeight: 500 }}>
                   CO1–CO4: LAB/5 each (≤6) | CO5: CIA {`(LAB×4/30)`} + (avg/{tcplModelRecordMaxPerExp})×2
                 </span>
-              )}
-
-              {tcplModelRecordLocked ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isPublished) {
-                      setPublishedEditModalOpen(true);
-                    } else {
-                      setTcplModelRecordLocked(false);
-                    }
-                  }}
-                  className="obe-btn"
-                  style={{ 
-                    padding: '6px 14px', 
-                    fontSize: 12, 
-                    background: '#d97706', 
-                    color: '#fff', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 6,
-                    height: 'fit-content'
-                  }}
-                  title={isPublished ? 'Record configuration is locked because marks are published. Request edit to change.' : 'Unlock configuration'}
-                >
-                  <i className="fas fa-edit"></i>
-                  Edit
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setTcplModelRecordLocked(true)}
-                  className="obe-btn"
-                  style={{ 
-                    padding: '6px 14px', 
-                    fontSize: 12, 
-                    background: '#059669', 
-                    color: '#fff', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 6,
-                    height: 'fit-content'
-                  }}
-                >
-                  <i className="fas fa-save"></i>
-                  Save
-                </button>
               )}
             </div>
           </div>
