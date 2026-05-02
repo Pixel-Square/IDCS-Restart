@@ -89,8 +89,10 @@ interface ExamAssignment {
     name: string;
     code: string;
     cos: number[];
+    exams?: string[]; // Selected exam assignment codes to consider; empty/undefined = all
+    custom_vars?: Array<{ code: string; label?: string; expr: string }>; // Custom variable tokens
     formula: string;
-    conditions: Array<{ if: string; then: string }>;
+    conditions: Array<{ if: string; then: string; color?: string }>;
     else_formula: string;
   };
   mark_manager_enabled?: boolean;
@@ -255,12 +257,12 @@ function isCqiAssignment(exam: ExamAssignment | null | undefined): boolean {
   return code === 'CQI' || code.startsWith('CQI');
 }
 
-type CqiVar = { code: string; label: string; token: string };
+type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
 function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] {
   const vars: CqiVar[] = [];
-  const push = (code: string, label: string) => {
-    vars.push({ code, label, token: `[${code}]` });
+  const push = (code: string, label: string, kind: CqiVar['kind'] = 'base') => {
+    vars.push({ code, label, token: `[${code}]`, kind });
   };
 
   // CQI itself (entered/attained value in CQI entry page)
@@ -305,6 +307,15 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   }
 
   return vars;
+}
+
+function normalizeCustomVarCode(input: string) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  // Uppercase and allow letters/numbers/underscore/dash. Keep simple single-letter codes working.
+  const upper = raw.toUpperCase();
+  const cleaned = upper.replace(/[^A-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  return cleaned;
 }
 
 export default function QpPatternEditorPage() {
@@ -763,8 +774,18 @@ export default function QpPatternEditorPage() {
   const cqiVariables = React.useMemo(() => {
     const maxCo = Number(selectedClassType?.default_co_count ?? 5) || 5;
     const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
-    return generateCqiVariables(baseExams, maxCo);
-  }, [visibleExamAssignments, selectedClassType]);
+    const baseVars = generateCqiVariables(baseExams, maxCo);
+    const custom = (selectedExamAssignmentItem?.exam?.cqi?.custom_vars || [])
+      .filter((v) => v && typeof v === 'object')
+      .map((v: any) => {
+        const code = normalizeCustomVarCode(v.code);
+        if (!code) return null;
+        const label = String(v.label || '').trim() || code;
+        return { code, token: `[${code}]`, label: `Custom variable — ${label}`, kind: 'custom' as const };
+      })
+      .filter(Boolean) as CqiVar[];
+    return [...custom, ...baseVars];
+  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars]);
 
   const updateCqi = (updater: (prev: NonNullable<ExamAssignment['cqi']>) => NonNullable<ExamAssignment['cqi']>) => {
     if (!selectedExamAssignmentItem || !selectedIsCqi) return;
@@ -932,7 +953,7 @@ export default function QpPatternEditorPage() {
   };
 
   const validateAllCqiBeforeSave = (): string | null => {
-    const allowedTokens = new Set((cqiVariables || []).map((v) => v.token));
+    const baseAllowedTokens = new Set((cqiVariables || []).filter((v) => v.kind !== 'custom').map((v) => v.token));
     const targetQpType = String(selectedQpType || '').trim();
     const cqis = (localExamAssignments || []).filter((e) => isCqiAssignment(e) && String(e.qp_type || '').trim() === targetQpType);
     for (const exam of cqis) {
@@ -941,18 +962,45 @@ export default function QpPatternEditorPage() {
       const base = exam.cqi;
       if (!base) continue;
 
-      const errFormula = validateExpression(base.formula || '', {
-        label: `${title} · Formula`,
-        allowedTokens,
-      });
-      if (errFormula) return errFormula;
+      // Custom variables
+      const customList = Array.isArray(base.custom_vars) ? base.custom_vars : [];
+      const seenCodes = new Set<string>();
+      // For IF/THEN/ELSE we allow base tokens + all custom tokens.
+      const allCustomTokens: string[] = [];
+      for (let i = 0; i < customList.length; i++) {
+        const cv = customList[i] as any;
+        const code = normalizeCustomVarCode(cv?.code);
+        if (!code) continue;
+        allCustomTokens.push(`[${code}]`);
+      }
+      const allowedTokens = new Set<string>([...Array.from(baseAllowedTokens), ...allCustomTokens]);
+
+      // Validate each custom var; allow referencing previous custom vars only.
+      for (let i = 0; i < customList.length; i++) {
+        const cv = customList[i] as any;
+        const code = normalizeCustomVarCode(cv?.code);
+        const label = String(cv?.label || '').trim();
+        const expr = String(cv?.expr || '').trim();
+        if (!code && !label && !expr) continue;
+        if (!code) return `${title} · Custom variable ${i + 1}: token code is required`;
+        if (seenCodes.has(code)) return `${title} · Custom variable ${i + 1}: duplicate token code [${code}]`;
+        if (baseAllowedTokens.has(`[${code}]`)) return `${title} · Custom variable ${i + 1}: token code [${code}] conflicts with an existing token`;
+        seenCodes.add(code);
+        if (!expr) return `${title} · Custom variable ${i + 1} ([${code}]): expression is required`;
+        const prevCustomTokens = Array.from(seenCodes).filter((c) => c !== code).map((c) => `[${c}]`);
+        const allowedForExpr = new Set<string>([...Array.from(baseAllowedTokens), ...prevCustomTokens]);
+        const errExpr = validateExpression(expr, {
+          label: `${title} · Custom variable ${i + 1} ([${code}])`,
+          allowedTokens: allowedForExpr,
+        });
+        if (errExpr) return errExpr;
+      }
 
       const conds = Array.isArray(base.conditions) ? base.conditions : [];
       for (let i = 0; i < conds.length; i++) {
         const cond = conds[i];
         const errIf = validateExpression(cond?.if || '', {
           label: `${title} · Condition ${i + 1} (IF)`,
-          requireComparator: true,
           allowedTokens,
         });
         if (errIf) return errIf;
@@ -2145,35 +2193,181 @@ export default function QpPatternEditorPage() {
                         </div>
                       </div>
 
+                      <div className="mt-4">
+                        <div className="text-xs text-gray-500 mb-2">Exam Assignments Considered</div>
+                        <div className="text-[11px] text-gray-400 mb-2">
+                          If none selected, all exam assignments are considered.
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {(() => {
+                            const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
+                            const allCodes = baseExams
+                              .map((e) => normalizeTypeCode(e.exam_display_name || e.exam || ''))
+                              .filter(Boolean);
+                            const rawSelected = selectedExamAssignmentItem.exam.cqi?.exams || [];
+                            const selectedSet = new Set(
+                              (Array.isArray(rawSelected) && rawSelected.length > 0 ? rawSelected : allCodes)
+                                .map((x) => normalizeTypeCode(String(x || '')))
+                                .filter(Boolean)
+                            );
+                            return baseExams.map((ex) => {
+                              const code = normalizeTypeCode(ex.exam_display_name || ex.exam || '');
+                              const label = String(ex.exam_display_name || ex.exam || code);
+                              const checked = code ? selectedSet.has(code) : false;
+                              return (
+                                <label key={code || label} className="flex items-center gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={!isEditing || !code}
+                                    onChange={(e) => {
+                                      if (!code) return;
+                                      updateCqi((prev) => {
+                                        const nextAll = allCodes;
+                                        const init = new Set(
+                                          (Array.isArray(prev.exams) && prev.exams.length > 0 ? prev.exams : nextAll)
+                                            .map((x) => normalizeTypeCode(String(x || '')))
+                                            .filter(Boolean)
+                                        );
+                                        if (e.target.checked) init.add(code);
+                                        else init.delete(code);
+                                        return { ...prev, exams: Array.from(init).sort((a, b) => a.localeCompare(b)) };
+                                      });
+                                    }}
+                                    className="w-4 h-4"
+                                  />
+                                  <span className="text-gray-700">{label}</span>
+                                </label>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+
                       <div className="mt-5 border-t pt-4">
-                        <div className="text-sm font-semibold text-gray-700 mb-1">Formula Editor</div>
-                        <div className="text-xs text-gray-400 mb-2">Use variable tokens like [SSA1-CO1-RAW] with math operators</div>
+                        <div className="text-sm font-semibold text-gray-700 mb-1">Custom Variable (Token) Creator</div>
+                        <div className="text-xs text-gray-400 mb-2">Create reusable tokens like C = [COX-SSA_1-OBT] + [FORMATIVE_1-OBT]. Use them in IF/THEN/ELSE.</div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                           <div className="md:col-span-2">
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs text-gray-500">CQI Formula</label>
+                            <div className="flex items-center justify-between mb-2">
+                              <label className="text-xs text-gray-500">Custom Variables</label>
                               {isEditing && (
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    openTokenPicker((token) =>
-                                      updateCqi((prev) => ({ ...prev, formula: appendToken(prev.formula || '', token) }))
-                                    )
+                                    updateCqi((prev) => ({
+                                      ...prev,
+                                      custom_vars: [...(prev.custom_vars || []), { code: '', label: '', expr: '' }],
+                                    }))
                                   }
                                   className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
                                 >
-                                  + Token
+                                  + Add Custom Variable
                                 </button>
                               )}
                             </div>
-                            <textarea
-                              value={selectedExamAssignmentItem.exam.cqi?.formula || ''}
-                              onChange={(e) => updateCqi((prev) => ({ ...prev, formula: e.target.value }))}
-                              placeholder="Example: ([SSA1-TOTAL] + [CO1-TOTAL-WEIGHT]) / 2"
-                              className="w-full min-h-[90px] px-3 py-2 border rounded-lg text-sm font-mono"
-                              disabled={!isEditing}
-                            />
+
+                            <div className="space-y-2">
+                              {(selectedExamAssignmentItem.exam.cqi?.custom_vars || []).length === 0 ? (
+                                <div className="text-xs text-gray-400">No custom variables created</div>
+                              ) : (
+                                (selectedExamAssignmentItem.exam.cqi?.custom_vars || []).map((cv, idx) => (
+                                  <div key={idx} className="border rounded-lg p-2 bg-gray-50">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
+                                      <div>
+                                        <div className="flex items-center justify-between">
+                                          <label className="text-[11px] text-gray-500">Token Code</label>
+                                          {isEditing && (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                updateCqi((prev) => {
+                                                  const next = [...(prev.custom_vars || [])];
+                                                  next.splice(idx, 1);
+                                                  return { ...prev, custom_vars: next };
+                                                })
+                                              }
+                                              className="text-[11px] text-red-600 hover:underline"
+                                            >
+                                              Remove
+                                            </button>
+                                          )}
+                                        </div>
+                                        <input
+                                          value={cv?.code || ''}
+                                          disabled={!isEditing}
+                                          onChange={(e) =>
+                                            updateCqi((prev) => {
+                                              const next = [...(prev.custom_vars || [])];
+                                              next[idx] = { ...(next[idx] as any), code: normalizeCustomVarCode(e.target.value) };
+                                              return { ...prev, custom_vars: next };
+                                            })
+                                          }
+                                          placeholder="C"
+                                          className="w-full px-2 py-2 border rounded text-sm font-mono"
+                                        />
+                                        <div className="text-[10px] text-gray-400 mt-1">Will be used as <code className="font-mono">[{normalizeCustomVarCode(cv?.code || '') || 'CODE'}]</code></div>
+                                      </div>
+
+                                      <div>
+                                        <label className="text-[11px] text-gray-500">Label (optional)</label>
+                                        <input
+                                          value={cv?.label || ''}
+                                          disabled={!isEditing}
+                                          onChange={(e) =>
+                                            updateCqi((prev) => {
+                                              const next = [...(prev.custom_vars || [])];
+                                              next[idx] = { ...(next[idx] as any), label: e.target.value };
+                                              return { ...prev, custom_vars: next };
+                                            })
+                                          }
+                                          placeholder="Custom variable"
+                                          className="w-full px-2 py-2 border rounded text-sm"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <div className="flex items-center justify-between">
+                                          <label className="text-[11px] text-gray-500">Expression</label>
+                                          {isEditing && (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                openTokenPicker((token) =>
+                                                  updateCqi((prev) => {
+                                                    const next = [...(prev.custom_vars || [])];
+                                                    const prevExpr = String((next[idx] as any)?.expr || '');
+                                                    next[idx] = { ...(next[idx] as any), expr: appendToken(prevExpr, token) };
+                                                    return { ...prev, custom_vars: next };
+                                                  })
+                                                )
+                                              }
+                                              className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                            >
+                                              + Token
+                                            </button>
+                                          )}
+                                        </div>
+                                        <input
+                                          value={cv?.expr || ''}
+                                          disabled={!isEditing}
+                                          onChange={(e) =>
+                                            updateCqi((prev) => {
+                                              const next = [...(prev.custom_vars || [])];
+                                              next[idx] = { ...(next[idx] as any), expr: e.target.value };
+                                              return { ...prev, custom_vars: next };
+                                            })
+                                          }
+                                          placeholder="Example: ([COX-SSA_1-OBT] / 10) * 1.5"
+                                          className="w-full px-2 py-2 border rounded text-sm font-mono"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
                           </div>
                           <div>
                             <label className="text-xs text-gray-500">Variable Tokens</label>
@@ -2187,13 +2381,13 @@ export default function QpPatternEditorPage() {
                                       key={v.code}
                                       type="button"
                                       disabled={!isEditing}
-                                      onClick={() => updateCqi((prev) => ({ ...prev, formula: appendToken(prev.formula || '', v.token) }))}
-                                      className={`w-full text-left flex items-center justify-between gap-2 rounded px-1 py-0.5 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed ${tokenMeta(v.code).rowClass}`}
-                                      title={isEditing ? 'Click to insert into formula' : ''}
+                                      onClick={() => { /* tokens inserted via +Token buttons */ }}
+                                      className={`w-full text-left flex items-center justify-between gap-2 rounded px-1 py-0.5 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed ${v.kind === 'custom' ? 'bg-indigo-50' : tokenMeta(v.code).rowClass}`}
+                                      title={isEditing ? 'Use + Token buttons to insert' : ''}
                                     >
                                       <div className="flex items-center gap-2 min-w-0">
-                                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${tokenMeta(v.code).badgeClass}`}>{tokenMeta(v.code).badge}</span>
-                                        <code className={`text-[11px] ${tokenMeta(v.code).tokenClass}`}>{v.token}</code>
+                                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : tokenMeta(v.code).badgeClass}`}>{v.kind === 'custom' ? 'CUSTOM' : tokenMeta(v.code).badge}</span>
+                                        <code className={`text-[11px] ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : tokenMeta(v.code).tokenClass}`}>{v.token}</code>
                                       </div>
                                       <span className="text-[11px] text-gray-400 truncate">{v.label}</span>
                                     </button>
@@ -2216,7 +2410,7 @@ export default function QpPatternEditorPage() {
                           </div>
                           {isEditing && (
                             <button
-                              onClick={() => updateCqi((prev) => ({ ...prev, conditions: [...(prev.conditions || []), { if: '', then: '' }] }))}
+                              onClick={() => updateCqi((prev) => ({ ...prev, conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2' }] }))}
                               className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-1"
                             >
                               <Plus className="w-3.5 h-3.5" /> Add Condition
@@ -2227,7 +2421,7 @@ export default function QpPatternEditorPage() {
                         <div className="space-y-3">
                           {(selectedExamAssignmentItem.exam.cqi?.conditions || []).map((cond, idx) => (
                             <div key={idx} className="border rounded-lg p-3 bg-gray-50">
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                 <div>
                                   <div className="flex items-center justify-between">
                                     <label className="text-xs text-gray-500">Condition (IF)</label>
@@ -2297,6 +2491,38 @@ export default function QpPatternEditorPage() {
                                     placeholder="Example: [CO1-TOTAL-WEIGHT] + 10"
                                     className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                                   />
+                                </div>
+                                <div>
+                                  <label className="text-xs text-gray-500">Cell Color</label>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="color"
+                                      value={String((cond as any).color || '#FEE2E2')}
+                                      disabled={!isEditing}
+                                      onChange={(e) =>
+                                        updateCqi((prev) => {
+                                          const next = [...(prev.conditions || [])];
+                                          next[idx] = { ...next[idx], color: e.target.value };
+                                          return { ...prev, conditions: next };
+                                        })
+                                      }
+                                      className="h-9 w-12 p-0 border rounded bg-white"
+                                      title="Pick background color for matched cells"
+                                    />
+                                    <input
+                                      value={String((cond as any).color || '')}
+                                      disabled={!isEditing}
+                                      onChange={(e) =>
+                                        updateCqi((prev) => {
+                                          const next = [...(prev.conditions || [])];
+                                          next[idx] = { ...next[idx], color: e.target.value };
+                                          return { ...prev, conditions: next };
+                                        })
+                                      }
+                                      placeholder="#FEE2E2"
+                                      className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
+                                    />
+                                  </div>
                                 </div>
                               </div>
                               {isEditing && (
@@ -2608,11 +2834,11 @@ export default function QpPatternEditorPage() {
                         setTokenPickerOpen(false);
                         tokenInsertRef.current = null;
                       }}
-                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-3 ${tokenMeta(v.code).rowClass}`}
+                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-3 ${v.kind === 'custom' ? 'bg-indigo-50' : tokenMeta(v.code).rowClass}`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className={`text-[10px] px-2 py-0.5 rounded ${tokenMeta(v.code).badgeClass}`}>{tokenMeta(v.code).badge}</span>
-                        <code className={`text-sm font-mono ${tokenMeta(v.code).tokenClass}`}>{v.token}</code>
+                        <span className={`text-[10px] px-2 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : tokenMeta(v.code).badgeClass}`}>{v.kind === 'custom' ? 'CUSTOM' : tokenMeta(v.code).badge}</span>
+                        <code className={`text-sm font-mono ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : tokenMeta(v.code).tokenClass}`}>{v.token}</code>
                         <span className="text-sm text-gray-700 truncate">{v.label}</span>
                       </div>
                     </button>

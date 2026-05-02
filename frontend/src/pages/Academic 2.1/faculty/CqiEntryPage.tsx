@@ -17,8 +17,10 @@ type CqiAdminConfig = {
   name: string;
   code: string;
   cos: number[];
+  exams?: string[];
+  custom_vars?: Array<{ code: string; label?: string; expr: string }>;
   formula: string;
-  conditions: Array<{ if: string; then: string }>;
+  conditions: Array<{ if: string; then: string; color?: string }>;
   else_formula: string;
 };
 
@@ -55,6 +57,10 @@ type CqiDraftResponse = { draft: null | { co_numbers: number[]; threshold_percen
 type CqiPublishedResponse = { published: null | { co_numbers: number[]; entries: Record<string, Record<string, number | null>>; published_at?: string | null; published_by?: number | null; }; };
 
 const THRESHOLD_PERCENT = 58;
+
+function normalizeExamCode(input: string) {
+  return String(input || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
 
 function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)); }
 function round2(n: number) { return Math.round(n * 100) / 100; }
@@ -238,6 +244,19 @@ function evalCondition(condition: string, ctx: Record<string, number>, coNum?: n
   return evalFormula(condition, ctx, coNum) !== 0;
 }
 
+function extractTokenKeys(text: string): string[] {
+  const raw = String(text || '').match(/\[[^\]]+\]/g) || [];
+  const keys = raw.map((t) => t.slice(1, -1).trim().toUpperCase()).filter(Boolean);
+  return Array.from(new Set(keys));
+}
+
+function substituteTokens(text: string, ctx: Record<string, number>, coNum: number): string {
+  return String(text || '').replace(/\[([A-Z0-9_-]+)\]/gi, (_, key) => {
+    const v = resolveTokenValue(key, ctx, coNum);
+    return String(round2(Number(v) || 0));
+  });
+}
+
 function buildContext(
   coTotals: number[],
   coMaxByCo: number[],
@@ -246,6 +265,7 @@ function buildContext(
   exams: COSummary['exams'],
   examMarks?: Record<string, Record<string, number>>,
   weightedMarks?: Record<string, number>,
+  customVars?: Array<{ code: string; label?: string; expr: string }>,
 ): Record<string, number> {
   const ctx: Record<string, number> = {};
   const totalRaw = coTotals.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
@@ -318,6 +338,15 @@ function buildContext(
     // Legacy placeholders
     ctx[`${shortCode}-COX-DIFF`] = ctx[`${shortCode}-OBT`];
     ctx[`COX-${shortCode}-DIFF`] = ctx[`${shortCode}-OBT`];
+  }
+
+  // Custom variables: computed in order, can reference base tokens + previous custom vars.
+  const list = Array.isArray(customVars) ? customVars : [];
+  for (const cv of list) {
+    const code = String(cv?.code || '').trim().toUpperCase();
+    const expr = String(cv?.expr || '').trim();
+    if (!code || !expr) continue;
+    ctx[code] = round2(evalFormula(expr, ctx, coNum));
   }
   return ctx;
 }
@@ -405,6 +434,16 @@ function firstNotAttainedCondition(cfg: CqiAdminConfig | null): { if: string; th
   return null;
 }
 
+function firstMatchedCondition(cfg: CqiAdminConfig | null, ctxBase: Record<string, number>, coNum: number) {
+  if (!cfg) return null;
+  const list = Array.isArray(cfg.conditions) ? cfg.conditions : [];
+  for (const c of list) {
+    if (!String(c.if || '').trim()) continue;
+    if (evalCondition(String(c.if || ''), ctxBase, coNum)) return c;
+  }
+  return null;
+}
+
 function evaluateCqiImpact(
   cfg: CqiAdminConfig,
   ctxBase: Record<string, number>,
@@ -465,6 +504,7 @@ export default function CqiEntryPage() {
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [entries, setEntries] = useState<CqiEntries>({});
   const [dirty, setDirty] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
   const saveTimer = useRef<number | null>(null);
 
   const isPublished = Boolean(publishedLog?.published_at);
@@ -477,6 +517,16 @@ export default function CqiEntryPage() {
       || scriptHasAssignment(String(cqiConfig.else_formula || ''))
     )
   );
+
+  const consideredExams = useMemo(() => {
+    const exams = coSummary?.exams || [];
+    const selected = Array.isArray(cqiConfig?.exams)
+      ? (cqiConfig!.exams as any[]).map((x) => normalizeExamCode(String(x || ''))).filter(Boolean)
+      : [];
+    if (selected.length === 0) return exams;
+    const sel = new Set(selected);
+    return exams.filter((e) => sel.has(normalizeExamCode(e.short_name || e.name || '')));
+  }, [coSummary?.exams, cqiConfig?.exams]);
 
   const allCoNumbers = useMemo(() => {
     const n = coSummary?.co_count ?? 0;
@@ -495,7 +545,7 @@ export default function CqiEntryPage() {
   const coMaxByCo = useMemo(() => {
     const n = coSummary?.co_count ?? 0;
     const out = Array.from({ length: n }, () => 0);
-    for (const ex of coSummary?.exams || []) {
+    for (const ex of consideredExams || []) {
       const covered = Array.isArray(ex.covered_cos) ? ex.covered_cos : [];
       for (const coNum of covered) {
         if (!coNum || coNum < 1 || coNum > n) continue;
@@ -512,7 +562,7 @@ export default function CqiEntryPage() {
       }
     }
     return out.map((v) => round2(v));
-  }, [coSummary]);
+  }, [coSummary?.co_count, consideredExams]);
 
   const loadAll = async () => {
     if (!courseId) return;
@@ -588,13 +638,29 @@ export default function CqiEntryPage() {
 
   const rows = useMemo(() => {
     const students = coSummary?.students || [];
-    const exams = coSummary?.exams || [];
+    const exams = consideredExams || [];
+    const hasExamFilter = Array.isArray(cqiConfig?.exams) && (cqiConfig!.exams || []).length > 0;
     return students.map((s, idx) => {
       const studentId = String(s.student_id || s.reg_no);
       const totals = s.co_totals || [];
+      const co_count = coSummary?.co_count ?? totals.length;
+
+      // If admin selected specific exams for CQI, recompute per-CO totals from exam_marks for display + evaluation.
+      let evalTotals = totals;
+      if (hasExamFilter && s.exam_marks && exams.length > 0) {
+        const next = Array.from({ length: co_count }, () => 0);
+        for (const ex of exams) {
+          const marks = s.exam_marks?.[ex.id] || {};
+          for (let co = 1; co <= co_count; co++) {
+            next[co - 1] += Number(marks[`co${co}`] ?? 0);
+          }
+        }
+        evalTotals = next.map((v) => round2(v));
+      }
+
       const perCo = displayCoNumbers.map((coNum) => ({
         coNum,
-        value: round2(Number(totals[coNum - 1] ?? 0)),
+        value: round2(Number(evalTotals[coNum - 1] ?? 0)),
         max: round2(Number(coMaxByCo[coNum - 1] ?? 0)),
       }));
       const beforeValue = round2(perCo.reduce((sum, c) => sum + c.value, 0));
@@ -608,15 +674,15 @@ export default function CqiEntryPage() {
         const input = entries?.[studentId]?.[`co${c.coNum}`] ?? null;
         if (input == null) continue;
         if (!hasCqiConfig || !cqiConfig) continue;
-        const ctxBase = buildContext(totals, coMaxByCo, 0, c.coNum, exams, s.exam_marks, s.weighted_marks);
+        const ctxBase = buildContext(evalTotals, coMaxByCo, 0, c.coNum, exams, s.exam_marks, s.weighted_marks, cqiConfig?.custom_vars);
         const impact = evaluateCqiImpact(cqiConfig, ctxBase, Number(input), c.coNum);
         if (Number.isFinite(impact.addRaw) && impact.addRaw > 0) { delta += impact.addRaw; afterValue += impact.addRaw; }
       }
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;
       const afterPct = beforeMax > 0 ? (afterValue / beforeMax) * 100 : 0;
-      return { idx, studentId, regNo: s.reg_no, name: s.name, perCo, beforeValue, beforePct, afterValue: round2(afterValue), afterPct, delta: round2(delta), coTotals: totals, examMarks: s.exam_marks, weightedMarks: s.weighted_marks };
+      return { idx, studentId, regNo: s.reg_no, name: s.name, perCo, beforeValue, beforePct, afterValue: round2(afterValue), afterPct, delta: round2(delta), coTotals: evalTotals, examMarks: s.exam_marks, weightedMarks: s.weighted_marks };
     });
-  }, [coSummary, displayCoNumbers, coMaxByCo, entries, cqiConfig, hasCqiConfig]);
+  }, [coSummary, consideredExams, displayCoNumbers, coMaxByCo, entries, cqiConfig, hasCqiConfig]);
 
   if (loading) return <div className="p-6 flex items-center justify-center min-h-[400px]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
   if (!coSummary) return <div className="p-6 text-center text-red-600">Failed to load CQI</div>;
@@ -651,6 +717,13 @@ export default function CqiEntryPage() {
           <button onClick={loadAll} className="flex items-center gap-2 px-3 py-2 border rounded-lg hover:bg-gray-50 text-sm">
             <RefreshCw className="w-4 h-4" /> Refresh
           </button>
+          <button
+            onClick={() => setDebugOpen((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${debugOpen ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+            title="Show formula + token values per cell"
+          >
+            Debug
+          </button>
           <button onClick={() => saveDraft()} disabled={tableBlocked || saving}
             className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${tableBlocked || saving ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}>
             <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Sync Draft'}
@@ -679,7 +752,7 @@ export default function CqiEntryPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 flex flex-col gap-0.5">
           <span className="font-semibold">Active CQI Formula (admin-defined)</span>
           <div>COs: <span className="font-medium">{displayCoNumbers.map((n) => `CO${n}`).join(', ')}</span></div>
-          <div>Exams considered: <span className="font-medium">{(coSummary.exams || []).map((e) => e.short_name || e.name).filter(Boolean).join(', ') || '—'}</span></div>
+          <div>Exams considered: <span className="font-medium">{(consideredExams || []).map((e) => e.short_name || e.name).filter(Boolean).join(', ') || '—'}</span></div>
           {(cqiConfig!.conditions || []).map((c, i) => (
             <div key={i}>IF&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{c.if}</code>&nbsp;THEN&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{c.then}</code></div>
           ))}
@@ -733,8 +806,13 @@ export default function CqiEntryPage() {
                       const input = current == null ? null : Number(current);
                       const hasInput = input != null && Number.isFinite(input);
 
-                      const ctxBase = buildContext(r.coTotals, coMaxByCo, 0, c.coNum, coSummary.exams, r.examMarks, r.weightedMarks);
+                      const ctxBase = buildContext(r.coTotals, coMaxByCo, 0, c.coNum, consideredExams, r.examMarks, r.weightedMarks, cqiConfig?.custom_vars);
                       const notAttainedBefore = hasCqiConfig && cqiConfig ? evaluateCqiImpact(cqiConfig, ctxBase, null, c.coNum).notAttainedBefore : false;
+
+                      const matchedCond = hasCqiConfig && cqiConfig && notAttainedBefore
+                        ? firstMatchedCondition(cqiConfig, ctxBase, c.coNum)
+                        : null;
+                      const matchedColor = String((matchedCond as any)?.color || '').trim();
 
                       let addRaw = 0;
                       let notAttainedAfter = notAttainedBefore;
@@ -745,9 +823,88 @@ export default function CqiEntryPage() {
                       }
 
                       const isCqiAttained = notAttainedBefore && hasInput && !notAttainedAfter;
-                      const bg = !hasCqiConfig ? 'bg-amber-50' : (!notAttainedBefore ? 'bg-green-50' : 'bg-red-50');
+                      const bg = !hasCqiConfig ? 'bg-amber-50' : (!notAttainedBefore ? 'bg-green-50' : (matchedColor ? '' : 'bg-red-50'));
+
+                      const debugBlock = (() => {
+                        if (!debugOpen || !hasCqiConfig || !cqiConfig) return null;
+                        const conds = Array.isArray(cqiConfig.conditions) ? cqiConfig.conditions : [];
+                        const condEvaluations = conds
+                          .filter((x) => String(x.if || '').trim())
+                          .map((x, i) => {
+                            const ifRaw = String(x.if || '');
+                            const ifSub = substituteTokens(ifRaw, ctxBase, c.coNum);
+                            const ok = evalCondition(ifRaw, ctxBase, c.coNum);
+                            return { i, ifRaw, ifSub, ok, thenRaw: String(x.then || '') };
+                          });
+                        const matched = condEvaluations.find((x) => x.ok) || null;
+                        const thenScript = matched ? matched.thenRaw : '';
+                        const elseScript = String(cqiConfig.else_formula || '');
+
+                        const tokenKeys = Array.from(new Set([
+                          ...condEvaluations.flatMap((x) => extractTokenKeys(x.ifRaw)),
+                          ...extractTokenKeys(thenScript),
+                          ...extractTokenKeys(elseScript),
+                        ])).slice(0, 30);
+
+                        const tokenLines = tokenKeys
+                          .map((k) => ({ k, v: round2(resolveTokenValue(k, ctxBase, c.coNum)) }))
+                          .map(({ k, v }) => `${k}=${Number.isFinite(v) ? v : 0}`)
+                          .join('  ');
+
+                        const formatScript = (script: string) => {
+                          const lines = String(script || '').split(/\n|;/g).map((s) => s.trim()).filter(Boolean);
+                          return lines.slice(0, 6).map((ln) => {
+                            const eq = findAssignmentIndex(ln);
+                            if (eq < 0) return { raw: ln, sub: substituteTokens(ln, ctxBase, c.coNum) };
+                            const lhs = ln.slice(0, eq).trim();
+                            const rhs = ln.slice(eq + 1).trim();
+                            const rhsSub = substituteTokens(rhs, ctxBase, c.coNum);
+                            const rhsVal = round2(evalFormula(rhs, ctxBase, c.coNum));
+                            return { raw: ln, sub: `${lhs} = ${rhsSub}  (=${rhsVal})` };
+                          });
+                        };
+
+                        return (
+                          <div className="mt-2 text-[10px] text-gray-700 text-left">
+                            <div className="font-semibold mb-1">Debug</div>
+                            <div className="space-y-1">
+                              {condEvaluations.slice(0, 3).map((e) => (
+                                <div key={e.i} className={e.ok ? 'text-emerald-700' : 'text-gray-600'}>
+                                  <div>IF{e.i + 1}: <span className="font-mono">{e.ifRaw}</span></div>
+                                  <div className="font-mono">→ {e.ifSub} ({e.ok ? 'TRUE' : 'FALSE'})</div>
+                                </div>
+                              ))}
+                              {matched ? (
+                                <div>
+                                  <div className="font-semibold">THEN</div>
+                                  {formatScript(thenScript).map((l, i) => (
+                                    <div key={i} className="font-mono">{l.raw} → {l.sub}</div>
+                                  ))}
+                                </div>
+                              ) : (
+                                elseScript ? (
+                                  <div>
+                                    <div className="font-semibold">ELSE</div>
+                                    {formatScript(elseScript).map((l, i) => (
+                                      <div key={i} className="font-mono">{l.raw} → {l.sub}</div>
+                                    ))}
+                                  </div>
+                                ) : null
+                              )}
+                              {tokenLines ? (
+                                <div className="font-mono text-gray-500 break-words">{tokenLines}{tokenKeys.length >= 30 ? ' …' : ''}</div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })();
+
                       return (
-                        <td key={c.coNum} className={`px-3 py-2 text-center ${bg}`}>
+                        <td
+                          key={c.coNum}
+                          className={`px-3 py-2 text-center ${bg}`}
+                          style={matchedColor ? { backgroundColor: matchedColor } : undefined}
+                        >
                           <div className="text-sm text-gray-600 mb-1">{round2(c.value)} / {round2(c.max)}</div>
                           {!hasCqiConfig ? (
                             <div>
@@ -782,6 +939,7 @@ export default function CqiEntryPage() {
                                 placeholder="Enter CQI"
                                 className="w-[90px] px-2 py-1 text-sm text-center rounded border border-gray-300 bg-white disabled:bg-gray-100"
                               />
+                              {debugBlock}
                             </div>
                           )}
                         </td>

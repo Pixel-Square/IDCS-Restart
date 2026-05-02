@@ -3166,6 +3166,8 @@ def faculty_course_co_summary(request, ta_id):
                 'name': str(_raw.get('name', '') or ''),
                 'code': str(_raw.get('code', '') or ''),
                 'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
+                'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
+                'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
                 'formula': str(_raw.get('formula', '') or ''),
                 'conditions': _raw.get('conditions', []) if isinstance(_raw.get('conditions'), list) else [],
                 'else_formula': str(_raw.get('else_formula', '') or ''),
