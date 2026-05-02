@@ -144,7 +144,7 @@ function buildMainContent(
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text('Date :', W - 12, 14, { align: 'right' });
+  doc.text(`Date : ${formatDate(new Date())}`, W - 12, 14, { align: 'right' });
 
   // ── Faculty Details (compact: 2 per row) ──────────────────────────
   const applicantName = getApplicantName(form.applicant);
