@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
@@ -23,6 +23,7 @@ import DashboardPage from "./pages/dashboard/Dashboard";
 import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
+import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
 import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
 import ConditionsPage from './pages/settings/ConditionsPage';
 import UCGate from './components/UCGate';
@@ -30,6 +31,7 @@ import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
 import ElectiveImport from './pages/curriculum/ElectiveImport';
+import ElectivePollPage from './pages/curriculum/ElectivePollPage';
 import AcademicPage from './pages/AcademicPage';
 import QuestionImportPage from "./pages/tools/QuestionImportPage";
 import OBEPage from './pages/obe/OBEPage';
@@ -406,6 +408,10 @@ export default function App() {
                   path="/curriculum/elective-import"
                   element={<ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} element={<ElectiveImport />} />}
                 />
+                <Route
+                  path="/curriculum/elective-poll"
+                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.manage_elective_poll", "curriculum.choose_elective"]} requiredRoles={["IQAC"]} element={<ElectivePollPage user={user} />} />}
+                />
 
                 {/* OBE/marks/COAttainment routes removed */}
                 <Route path="/obe" element={<OBEPage />} />
@@ -509,6 +515,10 @@ export default function App() {
                 <Route
                   path="/iqac/obe-requests"
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<ObeRequestsPage />} />}
+                />
+                <Route
+                  path="/iqac/system-transitions"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<SystemTransitionsPage />} />}
                 />
                 {/* PBAS IQAC route removed */}
                 <Route

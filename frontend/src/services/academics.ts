@@ -52,3 +52,46 @@ export async function fetchDepartments(): Promise<DepartmentRow[]> {
   if (Array.isArray(data)) return data as DepartmentRow[]
   return []
 }
+export type AcademicYearRow = {
+  id: number;
+  name: string;
+  is_active: boolean;
+  parity: 'ODD' | 'EVEN';
+};
+
+export async function fetchAcademicYears(): Promise<AcademicYearRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/academic-years/`);
+  if (!res.ok) throw new Error('Failed to fetch academic years');
+  const data = await res.json();
+  const results = (data as any)?.results;
+  if (Array.isArray(results)) return results as AcademicYearRow[];
+  if (Array.isArray(data)) return data as AcademicYearRow[];
+  return [];
+}
+
+export async function shiftSemester(academicYearId: number): Promise<{ message: string; updated_count: number }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/academic-years/${academicYearId}/shift_semester/`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to shift semester');
+  }
+  return res.json();
+}
+
+export type TransitionLog = {
+  id: number;
+  academic_year: string;
+  parity: string;
+  performed_at: string;
+  performed_by: string;
+  updated_count: number;
+  details: string;
+};
+
+export async function fetchTransitionLogs(): Promise<TransitionLog[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/academic-years/transition_logs/`);
+  if (!res.ok) throw new Error('Failed to fetch transition logs');
+  return res.json();
+}

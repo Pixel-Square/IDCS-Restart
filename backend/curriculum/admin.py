@@ -11,6 +11,8 @@ from .models import (
     DepartmentGroupMapping,
     SPECIAL_ASSESSMENT_CHOICES,
     QuestionPaperType,
+    ElectivePoll,
+    ElectivePollSubject,
 )
 from django.urls import path
 from django.template.response import TemplateResponse
@@ -95,21 +97,23 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
     list_display = ('regulation', 'semester', 'batch', 'course_code', 'course_name', 'category', 'class_type', 'enabled_assessments_display', 'for_all_departments', 'editable')
     list_filter = (RegulationFilter, 'semester', 'batch', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
+    list_select_related = ('semester', 'batch')
     filter_horizontal = ('departments',)
     actions = ['propagate_to_departments']
+
+    _active_year_cache = None
+
+    def get_active_year(self):
+        if CurriculumMasterAdmin._active_year_cache is None:
+            CurriculumMasterAdmin._active_year_cache = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
+        return CurriculumMasterAdmin._active_year_cache
 
     def enabled_assessments_display(self, obj):
         if str(getattr(obj, 'class_type', '')).upper() != 'SPECIAL':
             return ''
 
-        # Prefer the runtime SPECIAL selection for the currently active academic year.
-        # This is what the faculty UI saves (global per master+year), whereas
-        # CurriculumMaster.enabled_assessments is a default template.
+        active_year = self.get_active_year()
         vals = None
-        try:
-            active_year = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
-        except Exception:
-            active_year = None
 
         if active_year is not None:
             try:
@@ -131,7 +135,6 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
 
         if not vals:
             return '(none)'
-        # show friendly labels in stable order
         order = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
         label_map = {k: v for k, v in SPECIAL_ASSESSMENT_CHOICES}
         display = [label_map.get(k, k) for k in order if k in set([str(x).lower() for x in vals])]
@@ -300,19 +303,6 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
 
 
 
-class RegulationFilter(SimpleListFilter):
-    title = 'regulation'
-    parameter_name = 'regulation'
-
-    def lookups(self, request, model_admin):
-        regs = Regulation.objects.order_by('code')
-        return [(r.code, (r.name and f"{r.code} - {r.name}" or r.code)) for r in regs]
-
-    def queryset(self, request, queryset):
-        v = self.value()
-        if v:
-            return queryset.filter(regulation__iexact=v)
-        return queryset
 
 
 class CurriculumDepartmentAdminForm(forms.ModelForm):
@@ -339,6 +329,8 @@ class CurriculumDepartmentAdmin(admin.ModelAdmin):
     list_display = ('department', 'regulation', 'semester', 'batch', 'course_code', 'mnemonic', 'course_name', 'question_paper_type', 'is_elective', 'is_dept_core', 'editable', 'overridden')
     list_filter = ('department', RegulationFilter, 'semester', 'batch', 'question_paper_type', 'is_elective', 'is_dept_core', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name', 'mnemonic')
+    list_select_related = ('department', 'semester', 'batch')
+    raw_id_fields = ('department', 'batch', 'master')
 
     def get_readonly_fields(self, request, obj=None):
         # If this department row is linked to a master which is not editable,
@@ -375,6 +367,8 @@ class ElectiveSubjectAdmin(admin.ModelAdmin):
     list_display = ('course_code', 'course_name', 'department', 'department_group', 'batch', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
     list_filter = ('department', 'department_group', 'batch', RegulationFilter, 'semester', 'is_elective', 'approval_status')
     search_fields = ('course_code', 'course_name')
+    list_select_related = ('department', 'department_group', 'batch', 'parent', 'semester')
+    raw_id_fields = ('department', 'batch', 'parent')
 
 
 @admin.register(ElectiveChoice)
@@ -382,6 +376,9 @@ class ElectiveChoiceAdmin(admin.ModelAdmin):
     list_display = ('student', 'elective_subject', 'academic_year', 'is_active')
     list_filter = ('academic_year', 'is_active')
     search_fields = ('student__user__username', 'student__reg_no', 'elective_subject__course_code', 'elective_subject__course_name')
+    list_select_related = ('student__user', 'elective_subject', 'academic_year')
+    raw_id_fields = ('student', 'elective_subject')
+    autocomplete_fields = ('elective_subject',)
 
 
 @admin.register(Regulation)
@@ -412,3 +409,20 @@ class QuestionPaperTypeAdmin(admin.ModelAdmin):
     list_display = ('code', 'label', 'is_active', 'sort_order')
     list_editable = ('label', 'is_active', 'sort_order')
     ordering = ('sort_order', 'code')
+
+
+class ElectivePollSubjectInline(admin.TabularInline):
+    model = ElectivePollSubject
+    extra = 0
+    fields = ('elective_subject', 'seats', 'staff')
+    raw_id_fields = ('elective_subject', 'staff')
+    autocomplete_fields = ('elective_subject',)
+
+
+@admin.register(ElectivePoll)
+class ElectivePollAdmin(admin.ModelAdmin):
+    list_display = ('parent_elective_name', 'batch_year', 'department_group', 'is_active', 'created_at')
+    list_filter = ('is_active', 'batch_year')
+    search_fields = ('parent_elective_name',)
+    list_select_related = ('batch_year', 'department_group')
+    inlines = [ElectivePollSubjectInline]
