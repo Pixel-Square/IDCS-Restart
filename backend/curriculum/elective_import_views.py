@@ -112,6 +112,121 @@ class ElectiveChoiceTemplateDownloadView(APIView):
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class ElectivePollSubjectTemplateDownloadView(APIView):
+    """Download an Excel template for importing elective poll subjects."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+
+        if not ('curriculum.manage_elective_poll' in perms or user.is_staff or user.is_superuser):
+            return Response({'error': 'You do not have permission to download elective poll template'},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        if not EXCEL_SUPPORT:
+            return Response({'error': 'Excel support not available. Please install openpyxl.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from academics.models import Department, StaffProfile
+            from io import BytesIO
+
+            departments = Department.objects.all().order_by('short_name', 'code', 'name')
+            staff_members = StaffProfile.objects.select_related('user').order_by('staff_id', 'id')
+
+            dept_values = []
+            for dept in departments:
+                name_label = dept.name or dept.short_name or dept.code or str(dept.id)
+                suffix = dept.short_name or dept.code
+                dept_values.append(f"{name_label} ({suffix})" if suffix else name_label)
+
+            staff_values = []
+            for staff in staff_members:
+                user_obj = getattr(staff, 'user', None)
+                full_name = ''
+                if user_obj:
+                    full_name = (getattr(user_obj, 'get_full_name', lambda: '')() or '').strip()
+                staff_label = full_name or getattr(user_obj, 'username', '') or staff.staff_id or str(staff.id)
+                suffix = f" ({staff.staff_id})" if staff.staff_id else ''
+                staff_values.append(f"{staff_label}{suffix}")
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'Elective Subjects'
+
+            headers = ['code', 'name', 'seats', 'staff', 'dept', 'block_rule']
+            ws.append(headers)
+
+            sample_dept = dept_values[0] if dept_values else ''
+            sample_staff = staff_values[0] if staff_values else ''
+            ws.append(['CS301', 'Advanced Machine Learning', '60', sample_staff, sample_dept, 'Block providing dept'])
+
+            lists_ws = wb.create_sheet('Lists')
+            lists_ws.sheet_state = 'hidden'
+
+            for idx, value in enumerate(staff_values, start=1):
+                lists_ws.cell(row=idx, column=1, value=value)
+
+            for idx, value in enumerate(dept_values, start=1):
+                lists_ws.cell(row=idx, column=2, value=value)
+
+            if staff_values:
+                staff_range = f"Lists!$A$1:$A${len(staff_values)}"
+                dv_staff = DataValidation(type="list", formula1=staff_range, allow_blank=True)
+                dv_staff.error = 'Please select a staff member from the dropdown'
+                dv_staff.errorTitle = 'Invalid Staff'
+                dv_staff.prompt = 'Select staff'
+                dv_staff.promptTitle = 'Staff'
+                ws.add_data_validation(dv_staff)
+                dv_staff.add('D2:D1000')
+
+            if dept_values:
+                dept_range = f"Lists!$B$1:$B${len(dept_values)}"
+                dv_dept = DataValidation(type="list", formula1=dept_range, allow_blank=False)
+                dv_dept.error = 'Please select a department from the dropdown'
+                dv_dept.errorTitle = 'Invalid Department'
+                dv_dept.prompt = 'Select department'
+                dv_dept.promptTitle = 'Department'
+                ws.add_data_validation(dv_dept)
+                dv_dept.add('E2:E1000')
+
+            block_values = ['Block providing dept', 'Block outside group']
+            for idx, value in enumerate(block_values, start=1):
+                lists_ws.cell(row=idx, column=3, value=value)
+
+            block_range = f"Lists!$C$1:$C${len(block_values)}"
+            dv_block = DataValidation(type="list", formula1=block_range, allow_blank=True)
+            dv_block.error = 'Please select a block rule from the dropdown'
+            dv_block.errorTitle = 'Invalid Block Rule'
+            dv_block.prompt = 'Select block rule'
+            dv_block.promptTitle = 'Block Rule'
+            ws.add_data_validation(dv_block)
+            dv_block.add('F2:F1000')
+
+            ws.column_dimensions['A'].width = 16
+            ws.column_dimensions['B'].width = 36
+            ws.column_dimensions['C'].width = 10
+            ws.column_dimensions['D'].width = 32
+            ws.column_dimensions['E'].width = 28
+            ws.column_dimensions['F'].width = 24
+
+            excel_file = BytesIO()
+            wb.save(excel_file)
+            excel_file.seek(0)
+
+            response = HttpResponse(
+                excel_file.read(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="elective_poll_subjects_template.xlsx"'
+            return response
+
+        except Exception as e:
+            return Response({'error': f'Failed to generate template: {str(e)}'},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class ElectiveChoiceBulkImportView(APIView):
     """Bulk import elective student mappings from CSV or Excel file."""
     parser_classes = (MultiPartParser, FormParser)

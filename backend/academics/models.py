@@ -1777,3 +1777,20 @@ class ExtStaffFormSettings(models.Model):
             {"field": "ifsc_code", "label": "IFSC Code", "type": "text"},
             {"field": "passbook_proof", "label": "Passbook Proof (Scanned Copy)", "type": "file"},
         ]
+
+
+class SystemTransitionLog(models.Model):
+    """Log of global semester shifts performed in the system."""
+    academic_year = models.ForeignKey('AcademicYear', on_delete=models.CASCADE, related_name='transition_logs')
+    performed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    performed_at = models.DateTimeField(auto_now_add=True)
+    updated_count = models.PositiveIntegerField(default=0)
+    details = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = 'System Transition Log'
+        verbose_name_plural = 'System Transition Logs'
+        ordering = ('-performed_at',)
+
+    def __str__(self):
+        return f"{self.academic_year.name} shift on {self.performed_at}"

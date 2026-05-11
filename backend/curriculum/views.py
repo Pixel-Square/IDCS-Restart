@@ -204,7 +204,20 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Restrict department rows based on user's profile and role.
         user = self.request.user
-        qs = CurriculumDepartment.objects.all().select_related('department', 'master')
+        qs = CurriculumDepartment.objects.all().select_related('department', 'master', 'semester')
+        
+        # Basic filtering
+        is_elective = self.request.query_params.get('is_elective')
+        if is_elective is not None:
+            qs = qs.filter(is_elective=is_elective.lower() in ['true', '1'])
+        
+        semester = self.request.query_params.get('semester')
+        if semester:
+            try:
+                qs = qs.filter(semester__number=int(semester))
+            except (ValueError, TypeError):
+                pass
+
         if not user or not user.is_authenticated:
             return qs.none()
 
@@ -688,3 +701,307 @@ class QuestionPaperTypeListView(APIView):
         qs = QuestionPaperType.objects.filter(is_active=True).order_by('sort_order', 'code')
         data = [{'id': q.id, 'code': q.code, 'label': q.label} for q in qs]
         return Response(data)
+
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from django.db import transaction
+from django.db.models import Q
+from .models import ElectivePoll, ElectivePollSubject, ElectiveChoice, DepartmentGroupMapping
+from .serializers import ElectivePollSerializer
+
+class ElectivePollView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        polls = ElectivePoll.objects.all().order_by('-created_at')
+        return Response(ElectivePollSerializer(polls, many=True).data)
+
+    def post(self, request):
+        serializer = ElectivePollSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ElectivePollDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self, pk):
+        try:
+            return ElectivePoll.objects.get(pk=pk)
+        except ElectivePoll.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        poll = self.get_object(pk)
+        if not poll:
+            return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(ElectivePollSerializer(poll).data)
+
+    def patch(self, request, pk):
+        poll = self.get_object(pk)
+        if not poll:
+            return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = ElectivePollSerializer(poll, data=request.data, partial=True, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        poll = self.get_object(pk)
+        if not poll:
+            return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        poll.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class ActiveStudentPollsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            student_profile = getattr(request.user, 'student_profile', None)
+            if not student_profile:
+                return Response({'detail': 'User is not a student'}, status=status.HTTP_403_FORBIDDEN)
+
+            section = student_profile.get_current_section()
+            if not section:
+                return Response([], status=status.HTTP_200_OK)
+
+            batch = section.batch
+            
+            home_dept = student_profile.home_department
+            if not home_dept and getattr(section, 'batch', None) and getattr(section.batch, 'course', None):
+                home_dept = section.batch.course.department
+
+            # Find applicable department groups
+            dept_groups = []
+            if home_dept:
+                dept_groups = list(DepartmentGroupMapping.objects.filter(
+                    department=home_dept, is_active=True
+                ).values_list('group_id', flat=True))
+
+            # Start with active polls
+            query = Q(is_active=True)
+            
+            # Match batch year if set
+            if batch and getattr(batch, 'batch_year_id', None):
+                query &= (Q(batch_year_id__isnull=True) | Q(batch_year_id=batch.batch_year_id))
+                
+            # Match department group if set
+            if dept_groups:
+                query &= (Q(department_group_id__isnull=True) | Q(department_group_id__in=dept_groups))
+            else:
+                # If student has no department group mapping, only show polls without group restrictions
+                query &= Q(department_group_id__isnull=True)
+
+            polls = ElectivePoll.objects.filter(query).distinct()
+            
+            # Annotate each poll with the student's existing choice (poll_subject id)
+            serialized = ElectivePollSerializer(polls, many=True).data
+            existing_choices = {
+                ec.elective_subject_id: ec
+                for ec in ElectiveChoice.objects.filter(
+                    student=student_profile,
+                    elective_subject__poll_associations__poll__in=polls
+                ).select_related('elective_subject').distinct()
+            }
+            choice_counts = {
+                row['elective_subject_id']: row['count']
+                for row in ElectiveChoice.objects.filter(
+                    elective_subject__poll_associations__poll__in=polls
+                ).values('elective_subject_id').annotate(count=Count('id'))
+            }
+            # Build a map from elective_subject_id -> poll_subject_id for quick lookup
+            elective_to_ps = {
+                ps.elective_subject_id: ps.id
+                for ps in ElectivePollSubject.objects.filter(poll__in=polls)
+            }
+            result = []
+            for poll_data in serialized:
+                poll_data = dict(poll_data)
+                
+                # Filter out poll_subjects that are blocked for the current student's department
+                if home_dept:
+                    all_subjects = poll_data.get('poll_subjects', [])
+                    filtered_subjects = [
+                        ps for ps in all_subjects 
+                        if home_dept.id not in (ps.get('blocked_departments') or [])
+                    ]
+                    poll_data['poll_subjects'] = filtered_subjects
+
+                chosen_ps_id = None
+                for ps in poll_data.get('poll_subjects', []):
+                    # We need the ES ID to check against existing choices
+                    # Check if it was provided in the serialized data or lookup if needed
+                    ps_id = ps['id']
+                    es_id = ps.get('elective_subject_id')
+                    if not es_id:
+                        es_id = ElectivePollSubject.objects.filter(id=ps_id).values_list('elective_subject_id', flat=True).first()
+
+                    if es_id:
+                        chosen_count = choice_counts.get(es_id, 0)
+                        seats_left = ps.get('seats')
+                        total_seats = None
+                        if seats_left is not None:
+                            try:
+                                total_seats = int(seats_left) + int(chosen_count)
+                            except Exception:
+                                total_seats = None
+                        ps['chosen_count'] = chosen_count
+                        ps['total_seats'] = total_seats
+
+                    if es_id and es_id in existing_choices:
+                        chosen_ps_id = ps_id
+                        ec = existing_choices.get(es_id)
+                        if ec:
+                            rank = ElectiveChoice.objects.filter(
+                                Q(elective_subject_id=es_id)
+                                & (Q(created_at__lt=ec.created_at) | Q(created_at=ec.created_at, id__lte=ec.id))
+                            ).count()
+                            ps['your_rank'] = rank
+                        break
+                poll_data['your_choice_poll_subject_id'] = chosen_ps_id
+                result.append(poll_data)
+
+            return Response(result)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class SubmitElectiveChoiceView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            student_profile = getattr(request.user, 'student_profile', None)
+            if not student_profile:
+                return Response({'detail': 'User is not a student'}, status=status.HTTP_403_FORBIDDEN)
+
+            poll = ElectivePoll.objects.get(id=pk, is_active=True)
+            poll_subject_id = request.data.get('poll_subject_id')
+            if not poll_subject_id:
+                return Response({'detail': 'poll_subject_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            with transaction.atomic():
+                # Lock student row to prevent concurrent double-submits from same user.
+                from academics.models import StudentProfile
+                StudentProfile.objects.select_for_update().get(pk=student_profile.pk)
+                poll_subject = ElectivePollSubject.objects.select_for_update().get(id=poll_subject_id, poll=poll)
+                
+                # Check if the student has already chosen an elective for this poll
+                existing_choice = ElectiveChoice.objects.filter(
+                    student=student_profile,
+                    elective_subject__poll_associations__poll=poll
+                ).first()
+                if existing_choice:
+                    return Response({'detail': 'You have already submitted a choice for this poll'}, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Check seats
+                if poll_subject.seats is not None:
+                    if poll_subject.seats <= 0:
+                        return Response({'detail': 'Seats full for this subject'}, status=status.HTTP_400_BAD_REQUEST)
+                    poll_subject.seats -= 1
+                    poll_subject.save()
+                
+                # Get the active academic year to associate with the choice
+                from academics.models import AcademicYear
+                current_year = AcademicYear.objects.filter(is_active=True).first()
+
+                ElectiveChoice.objects.create(
+                    student=student_profile,
+                    elective_subject=poll_subject.elective_subject,
+                    academic_year=current_year,
+                    created_by=request.user
+                )
+            
+            return Response({'detail': 'Choice submitted successfully'}, status=status.HTTP_201_CREATED)
+        except ElectivePoll.DoesNotExist:
+            return Response({'detail': 'Active poll not found'}, status=status.HTTP_404_NOT_FOUND)
+        except ElectivePollSubject.DoesNotExist:
+            return Response({'detail': 'Subject not found in this poll'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ElectivePollExportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            return Response({'detail': 'Excel export requires openpyxl.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        poll = ElectivePoll.objects.filter(pk=pk).first()
+        if not poll:
+            return Response({'detail': 'Poll not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        poll_subjects = ElectivePollSubject.objects.filter(poll=poll).select_related(
+            'elective_subject',
+            'elective_subject__department',
+            'staff',
+            'staff__user'
+        )
+        subject_staff = {ps.elective_subject_id: ps.staff for ps in poll_subjects}
+
+        choices = ElectiveChoice.objects.filter(
+            elective_subject__poll_associations__poll=poll
+        ).select_related(
+            'student__user',
+            'student__section',
+            'elective_subject',
+            'elective_subject__department',
+            'elective_subject__parent',
+            'academic_year',
+        ).order_by('elective_subject__course_code', 'student__reg_no')
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Elective Poll'
+
+        ws.append([
+            'Poll', 'Batch Year',
+            'Subject Code', 'Subject Name',
+            'Providing Dept', 'Staff',
+            'Student Reg No', 'Student Name', 'Student Username',
+            'Section', 'Academic Year'
+        ])
+
+        for choice in choices:
+            es = choice.elective_subject
+            staff = subject_staff.get(es.id)
+            staff_name = None
+            if staff and getattr(staff, 'user', None):
+                staff_name = staff.user.get_full_name() or staff.user.username
+            student = getattr(choice, 'student', None)
+            user = getattr(student, 'user', None)
+            student_name = None
+            if student:
+                student_name = getattr(student, 'name', None) or (user.get_full_name() if user else None) or (user.username if user else None)
+            dept = getattr(es, 'department', None)
+            dept_short = getattr(dept, 'short_name', None) if dept else None
+            if not dept_short and dept is not None:
+                dept_short = getattr(dept, 'code', None)
+            ws.append([
+                poll.parent_elective_name,
+                getattr(poll.batch_year, 'name', None),
+                getattr(es, 'course_code', None),
+                getattr(es, 'course_name', None),
+                dept_short,
+                staff_name,
+                getattr(student, 'reg_no', None),
+                student_name,
+                getattr(user, 'username', None),
+                getattr(getattr(student, 'section', None), 'name', None),
+                getattr(getattr(choice, 'academic_year', None), 'name', None),
+            ])
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"elective_poll_{poll.id}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        return response

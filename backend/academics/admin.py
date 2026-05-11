@@ -117,10 +117,10 @@ class StaffProfileForm(forms.ModelForm):
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'get_section_dept')
-    search_fields = ('reg_no', 'user__username', 'user__email')
-    # filter by the department through the section->semester->course relation
+    search_fields = ('reg_no', 'user__username', 'user__email', 'section__name')
     list_filter = ('section__batch__course__department', 'batch', 'home_department')
-    raw_id_fields = ('home_department',)
+    list_select_related = ('user', 'section__batch__course__department', 'home_department')
+    raw_id_fields = ('user', 'section', 'home_department')
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
 
     change_list_template = 'admin/academics/studentprofile/change_list.html'
@@ -678,6 +678,8 @@ class StaffProfileAdmin(admin.ModelAdmin):
     list_display = ('staff_id', 'internal_id', 'rfid_uid', 'get_full_name', 'current_department_display', 'designation', 'status')
     search_fields = ('staff_id', 'internal_id', 'rfid_uid', 'user__username', 'user__email', 'user__first_name', 'user__last_name')
     list_filter = ('department', 'designation')
+    list_select_related = ('user', 'department')
+    raw_id_fields = ('user', 'department')
     
     def get_queryset(self, request):
         """Optimize queryset with select_related for user and department."""
@@ -1039,6 +1041,55 @@ class AcademicYearAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     list_filter = ('parity', 'is_active')
     search_fields = ('name',)
+    actions = ['shift_semester_action']
+
+    @admin.action(description='Shift all sections to semesters for this year')
+    def shift_semester_action(self, request, queryset):
+        if queryset.count() != 1:
+            self.message_user(request, "Please select exactly one academic year to shift to.", messages.ERROR)
+            return
+
+        instance = queryset.first()
+        
+        # We manually trigger the logic here
+        from django.db import transaction
+        from .models import Section, Semester, AcademicYear
+        
+        updated_count = 0
+        with transaction.atomic():
+            AcademicYear.objects.all().update(is_active=False)
+            instance.is_active = True
+            instance.save(update_fields=['is_active'])
+
+            try:
+                acad_start = int(str(instance.name).split('-')[0])
+            except Exception:
+                self.message_user(request, f"Invalid year format in {instance.name}", messages.ERROR)
+                return
+
+            sections = Section.objects.all().select_related('batch')
+            for sec in sections:
+                try:
+                    start_year = getattr(sec.batch, 'start_year', None)
+                    if start_year is None:
+                        try:
+                            start_year = int(str(sec.batch.name).split('-')[0])
+                        except Exception:
+                            start_year = None
+                    if start_year is None: continue
+                    delta = acad_start - int(start_year)
+                    offset = 1 if (instance.parity or '').upper() == 'ODD' else 2
+                    sem_number = delta * 2 + offset
+                    if sem_number > 0:
+                        sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                        if sec.semester_id != sem_obj.id:
+                            sec.semester = sem_obj
+                            sec.save(update_fields=['semester'])
+                            updated_count += 1
+                except Exception:
+                    continue
+
+        self.message_user(request, f"Activated {instance.name}. Shifted {updated_count} sections.")
 
 
 @admin.register(Department)
@@ -1109,12 +1160,11 @@ class BatchYearAdmin(admin.ModelAdmin):
 
 @admin.register(TeachingAssignment)
 class TeachingAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'subject_display', 'section', 'academic_year', 'is_active')
-    search_fields = (
-        'staff__staff_id', 'staff__user__username', 'subject__code', 'subject__name', 'section__name'
-    )
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
-    raw_id_fields = ('staff', 'curriculum_row', 'section', 'academic_year')
+    list_display = ('staff', 'subject_display', 'elective_subject', 'section', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department', 'staff__department')
+    search_fields = ('staff__user__username', 'staff__staff_id', 'subject__code', 'subject__name', 'elective_subject__course_code', 'elective_subject__course_name', 'section__name')
+    list_select_related = ('staff__user', 'subject', 'elective_subject', 'section__batch__course__department', 'academic_year')
+    raw_id_fields = ('staff', 'subject', 'elective_subject', 'section', 'curriculum_row', 'academic_year')
 
     class TeachingAssignmentForm(forms.ModelForm):
         class Meta:

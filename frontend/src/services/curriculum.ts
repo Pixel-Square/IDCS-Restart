@@ -109,6 +109,126 @@ export async function fetchMasters(): Promise<Master[]> {
   return res.json();
 }
 
+export type DepartmentGroup = {
+  id: number;
+  name: string;
+  department_ids?: number[];
+};
+
+export async function deleteCurriculumDepartment(id: number) {
+  const res = await fetchWithAuth(`/api/curriculum/department/${id}/`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete department curriculum');
+}
+
+export type ElectivePollSubject = {
+  id: number;
+  elective_subject_id: number;
+  staff_id?: number | null;
+  course_code?: string;
+  course_name?: string;
+  department_name?: string;
+  department_code?: string;
+  department_id?: number;
+  seats?: number | null;
+  staff_name?: string | null;
+};
+
+export type ElectivePoll = {
+  id: number;
+  parent_elective_name: string;
+  batch_year?: number | null;
+  batch_year_name?: string | null;
+  department_group?: number | null;
+  department_group_name?: string | null;
+  is_active: boolean;
+  poll_subjects: ElectivePollSubject[];
+  created_at: string;
+};
+
+export async function fetchElectivePolls(): Promise<ElectivePoll[]> {
+  const res = await fetchWithAuth('/api/curriculum/elective-polls/');
+  if (!res.ok) throw new Error('Failed to fetch elective polls');
+  return res.json();
+}
+
+export async function fetchActiveStudentPolls(): Promise<ElectivePoll[]> {
+  const res = await fetchWithAuth('/api/curriculum/elective-polls/active-for-student/');
+  if (!res.ok) throw new Error('Failed to fetch active student polls');
+  return res.json();
+}
+
+export async function submitElectiveChoice(pollId: number | string, pollSubjectId: number | string): Promise<any> {
+  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/submit/`, {
+    method: 'POST',
+    body: JSON.stringify({ poll_subject_id: pollSubjectId })
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Failed to submit elective choice');
+  }
+  return res.json();
+}
+
+export async function createElectivePoll(payload: {
+  parent_elective_name: string;
+  batch_year?: number | string | null;
+  semester?: number | string | null;
+  department_group?: number | string | null;
+  subjects: Array<{
+    elective_subject_id: number;
+    seats?: number | string | null;
+    staff_id?: number | string | null;
+  }>;
+}): Promise<ElectivePoll> {
+  const res = await fetchWithAuth('/api/curriculum/elective-polls/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const detail = data.detail || data.subjects || 'Failed to create elective poll';
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function updateElectivePollStatus(id: number, is_active: boolean): Promise<ElectivePoll> {
+  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active }),
+  });
+  if (!res.ok) throw new Error('Failed to update elective poll status');
+  return res.json();
+}
+
+export async function downloadElectivePollExport(pollId: number | string): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/export/`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Failed to download export');
+  }
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const header = res.headers.get('content-disposition') || '';
+  const match = /filename="?([^";]+)"?/i.exec(header);
+  link.href = url;
+  link.download = match?.[1] || `elective_poll_${pollId}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function fetchDepartmentGroups(): Promise<DepartmentGroup[]> {
+  const res = await fetchWithAuth('/api/curriculum/department-groups/');
+  if (!res.ok) throw new Error('Failed to fetch department groups');
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.results || []);
+}
+
 export async function createMaster(payload: Partial<Master>) {
   const res = await fetchWithAuth('/api/curriculum/master/', {
     method: 'POST',
@@ -141,8 +261,12 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
   }
 }
 
-export async function fetchDeptRows(): Promise<DeptRow[]> {
-  const res = await fetchWithAuth('/api/curriculum/department/');
+export async function fetchDeptRows(params?: { is_elective?: boolean; semester?: number }): Promise<DeptRow[]> {
+  const qs = new URLSearchParams();
+  if (params?.is_elective !== undefined) qs.set('is_elective', String(params.is_elective));
+  if (params?.semester) qs.set('semester', String(params.semester));
+  const url = `/api/curriculum/department/${qs.toString() ? '?' + qs.toString() : ''}`;
+  const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch dept rows');
   return res.json();
 }

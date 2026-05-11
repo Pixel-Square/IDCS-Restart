@@ -40,6 +40,7 @@ from .models import (
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
     Semester,
+    SystemTransitionLog,
 )
 from OBE.models import (
     Cia1Mark,
@@ -5291,6 +5292,100 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
         if not (user.is_staff or 'academics.manage_academicyears' in perms or user.has_perm('academics.delete_academicyear')):
             raise PermissionDenied('You do not have permission to delete academic years.')
         instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def shift_semester(self, request, pk=None):
+        """Global semester shift: update all sections to their calculated semester 
+        for this specific academic year.
+        """
+        instance = self.get_object()
+        user = request.user
+        perms = get_user_permissions(user)
+        
+        # Permission check
+        if not (user.is_staff or 'academics.manage_academicyears' in perms):
+            return Response(
+                {"detail": "You do not have permission to perform a global semester shift."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 1. Activate this academic year (deactivate others)
+        with transaction.atomic():
+            AcademicYear.objects.all().update(is_active=False)
+            instance.is_active = True
+            instance.save(update_fields=['is_active'])
+
+            # 2. Shift all sections
+            sections = Section.objects.all().select_related('batch')
+            updated_count = 0
+            
+            # Parse academic start year from name like '2025-2026'
+            try:
+                acad_start = int(str(instance.name).split('-')[0])
+            except Exception:
+                return Response(
+                    {"detail": f"Invalid Academic Year format: '{instance.name}'. Expected 'YYYY-YYYY'."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            for sec in sections:
+                try:
+                    # Determine batch start year
+                    start_year = getattr(sec.batch, 'start_year', None)
+                    if start_year is None:
+                        try:
+                            start_year = int(str(sec.batch.name).split('-')[0])
+                        except Exception:
+                            start_year = None
+
+                    if start_year is None:
+                        continue
+
+                    # Calculate semester
+                    delta = acad_start - int(start_year)
+                    offset = 1 if (instance.parity or '').upper() == 'ODD' else 2
+                    sem_number = delta * 2 + offset
+
+                    if sem_number and sem_number > 0:
+                        sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                        if sec.semester_id != sem_obj.id:
+                            sec.semester = sem_obj
+                            # We use save() instead of update() to trigger any signals if needed,
+                            # but we pass update_fields to be efficient.
+                            sec.save(update_fields=['semester'])
+                            updated_count += 1
+                except Exception:
+                    continue
+            
+            # 3. Log the transition
+            SystemTransitionLog.objects.create(
+                academic_year=instance,
+                performed_by=user,
+                updated_count=updated_count,
+                details=f"Global shift to {instance.name} ({instance.parity})."
+            )
+
+        return Response({
+            "message": f"Academic Year '{instance.name}' activated. {updated_count} sections shifted to their new semesters.",
+            "updated_count": updated_count
+        })
+
+    @action(detail=False, methods=['get'])
+    def transition_logs(self, request):
+        """Retrieve recent system transition logs."""
+        logs = SystemTransitionLog.objects.all().select_related('academic_year', 'performed_by').order_by('-performed_at')[:50]
+        data = []
+        for l in logs:
+            data.append({
+                'id': l.id,
+                'academic_year': l.academic_year.name,
+                'parity': l.academic_year.parity,
+                'performed_at': l.performed_at,
+                'performed_by': l.performed_by.get_full_name() if l.performed_by else 'System',
+                'updated_count': l.updated_count,
+                'details': l.details
+            })
+        return Response(data)
 
     def create(self, request, *args, **kwargs):
         try:
