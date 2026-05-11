@@ -18,6 +18,10 @@ interface QuestionDef {
   btl_level: number | null;
   co_number: number | number[] | null;  // single CO or combination e.g. [1,2]
   enabled: boolean;
+  // Settings (extensible)
+  special_split?: boolean;
+  // Indices (0-based) of source questions included in the formula.
+  special_split_sources?: number[];
 }
 
 interface MarkManagerCOConfig {
@@ -51,6 +55,9 @@ interface QpPattern {
     cos?: Array<number | null>;
     enabled?: boolean[];
     mark_manager?: MarkManagerConfig | null;
+    // Per-question settings (optional; stored alongside titles/marks)
+    special_split?: boolean[];
+    special_split_sources?: number[][];
   };
   questions?: Array<{
     title?: string;
@@ -91,8 +98,15 @@ interface ExamAssignment {
     cos: number[];
     exams?: string[]; // Selected exam assignment codes to consider; empty/undefined = all
     custom_vars?: Array<{ code: string; label?: string; expr: string }>; // Custom variable tokens
+    co_value_expr?: string; // Expression to compute per-CO CQI value for Internal Marks (uses [CQI])
     formula: string;
-    conditions: Array<{ if: string; then: string; color?: string }>;
+    conditions: Array<{
+      if: string;
+      then: string;
+      color?: string;
+      // UI-only helper to edit AND clauses. Saved alongside without breaking older readers.
+      if_clauses?: Array<{ token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string }>;
+    }>;
     else_formula: string;
   };
   mark_manager_enabled?: boolean;
@@ -207,6 +221,8 @@ function normalizeRows(pattern: QpPattern | null): QuestionDef[] {
   const btls = Array.isArray(p.btls) ? p.btls : [];
   const cos = Array.isArray(p.cos) ? p.cos : [];
   const enabled = Array.isArray(p.enabled) ? p.enabled : [];
+  const specialSplit = Array.isArray(p.special_split) ? p.special_split : [];
+  const specialSplitSources = Array.isArray(p.special_split_sources) ? p.special_split_sources : [];
 
   if (titles.length > 0) {
     return titles.map((title, idx) => ({
@@ -217,6 +233,10 @@ function normalizeRows(pattern: QpPattern | null): QuestionDef[] {
         ? (cos[idx] as unknown as number[])
         : (cos[idx] == null ? null : Number(cos[idx])),
       enabled: enabled[idx] ?? true,
+      special_split: !!specialSplit[idx],
+      special_split_sources: Array.isArray(specialSplitSources[idx])
+        ? (specialSplitSources[idx] as unknown as number[]).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+        : [],
     }));
   }
 
@@ -229,6 +249,9 @@ function normalizeRows(pattern: QpPattern | null): QuestionDef[] {
         ? (q.co_number ?? q.co) as unknown as number[]
         : ((q.co_number ?? q.co) == null ? null : Number(q.co_number ?? q.co)),
       enabled: q.enabled ?? true,
+      // Old shape doesn't store settings; default them off.
+      special_split: false,
+      special_split_sources: [],
     }));
   }
 
@@ -243,7 +266,20 @@ function rowsToPattern(rows: QuestionDef[]) {
     // Preserve arrays for combination COs; single number for single COs
     cos: rows.map((r) => Array.isArray(r.co_number) ? r.co_number : (r.co_number == null ? null : Number(r.co_number))),
     enabled: rows.map((r) => !!r.enabled),
+    special_split: rows.map((r) => !!r.special_split),
+    special_split_sources: rows.map((r) => Array.isArray(r.special_split_sources) ? r.special_split_sources : []),
   };
+}
+
+function toCoSet(co: QuestionDef['co_number']): number[] {
+  if (co == null) return [];
+  if (Array.isArray(co)) return co.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+  const n = Number(co);
+  return Number.isFinite(n) ? [n] : [];
+}
+
+function uniq(nums: number[]): number[] {
+  return Array.from(new Set(nums));
 }
 
 function normalizeTypeCode(input: string) {
@@ -269,6 +305,11 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   push('CQI', 'CQI (entered/attained value)');
   push('X', 'Alias for CQI (entered value)');
 
+  // CQI Entry columns
+  push('BEFORE_CQI', 'Before CQI (CQI Entry column, raw total)');
+  push('AFTER_CQI', 'After CQI (CQI Entry column, raw total)');
+  push('TOTAL_CQI', 'Total (CQI Entry column, %)');
+
   // Current-CO aliases (evaluated for the CO column being processed)
   push('CO-RAW', 'Current CO total (raw)');
   push('CO-WEIGHT', 'Current CO total (weighted %)');
@@ -279,10 +320,10 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   // Overall / per-CO totals
   push('TOTAL-RAW', 'Overall total (raw)');
   push('TOTAL-WEIGHT', 'Overall total (weighted)');
-  for (let co = 1; co <= maxCo; co++) {
-    push(`CO${co}-TOTAL-RAW`, `CO${co} total (raw)`);
-    push(`CO${co}-TOTAL-WEIGHT`, `CO${co} total (weighted)`);
-  }
+
+  // COx placeholders (do not generate numbered CO tokens in picker)
+  push('COX-TOTAL-RAW', 'CO(x) total (raw) — placeholder for current CO');
+  push('COX-TOTAL-WEIGHT', 'CO(x) total (weighted %) — placeholder for current CO');
 
   // Per-exam variables
   for (const ex of exams) {
@@ -292,18 +333,6 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
     push(`${examCode}-OBT`, `${ex.exam_display_name || ex.exam} CO(x) obtained (raw, current column)`);
     push(`${examCode}-COX-OBT`, `${ex.exam_display_name || ex.exam} CO(x) obtained (raw, current column)`);
     push(`COX-${examCode}-OBT`, `CO(x) ${ex.exam_display_name || ex.exam} obtained (raw, current column)`);
-    for (let co = 1; co <= maxCo; co++) {
-      push(`${examCode}-CO${co}-RAW`, `${ex.exam_display_name || ex.exam} CO${co} (raw)`);
-      push(`${examCode}-CO${co}-WEIGHT`, `${ex.exam_display_name || ex.exam} CO${co} (weighted)`);
-      push(`${examCode}-CO${co}-TOTAL`, `${ex.exam_display_name || ex.exam} CO${co} max`);
-      push(`${examCode}-CO${co}-OBT`, `${ex.exam_display_name || ex.exam} CO${co} obtained (raw)`);
-
-      // Alias: CO-first style (requested)
-      push(`CO${co}-${examCode}-RAW`, `CO${co} ${ex.exam_display_name || ex.exam} (raw)`);
-      push(`CO${co}-${examCode}-WEIGHT`, `CO${co} ${ex.exam_display_name || ex.exam} (weighted)`);
-      push(`CO${co}-${examCode}-TOTAL`, `CO${co} ${ex.exam_display_name || ex.exam} max`);
-      push(`CO${co}-${examCode}-OBT`, `CO${co} ${ex.exam_display_name || ex.exam} obtained (raw)`);
-    }
   }
 
   return vars;
@@ -359,6 +388,16 @@ export default function QpPatternEditorPage() {
   const [isDirty, setIsDirty] = useState(false);
   const [showAddExamModal, setShowAddExamModal] = useState(false);
   const [addExamSearch, setAddExamSearch] = useState('');
+
+  // Horizontal editor popup (for exam assignment click/open)
+  const [examEditorModalOpen, setExamEditorModalOpen] = useState(false);
+
+  // Horizontal CQI editor popup (dedicated UI, includes question table, hides Mark Manager)
+  const [cqiEditorModalOpen, setCqiEditorModalOpen] = useState(false);
+
+  // Question settings popup
+  const [questionSettingsOpen, setQuestionSettingsOpen] = useState(false);
+  const [settingsQuestionIndex, setSettingsQuestionIndex] = useState<number | null>(null);
 
   // Exam assignments (weights) live on ClassType config
   const [localExamAssignments, setLocalExamAssignments] = useState<ExamAssignment[]>([]);
@@ -618,11 +657,22 @@ export default function QpPatternEditorPage() {
             name: String(rawCqi.name || ''),
             code: String(rawCqi.code || ''),
             cos: Array.isArray(rawCqi.cos) ? rawCqi.cos.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n)) : [],
+            exams: Array.isArray(rawCqi.exams) ? rawCqi.exams.map((x: any) => String(x || '')).filter(Boolean) : [],
+            custom_vars: Array.isArray(rawCqi.custom_vars)
+              ? rawCqi.custom_vars
+                  .filter((v: any) => v && typeof v === 'object')
+                  .map((v: any) => ({
+                    code: String(v.code || ''),
+                    label: v.label == null ? '' : String(v.label || ''),
+                    expr: String(v.expr || ''),
+                  }))
+              : [],
+            co_value_expr: String(rawCqi.co_value_expr || ''),
             formula: String(rawCqi.formula || ''),
             conditions: Array.isArray(rawCqi.conditions)
               ? rawCqi.conditions
                   .filter((c: any) => c && typeof c === 'object')
-                  .map((c: any) => ({ if: String(c.if || ''), then: String(c.then || '') }))
+                  .map((c: any) => ({ if: String(c.if || ''), then: String(c.then || ''), color: c.color == null ? undefined : String(c.color || '') }))
               : [],
             else_formula: String(rawCqi.else_formula || ''),
           }
@@ -817,7 +867,7 @@ export default function QpPatternEditorPage() {
     const c = String(code || '').toUpperCase();
 
     // CQI / X
-    if (c === 'CQI' || c === 'X') {
+    if (c === 'CQI' || c === 'X' || c === 'BEFORE_CQI' || c === 'AFTER_CQI' || c === 'TOTAL_CQI') {
       return {
         group: 'CQI',
         badge: c,
@@ -913,7 +963,7 @@ export default function QpPatternEditorPage() {
     if (!text) return null;
 
     // Basic character allow-list (numbers, identifiers, tokens, math + comparisons)
-    const invalidChar = text.match(/[^0-9A-Za-z_\-\[\]\(\)\s\+\*\/%.<>=!;]/);
+    const invalidChar = text.match(/[^0-9A-Za-z_\-\[\]\(\)\s\+\*\/%\.<>=!;,|&]/);
     if (invalidChar) return `${label}: invalid character "${invalidChar[0]}"`;
 
     // Bracket/parenthesis balance checks
@@ -938,12 +988,66 @@ export default function QpPatternEditorPage() {
 
     const tokens = text.match(/\[[^\]]+\]/g) || [];
     if (opts?.allowedTokens) {
+      const isKnownDynamicToken = (wrapped: string) => {
+        const key = String(wrapped || '').slice(1, -1).trim().toUpperCase();
+        if (!key) return false;
+        // Allow legacy numbered CO tokens even if hidden from picker.
+        if (/^CO\d+-TOTAL-(RAW|WEIGHT)$/.test(key)) return true;
+        if (/^CO\d+-[A-Z0-9_]+-(RAW|WEIGHT|TOTAL|OBT|DIFF)$/.test(key)) return true;
+        if (/^[A-Z0-9_]+-CO\d+-(RAW|WEIGHT|TOTAL|OBT|DIFF)$/.test(key)) return true;
+        return false;
+      };
       for (const token of tokens) {
-        if (!opts.allowedTokens.has(token)) return `${label}: unknown token ${token}`;
+        if (!opts.allowedTokens.has(token) && !isKnownDynamicToken(token)) return `${label}: unknown token ${token}`;
       }
     }
 
     return null;
+  };
+
+  const appendAnd = (current: string) => {
+    const base = String(current || '');
+    if (!base.trim()) return '';
+    if (base.trim().endsWith('&&') || base.trim().endsWith('||')) return base;
+    if (base.endsWith(' ')) return `${base}&& `;
+    return `${base} && `;
+  };
+
+  type CqiIfClause = { token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string };
+  const CQI_CLAUSE_TOKENS: Array<CqiIfClause['token']> = ['BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'];
+
+  const parseIfClauses = (raw: string): CqiIfClause[] => {
+    const s = String(raw || '').trim();
+    if (!s) return [{ token: 'BEFORE_CQI', rhs: '' }];
+    const parts = s.split(/\s*(?:&&|\bAND\b)\s*/i).map((p) => String(p || '').trim()).filter(Boolean);
+    const clauses: CqiIfClause[] = [];
+    for (const p of parts) {
+      const m = p.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*)\)?$/);
+      if (m) {
+        const tok = String(m[1] || '').toUpperCase();
+        const rhs = String(m[2] || '').trim();
+        if (tok === 'BEFORE_CQI' || tok === 'AFTER_CQI' || tok === 'TOTAL_CQI') {
+          clauses.push({ token: tok as CqiIfClause['token'], rhs });
+          continue;
+        }
+      }
+      clauses.push({ token: 'BEFORE_CQI', rhs: p });
+    }
+    if (!clauses.length || clauses[0].token !== 'BEFORE_CQI') clauses.unshift({ token: 'BEFORE_CQI', rhs: '' });
+    return clauses;
+  };
+
+  const buildIfFromClauses = (clauses: CqiIfClause[]): string => {
+    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && c.token);
+    if (!list.length) return '';
+    return list
+      .map((c) => {
+        const rhs = String(c.rhs || '').trim();
+        if (!rhs) return '';
+        return `([${c.token}] ${rhs})`;
+      })
+      .filter(Boolean)
+      .join(' && ');
   };
 
   const hasAssignmentTask = (text: string) => {
@@ -1009,9 +1113,6 @@ export default function QpPatternEditorPage() {
           allowedTokens,
         });
         if (errThen) return errThen;
-        if (String(cond?.if || '').trim() && String(cond?.then || '').trim() && !hasAssignmentTask(cond.then || '')) {
-          return `${title} · Condition ${i + 1} (THEN): must be an assignment like CO-RAW = CO-RAW + X`;
-        }
       }
 
       const errElse = validateExpression(base.else_formula || '', {
@@ -1019,9 +1120,6 @@ export default function QpPatternEditorPage() {
         allowedTokens,
       });
       if (errElse) return errElse;
-      if (String(base.else_formula || '').trim() && !hasAssignmentTask(base.else_formula || '')) {
-        return `${title} · Else Formula: must be an assignment like CO-RAW = CO-RAW + X`;
-      }
     }
     return null;
   };
@@ -1237,8 +1335,59 @@ export default function QpPatternEditorPage() {
       btl_level: 2,
       co_number: 1,
       enabled: true,
+      special_split: false,
+      special_split_sources: [],
     }]);
     markDirty();
+  };
+
+  const openQuestionSettings = (idx: number) => {
+    setSettingsQuestionIndex(idx);
+    setQuestionSettingsOpen(true);
+  };
+
+  const closeQuestionSettings = () => {
+    setQuestionSettingsOpen(false);
+    setSettingsQuestionIndex(null);
+  };
+
+  const settingsRow = (settingsQuestionIndex != null && settingsQuestionIndex >= 0 && settingsQuestionIndex < localRows.length)
+    ? localRows[settingsQuestionIndex]
+    : null;
+  const settingsSpecialEnabled = !!settingsRow?.special_split;
+
+  const getSpecialSplitPreview = (idx: number) => {
+    const r = localRows[idx];
+    if (!r || !r.special_split) {
+      return { sumMarks: 0, specialMarks: 0, coSet: [] as number[], coCount: 0, result: 0 };
+    }
+    const sources = Array.isArray(r.special_split_sources) ? r.special_split_sources : [];
+    const coSet = uniq(
+      sources
+        .filter((sIdx) => Number.isFinite(sIdx) && sIdx >= 0 && sIdx < localRows.length)
+        .filter((sIdx) => sIdx !== idx)
+        .flatMap((sIdx) => toCoSet(localRows[sIdx]?.co_number))
+    );
+    const coCount = coSet.length;
+    const sumMarks = sources
+      .filter((sIdx) => Number.isFinite(sIdx) && sIdx >= 0 && sIdx < localRows.length)
+      .filter((sIdx) => sIdx !== idx)
+      .reduce((sum, sIdx) => sum + (Number(localRows[sIdx]?.max_marks) || 0), 0);
+    const specialMarks = Number(r.max_marks) || 0;
+    const denom = Math.max(coCount, 1);
+    const result = Math.round((sumMarks + (specialMarks / denom)) * 100) / 100;
+    return { sumMarks, specialMarks, coSet, coCount, result };
+  };
+
+  const toggleSpecialSplitSource = (specialIdx: number, sourceIdx: number, checked: boolean) => {
+    const current = localRows[specialIdx];
+    if (!current) return;
+    const prev = Array.isArray(current.special_split_sources) ? current.special_split_sources : [];
+    const base = prev.filter((n) => Number.isFinite(n) && n >= 0);
+    const next = checked
+      ? uniq([...base, sourceIdx]).filter((n) => n !== specialIdx)
+      : base.filter((n) => n !== sourceIdx);
+    updateRow(specialIdx, 'special_split_sources', next);
   };
 
   const removeQuestion = (index: number) => {
@@ -2016,22 +2165,35 @@ export default function QpPatternEditorPage() {
                   </div>
 
                   <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm table-fixed">
                       <thead className="bg-gray-50 border-b">
                         <tr>
                           {isEditing && <th className="w-8 px-2 py-2 text-gray-400">#</th>}
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Enabled</th>
+                          <th className="w-20 px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Enabled</th>
                           <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Question Title</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Max Marks</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">BTL</th>
-                          <th className="px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">CO</th>
+                          <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Max</th>
+                          <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">BTL</th>
+                          <th className="w-56 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">CO</th>
+                          <th className="w-14 px-2 py-2"></th>
                           {isEditing && <th className="px-2 py-2 w-8"></th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {localRows.length === 0 ? (
                           <tr>
-                            <td colSpan={isEditing ? 7 : 5} className="text-center py-8 text-gray-400">
+                            <td
+                              colSpan={
+                                (isEditing ? 1 : 0)
+                                + 1 /* enabled */
+                                + 1 /* title */
+                                + 1 /* max */
+                                + 1 /* btl */
+                                + 1 /* co */
+                                + 1 /* settings */
+                                + (isEditing ? 1 : 0) /* delete */
+                              }
+                              className="text-center py-8 text-gray-400"
+                            >
                               No questions yet. {isEditing && 'Click "Add Row" to create one.'}
                             </td>
                           </tr>
@@ -2061,7 +2223,7 @@ export default function QpPatternEditorPage() {
                                     placeholder="Q1 (a)"
                                   />
                                 ) : (
-                                  <span className="font-medium">{row.title}</span>
+                                  <span className="font-medium truncate inline-block max-w-full align-middle">{row.title}</span>
                                 )}
                               </td>
                               <td className="px-3 py-2 text-center">
@@ -2092,7 +2254,7 @@ export default function QpPatternEditorPage() {
                                   <select
                                     value={coToSelectVal(row.co_number)}
                                     onChange={e => { updateRow(idx, 'co_number', selectValToCo(e.target.value)); markDirty(); }}
-                                    className="px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500"
+                                    className="w-full max-w-[14rem] px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500"
                                   >
                                     <option value="">—</option>
                                     <optgroup label="Single CO">
@@ -2113,10 +2275,19 @@ export default function QpPatternEditorPage() {
                                 ) : (
                                   row.co_number != null
                                     ? Array.isArray(row.co_number)
-                                      ? <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded font-medium">{coLabel(row.co_number)}</span>
-                                      : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded">{coLabel(row.co_number)}</span>
+                                      ? <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded font-medium inline-block max-w-[14rem] truncate align-middle">{coLabel(row.co_number)}</span>
+                                      : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded inline-block max-w-[14rem] truncate align-middle">{coLabel(row.co_number)}</span>
                                     : <span className="text-gray-300">—</span>
                                 )}
+                              </td>
+                              <td className="px-2 py-2 text-center">
+                                <button
+                                  onClick={() => openQuestionSettings(idx)}
+                                  className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded"
+                                  title="Question settings"
+                                >
+                                  <Settings2 className="w-4 h-4" />
+                                </button>
                               </td>
                               {isEditing && (
                                 <td className="px-2 py-2 text-center">
@@ -2132,6 +2303,122 @@ export default function QpPatternEditorPage() {
                     </table>
                   </div>
                 </div>
+                )}
+
+                {/* Question Settings Modal */}
+                {questionSettingsOpen && settingsQuestionIndex != null && settingsRow && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+                    <div className="w-full max-w-xl bg-white rounded-lg shadow-lg border overflow-hidden">
+                      <div className="px-4 py-3 border-b flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">Question Settings</div>
+                          <div className="text-xs text-gray-400">Q{settingsQuestionIndex + 1}: {settingsRow.title || `Q${settingsQuestionIndex + 1}`}</div>
+                        </div>
+                        <button onClick={closeQuestionSettings} className="p-2 rounded hover:bg-gray-100" title="Close">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="p-4 space-y-4">
+                        <div className="text-xs text-gray-500">
+                          This popup is designed to hold more per-question options later.
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-violet-600"
+                            disabled={!isEditing}
+                            checked={!!settingsRow.special_split}
+                            onChange={(e) => {
+                              updateRow(settingsQuestionIndex, 'special_split', e.target.checked);
+                              if (!e.target.checked) {
+                                updateRow(settingsQuestionIndex, 'special_split_sources', []);
+                              }
+                            }}
+                          />
+                          <span className="font-medium text-gray-800">special_split</span>
+                        </label>
+
+                        {settingsSpecialEnabled && (
+                          <div className="border rounded-lg p-3 bg-violet-50/40">
+                            {(() => {
+                              const p = getSpecialSplitPreview(settingsQuestionIndex);
+                              return (
+                                <div className="space-y-2">
+                                  <div className="text-xs text-gray-600">
+                                    Formula (preview): <span className="font-semibold">sum(checked max marks) + (special max marks / unique CO count)</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2 text-sm">
+                                    <div className="bg-white rounded border p-2">
+                                      <div className="text-xs text-gray-500">Checked sum</div>
+                                      <div className="font-semibold">{p.sumMarks}</div>
+                                    </div>
+                                    <div className="bg-white rounded border p-2">
+                                      <div className="text-xs text-gray-500">Special max</div>
+                                      <div className="font-semibold">{p.specialMarks}</div>
+                                    </div>
+                                    <div className="bg-white rounded border p-2">
+                                      <div className="text-xs text-gray-500">Unique COs</div>
+                                      <div className="font-semibold">{p.coCount || 0}{p.coSet.length ? ` (${p.coSet.map((c) => `CO${c}`).join(', ')})` : ''}</div>
+                                    </div>
+                                    <div className="bg-white rounded border p-2">
+                                      <div className="text-xs text-gray-500">Result</div>
+                                      <div className="font-semibold text-violet-700">{p.result}</div>
+                                    </div>
+                                  </div>
+                                  <div className="text-xs text-gray-600 mt-3 font-medium">Select source questions</div>
+                                  <div className="max-h-48 overflow-auto bg-white rounded border">
+                                    {localRows
+                                      .map((r, i) => ({ r, i }))
+                                      .filter(({ i }) => i !== settingsQuestionIndex)
+                                      .map(({ r, i }) => {
+                                        const selected = Array.isArray(settingsRow.special_split_sources)
+                                          ? (settingsRow.special_split_sources as number[]).includes(i)
+                                          : false;
+                                        const disabled = !isEditing || !r.enabled;
+                                        return (
+                                          <label
+                                            key={i}
+                                            className={`flex items-center justify-between gap-3 px-3 py-2 text-sm border-b last:border-b-0 ${disabled ? 'opacity-60' : 'hover:bg-gray-50'}`}
+                                          >
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <input
+                                                type="checkbox"
+                                                className="w-4 h-4 accent-violet-600"
+                                                disabled={disabled}
+                                                checked={selected}
+                                                onChange={(e) => toggleSpecialSplitSource(settingsQuestionIndex, i, e.target.checked)}
+                                              />
+                                              <div className="min-w-0">
+                                                <div className="font-medium truncate">Q{i + 1}: {r.title || `Q${i + 1}`}</div>
+                                                <div className="text-xs text-gray-500 truncate">Max {Number(r.max_marks) || 0} · {coLabel(r.co_number)}</div>
+                                              </div>
+                                            </div>
+                                            {!r.enabled && (
+                                              <span className="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600">Disabled</span>
+                                            )}
+                                          </label>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="px-4 py-3 border-t flex justify-end gap-2">
+                        <button
+                          onClick={closeQuestionSettings}
+                          className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                        >
+                          Close
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {selectedIsCqi && selectedExamAssignmentItem && (
@@ -2426,40 +2713,109 @@ export default function QpPatternEditorPage() {
                                   <div className="flex items-center justify-between">
                                     <label className="text-xs text-gray-500">Condition (IF)</label>
                                     {isEditing && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          openTokenPicker((token) =>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
                                             updateCqi((prev) => {
                                               const next = [...(prev.conditions || [])];
-                                              next[idx] = { ...next[idx], if: appendToken(next[idx]?.if || '', token) };
+                                              const existing = next[idx] as any;
+                                              const clauses: CqiIfClause[] = Array.isArray(existing?.if_clauses)
+                                                ? existing.if_clauses
+                                                : parseIfClauses(existing?.if || '');
+                                              clauses.push({ token: 'TOTAL_CQI', rhs: '' });
+                                              next[idx] = { ...next[idx], if_clauses: clauses, if: buildIfFromClauses(clauses) };
                                               return { ...prev, conditions: next };
                                             })
-                                          )
-                                        }
-                                        className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                      >
-                                        + Token
-                                      </button>
+                                          }
+                                          className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                          title="Add AND condition"
+                                        >
+                                          + AND
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            openTokenPicker((token) =>
+                                              updateCqi((prev) => {
+                                                const next = [...(prev.conditions || [])];
+                                                const existing = next[idx] as any;
+                                                const clauses: CqiIfClause[] = Array.isArray(existing?.if_clauses)
+                                                  ? existing.if_clauses
+                                                  : parseIfClauses(existing?.if || '');
+                                                const lastIdx = Math.max(0, clauses.length - 1);
+                                                clauses[lastIdx] = { ...clauses[lastIdx], rhs: appendToken(clauses[lastIdx]?.rhs || '', token) };
+                                                next[idx] = { ...next[idx], if_clauses: clauses, if: buildIfFromClauses(clauses) };
+                                                return { ...prev, conditions: next };
+                                              })
+                                            )
+                                          }
+                                          className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                        >
+                                          + Token
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
-                                  <input
-                                    value={cond.if || ''}
-                                    disabled={!isEditing}
-                                    onChange={(e) =>
+                                  {(() => {
+                                    const cAny = cond as any;
+                                    const clauses: CqiIfClause[] = Array.isArray(cAny?.if_clauses)
+                                      ? cAny.if_clauses
+                                      : parseIfClauses(cAny?.if || '');
+
+                                    const writeClauses = (nextClauses: CqiIfClause[]) =>
                                       updateCqi((prev) => {
                                         const next = [...(prev.conditions || [])];
-                                        next[idx] = { ...next[idx], if: e.target.value };
+                                        next[idx] = { ...(next[idx] as any), if_clauses: nextClauses, if: buildIfFromClauses(nextClauses) };
                                         return { ...prev, conditions: next };
-                                      })
-                                    }
-                                    placeholder="Example: [CO1-TOTAL-WEIGHT] < 60"
-                                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                                  />
+                                      });
+
+                                    return (
+                                      <div className="space-y-2">
+                                        {clauses.map((cl, ci) => (
+                                          <div key={ci} className="flex items-center gap-2">
+                                            {ci === 0 ? (
+                                              <div className="px-2 py-2 border rounded-lg text-sm font-mono bg-gray-100 text-gray-600 whitespace-nowrap">
+                                                Before_CQI =
+                                              </div>
+                                            ) : (
+                                              <select
+                                                disabled={!isEditing}
+                                                value={cl.token}
+                                                onChange={(e) => {
+                                                  const t = String(e.target.value || '').toUpperCase() as any;
+                                                  if (!CQI_CLAUSE_TOKENS.includes(t)) return;
+                                                  const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, token: t } : x));
+                                                  writeClauses(nextClauses);
+                                                }}
+                                                className="px-2 py-2 border rounded-lg text-sm font-mono bg-white text-gray-700"
+                                                title="Token"
+                                              >
+                                                {CQI_CLAUSE_TOKENS.map((t) => (
+                                                  <option key={t} value={t}>{t} =</option>
+                                                ))}
+                                              </select>
+                                            )}
+
+                                            <input
+                                              value={cl.rhs || ''}
+                                              disabled={!isEditing}
+                                              onChange={(e) => {
+                                                const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, rhs: e.target.value } : x));
+                                                writeClauses(nextClauses);
+                                              }}
+                                              placeholder={ci === 0 ? 'Example: < 58' : 'Example: >= 58'}
+                                              className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+                                            />
+                                          </div>
+                                        ))}
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                                 <div>
                                   <div className="flex items-center justify-between">
-                                    <label className="text-xs text-gray-500">Formula (THEN)</label>
+                                    <label className="text-xs text-gray-500">Internal Mark Value (THEN)</label>
                                     {isEditing && (
                                       <button
                                         type="button"
@@ -2488,7 +2844,7 @@ export default function QpPatternEditorPage() {
                                         return { ...prev, conditions: next };
                                       })
                                     }
-                                    placeholder="Example: [CO1-TOTAL-WEIGHT] + 10"
+                                    placeholder="Example: [CQI] * 1.5"
                                     className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                                   />
                                 </div>
@@ -2564,7 +2920,7 @@ export default function QpPatternEditorPage() {
                             <input
                               value={selectedExamAssignmentItem.exam.cqi?.else_formula || ''}
                               onChange={(e) => updateCqi((prev) => ({ ...prev, else_formula: e.target.value }))}
-                              placeholder="Example: [TOTAL-WEIGHT]"
+                              placeholder="Example: [CQI] * 1.5"
                               className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
                               disabled={!isEditing}
                             />

@@ -54,6 +54,9 @@ interface COExam {
   max_marks: number;
   weight: number;
   co_weights: Record<string, number>;  // Per-CO weights from ClassType config
+  kind?: 'exam' | 'cqi';
+  cqi_cos?: number[];
+  cqi_name?: string;
   cia_enabled?: boolean;
   cia_weight?: number;
   exam_max_marks?: number;
@@ -89,10 +92,12 @@ export default function InternalMarkPage() {
   const { courseId } = useParams<{ courseId: string }>();
   const navigate = useNavigate();
 
+  const powerBiEmbedUrl = (import.meta.env as any).VITE_POWERBI_EMBED_URL as string | undefined;
+
   const [loading, setLoading] = useState(true);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [tab, setTab] = useState<'exams' | 'co'>('exams');
+  const [tab, setTab] = useState<'dashboard' | 'exams' | 'co'>('dashboard');
 
   // CO summary
   const [coLoading, setCoLoading] = useState(false);
@@ -179,8 +184,11 @@ export default function InternalMarkPage() {
     for (const ex of exams) {
       if (isW) {
         for (const co of ex.covered_cos) {
-          const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
-          headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
+          if (ex.kind === 'cqi') headers.push(`${ex.short_name}_CO${co}`);
+          else {
+            const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
+            headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
+          }
         }
         if (ex.cia_enabled) {
           const n = ex.covered_cos.length || 1;
@@ -191,7 +199,7 @@ export default function InternalMarkPage() {
           }
         }
       } else {
-        for (const co of ex.covered_cos) headers.push(`${ex.short_name} CO${co} (/${ex.max_per_co})`);
+        for (const co of ex.covered_cos) headers.push(ex.kind === 'cqi' ? `${ex.short_name} CO${co}` : `${ex.short_name} CO${co} (/${ex.max_per_co})`);
         if (ex.cia_enabled) {
           const n = ex.covered_cos.length || 1;
           for (const co of ex.covered_cos) {
@@ -212,7 +220,14 @@ export default function InternalMarkPage() {
       for (const ex of exams) {
         const em = s.exam_marks[ex.id] || {};
         if (isW) {
-          for (const co of ex.covered_cos) row.push(s.weighted_marks[`${ex.id}_CO${co}`] ?? '');
+          for (const co of ex.covered_cos) {
+            if (ex.kind === 'cqi') {
+              const v = (em as any)[`co${co}`];
+              row.push(typeof v === 'number' ? v : '');
+            } else {
+              row.push(s.weighted_marks[`${ex.id}_CO${co}`] ?? '');
+            }
+          }
           if (ex.cia_enabled) {
             for (const co of ex.covered_cos) {
               row.push(s.weighted_marks[`${ex.id}_exam_CO${co}`] ?? '');
@@ -363,6 +378,14 @@ export default function InternalMarkPage() {
       {/* ─── Tabs ─── */}
       <div className="flex border-b">
         <button
+          onClick={() => setTab('dashboard')}
+          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'dashboard' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />Dashboard
+        </button>
+        <button
           onClick={() => setTab('exams')}
           className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
             tab === 'exams' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -379,6 +402,37 @@ export default function InternalMarkPage() {
           <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />CO Summary
         </button>
       </div>
+
+      {/* ─── Tab: Dashboard ─── */}
+      {tab === 'dashboard' && (
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-4 border-b flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Dashboard</h2>
+            {courseInfo.qp_type && (
+              <span className="text-xs font-semibold px-2.5 py-1 bg-orange-100 text-orange-700 rounded-full">
+                QP Type: {courseInfo.qp_type}
+              </span>
+            )}
+          </div>
+          <div className="p-4">
+            {powerBiEmbedUrl ? (
+              <iframe
+                title="Power BI Dashboard"
+                src={powerBiEmbedUrl}
+                className="w-full h-[70vh] rounded border"
+                allowFullScreen
+              />
+            ) : (
+              <div className="p-8 text-center text-gray-500">
+                Power BI dashboard is not configured.
+                <div className="text-sm text-gray-400 mt-1">
+                  Set VITE_POWERBI_EMBED_URL in .env.local to embed.
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ─── Tab: Exam Assignments ─── */}
       {tab === 'exams' && (
@@ -533,18 +587,22 @@ function COSummaryTab({
   const { exams, students, co_count, total_internal_marks } = data;
 
   // Build column groups for the table
-  type ColDef = { key: string; label: string; sub: string; examIdx: number; co: number; weightNotSet?: boolean; isExamSplit?: boolean; isCombo?: boolean; comboKey?: string };
+  type ColDef = { key: string; label: string; sub: string; examIdx: number; co: number; weightNotSet?: boolean; isExamSplit?: boolean; isCombo?: boolean; comboKey?: string; isCqi?: boolean };
   const cols: ColDef[] = [];
   exams.forEach((ex, ei) => {
     for (const co of ex.covered_cos) {
       const coMax = ex.co_max_map?.[String(co)] ?? ex.max_per_co;
       if (view === 'raw') {
-        cols.push({ key: `${ex.id}_co${co}`, label: `CO${co}`, sub: `/${coMax}`, examIdx: ei, co });
+        cols.push({ key: `${ex.id}_co${co}`, label: `CO${co}`, sub: ex.kind === 'cqi' ? '' : `/${coMax}`, examIdx: ei, co, isCqi: ex.kind === 'cqi' });
       } else {
-        const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
-        const notSet = !w || w <= 0;
-        const sub = notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`;
-        cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
+        if (ex.kind === 'cqi') {
+          cols.push({ key: `${ex.id}_CQI_CO${co}`, label: `CO${co}`, sub: '', examIdx: ei, co, isCqi: true });
+        } else {
+          const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
+          const notSet = !w || w <= 0;
+          const sub = notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`;
+          cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
+        }
       }
     }
 
@@ -618,6 +676,10 @@ function COSummaryTab({
       return em ? (em[`co${col.co}`] as number) ?? '' : '';
     }
     // Weighted
+    if (col.isCqi) {
+      const em = s.exam_marks[exams[col.examIdx].id];
+      return em ? (em[`co${col.co}`] as number) ?? '' : '';
+    }
     if (col.isExamSplit) {
       // Exam split column (weighted) - fetched from backend weighted_marks
       return s.weighted_marks[col.key] ?? '';
@@ -695,25 +757,31 @@ function COSummaryTab({
                   <th key={exam.id} colSpan={colCount} className="px-2 py-2 text-center text-xs font-semibold text-gray-700 border-l border-gray-300">
                     {exam.name}
                     <div className="text-[10px] text-gray-400 font-normal flex items-center justify-center gap-1 flex-wrap">
-                      <span>Max: {exam.max_marks}</span>
-                      <span>&middot;</span>
-                      {exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
-                        exam.covered_cos.map(co => {
-                          const wVal = Number(exam.co_weights[String(co)] ?? 0);
-                          return wVal > 0 ? (
-                            <span key={co} className="bg-blue-50 text-blue-700 px-1 rounded">
-                              CO{co}:{wVal}
-                            </span>
-                          ) : (
-                            <span key={co} className="bg-red-50 text-red-500 px-1 rounded font-medium">
-                              CO{co}:NOT SET
-                            </span>
-                          );
-                        })
+                      {exam.kind === 'cqi' ? (
+                        <span className="bg-purple-50 text-purple-700 px-1 rounded font-medium">CQI (no weight)</span>
                       ) : (
-                        <span className="text-red-500 font-medium">
-                          Wt: NOT SET (Admin)
-                        </span>
+                        <>
+                          <span>Max: {exam.max_marks}</span>
+                          <span>&middot;</span>
+                          {exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
+                            exam.covered_cos.map(co => {
+                              const wVal = Number(exam.co_weights[String(co)] ?? 0);
+                              return wVal > 0 ? (
+                                <span key={co} className="bg-blue-50 text-blue-700 px-1 rounded">
+                                  CO{co}:{wVal}
+                                </span>
+                              ) : (
+                                <span key={co} className="bg-red-50 text-red-500 px-1 rounded font-medium">
+                                  CO{co}:NOT SET
+                                </span>
+                              );
+                            })
+                          ) : (
+                            <span className="text-red-500 font-medium">
+                              Wt: NOT SET (Admin)
+                            </span>
+                          )}
+                        </>
                       )}
                     </div>
                   </th>

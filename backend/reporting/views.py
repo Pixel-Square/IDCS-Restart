@@ -1,6 +1,8 @@
 import csv
+import logging
 
 from django.http import HttpResponse
+from django.db.utils import ProgrammingError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -8,7 +10,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from .authentication import ReportingApiKeyAuthentication
 from .permissions import CanViewPowerBIDataOrApiKey
 from .services import query_reporting_view
-from .services_v2 import query_v2_marks
+from .simple_query import get_simple_marks_data
+# v2 reporting endpoints must use Academic 2.1 data only (avoid obe_* tables).
+from .services_v2_acv2 import query_v2_marks
+
+logger = logging.getLogger(__name__)
 
 
 def _filters_from_request(request):
@@ -44,13 +50,34 @@ def _to_positive_int(raw, default: int) -> int:
 
 def _mark_response(request, format_key: str, default_filename: str):
     filters = _filters_from_request(request)
+    page = _to_positive_int(request.query_params.get('page', 1), 1)
+    page_size = _to_positive_int(request.query_params.get('page_size', 500), 500)
+    
     try:
         result = query_reporting_view(
             format_key=format_key,
             filters=filters,
-            page=request.query_params.get('page'),
-            page_size=request.query_params.get('page_size'),
+            page=page,
+            page_size=page_size,
         )
+    except ProgrammingError as e:
+        # Views don't exist; use simple fallback query with real Academic 2.1 data
+        if 'does not exist' in str(e).lower():
+            logger.warning(f'Reporting view not found for {format_key}; using fallback query with Academic 2.1 data')
+            data = get_simple_marks_data(page=page, page_size=page_size, filters=filters)
+            out_format = str(request.query_params.get('format', 'json')).strip().lower()
+            if out_format == 'csv':
+                return _as_csv_response(default_filename, data['columns'], data['rows'])
+            return Response({
+                'format_key': format_key,
+                'count': len(data['rows']),
+                'total': data['total'],
+                'page': page,
+                'page_size': page_size,
+                'columns': data['columns'],
+                'rows': data['rows'],
+            })
+        raise
     except ValueError as exc:
         return Response({'detail': str(exc)}, status=400)
 
@@ -58,8 +85,6 @@ def _mark_response(request, format_key: str, default_filename: str):
     if out_format == 'csv':
         return _as_csv_response(default_filename, result.columns, result.rows)
 
-    page = _to_positive_int(request.query_params.get('page', 1), 1)
-    page_size = _to_positive_int(request.query_params.get('page_size', 500), 500)
     return Response(
         {
             'format_key': format_key,

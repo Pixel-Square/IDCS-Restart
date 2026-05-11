@@ -1305,7 +1305,7 @@ def faculty_course_info(request, ta_id):
     # Filter by qp_type if set
     ea_qs = AcV2ExamAssignment.objects.filter(section__in=acv2_sections).select_related('section')
     if qp_type_code:
-        ea_qs = ea_qs.filter(qp_type=qp_type_code)
+        ea_qs = ea_qs.filter(qp_type__iexact=qp_type_code)
     exam_assignments = list(ea_qs)
 
     # ClassType exam_assignments filtered to this qp_type (normalized)
@@ -1324,13 +1324,13 @@ def faculty_course_info(request, ta_id):
     if acv2_ct and qp_type_code and not ct_ea_configs:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
-            qp_type=qp_type_code,
+            qp_type__iexact=qp_type_code,
             class_type=acv2_ct,
         ).order_by('order', 'created_at')
         if not patterns_qs.exists():
             patterns_qs = AcV2QpPattern.objects.filter(
                 is_active=True,
-                qp_type=qp_type_code,
+                qp_type__iexact=qp_type_code,
                 class_type__isnull=True,
             ).order_by('order', 'created_at')
 
@@ -1527,7 +1527,7 @@ def faculty_course_info(request, ta_id):
                 exam_code_raw = ea_conf.get('exam', '')
                 display_name = ea_conf.get('exam_display_name', exam_code_raw)
                 weight = ea_conf.get('weight', 0)
-                qp_type_val = ea_conf.get('qp_type', exam_code_raw)
+                qp_type_val = (ea_conf.get('qp_type') or qp_type_code or exam_code_raw or '').strip()
 
                 # If exam code equals the qp_type (legacy bad data from WeightagePage),
                 # use display_name as the unique exam identifier instead.
@@ -1544,17 +1544,17 @@ def faculty_course_info(request, ta_id):
                 covered_cos = []
                 qp_match = (
                     AcV2QpPattern.objects.filter(
-                        name__iexact=display_name, qp_type=qp_type_val,
+                        name__iexact=display_name, qp_type__iexact=qp_type_val,
                         class_type=acv2_ct, is_active=True,
                     ).first()
                     or AcV2QpPattern.objects.filter(
-                        name__iexact=display_name, qp_type=qp_type_val, is_active=True,
+                        name__iexact=display_name, qp_type__iexact=qp_type_val, is_active=True,
                     ).first()
                     or AcV2QpPattern.objects.filter(
-                        qp_type=qp_type_val, class_type=acv2_ct, is_active=True,
+                        qp_type__iexact=qp_type_val, class_type=acv2_ct, is_active=True,
                     ).first()
                     or AcV2QpPattern.objects.filter(
-                        qp_type=qp_type_val, is_active=True,
+                        qp_type__iexact=qp_type_val, is_active=True,
                     ).first()
                 )
                 derived_max = 0
@@ -2402,6 +2402,9 @@ def faculty_course_co_summary(request, ta_id):
     """
     from academics.models import TeachingAssignment, StudentSectionAssignment, StudentProfile
     from decimal import Decimal
+    from .models import AcV2CqiAttained
+    import ast
+    import math
 
     ta = get_object_or_404(
         TeachingAssignment.objects.select_related(
@@ -2450,7 +2453,7 @@ def faculty_course_co_summary(request, ta_id):
     # Otherwise, legacy exam assignments (SSA/CIA/Model etc.) bleed into the table.
     exam_qs = AcV2ExamAssignment.objects.filter(section=acv2_section)
     if qp_type_code:
-        exam_qs = exam_qs.filter(qp_type=qp_type_code)
+        exam_qs = exam_qs.filter(qp_type__iexact=qp_type_code)
     exam_assignments = list(exam_qs.order_by('created_at'))
 
     # Build qp_type-specific effective configs for weight/ordering.
@@ -2468,13 +2471,13 @@ def faculty_course_co_summary(request, ta_id):
     if class_type and qp_type_code and not ct_ea_configs:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
-            qp_type=qp_type_code,
+            qp_type__iexact=qp_type_code,
             class_type=class_type,
         ).order_by('order', 'created_at')
         if not patterns_qs.exists():
             patterns_qs = AcV2QpPattern.objects.filter(
                 is_active=True,
-                qp_type=qp_type_code,
+                qp_type__iexact=qp_type_code,
                 class_type__isnull=True,
             ).order_by('order', 'created_at')
 
@@ -2506,8 +2509,26 @@ def faculty_course_co_summary(request, ta_id):
 
     effective_ea_configs = ct_ea_configs or derived_ea_configs
 
-    # Build weight lookup from effective configs (qp_type-specific)
+    # Normalization helper for matching exams between DB and ClassType config
     norm_exam_key = lambda s: (str(s or '').strip().lower())
+
+    # Helper: determine kind + CQI subconfig from class-type exam_assignments
+    ct_kind_by_key = {}
+    if effective_ea_configs:
+        for ea_conf in effective_ea_configs:
+            try:
+                kind = 'cqi' if str(ea_conf.get('kind', '')).lower() == 'cqi' else 'exam'
+            except Exception:
+                kind = 'exam'
+            cqi_sub = ea_conf.get('cqi', {}) if isinstance(ea_conf.get('cqi'), dict) else {}
+            for key in [ea_conf.get('exam'), ea_conf.get('exam_display_name')]:
+                k = norm_exam_key(key)
+                if not k:
+                    continue
+                if k not in ct_kind_by_key:
+                    ct_kind_by_key[k] = { 'kind': kind, 'cqi': cqi_sub }
+
+    # Build weight lookup from effective configs (qp_type-specific)
     ct_weight_map = {}
     ct_co_weights_map = {}  # exam -> {co_num: weight}
     ct_index = {}
@@ -2576,6 +2597,199 @@ def faculty_course_co_summary(request, ta_id):
 
     exams_data = []
     exam_map = {}  # exam_id -> exam info
+
+    # Published CQI snapshot for this TA (if any)
+    cqi_attained = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
+    cqi_entries = cqi_attained.entries if cqi_attained and isinstance(cqi_attained.entries, dict) else {}
+
+    # CQI expression evaluation (used for Internal Marks CQI values)
+    def _normalize_cqi_expr(expr: str, allowed_names: set) -> str:
+        s = str(expr or '').strip()
+        if not s:
+            return ''
+        # Replace token form [TOKEN] with identifier TOKEN (or 0 if unknown).
+        def repl(m):
+            key = str(m.group(1) or '').strip().upper()
+            return key if key in allowed_names else '0'
+        return re.sub(r'\[([A-Za-z0-9_-]+)\]', repl, s)
+
+    _ALLOWED_FUNCS = {
+        'min': min,
+        'max': max,
+        'abs': abs,
+        'round': round,
+        'sqrt': math.sqrt,
+        'floor': math.floor,
+        'ceil': math.ceil,
+    }
+
+    def _safe_eval_cqi_num(expr: str, vars_map: dict) -> float:
+        """Safely evaluate a numeric expression for CQI mapping."""
+        allowed_names = set(str(k).upper() for k in (vars_map or {}).keys())
+        expr_n = _normalize_cqi_expr(expr, allowed_names)
+        if not expr_n:
+            return float(vars_map.get('CQI', 0) or 0)
+        try:
+            tree = ast.parse(expr_n, mode='eval')
+        except Exception:
+            return float(vars_map.get('CQI', 0) or 0)
+
+        def _eval(node):
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant):
+                return float(node.value) if isinstance(node.value, (int, float)) else 0.0
+            if isinstance(node, ast.Num):
+                return float(node.n)
+            if isinstance(node, ast.Name):
+                key = str(node.id or '').upper()
+                try:
+                    return float(vars_map.get(key, 0) or 0)
+                except Exception:
+                    return 0.0
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                v = _eval(node.operand)
+                return v if isinstance(node.op, ast.UAdd) else -v
+            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)):
+                a = _eval(node.left)
+                b = _eval(node.right)
+                if isinstance(node.op, ast.Add):
+                    return a + b
+                if isinstance(node.op, ast.Sub):
+                    return a - b
+                if isinstance(node.op, ast.Mult):
+                    return a * b
+                if isinstance(node.op, ast.Div):
+                    return a / b if b else 0.0
+                if isinstance(node.op, ast.Mod):
+                    return a % b if b else 0.0
+                if isinstance(node.op, ast.Pow):
+                    return a ** b
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                fn = _ALLOWED_FUNCS.get(node.func.id)
+                if not fn:
+                    return 0.0
+                args = [_eval(a) for a in (node.args or [])]
+                try:
+                    return float(fn(*args))
+                except Exception:
+                    return 0.0
+            return 0.0
+
+        try:
+            return float(_eval(tree))
+        except Exception:
+            return float(vars_map.get('CQI', 0) or 0)
+
+    def _safe_eval_cqi_bool(expr: str, vars_map: dict) -> bool:
+        """Safely evaluate a boolean expression (comparisons + AND/OR) for CQI conditions."""
+        allowed_names = set(str(k).upper() for k in (vars_map or {}).keys())
+        expr_n = _normalize_cqi_expr(expr, allowed_names)
+        if not expr_n:
+            return False
+        # Support AND/OR written as words
+        expr_n = re.sub(r'\bAND\b', 'and', expr_n, flags=re.IGNORECASE)
+        expr_n = re.sub(r'\bOR\b', 'or', expr_n, flags=re.IGNORECASE)
+        try:
+            tree = ast.parse(expr_n, mode='eval')
+        except Exception:
+            return False
+
+        def _eval(node):
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Num):
+                return node.n
+            if isinstance(node, ast.Name):
+                key = str(node.id or '').upper()
+                try:
+                    return float(vars_map.get(key, 0) or 0)
+                except Exception:
+                    return 0.0
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub, ast.Not)):
+                v = _eval(node.operand)
+                if isinstance(node.op, ast.Not):
+                    return not bool(v)
+                try:
+                    v = float(v or 0)
+                except Exception:
+                    v = 0.0
+                return v if isinstance(node.op, ast.UAdd) else -v
+            if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)):
+                a = _eval(node.left)
+                b = _eval(node.right)
+                try:
+                    a = float(a or 0)
+                except Exception:
+                    a = 0.0
+                try:
+                    b = float(b or 0)
+                except Exception:
+                    b = 0.0
+                if isinstance(node.op, ast.Add):
+                    return a + b
+                if isinstance(node.op, ast.Sub):
+                    return a - b
+                if isinstance(node.op, ast.Mult):
+                    return a * b
+                if isinstance(node.op, ast.Div):
+                    return a / b if b else 0.0
+                if isinstance(node.op, ast.Mod):
+                    return a % b if b else 0.0
+                if isinstance(node.op, ast.Pow):
+                    return a ** b
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                fn = _ALLOWED_FUNCS.get(node.func.id)
+                if not fn:
+                    return 0.0
+                args = [_eval(a) for a in (node.args or [])]
+                try:
+                    return float(fn(*args))
+                except Exception:
+                    return 0.0
+            if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
+                vals = [_eval(v) for v in (node.values or [])]
+                if isinstance(node.op, ast.And):
+                    return all(bool(v) for v in vals)
+                return any(bool(v) for v in vals)
+            if isinstance(node, ast.Compare):
+                left = _eval(node.left)
+                try:
+                    left_num = float(left or 0)
+                except Exception:
+                    left_num = 0.0
+                ok = True
+                for op, comp in zip(node.ops or [], node.comparators or []):
+                    right = _eval(comp)
+                    try:
+                        right_num = float(right or 0)
+                    except Exception:
+                        right_num = 0.0
+                    if isinstance(op, ast.Eq):
+                        ok = ok and (left_num == right_num)
+                    elif isinstance(op, ast.NotEq):
+                        ok = ok and (left_num != right_num)
+                    elif isinstance(op, ast.Lt):
+                        ok = ok and (left_num < right_num)
+                    elif isinstance(op, ast.LtE):
+                        ok = ok and (left_num <= right_num)
+                    elif isinstance(op, ast.Gt):
+                        ok = ok and (left_num > right_num)
+                    elif isinstance(op, ast.GtE):
+                        ok = ok and (left_num >= right_num)
+                    else:
+                        ok = False
+                    left_num = right_num
+                return ok
+            return False
+
+        try:
+            return bool(_eval(tree))
+        except Exception:
+            return False
+
     for ea in exam_assignments:
         def _extract_co_list(raw_co):
             if raw_co is None:
@@ -2614,6 +2828,20 @@ def faculty_course_co_summary(request, ta_id):
         max_marks = float(ea.max_marks) if ea.max_marks else 0
         ea_key = norm_exam_key(ea.exam_display_name or ea.exam)
 
+        # Determine kind + CQI metadata from ClassType config
+        ea_kind = 'exam'
+        cqi_sub = {}
+        if ea_key in ct_kind_by_key:
+            ea_kind = ct_kind_by_key[ea_key].get('kind') or 'exam'
+            cqi_sub = ct_kind_by_key[ea_key].get('cqi') or {}
+        if ea_kind == 'cqi':
+            try:
+                _cqi_cos = cqi_sub.get('cos', []) if isinstance(cqi_sub, dict) else []
+            except Exception:
+                _cqi_cos = []
+            if isinstance(_cqi_cos, list) and _cqi_cos:
+                covered_cos = [int(x) for x in _cqi_cos if str(x).isdigit() and 1 <= int(x) <= co_count]
+
         # Resolve weight from ClassType config if ea.weight is 0
         if weight == 0 and ea_key in ct_weight_map and ct_weight_map[ea_key]:
             weight = float(ct_weight_map[ea_key])
@@ -2634,6 +2862,8 @@ def faculty_course_co_summary(request, ta_id):
         qp_marks = []
         qp_cos = []
         qp_enabled = []
+        qp_special_split = []
+        qp_special_split_sources = []
         
         if user_pattern and isinstance(user_pattern, dict):
             # Use course-specific pattern from Mark Manager
@@ -2641,6 +2871,8 @@ def faculty_course_co_summary(request, ta_id):
             qp_marks = p.get('marks', [])
             qp_cos = p.get('cos', [])
             qp_enabled = p.get('enabled', [True] * len(qp_marks))
+            qp_special_split = p.get('special_split', [])
+            qp_special_split_sources = p.get('special_split_sources', [])
             # Derive max_marks from user pattern
             derived_max = sum(
                 m for i, m in enumerate(qp_marks)
@@ -2755,6 +2987,8 @@ def faculty_course_co_summary(request, ta_id):
                 qp_marks = p.get('marks', [])
                 qp_cos = p.get('cos', [])
                 qp_enabled = p.get('enabled', [True] * len(qp_marks))
+                qp_special_split = p.get('special_split', [])
+                qp_special_split_sources = p.get('special_split_sources', [])
                 # Derive max_marks from pattern
                 derived_max = sum(
                     m for i, m in enumerate(qp_marks)
@@ -2797,6 +3031,44 @@ def faculty_course_co_summary(request, ta_id):
 
         combo_questions = []
         if isinstance(qp_cos, list) and qp_cos:
+            def _num(x):
+                try:
+                    return float(x or 0)
+                except Exception:
+                    return 0.0
+
+            def _safe_bool_at(arr, i: int) -> bool:
+                return bool(isinstance(arr, list) and i < len(arr) and arr[i])
+
+            def _safe_sources_at(arr, i: int):
+                if not isinstance(arr, list) or i >= len(arr):
+                    return []
+                v = arr[i]
+                return v if isinstance(v, list) else []
+
+            def _special_split_max(i: int) -> float:
+                # Derived max preview using QP pattern marks (not student marks)
+                if not _safe_bool_at(qp_special_split, i):
+                    return _num(qp_marks[i] if isinstance(qp_marks, list) and i < len(qp_marks) else 0)
+                sources = _safe_sources_at(qp_special_split_sources, i)
+                co_set = set()
+                sum_src = 0.0
+                for sidx in sources:
+                    try:
+                        j = int(sidx)
+                    except Exception:
+                        continue
+                    if j == i or j < 0 or j >= len(qp_cos):
+                        continue
+                    if isinstance(qp_enabled, list) and j < len(qp_enabled) and not qp_enabled[j]:
+                        continue
+                    sum_src += _num(qp_marks[j] if isinstance(qp_marks, list) and j < len(qp_marks) else 0)
+                    for c in _extract_co_list(qp_cos[j]):
+                        co_set.add(int(c))
+                denom = len(co_set) or 1
+                base = _num(qp_marks[i] if isinstance(qp_marks, list) and i < len(qp_marks) else 0)
+                return round(sum_src + (base / denom), 2)
+
             for i, co in enumerate(qp_cos):
                 if i < len(qp_enabled) and qp_enabled and not qp_enabled[i]:
                     continue
@@ -2829,12 +3101,7 @@ def faculty_course_co_summary(request, ta_id):
                         co_list.append(n)
 
                 if len(co_list) >= 2:
-                    max_q = 0
-                    if isinstance(qp_marks, list) and i < len(qp_marks):
-                        try:
-                            max_q = float(qp_marks[i] or 0)
-                        except Exception:
-                            max_q = 0
+                    max_q = _special_split_max(i)
                     combo_questions.append({
                         'key': f'combo_q{i}',
                         'co_list': co_list,
@@ -2847,7 +3114,7 @@ def faculty_course_co_summary(request, ta_id):
             'short_name': ea.exam or ea.qp_type or '',
             'max_marks': max_marks,
             'weight': weight,
-            'co_weights': co_weights,  # Per-CO weights (from Mark Manager or admin config)
+            'co_weights': {} if ea_kind == 'cqi' else co_weights,  # Per-CO weights (from Mark Manager or admin config)
             'cia_enabled': cia_enabled,  # Whether Mark Manager Exam checkbox is enabled
             'cia_weight': cia_weight,  # Weight for Exam component from Mark Manager
             'exam_max_marks': exam_max_marks,
@@ -2857,6 +3124,9 @@ def faculty_course_co_summary(request, ta_id):
             'co_max_map': co_max_map,
             'status': ea.status,
             'combo_questions': combo_questions,
+            'kind': ea_kind,
+            'cqi_name': str(cqi_sub.get('name', '') or '') if isinstance(cqi_sub, dict) else '',
+            'cqi_cos': covered_cos if ea_kind == 'cqi' else [],
         }
         exams_data.append(exam_info)
         # Keep internal fields for per-student recomputation from question_marks.
@@ -2865,9 +3135,13 @@ def faculty_course_co_summary(request, ta_id):
             '_exam_q_index': exam_q_index,
             '_qp_marks': qp_marks if isinstance(qp_marks, list) else [],
         }
+        if ea_kind == 'cqi' and isinstance(cqi_sub, dict):
+            internal['_cqi_sub'] = cqi_sub
         if isinstance(qp_cos, list) and qp_cos:
             internal['_qp_cos'] = qp_cos
             internal['_qp_enabled'] = qp_enabled
+            internal['_qp_special_split'] = qp_special_split if isinstance(qp_special_split, list) else []
+            internal['_qp_special_split_sources'] = qp_special_split_sources if isinstance(qp_special_split_sources, list) else []
         exam_map[str(ea.id)] = {**exam_info, **internal}
 
     # Get all active students in the academic section
@@ -2908,10 +3182,17 @@ def faculty_course_co_summary(request, ta_id):
 
         student_marks = mark_lookup.get(sid, {})
 
+        pending_cqi = []
+
         for ea in exam_assignments:
             eid = str(ea.id)
             einfo = exam_map[eid]
             sm = student_marks.get(eid)
+
+            # CQI-kind exam assignment: derive marks from published CQI snapshot
+            if einfo.get('kind') == 'cqi':
+                pending_cqi.append(einfo)
+                continue
 
             exam_entry = {
                 'is_absent': sm.is_absent if sm else False,
@@ -2956,9 +3237,12 @@ def faculty_course_co_summary(request, ta_id):
             effective_for_db = None  # type: ignore
             exam_raw_for_split = 0.0
             computed_total_from_questions = None  # type: ignore
+            special_combo_value = {}
             if sm and not sm.is_absent and isinstance(sm.question_marks, dict) and isinstance(einfo.get('_qp_cos'), list):
                 qp_cos_local = einfo.get('_qp_cos') or []
                 qp_enabled_local = einfo.get('_qp_enabled') or [True] * len(qp_cos_local)
+                qp_special_local = einfo.get('_qp_special_split') or []
+                qp_special_sources_local = einfo.get('_qp_special_split_sources') or []
                 qmarks = sm.question_marks
 
                 # Question keys can be either 0-based (q0, q1, ...) or 1-based (q1, q2, ...)
@@ -2972,6 +3256,45 @@ def faculty_course_co_summary(request, ta_id):
                 def _qkey(i: int) -> str:
                     return f'q{i + q_base}'
 
+                def _safe_bool_at(arr, i: int) -> bool:
+                    return bool(isinstance(arr, list) and i < len(arr) and arr[i])
+
+                def _safe_sources_at(arr, i: int):
+                    if not isinstance(arr, list) or i >= len(arr):
+                        return []
+                    v = arr[i]
+                    return v if isinstance(v, list) else []
+
+                # Pre-compute per-student derived values for special_split combo questions.
+                special_combo_value = {}
+                if isinstance(qp_cos_local, list) and qp_cos_local:
+                    for i, _co in enumerate(qp_cos_local):
+                        if not _safe_bool_at(qp_special_local, i):
+                            continue
+                        if i < len(qp_enabled_local) and not qp_enabled_local[i]:
+                            continue
+                        sources = _safe_sources_at(qp_special_sources_local, i)
+                        co_set = set()
+                        sum_src = 0.0
+                        for sidx in sources:
+                            try:
+                                j = int(sidx)
+                            except Exception:
+                                continue
+                            if j == i or j < 0 or j >= len(qp_cos_local):
+                                continue
+                            if j < len(qp_enabled_local) and not qp_enabled_local[j]:
+                                continue
+                            v = qmarks.get(_qkey(j), 0) or 0
+                            if isinstance(v, (int, float)):
+                                sum_src += float(v)
+                            for c in _extract_cos(qp_cos_local[j]):
+                                co_set.add(int(c))
+                        denom = len(co_set) or 1
+                        base = qmarks.get(_qkey(i), 0) or 0
+                        base_num = float(base) if isinstance(base, (int, float)) else 0.0
+                        special_combo_value[i] = round(sum_src + (base_num / denom), 2)
+
                 # Build combo question list for UI columns
                 combo_cols = []
                 for i, co in enumerate(qp_cos_local):
@@ -2979,10 +3302,34 @@ def faculty_course_co_summary(request, ta_id):
                         continue
                     co_list = _extract_cos(co)
                     if len(co_list) >= 2:
+                        max_marks_list = einfo.get('_qp_marks') or []
+                        max_raw = max_marks_list[i] if isinstance(max_marks_list, list) and i < len(max_marks_list) else 0
+                        max_q = float(max_raw or 0) if isinstance(max_raw, (int, float)) else 0.0
+                        # If this is a special_split question, show derived max in header.
+                        if _safe_bool_at(qp_special_local, i):
+                            sources = _safe_sources_at(qp_special_sources_local, i)
+                            co_set = set()
+                            sum_src = 0.0
+                            for sidx in sources:
+                                try:
+                                    j = int(sidx)
+                                except Exception:
+                                    continue
+                                if j == i or j < 0 or j >= len(qp_cos_local):
+                                    continue
+                                if j < len(qp_enabled_local) and not qp_enabled_local[j]:
+                                    continue
+                                mr = max_marks_list[j] if isinstance(max_marks_list, list) and j < len(max_marks_list) else 0
+                                if isinstance(mr, (int, float)):
+                                    sum_src += float(mr)
+                                for c in _extract_cos(qp_cos_local[j]):
+                                    co_set.add(int(c))
+                            denom = len(co_set) or 1
+                            max_q = round(sum_src + (max_q / denom), 2)
                         combo_cols.append({
                             'key': f'combo_q{i}',
                             'co_list': co_list,
-                            'max_marks': (einfo.get('_qp_marks') or [])[i] if isinstance(einfo.get('_qp_marks'), list) and i < len(einfo.get('_qp_marks')) else 0,
+                            'max_marks': max_q,
                         })
                 if combo_cols:
                     einfo['combo_questions'] = combo_cols
@@ -3081,6 +3428,9 @@ def faculty_course_co_summary(request, ta_id):
                         idx = None
                     if idx is None or idx < 0:
                         continue
+                    if isinstance(special_combo_value, dict) and idx in special_combo_value:
+                        exam_entry[key] = float(special_combo_value[idx] or 0)
+                        continue
                     # Use the same base detection as above when possible
                     q_val = sm.question_marks.get(f'q{idx}', None)
                     if q_val is None:
@@ -3146,6 +3496,96 @@ def faculty_course_co_summary(request, ta_id):
                                 wm_key = f"{einfo['id']}_exam_CO{c}"
                                 student_entry['weighted_marks'][wm_key] = round(add_w, 2)
 
+        # Apply CQI exam(s) after non-CQI totals are known.
+        if pending_cqi:
+            sid_key = str(sid)
+            s_entries = cqi_entries.get(sid_key, {}) if isinstance(cqi_entries, dict) else {}
+
+            before_total_all = float(sum(student_entry.get('co_totals') or []))
+            # Precompute sum(CQI inputs) for TOTAL_CQI context.
+            sum_raw_cqi = 0.0
+            for einfo in pending_cqi:
+                for co_num in (einfo.get('covered_cos') or []):
+                    try:
+                        co_n = int(co_num)
+                    except Exception:
+                        continue
+                    if co_n < 1 or co_n > co_count:
+                        continue
+                    raw_in = s_entries.get(f'co{co_n}') if isinstance(s_entries, dict) else None
+                    try:
+                        sum_raw_cqi += float(raw_in) if raw_in is not None else 0.0
+                    except Exception:
+                        pass
+
+            for einfo in pending_cqi:
+                cqi_sub = einfo.get('_cqi_sub') if isinstance(einfo, dict) else {}
+                conds = cqi_sub.get('conditions', []) if isinstance(cqi_sub, dict) else []
+                else_expr = str(cqi_sub.get('else_formula', '') or '') if isinstance(cqi_sub, dict) else ''
+                legacy_value_expr = str(cqi_sub.get('co_value_expr', '') or '') if isinstance(cqi_sub, dict) else ''
+
+                exam_entry = { 'is_absent': False }
+                total_val = 0.0
+                for co_num in (einfo.get('covered_cos') or []):
+                    try:
+                        co_n = int(co_num)
+                    except Exception:
+                        continue
+                    if co_n < 1 or co_n > co_count:
+                        continue
+                    raw_in = s_entries.get(f'co{co_n}') if isinstance(s_entries, dict) else None
+                    try:
+                        cqi_in = float(raw_in) if raw_in is not None else 0.0
+                    except Exception:
+                        cqi_in = 0.0
+
+                    before_co = 0.0
+                    try:
+                        before_co = float((student_entry.get('co_totals') or [0.0] * co_count)[co_n - 1] or 0.0)
+                    except Exception:
+                        before_co = 0.0
+
+                    vars_map = {
+                        'CQI': float(cqi_in or 0.0),
+                        'X': float(cqi_in or 0.0),
+                        'BEFORE_CQI': float(before_co or 0.0),
+                        'AFTER_CQI': float((before_co or 0.0) + (cqi_in or 0.0)),
+                        'TOTAL_CQI': float((before_total_all or 0.0) + (sum_raw_cqi or 0.0)),
+                    }
+
+                    mapped = None
+                    # Condition ladder: first match wins.
+                    if isinstance(conds, list) and conds:
+                        for cond in conds:
+                            if not isinstance(cond, dict):
+                                continue
+                            if_expr = str(cond.get('if', '') or '').strip()
+                            then_expr = str(cond.get('then', '') or '').strip()
+                            if if_expr and _safe_eval_cqi_bool(if_expr, vars_map):
+                                if then_expr:
+                                    mapped = _safe_eval_cqi_num(then_expr, vars_map)
+                                break
+
+                    if mapped is None:
+                        if else_expr.strip():
+                            mapped = _safe_eval_cqi_num(else_expr, vars_map)
+                        elif legacy_value_expr.strip():
+                            mapped = _safe_eval_cqi_num(legacy_value_expr, vars_map)
+                        else:
+                            mapped = float(cqi_in or 0.0)
+
+                    mapped = round(float(mapped or 0.0), 2)
+                    exam_entry[f'co{co_n}'] = mapped
+                    total_val += mapped
+                    # CQI contributes directly to CO totals (no weight).
+                    try:
+                        student_entry['co_totals'][co_n - 1] = round(float(student_entry['co_totals'][co_n - 1] or 0.0) + mapped, 2)
+                    except Exception:
+                        pass
+
+                exam_entry['total'] = round(total_val, 2)
+                student_entry['exam_marks'][einfo.get('id')] = exam_entry
+
         # Round CO totals
         student_entry['co_totals'] = [round(v, 2) for v in student_entry['co_totals']]
         student_entry['final_mark'] = round(sum(student_entry['co_totals']), 2)
@@ -3168,6 +3608,7 @@ def faculty_course_co_summary(request, ta_id):
                 'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
                 'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
                 'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
+                'co_value_expr': str(_raw.get('co_value_expr', '') or ''),
                 'formula': str(_raw.get('formula', '') or ''),
                 'conditions': _raw.get('conditions', []) if isinstance(_raw.get('conditions'), list) else [],
                 'else_formula': str(_raw.get('else_formula', '') or ''),

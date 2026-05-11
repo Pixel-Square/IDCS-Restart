@@ -145,6 +145,10 @@ export default function App() {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
+  const bootstrapMeTimeoutMs = Math.max(
+    Number((import.meta as any)?.env?.VITE_ME_BOOTSTRAP_TIMEOUT) || 20000,
+    5000,
+  );
 
   const canAccessCoePortal = (currentUser: Me | null) => {
     if (!currentUser) return false;
@@ -175,11 +179,11 @@ export default function App() {
     let cancelled = false
     const timeout = setTimeout(() => {
       if (!cancelled) {
-        console.warn('getMe() timed out')
+        console.warn(`getMe() timed out after ${bootstrapMeTimeoutMs}ms`)
         setUser(null)
         setLoading(false)
       }
-    }, 5000)
+    }, bootstrapMeTimeoutMs)
 
     getMe()
       .then((r) => {
@@ -204,7 +208,7 @@ export default function App() {
       .finally(() => { if (!cancelled) { clearTimeout(timeout); setLoading(false) } })
 
     return () => { cancelled = true; clearTimeout(timeout) }
-  }, []);
+  }, [bootstrapMeTimeoutMs]);
 
   useEffect(() => {
     const onMeUpdated = (event: Event) => {

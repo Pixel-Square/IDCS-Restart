@@ -80,12 +80,18 @@ function tokenizeExpr(s: string): EToken[] {
   let i = 0;
   while (i < s.length) {
     if (/\s/.test(s[i])) { i++; continue; }
+    if (s[i] === '&' && s[i + 1] === '&') { tokens.push({ t: 'op', v: '&&' }); i += 2; continue; }
+    if (s[i] === '|' && s[i + 1] === '|') { tokens.push({ t: 'op', v: '||' }); i += 2; continue; }
     if (/[0-9.]/.test(s[i])) {
       let j = i; while (j < s.length && /[0-9.]/.test(s[j])) j++;
       tokens.push({ t: 'num', v: s.slice(i, j), n: parseFloat(s.slice(i, j)) }); i = j;
     } else if (/[a-z]/i.test(s[i])) {
       let j = i; while (j < s.length && /[a-z0-9]/i.test(s[j])) j++;
-      tokens.push({ t: 'fn', v: s.slice(i, j).toLowerCase() }); i = j;
+      const word = s.slice(i, j).toLowerCase();
+      if (word === 'and') tokens.push({ t: 'op', v: '&&' });
+      else if (word === 'or') tokens.push({ t: 'op', v: '||' });
+      else tokens.push({ t: 'fn', v: word });
+      i = j;
     } else if (s[i] === '(') { tokens.push({ t: 'lp', v: '(' }); i++; }
     else if (s[i] === ')') { tokens.push({ t: 'rp', v: ')' }); i++; }
     else if (s[i] === ',') { tokens.push({ t: 'comma', v: ',' }); i++; }
@@ -158,7 +164,7 @@ function parseAddSub(tokens: EToken[], pos: { i: number }): number {
   }
   return left;
 }
-function parseExprInner(tokens: EToken[], pos: { i: number }): number {
+function parseCompare(tokens: EToken[], pos: { i: number }): number {
   let left = parseAddSub(tokens, pos);
   const cur = tokens[pos.i];
   if (cur?.t === 'op' && ['<', '>', '<=', '>=', '==', '!=', '='].includes(cur.v)) {
@@ -170,6 +176,20 @@ function parseExprInner(tokens: EToken[], pos: { i: number }): number {
     if (op === '>=') return left >= right ? 1 : 0;
     if (op === '==' || op === '=') return left === right ? 1 : 0;
     if (op === '!=') return left !== right ? 1 : 0;
+  }
+  return left;
+}
+
+function parseExprInner(tokens: EToken[], pos: { i: number }): number {
+  let left = parseCompare(tokens, pos);
+  while (pos.i < tokens.length) {
+    const cur = tokens[pos.i];
+    if (cur?.t !== 'op' || !['&&', '||'].includes(cur.v)) break;
+    const op = cur.v;
+    pos.i++;
+    const right = parseCompare(tokens, pos);
+    if (op === '&&') left = (left !== 0 && right !== 0) ? 1 : 0;
+    else left = (left !== 0 || right !== 0) ? 1 : 0;
   }
   return left;
 }
@@ -266,6 +286,7 @@ function buildContext(
   examMarks?: Record<string, Record<string, number>>,
   weightedMarks?: Record<string, number>,
   customVars?: Array<{ code: string; label?: string; expr: string }>,
+  cqiTotals?: { beforeValue: number; beforePct: number; afterValue: number; afterPct: number },
 ): Record<string, number> {
   const ctx: Record<string, number> = {};
   const totalRaw = coTotals.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
@@ -290,6 +311,13 @@ function buildContext(
   // Faculty-entered CQI value (0-10)
   ctx['CQI'] = cqiInput != null && Number.isFinite(cqiInput) ? cqiInput : 0;
   ctx['X'] = ctx['CQI'];
+
+  // CQI Entry columns (row-level tokens)
+  if (cqiTotals) {
+    ctx['BEFORE_CQI'] = round2(Number(cqiTotals.beforeValue) || 0);
+    ctx['AFTER_CQI'] = round2(Number(cqiTotals.afterValue) || 0);
+    ctx['TOTAL_CQI'] = round2(Number(cqiTotals.beforePct) || 0);
+  }
   const co_count = coTotals.length;
   for (const ex of exams) {
     const marks = examMarks?.[ex.id] || {};
@@ -666,21 +694,66 @@ export default function CqiEntryPage() {
       const beforeValue = round2(perCo.reduce((sum, c) => sum + c.value, 0));
       const beforeMax = round2(perCo.reduce((sum, c) => sum + c.max, 0));
       const beforePct = beforeMax > 0 ? (beforeValue / beforeMax) * 100 : 0;
+
+      const perCoMeta = perCo.map((c) => {
+        const baseTotals = { beforeValue, beforePct, afterValue: beforeValue, afterPct: beforePct };
+        const ctxBase = buildContext(
+          evalTotals,
+          coMaxByCo,
+          0,
+          c.coNum,
+          exams,
+          s.exam_marks,
+          s.weighted_marks,
+          cqiConfig?.custom_vars,
+          baseTotals,
+        );
+        const notAttainedBefore = hasCqiConfig && cqiConfig
+          ? evaluateCqiImpact(cqiConfig, ctxBase, null, c.coNum).notAttainedBefore
+          : false;
+        const matchedCond = hasCqiConfig && cqiConfig && notAttainedBefore
+          ? firstMatchedCondition(cqiConfig, ctxBase, c.coNum)
+          : null;
+        const matchedColor = String((matchedCond as any)?.color || '').trim();
+        return { ...c, ctxBase, notAttainedBefore, matchedCond, matchedColor };
+      });
+
+      const firstEligible = perCoMeta.find((c) => c.notAttainedBefore && c.matchedCond) || null;
+      const totalHighlightColor = firstEligible
+        ? (String((firstEligible as any).matchedColor || '').trim() || '#FEE2E2')
+        : '';
       let afterValue = beforeValue;
       let delta = 0;
       // Apply CQI only for the admin-selected COs shown in this page.
-      for (const c of perCo) {
+      for (const c of perCoMeta) {
         if (!c.max || c.max <= 0) continue;
         const input = entries?.[studentId]?.[`co${c.coNum}`] ?? null;
         if (input == null) continue;
         if (!hasCqiConfig || !cqiConfig) continue;
-        const ctxBase = buildContext(evalTotals, coMaxByCo, 0, c.coNum, exams, s.exam_marks, s.weighted_marks, cqiConfig?.custom_vars);
+        if (!c.notAttainedBefore || !c.matchedCond) continue;
+        const ctxBase = c.ctxBase;
         const impact = evaluateCqiImpact(cqiConfig, ctxBase, Number(input), c.coNum);
         if (Number.isFinite(impact.addRaw) && impact.addRaw > 0) { delta += impact.addRaw; afterValue += impact.addRaw; }
       }
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;
       const afterPct = beforeMax > 0 ? (afterValue / beforeMax) * 100 : 0;
-      return { idx, studentId, regNo: s.reg_no, name: s.name, perCo, beforeValue, beforePct, afterValue: round2(afterValue), afterPct, delta: round2(delta), coTotals: evalTotals, examMarks: s.exam_marks, weightedMarks: s.weighted_marks };
+      return {
+        idx,
+        studentId,
+        regNo: s.reg_no,
+        name: s.name,
+        perCo: perCoMeta.map(({ ctxBase, matchedCond, ...rest }) => rest),
+        perCoMeta,
+        beforeValue,
+        beforePct,
+        afterValue: round2(afterValue),
+        afterPct,
+        delta: round2(delta),
+        coTotals: evalTotals,
+        examMarks: s.exam_marks,
+        weightedMarks: s.weighted_marks,
+        totalHighlightColor,
+      };
     });
   }, [coSummary, consideredExams, displayCoNumbers, coMaxByCo, entries, cqiConfig, hasCqiConfig]);
 
@@ -794,7 +867,10 @@ export default function CqiEntryPage() {
                       {r.delta > 0 && <div className="text-xs text-green-600 mt-0.5">+{round2(r.delta)}</div>}
                     </td>
                     <td className="px-3 py-2 text-center font-bold">
-                      <div className="inline-block px-2 py-1 rounded">
+                      <div
+                        className="inline-block px-2 py-1 rounded"
+                        style={r.totalHighlightColor ? { backgroundColor: r.totalHighlightColor } : undefined}
+                      >
                         <div className="text-gray-900 text-sm font-extrabold">{round2(r.beforePct)}%</div>
                         <div className="text-xs text-gray-500 mt-1">{round2(r.beforeValue)}</div>
                       </div>
@@ -806,24 +882,36 @@ export default function CqiEntryPage() {
                       const input = current == null ? null : Number(current);
                       const hasInput = input != null && Number.isFinite(input);
 
-                      const ctxBase = buildContext(r.coTotals, coMaxByCo, 0, c.coNum, consideredExams, r.examMarks, r.weightedMarks, cqiConfig?.custom_vars);
-                      const notAttainedBefore = hasCqiConfig && cqiConfig ? evaluateCqiImpact(cqiConfig, ctxBase, null, c.coNum).notAttainedBefore : false;
+                      const cMeta = (r.perCoMeta || []).find((x: any) => x.coNum === c.coNum) as any;
+                      const notAttainedBefore = Boolean(cMeta?.notAttainedBefore);
+                      const matchedCond = (cMeta?.matchedCond as any) || null;
+                      const matchedColor = String(cMeta?.matchedColor || '').trim();
+                      const allowInput = !tableBlocked && hasCqiConfig && cqiConfig && notAttainedBefore && !!matchedCond;
 
-                      const matchedCond = hasCqiConfig && cqiConfig && notAttainedBefore
-                        ? firstMatchedCondition(cqiConfig, ctxBase, c.coNum)
-                        : null;
-                      const matchedColor = String((matchedCond as any)?.color || '').trim();
+                      const ctxBase = buildContext(
+                        r.coTotals,
+                        coMaxByCo,
+                        0,
+                        c.coNum,
+                        consideredExams,
+                        r.examMarks,
+                        r.weightedMarks,
+                        cqiConfig?.custom_vars,
+                        { beforeValue: r.beforeValue, beforePct: r.beforePct, afterValue: r.afterValue, afterPct: r.afterPct },
+                      );
 
                       let addRaw = 0;
                       let notAttainedAfter = notAttainedBefore;
-                      if (hasInput && hasCqiConfig && cqiConfig && notAttainedBefore) {
+                      if (hasInput && hasCqiConfig && cqiConfig && allowInput) {
                         const impact = evaluateCqiImpact(cqiConfig, ctxBase, input, c.coNum);
                         addRaw = impact.addRaw;
                         notAttainedAfter = impact.notAttainedAfter;
                       }
 
                       const isCqiAttained = notAttainedBefore && hasInput && !notAttainedAfter;
-                      const bg = !hasCqiConfig ? 'bg-amber-50' : (!notAttainedBefore ? 'bg-green-50' : (matchedColor ? '' : 'bg-red-50'));
+                      const bg = !hasCqiConfig
+                        ? 'bg-amber-50'
+                        : (!notAttainedBefore ? 'bg-green-50' : (matchedColor ? '' : (allowInput ? 'bg-red-50' : '')));
 
                       const debugBlock = (() => {
                         if (!debugOpen || !hasCqiConfig || !cqiConfig) return null;
@@ -931,14 +1019,18 @@ export default function CqiEntryPage() {
                               ) : (
                                 <div className="text-[11px] font-semibold mb-1 text-amber-500">⚠ Formula not set</div>
                               )}
-                              <input
-                                type="number" inputMode="decimal"
-                                value={current ?? ''}
-                                onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
-                                disabled={tableBlocked}
-                                placeholder="Enter CQI"
-                                className="w-[90px] px-2 py-1 text-sm text-center rounded border border-gray-300 bg-white disabled:bg-gray-100"
-                              />
+                              {allowInput ? (
+                                <input
+                                  type="number" inputMode="decimal"
+                                  value={current ?? ''}
+                                  onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
+                                  disabled={tableBlocked}
+                                  placeholder="Enter CQI"
+                                  className="w-[90px] px-2 py-1 text-sm text-center rounded border border-gray-300 bg-white disabled:bg-gray-100"
+                                />
+                              ) : (
+                                <div className="text-[11px] text-gray-400">—</div>
+                              )}
                               {debugBlock}
                             </div>
                           )}
