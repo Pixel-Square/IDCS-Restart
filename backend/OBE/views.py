@@ -1369,17 +1369,23 @@ def _merge_cqi_page_entries(pages: dict) -> tuple[dict, list[int]]:
     return merged, all_co_numbers
 
 
-def _build_cqi_entries_payload(existing_entries, page_key: str | None, assessment_type: str | None, co_numbers: list[int], entries: dict, *, meta_kind: str, user_id=None, legacy_co_numbers=None):
+def _build_cqi_entries_payload(existing_entries, page_key: str | None, assessment_type: str | None, co_numbers: list[int], entries: dict, *, meta_kind: str, user_id=None, legacy_co_numbers=None, legacy_published_at=None):
     if not page_key:
         return entries or {}, co_numbers, None
 
     legacy_entries, pages = _split_cqi_entries_payload(existing_entries)
     if not pages and legacy_entries:
         legacy_page_key = _make_cqi_page_key(None, _normalize_cqi_co_numbers(legacy_co_numbers)) or page_key
-        pages[legacy_page_key] = {
+        legacy_snapshot: dict = {
             'entries': legacy_entries,
             **({'coNumbers': _normalize_cqi_co_numbers(legacy_co_numbers)} if _normalize_cqi_co_numbers(legacy_co_numbers) else {}),
         }
+        # Carry over the original publishedAt so _build_pages_info doesn't filter
+        # this page out, which would incorrectly enable editing of already-published COs
+        # on subsequent CQI pages.
+        if legacy_published_at:
+            legacy_snapshot['publishedAt'] = str(legacy_published_at)
+        pages[legacy_page_key] = legacy_snapshot
 
     snapshot = dict(pages.get(page_key) or {})
     snapshot['entries'] = entries or {}
@@ -2146,17 +2152,41 @@ def cqi_published(request, subject_id: str):
     snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers, legacy_co_numbers=obj.co_numbers)
 
     def _build_pages_info(raw_entries, *, include_entries=False):
-        """Return list of published page summaries from paged entries."""
+        """Return list of published page summaries from paged entries.
+
+        All entries in ObeCqiPublished were published at some point.  Legacy
+        pages migrated from the old non-paged format may lack an explicit
+        publishedAt timestamp \u2014 include them if they have coNumbers so the
+        frontend can correctly mark those COs as already-attained on subsequent
+        CQI pages.
+        """
         _, pgs = _split_cqi_entries_payload(raw_entries or {})
+        # Fallback timestamp from the parent record (for legacy pages without
+        # per-page publishedAt).
+        legacy_fallback_pub = None
+        raw_pa = getattr(obj, 'published_at', None)
+        if raw_pa is not None:
+            try:
+                legacy_fallback_pub = raw_pa.isoformat()
+            except Exception:
+                legacy_fallback_pub = str(raw_pa)
+
         out = []
         for pk, snap in pgs.items():
-            if not isinstance(snap, dict) or not snap.get('publishedAt'):
+            if not isinstance(snap, dict):
                 continue
+            explicit_pub = snap.get('publishedAt')
+            co_nums = _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers')))
+            # Include the page if it has an explicit publishedAt OR if it has
+            # coNumbers (legacy migration artifact \u2014 the outer record IS published).
+            if not explicit_pub and not co_nums:
+                continue
+            pub_at = explicit_pub or legacy_fallback_pub
             item = {
                 'key': str(pk),
                 'assessmentType': snap.get('assessmentType'),
-                'coNumbers': _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers'))),
-                'publishedAt': snap.get('publishedAt'),
+                'coNumbers': co_nums,
+                'publishedAt': pub_at,
             }
             if include_entries:
                 item['entries'] = snap.get('entries') if isinstance(snap.get('entries'), dict) else {}
@@ -2246,6 +2276,15 @@ def cqi_publish(request, subject_id: str):
 
     user_id = getattr(getattr(request, 'user', None), 'id', None)
     existing = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
+    legacy_pub_at = None
+    if existing is not None:
+        raw_pa = getattr(existing, 'published_at', None)
+        if raw_pa is not None:
+            try:
+                legacy_pub_at = raw_pa.isoformat()
+            except Exception:
+                legacy_pub_at = str(raw_pa)
+
     stored_entries, merged_nums, snapshot = _build_cqi_entries_payload(
         existing.entries if existing is not None else None,
         page_key,
@@ -2255,6 +2294,7 @@ def cqi_publish(request, subject_id: str):
         meta_kind='published',
         user_id=user_id,
         legacy_co_numbers=existing.co_numbers if existing is not None else None,
+        legacy_published_at=legacy_pub_at,
     )
     obj, _created = ObeCqiPublished.objects.update_or_create(
         subject=subject,
@@ -2295,6 +2335,101 @@ def cqi_publish(request, subject_id: str):
             'published_by': (snapshot or {}).get('publishedBy', getattr(obj, 'published_by', None)),
         }
     )
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_reset_page(request, subject_id: str):
+    """Reset (unpublish) a specific CQI page for a subject + teaching assignment.
+
+    Removes the page from both published and draft CQI data, deletes the
+    associated ObeMarkTableLock, and recomputes final internal marks.
+    This allows subsequent CQI pages to no longer see the reset page's COs
+    as read-only "prior published".
+    """
+    _staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    body = request.data if isinstance(request.data, dict) else {}
+    ta_id = _get_teaching_assignment_id_from_request(request, body)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request, body)
+    normalized_page_key = _normalize_cqi_page_key(page_key=page_key, assessment_type=assessment_type, co_numbers=requested_co_numbers)
+
+    from .models import ObeCqiDraft, ObeCqiPublished, ObeMarkTableLock
+
+    deleted = {'draft_page': False, 'published_page': False, 'lock': 0}
+
+    with transaction.atomic():
+        # --- Remove page from published entries ---
+        pub_obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
+        if pub_obj is not None and isinstance(pub_obj.entries, dict):
+            raw_pages = pub_obj.entries.get('__pages')
+            if isinstance(raw_pages, dict) and normalized_page_key and normalized_page_key in raw_pages:
+                del raw_pages[normalized_page_key]
+                pub_obj.entries['__pages'] = raw_pages
+                # Re-merge co_numbers from remaining pages
+                pub_obj.co_numbers = _collect_cqi_co_numbers(pub_obj.entries, fallback=pub_obj.co_numbers)
+                pub_obj.save()
+                deleted['published_page'] = True
+            elif not isinstance(raw_pages, dict):
+                # Legacy (non-paged) format — the specific page was never stored
+                # in paged format so there is nothing to delete.  Do NOT wipe the
+                # entire record: that would destroy published data for OTHER CQI
+                # pages (e.g. CIA-1 CO1/CO2 data) and break the prior-attained
+                # locking on subsequent CQI pages.
+                # Mark as found-but-skipped so callers know the record exists.
+                deleted['published_page'] = False
+
+        # --- Remove page from draft entries ---
+        draft_obj = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
+        if draft_obj is not None and isinstance(draft_obj.entries, dict):
+            raw_pages = draft_obj.entries.get('__pages')
+            if isinstance(raw_pages, dict) and normalized_page_key and normalized_page_key in raw_pages:
+                del raw_pages[normalized_page_key]
+                draft_obj.entries['__pages'] = raw_pages
+                draft_obj.save()
+                deleted['draft_page'] = True
+            elif not isinstance(raw_pages, dict):
+                # Legacy (non-paged) format — the specific page was never stored
+                # in paged format.  Clear entirely only if co_numbers on the
+                # draft record overlap with the page being reset (i.e. it is
+                # likely this very page's draft), otherwise leave untouched.
+                draft_co_nums = _normalize_cqi_co_numbers(getattr(draft_obj, 'co_numbers', None))
+                if draft_co_nums and all(c in requested_co_numbers for c in draft_co_nums):
+                    draft_obj.entries = {}
+                    draft_obj.save()
+                    deleted['draft_page'] = True
+
+        # --- Delete lock for this CQI assessment key ---
+        assessment_key = _build_cqi_assessment_key(page_key=page_key, assessment_type=assessment_type, co_numbers=requested_co_numbers or requested_co_numbers)
+        if assessment_key:
+            deleted['lock'] = int(
+                ObeMarkTableLock.objects.filter(teaching_assignment=ta, assessment=assessment_key).delete()[0] or 0
+            )
+
+    # --- Recompute final internal marks ---
+    try:
+        recompute_final_internal_marks(
+            actor_user_id=getattr(getattr(request, 'user', None), 'id', None),
+            filters={
+                'subject_code': subject.code,
+                'teaching_assignment_id': ta_id,
+            },
+        )
+    except Exception:
+        logger.exception('cqi_reset_page: recompute_final_internal_marks failed for subject=%s ta=%s', subject.code, ta_id)
+
+    return Response({'status': 'ok', 'deleted': deleted})
 
 
 @api_view(['POST'])
@@ -6369,7 +6504,15 @@ def obe_progress_overview(request):
     is_iqac = 'IQAC' in role_names
     is_iqac_main = False
     try:
-        is_iqac_main = bool(is_iqac and str(getattr(user, 'username', '') or '').strip() == '000000')
+        # Treat the dedicated IQAC master account, any superuser, or any user
+        # holding the obe.master.manage permission as the IQAC main controller.
+        # This lets the Academic Controller dashboard work for all OBE-master users
+        # even when they don't have the legacy username '000000'.
+        is_iqac_main = bool(
+            (is_iqac and str(getattr(user, 'username', '') or '').strip() == '000000')
+            or getattr(user, 'is_superuser', False)
+            or _has_obe_master_permission(user)
+        )
     except Exception:
         is_iqac_main = False
 
@@ -11206,3 +11349,364 @@ def iqac_special_exam_config(request):
 
     else:
         return Response({'detail': "action must be 'add', 'remove', or 'set'"}, status=400)
+
+
+# ─────────────────────────────────────────────────────────────
+# IQAC Academic Controller Dashboard analytics
+# ─────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_dashboard_analytics(request):
+    """Aggregated analytics for the IQAC Academic Controller dashboard.
+
+    Returns a single payload powering:
+      - department_performance: avg/min/max/pass% from FinalInternalMark
+      - bottlenecks: pending publish/edit counts grouped by department + top staff
+      - completion_heatmap: department x assessment publish completion grid
+      - departments: teaching department list (for the global filter dropdown)
+
+    Query params:
+      - department_id (optional int): scope all aggregations to one department
+      - academic_year_id (optional int): override the active AY
+    """
+    err = _require_obe_master_permission(request)
+    if err is not None:
+        return err
+
+    from academics.models import AcademicYear, Department
+    from .models import (
+        FinalInternalMark,
+        ObePublishRequest,
+        ObeEditRequest,
+        ObeMarkTableLock,
+    )
+    from django.db.models import Avg, Count, Min, Max, F, ExpressionWrapper, FloatField, IntegerField
+    from django.db.models.functions import Coalesce
+    from django.contrib.auth import get_user_model
+
+    # Resolve academic year (param > active > latest)
+    ay = None
+    raw_ay = request.GET.get('academic_year_id')
+    if raw_ay:
+        try:
+            ay = AcademicYear.objects.filter(id=int(raw_ay)).first()
+        except Exception:
+            ay = None
+    if ay is None:
+        ay = (
+            AcademicYear.objects.filter(is_active=True).order_by('-id').first()
+            or AcademicYear.objects.order_by('-id').first()
+        )
+    ay_id = ay.id if ay else None
+
+    # Optional department filter
+    dept_filter_id = None
+    raw_dept = request.GET.get('department_id')
+    if raw_dept:
+        try:
+            dept_filter_id = int(raw_dept)
+        except Exception:
+            dept_filter_id = None
+
+    CANONICAL_ASSESSMENTS = ['ssa1', 'formative1', 'cia1', 'ssa2', 'formative2', 'cia2', 'model']
+
+    # ── 1. Department list (for filter dropdown) ────────────
+    departments_list = list(
+        Department.objects.filter(is_teaching=True)
+        .order_by('name')
+        .values('id', 'code', 'name', 'short_name')
+    )
+    dept_lookup = {d['id']: d for d in departments_list}
+
+    # Department resolution coalesce — used wherever a TA path is available.
+    # In this DB, Subject.course is null, so curriculum_row.department is the
+    # primary source of truth, with section.batch.course / section.batch as fallbacks.
+    def _ta_dept_coalesce(prefix: str = ''):
+        p = prefix
+        return Coalesce(
+            f'{p}curriculum_row__department_id',
+            f'{p}section__batch__course__department_id',
+            f'{p}section__batch__department_id',
+            output_field=IntegerField(),
+        )
+
+    # ── 2. Department performance from FinalInternalMark ────
+    fim_qs = (
+        FinalInternalMark.objects
+        .filter(max_mark__gt=0, final_mark__isnull=False)
+    )
+    if ay_id is not None:
+        fim_qs = fim_qs.filter(teaching_assignment__academic_year_id=ay_id)
+
+    fim_qs = fim_qs.annotate(
+        dept_id=_ta_dept_coalesce('teaching_assignment__'),
+        pct=ExpressionWrapper(F('final_mark') * 100.0 / F('max_mark'), output_field=FloatField()),
+    ).filter(dept_id__isnull=False)
+
+    if dept_filter_id is not None:
+        fim_qs = fim_qs.filter(dept_id=dept_filter_id)
+
+    perf_rows = list(
+        fim_qs.values('dept_id').annotate(
+            subject_count=Count('subject_id', distinct=True),
+            student_count=Count('student_id', distinct=True),
+            avg_percentage=Avg('pct'),
+            min_percentage=Min('pct'),
+            max_percentage=Max('pct'),
+            pass_count=Count('id', filter=Q(final_mark__gte=F('max_mark') / 2)),
+            total_count=Count('id'),
+        )
+    )
+
+    department_performance = []
+    for r in perf_rows:
+        d_id = r.get('dept_id')
+        if d_id is None:
+            continue
+        d = dept_lookup.get(d_id)
+        if not d:
+            continue
+        total = r.get('total_count') or 0
+        passed = r.get('pass_count') or 0
+        department_performance.append({
+            'department_id': d_id,
+            'department_code': d['code'] or '',
+            'department_name': d['name'] or '',
+            'department_short_name': d['short_name'] or d['code'] or '',
+            'subject_count': r.get('subject_count') or 0,
+            'student_count': r.get('student_count') or 0,
+            'mark_count': total,
+            'avg_percentage': round(float(r.get('avg_percentage') or 0), 2),
+            'min_percentage': round(float(r.get('min_percentage') or 0), 2),
+            'max_percentage': round(float(r.get('max_percentage') or 0), 2),
+            'pass_percentage': round((passed * 100.0 / total) if total else 0.0, 2),
+        })
+    department_performance.sort(key=lambda x: x['department_code'])
+
+    # ── 3. Bottlenecks (pending publish + edit) ─────────────
+    pub_pending = ObePublishRequest.objects.filter(status='PENDING')
+    edit_pending = ObeEditRequest.objects.filter(status='PENDING')
+    if ay_id is not None:
+        pub_pending = pub_pending.filter(academic_year_id=ay_id)
+        edit_pending = edit_pending.filter(academic_year_id=ay_id)
+
+    pub_pending_total = pub_pending.count()
+    edit_pending_total = edit_pending.count()
+
+    # Edit requests: TA path resolves dept directly via coalesce.
+    edit_pending_with_ta = edit_pending.filter(teaching_assignment__isnull=False).annotate(
+        dept_id=_ta_dept_coalesce('teaching_assignment__'),
+    )
+    edit_rows = list(edit_pending_with_ta.values('dept_id', 'subject_code').annotate(c=Count('id')))
+    edit_no_ta_rows = list(
+        edit_pending.filter(teaching_assignment__isnull=True)
+        .values('subject_code').annotate(c=Count('id'))
+    )
+
+    # Pub requests have no TA FK — must derive department via subject_code.
+    pub_rows = list(pub_pending.values('subject_code').annotate(c=Count('id')))
+
+    # Build subject_code -> department_id map. Two sources:
+    # 1. CurriculumDepartment (course_code or master.course_code)
+    # 2. Subject.course (legacy; usually null in this DB but keep for safety)
+    needed_codes: set[str] = set()
+    for row in pub_rows:
+        if row.get('subject_code'):
+            needed_codes.add(row['subject_code'])
+    for row in edit_rows:
+        if row.get('dept_id') is None and row.get('subject_code'):
+            needed_codes.add(row['subject_code'])
+    for row in edit_no_ta_rows:
+        if row.get('subject_code'):
+            needed_codes.add(row['subject_code'])
+
+    subj_dept_map: dict[str, int] = {}
+    if needed_codes:
+        try:
+            from curriculum.models import CurriculumDepartment
+            cd_rows = list(
+                CurriculumDepartment.objects.filter(
+                    Q(course_code__in=list(needed_codes))
+                    | Q(master__course_code__in=list(needed_codes))
+                )
+                .select_related('master')
+                .values('course_code', 'master__course_code', 'department_id')
+            )
+            for r in cd_rows:
+                d_id = r.get('department_id')
+                if d_id is None:
+                    continue
+                cc = r.get('course_code')
+                if cc and cc not in subj_dept_map:
+                    subj_dept_map[cc] = d_id
+                mcc = r.get('master__course_code')
+                if mcc and mcc not in subj_dept_map:
+                    subj_dept_map[mcc] = d_id
+        except Exception:
+            pass
+        # Fallback via Subject.course (rare in this DB)
+        missing = [c for c in needed_codes if c not in subj_dept_map]
+        if missing:
+            for s in Subject.objects.filter(code__in=missing).select_related('course'):
+                if getattr(s, 'course_id', None) and getattr(s.course, 'department_id', None):
+                    subj_dept_map[s.code] = s.course.department_id
+
+    dept_stats: dict[int, dict[str, int]] = {}
+
+    for row in pub_rows:
+        d_id = subj_dept_map.get(row.get('subject_code') or '')
+        if d_id is None:
+            continue
+        if dept_filter_id is not None and d_id != dept_filter_id:
+            continue
+        s = dept_stats.setdefault(d_id, {'publish_pending': 0, 'edit_pending': 0})
+        s['publish_pending'] += row['c']
+
+    for row in edit_rows:
+        d_id = row.get('dept_id')
+        if d_id is None:
+            d_id = subj_dept_map.get(row.get('subject_code') or '')
+        if d_id is None:
+            continue
+        if dept_filter_id is not None and d_id != dept_filter_id:
+            continue
+        s = dept_stats.setdefault(d_id, {'publish_pending': 0, 'edit_pending': 0})
+        s['edit_pending'] += row['c']
+
+    for row in edit_no_ta_rows:
+        d_id = subj_dept_map.get(row.get('subject_code') or '')
+        if d_id is None:
+            continue
+        if dept_filter_id is not None and d_id != dept_filter_id:
+            continue
+        s = dept_stats.setdefault(d_id, {'publish_pending': 0, 'edit_pending': 0})
+        s['edit_pending'] += row['c']
+
+    bottleneck_by_dept = []
+    for d_id, stats in dept_stats.items():
+        d = dept_lookup.get(d_id)
+        if not d:
+            continue
+        bottleneck_by_dept.append({
+            'department_id': d_id,
+            'department_code': d['code'],
+            'department_name': d['name'],
+            'publish_pending': stats['publish_pending'],
+            'edit_pending': stats['edit_pending'],
+        })
+    bottleneck_by_dept.sort(key=lambda x: -(x['publish_pending'] + x['edit_pending']))
+
+    # Top blocked staff
+    pub_staff = list(pub_pending.values('staff_user_id').annotate(c=Count('id')))
+    edit_staff = list(edit_pending.values('staff_user_id').annotate(c=Count('id')))
+    staff_stats: dict[int, dict[str, int]] = {}
+    for r in pub_staff:
+        sid = r['staff_user_id']
+        if sid is None:
+            continue
+        s = staff_stats.setdefault(sid, {'publish_pending': 0, 'edit_pending': 0})
+        s['publish_pending'] = r['c']
+    for r in edit_staff:
+        sid = r['staff_user_id']
+        if sid is None:
+            continue
+        s = staff_stats.setdefault(sid, {'publish_pending': 0, 'edit_pending': 0})
+        s['edit_pending'] = r['c']
+
+    User = get_user_model()
+    user_map: dict[int, str] = {}
+    if staff_stats:
+        for u in User.objects.filter(id__in=list(staff_stats.keys())).only(
+            'id', 'first_name', 'last_name', 'username'
+        ):
+            full = f"{u.first_name or ''} {u.last_name or ''}".strip() or u.username
+            user_map[u.id] = full
+
+    top_blocked_staff = sorted(
+        (
+            {
+                'staff_user_id': sid,
+                'name': user_map.get(sid, f'User {sid}'),
+                'publish_pending': st['publish_pending'],
+                'edit_pending': st['edit_pending'],
+                'total': st['publish_pending'] + st['edit_pending'],
+            }
+            for sid, st in staff_stats.items()
+        ),
+        key=lambda x: -x['total'],
+    )[:10]
+
+    # ── 4. Completion heatmap ───────────────────────────────
+    # Numerator = TAs with a published lock for (dept, assessment).
+    # Denominator = TAs with ANY lock for (dept, assessment) — better than total
+    # active TAs because not every class_type has every assessment enabled.
+    lock_qs = ObeMarkTableLock.objects.filter(teaching_assignment__isnull=False)
+    if ay_id is not None:
+        lock_qs = lock_qs.filter(teaching_assignment__academic_year_id=ay_id)
+
+    lock_qs = lock_qs.annotate(dept_id=_ta_dept_coalesce('teaching_assignment__')).filter(
+        dept_id__isnull=False,
+    )
+    if dept_filter_id is not None:
+        lock_qs = lock_qs.filter(dept_id=dept_filter_id)
+
+    lock_rows = list(
+        lock_qs.values('dept_id', 'assessment').annotate(
+            ta_total=Count('teaching_assignment_id', distinct=True),
+            published=Count('teaching_assignment_id', distinct=True, filter=Q(is_published=True)),
+        )
+    )
+
+    # Pivot: dept_id -> {assessment: {ta_total, published, pct}}
+    heatmap_pivot: dict[int, dict[str, dict[str, float]]] = {}
+    for row in lock_rows:
+        d_id = row.get('dept_id')
+        if d_id is None:
+            continue
+        a = (row.get('assessment') or '').lower()
+        if a not in CANONICAL_ASSESSMENTS:
+            continue
+        ta_total = row.get('ta_total') or 0
+        published = row.get('published') or 0
+        pct = (published * 100.0 / ta_total) if ta_total else 0.0
+        heatmap_pivot.setdefault(d_id, {})[a] = {
+            'ta_total': ta_total,
+            'published': published,
+            'pct': round(pct, 1),
+        }
+
+    heatmap_rows = []
+    for d_id, cells in heatmap_pivot.items():
+        d = dept_lookup.get(d_id)
+        if not d:
+            continue
+        # Fill all canonical assessments for stable column order
+        full_cells = {}
+        for a in CANONICAL_ASSESSMENTS:
+            full_cells[a] = cells.get(a, {'ta_total': 0, 'published': 0, 'pct': 0.0})
+        heatmap_rows.append({
+            'department_id': d_id,
+            'department_code': d['code'],
+            'department_name': d['name'],
+            'department_short_name': d['short_name'] or d['code'],
+            'cells': full_cells,
+        })
+    heatmap_rows.sort(key=lambda x: x['department_code'])
+
+    return Response({
+        'academic_year': ({'id': ay.id, 'name': ay.name} if ay else None),
+        'departments': departments_list,
+        'department_performance': department_performance,
+        'bottlenecks': {
+            'pending_publish_total': pub_pending_total,
+            'pending_edit_total': edit_pending_total,
+            'by_department': bottleneck_by_dept,
+            'top_blocked_staff': top_blocked_staff,
+        },
+        'completion_heatmap': {
+            'assessments': CANONICAL_ASSESSMENTS,
+            'rows': heatmap_rows,
+        },
+    })

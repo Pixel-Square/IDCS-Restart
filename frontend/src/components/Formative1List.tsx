@@ -1011,26 +1011,52 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
       try {
         let roster: Student[] = [];
+
+        // Prefer the exact pinned TA first so section-wise mark entry does not
+        // fall back to the first subject-level assignment (usually section A).
+        if (teachingAssignmentId) {
+          try {
+            const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
+            roster = (taResp.students || []).map((s: TeachingAssignmentRosterStudent) => ({
+              id: Number(s.id),
+              reg_no: String(s.reg_no ?? ''),
+              name: String(s.name ?? ''),
+              section: s.section ?? null,
+            })).filter((s) => Number.isFinite(s.id));
+            if (mounted && roster.length) {
+              const taMeta = (taResp as any)?.teaching_assignment;
+              if (taMeta) {
+                setSubjectData({ subject_name: taMeta.subject_name, section: taMeta.section_name });
+              }
+            }
+          } catch (err) {
+            console.warn('[Formative] direct TA roster fetch failed:', err);
+          }
+        }
         
         // ALWAYS check user's TAs first (matching CIA logic) - this handles electives correctly
         let matchedTa: any = null;
         try {
           const myTAs = await fetchMyTeachingAssignments();
-          // debug: myTAs fetched
-          matchedTa = (myTAs || []).find((t: any) => {
-            const codeMatch = String(t.subject_code || '').trim().toUpperCase() === String(subjectId || '').trim().toUpperCase();
-            const idMatch = teachingAssignmentId ? t.id === teachingAssignmentId : false;
-            return idMatch || codeMatch;
-          });
-          
-          // matchedTa determined
+          const desiredCode = String(subjectId || '').trim().toUpperCase();
+
+          if (teachingAssignmentId) {
+            matchedTa = (myTAs || []).find((t: any) => Number(t.id) === Number(teachingAssignmentId)) || null;
+          }
+
+          if (!matchedTa) {
+            matchedTa = (myTAs || []).find((t: any) => String(t.subject_code || '').trim().toUpperCase() === desiredCode) || null;
+          }
         } catch (err) {
           console.warn('[Formative] My TAs fetch failed:', err);
         }
 
         // Always use TA roster (backend handles batch filtering for electives)
         // Also covers IQAC viewer path where matchedTa is null but teachingAssignmentId is provided.
-        const rosterTaId: number | undefined = (matchedTa && matchedTa.id) || (teachingAssignmentId ?? undefined);
+        const rosterTaId: number | undefined =
+          (teachingAssignmentId && Number.isFinite(teachingAssignmentId) ? teachingAssignmentId : undefined) ||
+          (matchedTa && matchedTa.id) ||
+          undefined;
         if (!roster.length && rosterTaId) {
           // fetching regular TA roster
           try {

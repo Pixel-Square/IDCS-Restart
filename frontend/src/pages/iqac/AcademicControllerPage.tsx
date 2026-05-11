@@ -8,6 +8,7 @@ import AcademicControllerCQIPage from './AcademicControllerCQIPage';
 import AcademicControllerActiveLearningPage from './AcademicControllerActiveLearningPage';
 import AcademicControllerPublishPage from './AcademicControllerPublishPage';
 import AcademicControllerInternalMarksPage from './AcademicControllerInternalMarksPage';
+import IQACDashboardPage from './IQACDashboardPage';
 
 type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'internal_marks' | 'weights' | 'active_learning' | 'qp' | 'cqi' | 'publish';
 
@@ -67,9 +68,7 @@ export default function AcademicControllerPage(): JSX.Element {
       </div>
 
       <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
-        {tab === 'dashboard' && (
-          <div style={{ color: '#6b7280' }}>Dashboard coming soon.</div>
-        )}
+        {tab === 'dashboard' && <IQACDashboardPage />}
         {tab === 'weights' && <AcademicControllerWeightsPage />}
         {tab === 'active_learning' && <AcademicControllerActiveLearningPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}

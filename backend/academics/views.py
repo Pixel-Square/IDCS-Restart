@@ -739,9 +739,203 @@ def _ms_add_co_breakdown_sheets(wb, ta, subject, student_list):
     qp_type = _resolve_qp_type(ta)
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
     is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+    is_english_like = class_type in ('ENGLISH', 'FOREIGN_LANG')
 
     def _v(x):
         return _round2(x) if x is not None else '-'
+
+    # ── ENGLISH / FOREIGN_LANG: dedicated breakdown sheets ──────────
+    if is_english_like:
+        from OBE.services.final_internal_marks import (
+            _get_english_exam_weights,
+            _get_foreign_lang_exam_weights,
+            _extract_cia_total_for_student,
+        )
+
+        eng_cfg = _get_english_exam_weights() if class_type == 'ENGLISH' else _get_foreign_lang_exam_weights()
+
+        def _wcfg_eb(key):
+            return eng_cfg.get(key) or {}
+
+        ssa1_cos_eb = list(_wcfg_eb('ssa1').get('cos', [1, 2]))
+        fa1_cos_eb  = list(_wcfg_eb('fa1').get('cos', [1, 2]))
+        ssa2_cos_eb = list(_wcfg_eb('ssa2').get('cos', [3, 4]))
+        fa2_cos_eb  = list(_wcfg_eb('fa2').get('cos', [3, 4]))
+
+        ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id)
+        ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id)
+        ssa1_splits = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa1', [f'co{c}' for c in ssa1_cos_eb])
+        ssa2_splits = _extract_ssa_co_splits_for_ta(subject_id, ta_id, 'ssa2', [f'co{c}' for c in ssa2_cos_eb])
+
+        def _fetch_formative_eb(model_cls):
+            result = {}
+            qs = (
+                model_cls.objects.filter(subject_id=subject_id, student_id__in=student_ids)
+                .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+                .values('student_id', 'teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+            )
+            for row in qs:
+                sid = int(row['student_id'])
+                is_ta = row.get('teaching_assignment_id') == ta_id
+                existing = result.get(sid)
+                if existing is None or (not existing.get('_is_ta') and is_ta):
+                    result[sid] = {**row, '_is_ta': is_ta}
+            return result
+
+        f1_rows_eb = _fetch_formative_eb(Formative1Mark)
+        f2_rows_eb = _fetch_formative_eb(Formative2Mark)
+
+        cia1_sheet_eb = _get_cia_sheet_data(subject_id, ta_id, 'cia1')
+        cia2_sheet_eb = _get_cia_sheet_data(subject_id, ta_id, 'cia2')
+
+        # ── Cycle 1 Sheet ──
+        ssa1_co_hdrs = [f'SSA1 CO{c}' for c in ssa1_cos_eb]
+        fa1_co_hdrs  = [f'FA1 CO{c}' for c in fa1_cos_eb]
+        ws1 = wb.create_sheet('Cycle 1 (SSA1+CIA1+FA1)')
+        ws1.append([
+            'S.no', "Student's Name", 'Register Number',
+        ] + ssa1_co_hdrs + ['SSA1 Total', 'CIA1 Total'] + fa1_co_hdrs + ['FA1 Total'])
+        try:
+            from openpyxl.styles import Font as _Fc1e
+            for ci in range(1, ws1.max_column + 1):
+                ws1.cell(row=1, column=ci).font = _Fc1e(bold=True)
+        except Exception:
+            pass
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+
+            sp1 = ssa1_splits.get(sid, {})
+            s1_co_vals = [_sf(sp1.get(f'co{co}')) for co in ssa1_cos_eb]
+            s1_total = _sf(ssa1_totals.get(sid))
+            if all(v is None for v in s1_co_vals) and s1_total is not None:
+                n_cos = len(ssa1_cos_eb) or 1
+                s1_co_vals = [s1_total / n_cos] * n_cos
+
+            cia1_total_eb = _extract_cia_total_for_student(cia1_sheet_eb, sid)
+
+            f1 = f1_rows_eb.get(sid, {})
+            f1_co_vals = []
+            for co in fa1_cos_eb:
+                if co == 1:
+                    val = _round2(_sf(f1.get('skill1')) + _sf(f1.get('att1'))) if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None else None
+                elif co == 2:
+                    val = _round2(_sf(f1.get('skill2')) + _sf(f1.get('att2'))) if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None else None
+                else:
+                    val = None
+                f1_co_vals.append(val)
+            f1_total = _sf(f1.get('total'))
+
+            ws1.append([
+                idx,
+                _ms_safe_text(s.get('name')),
+                _ms_safe_text(s.get('reg_no')),
+            ] + [_v(v) for v in s1_co_vals] + [_v(s1_total), _v(cia1_total_eb)] + [_v(v) for v in f1_co_vals] + [_v(f1_total)])
+
+        try:
+            from openpyxl.utils import get_column_letter as _gcl_e1
+            ws1.auto_filter.ref = f"A1:{_gcl_e1(ws1.max_column)}{ws1.max_row}"
+            ws1.freeze_panes = 'A2'
+        except Exception:
+            pass
+
+        # ── Cycle 2 Sheet ──
+        ssa2_co_hdrs = [f'SSA2 CO{c}' for c in ssa2_cos_eb]
+        fa2_co_hdrs  = [f'FA2 CO{c}' for c in fa2_cos_eb]
+        ws2 = wb.create_sheet('Cycle 2 (SSA2+CIA2+FA2)')
+        ws2.append([
+            'S.no', "Student's Name", 'Register Number',
+        ] + ssa2_co_hdrs + ['SSA2 Total', 'CIA2 Total'] + fa2_co_hdrs + ['FA2 Total'])
+        try:
+            from openpyxl.styles import Font as _Fc2e
+            for ci in range(1, ws2.max_column + 1):
+                ws2.cell(row=1, column=ci).font = _Fc2e(bold=True)
+        except Exception:
+            pass
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+
+            sp2 = ssa2_splits.get(sid, {})
+            s2_co_vals = [_sf(sp2.get(f'co{co}')) for co in ssa2_cos_eb]
+            s2_total = _sf(ssa2_totals.get(sid))
+            if all(v is None for v in s2_co_vals) and s2_total is not None:
+                n_cos = len(ssa2_cos_eb) or 1
+                s2_co_vals = [s2_total / n_cos] * n_cos
+
+            cia2_total_eb = _extract_cia_total_for_student(cia2_sheet_eb, sid)
+
+            f2 = f2_rows_eb.get(sid, {})
+            f2_co_vals = []
+            for co in fa2_cos_eb:
+                if co == 3:
+                    val = _round2(_sf(f2.get('skill1')) + _sf(f2.get('att1'))) if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None else None
+                elif co == 4:
+                    val = _round2(_sf(f2.get('skill2')) + _sf(f2.get('att2'))) if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None else None
+                else:
+                    val = None
+                f2_co_vals.append(val)
+            f2_total = _sf(f2.get('total'))
+
+            ws2.append([
+                idx,
+                _ms_safe_text(s.get('name')),
+                _ms_safe_text(s.get('reg_no')),
+            ] + [_v(v) for v in s2_co_vals] + [_v(s2_total), _v(cia2_total_eb)] + [_v(v) for v in f2_co_vals] + [_v(f2_total)])
+
+        try:
+            from openpyxl.utils import get_column_letter as _gcl_e2
+            ws2.auto_filter.ref = f"A1:{_gcl_e2(ws2.max_column)}{ws2.max_row}"
+            ws2.freeze_panes = 'A2'
+        except Exception:
+            pass
+
+        # ── Model Exam Sheet ──
+        model_co_keys_eb = ['co1', 'co2', 'co3', 'co4', 'co5']
+        model_sheet_eb = _get_model_sheet_data(subject_id, ta_id, class_type)
+        model_pattern_eb = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+        if not model_pattern_eb:
+            model_pattern_eb = {'marks': [20, 20, 20, 20, 20], 'cos': [1, 2, 3, 4, 5]}
+
+        ws3 = wb.create_sheet('Model Exam')
+        model_headers_eb = ['S.no', "Student's Name", 'Register Number']
+        for k in model_co_keys_eb:
+            model_headers_eb.append(f'MODEL {k.upper()}')
+        model_headers_eb.append('MODEL Total')
+        ws3.append(model_headers_eb)
+        try:
+            from openpyxl.styles import Font as _Fme
+            for ci in range(1, len(model_headers_eb) + 1):
+                ws3.cell(row=1, column=ci).font = _Fme(bold=True)
+        except Exception:
+            pass
+
+        for idx, s in enumerate(student_list, start=1):
+            sid = int(s['id'])
+            marks = _extract_model_co_marks_for_student(
+                model_sheet=model_sheet_eb, student_id=sid,
+                reg_no=reg_map.get(sid, ''), model_pattern=model_pattern_eb, class_type=class_type,
+            )
+            row_vals = [idx, _ms_safe_text(s.get('name')), _ms_safe_text(s.get('reg_no'))]
+            m_total = 0.0
+            m_has = False
+            for k in model_co_keys_eb:
+                v = _sf(marks.get(k)) if marks else None
+                row_vals.append(_v(v))
+                if v is not None:
+                    m_total += v
+                    m_has = True
+            row_vals.append(_v(m_total) if m_has else '-')
+            ws3.append(row_vals)
+
+        try:
+            from openpyxl.utils import get_column_letter as _gcl_em
+            ws3.auto_filter.ref = f"A1:{_gcl_em(len(model_headers_eb))}{ws3.max_row}"
+            ws3.freeze_panes = 'A2'
+        except Exception:
+            pass
+
+        return  # English-specific sheets created, skip Theory-style sheets
 
     # --- SSA totals + per-CO splits ---
     ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id)
@@ -1038,6 +1232,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
         _get_special_exam_weights, _get_project_exam_weights,
         _get_lab_cycle_weight_config, _extract_tcpr_review_co_splits_for_ta,
         _get_tcpl_weight_slots,
+        _get_english_exam_weights, _get_foreign_lang_exam_weights,
+        _extract_cia_total_for_student,
         recompute_final_internal_marks,
     )
     from .models import Subject as _SubjectModel
@@ -1438,24 +1634,47 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
         ssa1_totals = _assessment_map(Ssa1Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
         ssa2_totals = _assessment_map(Ssa2Mark, 'mark', subject_id, student_ids, ta_id) if subject_id else {}
 
-        # Fetch Review1 / Review2 / Model marks from LabPublishedSheet
+        # Fetch Review1 / Review2 / Model marks from LabPublishedSheet or AssessmentDraft
+        # (matches _compute_prbl_final_total's _get_prbl_lab_total logic: prefer draft when newer)
         def _pick_prbl_lab_data(assessment_key):
             if not subject_id:
                 return {}
             from OBE.models import LabPublishedSheet as _LPS
-            qs = list(
+            from OBE.models import AssessmentDraft as _AD
+
+            # Published
+            pub_qs = list(
                 _LPS.objects.filter(subject_id=subject_id, assessment=assessment_key)
                 .filter(_Q(teaching_assignment_id=ta_id) | _Q(teaching_assignment__isnull=True))
                 .order_by('-updated_at')
             )
-            exact = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
-            if exact and isinstance(getattr(exact, 'data', None), dict):
-                return exact.data
-            legacy = next((r for r in qs if getattr(r, 'teaching_assignment_id', None) is None), None)
-            if legacy and isinstance(getattr(legacy, 'data', None), dict):
-                return legacy.data
-            first = qs[0] if qs else None
-            return first.data if first and isinstance(getattr(first, 'data', None), dict) else {}
+            pub_exact = next((r for r in pub_qs if getattr(r, 'teaching_assignment_id', None) == ta_id), None)
+            pub_row = pub_exact or next((r for r in pub_qs if getattr(r, 'teaching_assignment_id', None) is None), None) or (pub_qs[0] if pub_qs else None)
+            pub_data = pub_row.data if pub_row and isinstance(getattr(pub_row, 'data', None), dict) else None
+            pub_updated = getattr(pub_row, 'updated_at', None) if pub_row else None
+            pub_is_ta = pub_row is not None and getattr(pub_row, 'teaching_assignment_id', None) == ta_id
+
+            # Draft
+            draft_qs = list(
+                _AD.objects.filter(subject_id=subject_id, assessment=assessment_key)
+                .order_by('-updated_at')
+            )
+            from OBE.services.final_internal_marks import _pick_scoped_row
+            draft_row = _pick_scoped_row(draft_qs, ta_id)
+            draft_data = draft_row.data if draft_row and isinstance(getattr(draft_row, 'data', None), dict) else None
+            draft_updated = getattr(draft_row, 'updated_at', None) if draft_row else None
+            draft_is_ta = draft_row is not None and getattr(draft_row, 'teaching_assignment_id', None) == ta_id
+
+            use_draft = False
+            if isinstance(draft_data, dict):
+                if pub_data is None:
+                    use_draft = True
+                elif draft_is_ta and not pub_is_ta:
+                    use_draft = True
+                elif draft_updated and pub_updated and draft_updated > pub_updated:
+                    use_draft = True
+
+            return (draft_data if use_draft else pub_data) or {}
 
         def _extract_prbl_mark(lab_data, sid, max_cap=50.0):
             """Extract a single total mark from LabPublishedSheet data for a PRBL student."""
@@ -1631,8 +1850,9 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
 
         cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
         cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
-        cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
-        cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+        pattern_class_type = 'THEORY' if class_type == 'THEORY_PMBL' else class_type
+        cia1_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+        cia2_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
 
         def _build_questions(sheet, pattern, is_cia1):
             qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
@@ -1700,8 +1920,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 return None, None, None
             return _round2(c_a), _round2(c_b), _round2(c_a + c_b)
 
-        model_sheet = _get_model_sheet_data(subject_id, ta_id, class_type) if subject_id else {}
-        model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+        model_sheet = _get_model_sheet_data(subject_id, ta_id, pattern_class_type) if subject_id else {}
+        model_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
 
         if class_type == 'SPECIAL':
             # ── SPECIAL: per-exam scaled marks + FIM (Before CQI) + FIM (After CQI) ──
@@ -2319,6 +2539,241 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             ws.auto_filter.ref = f"A2:{tcpr_last}{ws.max_row}"
             ws.freeze_panes = 'A3'
 
+        elif class_type in ('ENGLISH', 'FOREIGN_LANG'):
+            # ── ENGLISH / FOREIGN_LANG: 3-cycle structure ──
+            # Cycle 1: SSA1 (CO1+CO2) + FA1 (CO1+CO2) + CIA1 (total, split equally across CO1-CO5)
+            # Cycle 2: SSA2 (CO3+CO4) + FA2 (CO3+CO4) + CIA2 (total, split equally across CO1-CO5)
+            # Cycle 3: Model (per-CO marks CO1-CO5)
+            # Grand total = 40 → scaled to 100
+            eng_cfg = _get_english_exam_weights() if class_type == 'ENGLISH' else _get_foreign_lang_exam_weights()
+
+            def _wcfg_en(key):
+                return eng_cfg.get(key) or {}
+
+            max_ssa1_en = float(_wcfg_en('ssa1').get('max', 20))
+            w_ssa1_en   = float(_wcfg_en('ssa1').get('weight', 3.0))
+            ssa1_cos_en = list(_wcfg_en('ssa1').get('cos', [1, 2]))
+
+            max_fa1_en  = float(_wcfg_en('fa1').get('max', 20))
+            w_fa1_en    = float(_wcfg_en('fa1').get('weight', 5.0))
+            fa1_cos_en  = list(_wcfg_en('fa1').get('cos', [1, 2]))
+
+            max_cia1_en = float(_wcfg_en('cia1').get('max', 60))
+            w_cia1_en   = float(_wcfg_en('cia1').get('weight', 6.0))
+
+            max_ssa2_en = float(_wcfg_en('ssa2').get('max', 20))
+            w_ssa2_en   = float(_wcfg_en('ssa2').get('weight', 3.0))
+            ssa2_cos_en = list(_wcfg_en('ssa2').get('cos', [3, 4]))
+
+            max_fa2_en  = float(_wcfg_en('fa2').get('max', 20))
+            w_fa2_en    = float(_wcfg_en('fa2').get('weight', 5.0))
+            fa2_cos_en  = list(_wcfg_en('fa2').get('cos', [3, 4]))
+
+            max_cia2_en = float(_wcfg_en('cia2').get('max', 60))
+            w_cia2_en   = float(_wcfg_en('cia2').get('weight', 6.0))
+
+            model_cfg_en      = _wcfg_en('model')
+            max_per_co_en     = float(model_cfg_en.get('max_per_co', 20))
+            co_weights_list_en = model_cfg_en.get('co_weights', [2.4, 2.4, 2.4, 2.4, 2.4])
+
+            eng_max_total = w_ssa1_en + w_fa1_en + w_cia1_en + w_ssa2_en + w_fa2_en + w_cia2_en + sum(
+                float(co_weights_list_en[i]) if i < len(co_weights_list_en) else 0.0
+                for i in range(5)
+            )
+            eng_max_label = str(int(eng_max_total))
+            scaled_label = str(int(scaled_max))
+
+            model_co_keys_en = ['co1', 'co2', 'co3', 'co4', 'co5']
+            fim_co_keys_en   = ['co1', 'co2', 'co3', 'co4', 'co5']
+
+            # ── Build headers ──
+            eng_section = ['', '', '']
+            eng_col     = ['S.no', "Student's Name", 'Register Number']
+
+            # Cycle 1 columns: SSA1 (CO1, CO2, Total), CIA1 (Total), FA1 (CO1, CO2, Total)
+            ssa1_co_labels = [f'CO{c}' for c in ssa1_cos_en]
+            for lbl in ssa1_co_labels + ['Total']:
+                eng_section.append('SSA1')
+                eng_col.append(f'SSA1 {lbl}')
+            eng_section.append('CIA1')
+            eng_col.append('CIA1 Total')
+            fa1_co_labels = [f'CO{c}' for c in fa1_cos_en]
+            for lbl in fa1_co_labels + ['Total']:
+                eng_section.append('FA1')
+                eng_col.append(f'FA1 {lbl}')
+
+            # Cycle 2 columns: SSA2 (CO3, CO4, Total), CIA2 (Total), FA2 (CO3, CO4, Total)
+            ssa2_co_labels = [f'CO{c}' for c in ssa2_cos_en]
+            for lbl in ssa2_co_labels + ['Total']:
+                eng_section.append('SSA2')
+                eng_col.append(f'SSA2 {lbl}')
+            eng_section.append('CIA2')
+            eng_col.append('CIA2 Total')
+            fa2_co_labels = [f'CO{c}' for c in fa2_cos_en]
+            for lbl in fa2_co_labels + ['Total']:
+                eng_section.append('FA2')
+                eng_col.append(f'FA2 {lbl}')
+
+            # Model columns
+            for k in model_co_keys_en:
+                eng_section.append('Model Exam')
+                eng_col.append(f'MODEL {k.upper()}')
+            eng_section.append('Model Exam')
+            eng_col.append('MODEL Total')
+
+            # FIM (Before CQI) and FIM (After CQI)
+            for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
+                for k in fim_co_keys_en:
+                    eng_section.append(label)
+                    eng_col.append(k.upper())
+                eng_section.append(label)
+                eng_col.append(eng_max_label)
+                eng_section.append(label)
+                eng_col.append(scaled_label)
+
+            ws.append(eng_section)
+            ws.append(eng_col)
+
+            # Merge section headers
+            try:
+                section_ranges = {}
+                for ci, sec in enumerate(eng_section, start=1):
+                    if sec:
+                        if sec not in section_ranges:
+                            section_ranges[sec] = [ci, ci]
+                        else:
+                            section_ranges[sec][1] = ci
+                for sec, (start_col, end_col) in section_ranges.items():
+                    if start_col < end_col:
+                        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                    cell = ws.cell(row=1, column=start_col)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+                for ci in range(1, len(eng_col) + 1):
+                    ws.cell(row=2, column=ci).font = Font(bold=True)
+            except Exception:
+                pass
+
+            # ── Fetch raw data for all students ──
+            eng_cia1_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia1') if subject_id else {}
+            eng_cia2_sheet = _get_cia_sheet_data(subject_id, ta_id, 'cia2') if subject_id else {}
+
+            eng_model_sheet   = _get_model_sheet_data(subject_id, ta_id, class_type) if subject_id else {}
+            eng_model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+            if not eng_model_pattern:
+                eng_model_pattern = {'marks': [20, 20, 20, 20, 20], 'cos': [1, 2, 3, 4, 5]}
+
+            def _eng_scale(raw, out_of, weight):
+                if raw is None or not out_of or not weight:
+                    return None
+                return _round2(_clamp((float(raw) / float(out_of)) * float(weight), 0.0, float(weight)))
+
+            for idx_e, s in enumerate(student_id_list, start=1):
+                sid = int(s['id'])
+                fim_row = student_rows.get(sid, {})
+
+                # SSA1 CO splits
+                sp1 = ssa1_splits_all.get(sid, {})
+                s1_co_vals = []
+                for co in ssa1_cos_en:
+                    s1_co_vals.append(_sf(sp1.get(f'co{co}')))
+                s1_total = _sf(ssa1_totals.get(sid))
+                if all(v is None for v in s1_co_vals) and s1_total is not None:
+                    n_cos = len(ssa1_cos_en) or 1
+                    s1_co_vals = [s1_total / n_cos] * n_cos
+
+                # CIA1 total (NOT split by CO — for English, CIA is split equally across all 5 COs in FIM)
+                cia1_total_en = _extract_cia_total_for_student(eng_cia1_sheet, sid)
+
+                # FA1 CO splits
+                f1 = f1_rows_all.get(sid, {})
+                f1_co_vals = []
+                for co in fa1_cos_en:
+                    # FA1 uses skill/att pairs mapped to COs
+                    if co == 1:
+                        val = _round2(_sf(f1.get('skill1')) + _sf(f1.get('att1'))) if _sf(f1.get('skill1')) is not None and _sf(f1.get('att1')) is not None else None
+                    elif co == 2:
+                        val = _round2(_sf(f1.get('skill2')) + _sf(f1.get('att2'))) if _sf(f1.get('skill2')) is not None and _sf(f1.get('att2')) is not None else None
+                    else:
+                        val = None
+                    f1_co_vals.append(val)
+                f1_total = _sf(f1.get('total'))
+
+                # SSA2 CO splits
+                sp2 = ssa2_splits_all.get(sid, {})
+                s2_co_vals = []
+                for co in ssa2_cos_en:
+                    s2_co_vals.append(_sf(sp2.get(f'co{co}')))
+                s2_total = _sf(ssa2_totals.get(sid))
+                if all(v is None for v in s2_co_vals) and s2_total is not None:
+                    n_cos = len(ssa2_cos_en) or 1
+                    s2_co_vals = [s2_total / n_cos] * n_cos
+
+                # CIA2 total
+                cia2_total_en = _extract_cia_total_for_student(eng_cia2_sheet, sid)
+
+                # FA2 CO splits
+                f2 = f2_rows_all.get(sid, {})
+                f2_co_vals = []
+                for co in fa2_cos_en:
+                    if co == 3:
+                        val = _round2(_sf(f2.get('skill1')) + _sf(f2.get('att1'))) if _sf(f2.get('skill1')) is not None and _sf(f2.get('att1')) is not None else None
+                    elif co == 4:
+                        val = _round2(_sf(f2.get('skill2')) + _sf(f2.get('att2'))) if _sf(f2.get('skill2')) is not None and _sf(f2.get('att2')) is not None else None
+                    else:
+                        val = None
+                    f2_co_vals.append(val)
+                f2_total = _sf(f2.get('total'))
+
+                # Model per-CO
+                model_marks_en = _extract_model_co_marks_for_student(
+                    model_sheet=eng_model_sheet, student_id=sid,
+                    reg_no=reg_map.get(sid, ''), model_pattern=eng_model_pattern, class_type=class_type,
+                ) if subject_id else None
+                model_vals_en = []
+                m_total_en = 0.0
+                m_has_en = False
+                for k in model_co_keys_en:
+                    val = _sf(model_marks_en.get(k)) if model_marks_en else None
+                    model_vals_en.append(_v(val))
+                    if val is not None:
+                        m_total_en += val
+                        m_has_en = True
+                model_vals_en.append(_v(m_total_en) if m_has_en else '-')
+
+                # FIM (Before CQI)
+                before_co_en = [_v(fim_row.get(f'base_{k}')) for k in fim_co_keys_en]
+                before_co_en.append(_v(fim_row.get('base_fim')))
+                before_co_en.append(fim_row.get('base_total_100') if fim_row.get('base_total_100') is not None else '-')
+
+                # FIM (After CQI)
+                after_co_en = [_v(fim_row.get(k)) for k in fim_co_keys_en]
+                after_co_en.append(_v(fim_row.get('fim')))
+                after_co_en.append(fim_row.get('total_100') if fim_row.get('total_100') is not None else '-')
+
+                row_data = [
+                    idx_e,
+                    _ms_safe_text(s.get('name')),
+                    _ms_safe_text(s.get('reg_no')),
+                    # SSA1 CO splits + Total
+                ] + [_v(v) for v in s1_co_vals] + [_v(s1_total)] + [
+                    # CIA1 Total
+                    _v(cia1_total_en),
+                    # FA1 CO splits + Total
+                ] + [_v(v) for v in f1_co_vals] + [_v(f1_total)] + [
+                    # SSA2 CO splits + Total
+                ] + [_v(v) for v in s2_co_vals] + [_v(s2_total)] + [
+                    # CIA2 Total
+                    _v(cia2_total_en),
+                    # FA2 CO splits + Total
+                ] + [_v(v) for v in f2_co_vals] + [_v(f2_total)] + model_vals_en + before_co_en + after_co_en
+
+                ws.append(row_data)
+
+            eng_last = get_column_letter(len(eng_col))
+            ws.auto_filter.ref = f"A2:{eng_last}{ws.max_row}"
+            ws.freeze_panes = 'A3'
+
         else:
             # ── THEORY / QP1FINAL / others ──
             if is_qp1_final:
@@ -2442,7 +2897,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 # Model
                 model_marks = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
-                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
+                    reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=pattern_class_type,
                 ) if subject_id else None
                 model_vals = []
                 m_total = 0.0

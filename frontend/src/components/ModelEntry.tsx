@@ -890,9 +890,9 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           if (tcplReviewIsCo5) {
             coMark[4] += labNum;
           } else if (tcplModelRecordEnabled) {
-            // Record mode: CO1-CO4 equal LAB share; CO5 = CIA(lab×4/30) + (avg/maxPerExp)×2
-            for (let i = 0; i < 4; i++) coMark[i] += labNum / tcplCoCount;
-            coMark[4] += (labNum / tcplLabMax) * 4.0;
+            // Record mode: CO1-CO5 each get the equal LAB/5 share; CO5 additionally
+            // accrues the record contribution (avg/maxPerExp)×2.
+            for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
             const _recRaw = ((row.recordMarksCo5 ?? []) as (number | '')[]);
             const _recValid = _recRaw.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
             const _recAvg = _recValid.length > 0 ? _recValid.reduce((a, b) => a + b, 0) / _recValid.length : 0;
@@ -1693,10 +1693,11 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       return tcplCoTheoryMaxRow.map((m, i) => (i === 4 ? tcplLabMax : m));
     }
 
-    // TCPL: Excel logic inferred from screenshot:
-    // CO max = (sum of question max for that CO) + (LAB max / CO-count)
-    return tcplCoTheoryMaxRow.map((m) => m + tcplLabShareMax);
-  }, [tcplCoTheoryMaxRow, tcplLabShareMax, tcplReviewIsCo5, tcplLabMax]);
+    // TCPL: CO max = (sum of question max for that CO) + (LAB max / CO-count).
+    // When the CO5 record-mark option is enabled, CO5 also carries an extra +2 raw
+    // (avg-of-experiments scaled to /2), so its raw max becomes theory + share + 2.
+    return tcplCoTheoryMaxRow.map((m, i) => m + tcplLabShareMax + (i === 4 && tcplModelRecordEnabled ? 2 : 0));
+  }, [tcplCoTheoryMaxRow, tcplLabShareMax, tcplReviewIsCo5, tcplLabMax, tcplModelRecordEnabled]);
 
   const tcplBtlMaxRow = useMemo(() => {
     const btlMax: number[] = [0, 0, 0, 0, 0, 0];
@@ -2387,7 +2388,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               {tcplModelRecordEnabled && (
                 <span style={{ fontSize: 12, color: '#92400e', fontWeight: 500 }}>
-                  CO1–CO4: LAB/5 each (≤6) | CO5: CIA {`(LAB×4/30)`} + (avg/{tcplModelRecordMaxPerExp})×2
+                  CO1–CO5: LAB/5 each (≤6) | CO5 record: + (avg/{tcplModelRecordMaxPerExp})×2
                 </span>
               )}
             </div>
@@ -3471,9 +3472,9 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                         // TCPR: add REVIEW only to CO5.
                         coMark[4] += labNum;
                       } else if (tcplModelRecordEnabled) {
-                        // Record mode: CO1-CO4 equal LAB share; CO5 = CIA(lab×4/30) + (avg/maxPerExp)×2
-                        for (let i = 0; i < 4; i++) coMark[i] += labNum / tcplCoCount;
-                        coMark[4] += (labNum / tcplLabMax) * 4.0;
+                        // Record mode: CO1-CO5 each get the equal LAB/5 share; CO5 additionally
+                        // accrues the record contribution (avg/maxPerExp)×2.
+                        for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
                         const _recRawRow = ((row.recordMarksCo5 ?? []) as (number | '')[]);
                         const _recValidRow = _recRawRow.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
                         const _recAvgRow = _recValidRow.length > 0 ? _recValidRow.reduce((a, b) => a + b, 0) / _recValidRow.length : 0;

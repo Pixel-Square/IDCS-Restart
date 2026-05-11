@@ -140,6 +140,29 @@ function parseCoNumber(value: unknown, fallback = 1) {
   return m ? clamp(Number(m[0]), 1, 5) : fallback;
 }
 
+function parseCoList(value: unknown, fallback = 1): number[] {
+  if (Array.isArray(value)) {
+    const out: number[] = [];
+    for (const x of value) {
+      const nested = parseCoList(x, 0);
+      for (const n of nested) {
+        if (n >= 1 && n <= 5) out.push(n);
+      }
+    }
+    return out.length ? Array.from(new Set(out)) : [fallback];
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const digits = String(Math.trunc(value)).match(/[1-5]/g) || [];
+    const out = digits.map((d) => Number(d)).filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+    return out.length ? Array.from(new Set(out)) : [clamp(Math.round(value), 1, 5)];
+  }
+  const s = String(value ?? '').toUpperCase();
+  if (!s) return [fallback];
+  const digits = s.replace(/CO/g, '').match(/[1-5]/g) || [];
+  const out = digits.map((d) => Number(d)).filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+  return out.length ? Array.from(new Set(out)) : [fallback];
+}
+
 function componentLabel(ct: string, key: string): string {
   const k = String(key || '').toLowerCase();
   if (k === 'ssa') return 'SSA';
@@ -365,6 +388,8 @@ export default function CQIEntry({
   // priorCqiEntries: merged entries from ALL published pages (student → {co1: val, co2: val, ...})
   const [priorPublishedCos, setPriorPublishedCos] = useState<Set<number>>(new Set());
   const [priorCqiEntries, setPriorCqiEntries] = useState<Record<number | string, Record<string, number | null>>>({});
+  // Incrementing this triggers a re-fetch of priorPublishedCos (e.g., after reset).
+  const [priorCosRefreshCounter, setPriorCosRefreshCounter] = useState(0);
 
   const classTypeKey = useMemo(() => {
     const v = String(normalizeClassType(classType) || '').trim().toUpperCase();
@@ -596,10 +621,12 @@ export default function CQIEntry({
 
   // Load ALL published CQI pages (without page-specific params) to discover previously attained COs.
   // COs published in OTHER pages become read-only and cannot be re-entered.
+  // NOTE: This multi-page locking only applies to THEORY and THEORY_PMBL courses. For other types
+  // (TCPR, TCPL, etc.) all COs on the page are always editable.
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!subjectId || !teachingAssignmentId) {
+      if (!subjectId || !teachingAssignmentId || (classTypeKey !== 'THEORY' && classTypeKey !== 'THEORY_PMBL')) {
         if (mounted) { setPriorPublishedCos(new Set()); setPriorCqiEntries({}); }
         return;
       }
@@ -647,7 +674,15 @@ export default function CQIEntry({
             const allEntries: Record<string, Record<string, number | null>> = {};
 
             for (const pg of pages) {
-              if (!pg.publishedAt) continue;
+              // All pages returned by cqi-published belong to ObeCqiPublished
+              // (guaranteed by the API), so they were published at some point.
+              // Legacy pages migrated from the old non-paged format may lack a
+              // publishedAt timestamp — skip only truly empty/malformed entries
+              // (no publishedAt AND no coNumbers).  This prevents CO1/CO2 from
+              // appearing editable in subsequent CQI pages when the earlier page
+              // was stored in legacy format.
+              const hasCoNumbers = pg.coNumbers && pg.coNumbers.length > 0;
+              if (!pg.publishedAt && !hasCoNumbers) continue;
               const pgNormKey = normalizePageKey(pg.key);
               const pgNormAssessment = normalizeAssessment(pg.assessmentType);
               const pgNormCos = normalizeCos(pg.coNumbers || []);
@@ -682,7 +717,7 @@ export default function CQIEntry({
       if (mounted) { setPriorPublishedCos(new Set()); setPriorCqiEntries({}); }
     })();
     return () => { mounted = false; };
-  }, [subjectId, teachingAssignmentId, cqiPageKey]);
+  }, [subjectId, teachingAssignmentId, cqiPageKey, priorCosRefreshCounter, classTypeKey]);
 
   // Load global IQAC CQI config (applies to all courses).
   useEffect(() => {
@@ -1091,38 +1126,56 @@ export default function CQIEntry({
           return MODEL_THEORY_QUESTIONS;
         })();
 
-        const modelCosRow = (() => {
+        const modelCosRow: number[][] = (() => {
           const cos = Array.isArray((iqacModelPattern as any)?.cos) ? (iqacModelPattern as any).cos : null;
           if (Array.isArray(cos) && cos.length === modelQuestions.length) {
-            return cos.map((v: any) => parseCoNumber(v));
+            return cos.map((v: any) => parseCoList(v));
           }
           if (isTcpr) {
             const base = [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4];
-            if (modelQuestions.length === base.length) return base;
-            return Array.from({ length: modelQuestions.length }, (_, i) => base[i % base.length]);
+            const src = modelQuestions.length === base.length
+              ? base
+              : Array.from({ length: modelQuestions.length }, (_, i) => base[i % base.length]);
+            return src.map((n) => [n]);
           }
           if (isTcpl) {
             const base = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5];
-            if (modelQuestions.length === base.length) return base;
-            return Array.from({ length: modelQuestions.length }, (_, i) => base[i % base.length]);
+            const src = modelQuestions.length === base.length
+              ? base
+              : Array.from({ length: modelQuestions.length }, (_, i) => base[i % base.length]);
+            return src.map((n) => [n]);
           }
-          if (modelQuestions.length === MODEL_THEORY_CO_ROW.length) return [...MODEL_THEORY_CO_ROW];
-          return Array.from({ length: modelQuestions.length }, (_, i) => MODEL_THEORY_CO_ROW[i % MODEL_THEORY_CO_ROW.length]);
+          const src = modelQuestions.length === MODEL_THEORY_CO_ROW.length
+            ? [...MODEL_THEORY_CO_ROW]
+            : Array.from({ length: modelQuestions.length }, (_, i) => MODEL_THEORY_CO_ROW[i % MODEL_THEORY_CO_ROW.length]);
+          return src.map((n) => [n]);
         })();
 
         const modelQuestionMaxByCo = (() => {
           const out = { co1: 0, co2: 0, co3: 0, co4: 0, co5: 0 };
           for (let i = 0; i < modelQuestions.length; i++) {
             const def = modelQuestions[i];
-            const co = modelCosRow[i] ?? 1;
-            if (co === 1) out.co1 += def.max;
-            else if (co === 2) out.co2 += def.max;
-            else if (co === 3) out.co3 += def.max;
-            else if (co === 4) out.co4 += def.max;
-            else if (co === 5) out.co5 += def.max;
+            const cos = modelCosRow[i] && modelCosRow[i].length ? modelCosRow[i] : [1];
+            const share = (Number(def.max) || 0) / cos.length;
+            for (const co of cos) {
+              if (co === 1) out.co1 += share;
+              else if (co === 2) out.co2 += share;
+              else if (co === 3) out.co3 += share;
+              else if (co === 4) out.co4 += share;
+              else if (co === 5) out.co5 += share;
+            }
           }
           return out;
         })();
+
+        // TCPL Model Exam per-component weights — used by getModelScaledByCo to
+        // independently scale Theory / Lab / Record (avoids dilution from raw-sum scaling).
+        const TCPL_THEORY_W = [2, 2, 2, 2, 4] as const;     // per-CO theory weight
+        const TCPL_LAB_W = 1;                                // per-CO lab weight (all 5)
+        const TCPL_RECORD_W = 2;                             // CO5 only, when enabled
+        const TCPL_LAB_SHARE_MAX = 30 / 5;                   // = 6
+        const TCPL_RECORD_NORM_MAX = 2;                      // record avg normalised to /2
+        const TCPL_CO_TOTAL_W = { co1: 3, co2: 3, co3: 3, co4: 3, co5: 7 };
 
         const modelMaxes = (() => {
           const base = { ...modelQuestionMaxByCo };
@@ -1130,14 +1183,9 @@ export default function CQIEntry({
             return { ...base, co5: base.co5 + 30 };
           }
           if (isTcpl) {
-            const share = 30 / 5;
-            return {
-              co1: base.co1 + share,
-              co2: base.co2 + share,
-              co3: base.co3 + share,
-              co4: base.co4 + share,
-              co5: base.co5 + share,
-            };
+            // TCPL model values returned by getModelScaledByCo are pre-weighted, so the
+            // caps here equal the per-CO total weights (3 for CO1-4, 7 for CO5 always).
+            return { ...TCPL_CO_TOTAL_W };
           }
           return base;
         })();
@@ -1151,7 +1199,12 @@ export default function CQIEntry({
 
           const absent = Boolean((row as any).absent);
           const absentKind = String((row as any).absentKind || 'AL').toUpperCase();
-          if (absent && absentKind === 'AL') return null;
+          // For AL-absent students: treat as 0 marks across all COs so the model exam
+          // is counted as conducted (with 0) — this ensures they appear as Not Attained
+          // with the CQI textbox and are included in the CQI report.
+          if (absent && absentKind === 'AL') {
+            return { co1: 0, co2: 0, co3: 0, co4: 0, co5: 0, isAbsent: true };
+          }
 
           const qObj = (row as any).q && typeof (row as any).q === 'object' ? (row as any).q : row;
           const labRaw = toNumOrNull((row as any).lab);
@@ -1164,39 +1217,59 @@ export default function CQIEntry({
             if (raw == null) continue;
             hasAny = true;
             const mark = clamp(raw, 0, Number(def.max) || 0);
-            const co = modelCosRow[i] ?? 1;
-            if (co === 1) sums.co1 += mark;
-            else if (co === 2) sums.co2 += mark;
-            else if (co === 3) sums.co3 += mark;
-            else if (co === 4) sums.co4 += mark;
-            else if (co === 5) sums.co5 += mark;
+            const cos = modelCosRow[i] && modelCosRow[i].length ? modelCosRow[i] : [1];
+            const share = mark / cos.length;
+            for (const co of cos) {
+              if (co === 1) sums.co1 += share;
+              else if (co === 2) sums.co2 += share;
+              else if (co === 3) sums.co3 += share;
+              else if (co === 4) sums.co4 += share;
+              else if (co === 5) sums.co5 += share;
+            }
           }
 
-          if (modelIsTcplLike && labRaw != null) {
+          // TCPR: lab goes entirely to CO5 (raw). TCPL: handled below with independent
+          // per-component scaling so Theory / Lab / Record don't dilute each other.
+          if (isTcpr && labRaw != null) {
             hasAny = true;
-            const lab = clamp(labRaw, 0, 30);
-            if (isTcpr) {
-              sums.co5 += lab;
-            } else if (modelRecordCfg?.enabled) {
-              // Record mode: CO1-CO4 equal split; CO5 = CIA(lab*4/30) + record avg*(2/maxPerExp)
-              const share = lab / 5;
-              sums.co1 += share;
-              sums.co2 += share;
-              sums.co3 += share;
-              sums.co4 += share;
-              sums.co5 += (lab / 30) * 4.0;
-              const recList: any[] = Array.isArray((row as any).recordMarksCo5) ? (row as any).recordMarksCo5 : [];
-              const recSliced = modelRecordCfg.expCount ? recList.slice(0, modelRecordCfg.expCount) : recList;
-              const recValid = recSliced.map((x: any) => { const n = typeof x === 'number' ? x : Number(x); return Number.isFinite(n) ? n : null; }).filter((x): x is number => x !== null);
-              const recAvg = recValid.length > 0 ? recValid.reduce((a, b) => a + b, 0) / recValid.length : 0;
-              sums.co5 += Math.min(recAvg / (modelRecordCfg.maxPerExp || 2.0), 1.0) * 2.0;
-            } else {
-              const share = lab / 5;
-              sums.co1 += share;
-              sums.co2 += share;
-              sums.co3 += share;
-              sums.co4 += share;
-              sums.co5 += share;
+            sums.co5 += clamp(labRaw, 0, 30);
+          }
+
+          if (isTcpl) {
+            // Detect any TCPL-only signal that should make the row count as "conducted"
+            // even if no theory question was answered.
+            const recListRaw: any[] = Array.isArray((row as any).recordMarksCo5) ? (row as any).recordMarksCo5 : [];
+            const hasRecordData = Boolean(modelRecordCfg?.enabled) && recListRaw.some((x: any) => Number.isFinite(typeof x === 'number' ? x : Number(x)));
+            if (labRaw != null || hasRecordData) hasAny = true;
+
+            if (hasAny) {
+              // Snapshot the raw theory totals before overwriting sums with weighted values.
+              const theoryRawCo: Record<string, number> = { ...sums };
+              const lab = labRaw == null ? 0 : clamp(labRaw, 0, 30);
+              const labShare = lab / 5;
+
+              let recordContribution = 0;
+              if (modelRecordCfg?.enabled) {
+                const recSliced = modelRecordCfg.expCount ? recListRaw.slice(0, modelRecordCfg.expCount) : recListRaw;
+                const recValid = recSliced
+                  .map((x: any) => { const n = typeof x === 'number' ? x : Number(x); return Number.isFinite(n) ? n : null; })
+                  .filter((x): x is number => x !== null);
+                if (recValid.length > 0) {
+                  const recAvg = recValid.reduce((a, b) => a + b, 0) / recValid.length;
+                  const denom = modelRecordCfg.maxPerExp || TCPL_RECORD_NORM_MAX;
+                  recordContribution = Math.min(recAvg / denom, 1) * TCPL_RECORD_W;
+                }
+              }
+
+              for (let i = 1; i <= 5; i++) {
+                const ck = `co${i}` as 'co1' | 'co2' | 'co3' | 'co4' | 'co5';
+                const tMax = (modelQuestionMaxByCo as any)[ck] || 0;
+                const tRaw = theoryRawCo[ck] || 0;
+                const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
+                const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
+                const recordWeighted = i === 5 ? recordContribution : 0;
+                sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+              }
             }
           }
 
@@ -2418,7 +2491,7 @@ export default function CQIEntry({
 
             const modelConducted = modelScaled != null || (isLabLike && isExamConducted(labModel));
             if ((meMark !== null || modelConducted) && meMax > 0) {
-              const meWeight = weights.me > 0 ? weights.me : ((!isLabLike && modelScaled) ? (coNum === 5 ? 4 : 2) : meMax);
+              const meWeight = weights.me > 0 ? weights.me : ((!isLabLike && modelScaled) ? (coNum === 5 ? 7 : 3) : meMax);
               components.push({ key: 'me', mark: meMark ?? 0, max: meMax, w: meWeight });
             }
 
@@ -2693,53 +2766,85 @@ export default function CQIEntry({
           >
             {debugMode ? 'DEBUG ON' : 'DEBUG'}
           </button>
-          
 
-          
-
-          {!publishedEditLocked ? (
+           {/* Reset Marks — always visible, handles both draft-only and published states */}
             <button
               type="button"
               onClick={async () => {
                 if (!subjectId || !teachingAssignmentId) return alert('Missing subject/teaching assignment');
-                if (tableBlocked) return;
-                const ok = confirm('Reset CQI marks for all students? This clears the saved draft.');
+                const isCurrentlyPublished = isPublished;
+                const confirmMsg = isCurrentlyPublished
+                  ? 'Reset & Unpublish CQI marks for all students? This will clear the published data and unlock this page (and any dependent CQI pages).'
+                  : 'Reset CQI marks for all students? This clears the saved draft.';
+                const ok = confirm(confirmMsg);
                 if (!ok) return;
                 setResettingMarks(true);
                 try {
-                  // Clear UI state immediately.
-                  setCqiEntries({});
-                  setCqiErrors({});
-                  setDirty(false);
+                  if (isCurrentlyPublished) {
+                    // Call cqi-reset-page to remove published + draft + lock for this page
+                    const resetRes = await fetchWithAuth(`/api/obe/cqi-reset-page/${encodeURIComponent(String(subjectId))}`, {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        teaching_assignment_id: teachingAssignmentId,
+                        page_key: cqiPageKey,
+                        assessment_type: assessmentType || null,
+                        co_numbers: coNumbers,
+                      }),
+                    }).catch(() => null);
 
-                  // Save empty draft to server.
-                  const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${cqiQuery}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(buildCqiPayload({})),
-                  }).catch(() => null);
-
-                  if (res && res.ok) {
-                    const j = await res.json().catch(() => null);
-                    setDraftLog(j || { updated_at: new Date().toISOString(), updated_by: null });
-                    alert('CQI draft reset');
+                    if (resetRes && resetRes.ok) {
+                      // Clear all local state
+                      setCqiEntries({});
+                      setCqiErrors({});
+                      setDirty(false);
+                      setLocalPublished(false);
+                      setPublishedLog(null);
+                      setDraftLog(null);
+                      // Re-fetch prior published COs so CO1/CO2 from other pages
+                      // remain correctly locked after this page is unpublished.
+                      setPriorCosRefreshCounter((c) => c + 1);
+                      // Refresh lock/publish state
+                      refreshMarkLock({ silent: true });
+                      refreshMarkEntryEditWindow({ silent: true });
+                      try { refreshPublishWindow(); } catch {}
+                      alert('CQI reset & unpublished successfully.');
+                    } else {
+                      const txt = resetRes ? await resetRes.text().catch(() => '') : '';
+                      alert(txt || 'Failed to reset CQI page');
+                    }
                   } else {
-                    const txt = res ? await res.text().catch(() => '') : '';
-                    alert(txt || 'Failed to reset draft');
+                    // Draft-only reset: clear UI + save empty draft
+                    setCqiEntries({});
+                    setCqiErrors({});
+                    setDirty(false);
+
+                    const res = await fetchWithAuth(`/api/obe/cqi-draft/${encodeURIComponent(String(subjectId))}${cqiQuery}`, {
+                      method: 'PUT',
+                      body: JSON.stringify(buildCqiPayload({})),
+                    }).catch(() => null);
+
+                    if (res && res.ok) {
+                      const j = await res.json().catch(() => null);
+                      setDraftLog(j || { updated_at: new Date().toISOString(), updated_by: null });
+                      alert('CQI draft reset');
+                    } else {
+                      const txt = res ? await res.text().catch(() => '') : '';
+                      alert(txt || 'Failed to reset draft');
+                    }
                   }
                 } catch (e: any) {
-                  alert('Failed to reset draft: ' + String(e?.message || e));
+                  alert('Failed to reset: ' + String(e?.message || e));
                 } finally {
                   setResettingMarks(false);
                 }
               }}
               className="obe-btn obe-btn-danger"
               style={{ minWidth: 120 }}
-              disabled={resettingMarks || tableBlocked || !publishAllowed || globalLocked}
-              title="Clears the saved draft marks"
+              disabled={resettingMarks || globalLocked}
+              title={isPublished ? 'Reset & unpublish this CQI page' : 'Clears the saved draft marks'}
             >
-              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+              {resettingMarks ? 'Resetting…' : isPublished ? 'Reset & Unpublish' : 'Reset Marks'}
             </button>
-          ) : null}
 
           <button
             type="button"
@@ -2996,7 +3101,13 @@ export default function CQIEntry({
               <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#475569', minWidth: 120 }}>
                 TOTAL
                 <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
-              
+
+                </div>
+              </th>
+              <th style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 700, color: '#0f766e', minWidth: 160, backgroundColor: '#ecfeff' }}>
+                GRAND TOTAL
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#0e7490', marginTop: 2 }}>
+                  (AFTER CQI)
                 </div>
               </th>
                   {coNumbers.map(coNum => (
@@ -3181,6 +3292,27 @@ export default function CQIEntry({
                       <span style={{ color: '#94a3b8' }}>—</span>
                     )}
                   </td>
+                  <td style={{ padding: '10px 8px', textAlign: 'center', fontWeight: 700 }}>
+                    {afterCqiMax > 0 ? (
+                      <div style={{ backgroundColor: afterPercentage < THRESHOLD_PERCENT ? '#fff1f2' : '#ecfdf5', padding: 8, borderRadius: 6 }}>
+                        <div style={{ color: afterPercentage < THRESHOLD_PERCENT ? '#ef4444' : '#047857', fontSize: 16, fontWeight: 800 }}>
+                          {round2(afterCqiValue)}{!debugMode ? <> / {round2(afterCqiMax)}</> : null}
+                        </div>
+                        <div style={{ fontSize: 13, color: afterPercentage < THRESHOLD_PERCENT ? '#ef4444' : '#0f766e', fontWeight: 700, marginTop: 4 }}>
+                          {round2(afterPercentage)}%
+                        </div>
+                        {delta > 0 ? (
+                          <div style={{ fontSize: 11, color: '#16a34a', marginTop: 4, fontWeight: 600 }}>
+                            +{round2(delta)} (+{round2(afterPercentage - beforePercentage)}%)
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>—</div>
+                        )}
+                      </div>
+                    ) : (
+                      <span style={{ color: '#94a3b8' }}>—</span>
+                    )}
+                  </td>
                   {coNumbers.map(coNum => {
                     const coKey = `co${coNum}`;
                     const coData = studentTotals[coKey];
@@ -3209,13 +3341,22 @@ export default function CQIEntry({
                     const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
                     const priorValue = isAlreadyAttained ? (priorEntry[coKey] ?? null) : null;
 
+                    // Live feedback: CQI mark entered AND overall now meets threshold
+                    const hasCqiMark = cqiValue != null && cqiValue !== '' && Number.isFinite(Number(cqiValue));
+                    const isNowAttained = hasCqiMark && afterPercentage >= THRESHOLD_PERCENT;
+
                     return (
-                      <td 
+                      <td
                         key={coNum}
-                        style={{ 
-                          padding: '10px 8px', 
+                        style={{
+                          padding: '10px 8px',
                           textAlign: 'center',
-                          backgroundColor: isAlreadyAttained ? '#eff6ff' : (isBelowThreshold ? (isOverallBelowThreshold ? '#fef2f2' : '#f0f9ff') : '#f0fdf4'),
+                          backgroundColor: isAlreadyAttained
+                            ? '#eff6ff'
+                            : isNowAttained
+                            ? '#f0fdf4'
+                            : (isBelowThreshold ? (isOverallBelowThreshold ? '#fef2f2' : '#f0f9ff') : '#f0fdf4'),
+                          transition: 'background-color 0.2s ease',
                         }}
                       >
                         <div style={{ 
@@ -3275,13 +3416,16 @@ export default function CQIEntry({
                           </div>
                         ) : isBelowThreshold ? (
                           <div>
-                            <div style={{ 
-                              fontSize: 11, 
-                              color: isOverallBelowThreshold ? '#dc2626' : '#0369a1', 
-                              fontWeight: 600,
+                            <div style={{
+                              fontSize: 11,
+                              color: isNowAttained ? '#16a34a' : (isOverallBelowThreshold ? '#dc2626' : '#0369a1'),
+                              fontWeight: 700,
                               marginBottom: 4,
+                              transition: 'color 0.2s ease',
                             }}>
-                              {isOverallBelowThreshold ? 'CO Not Attained (Converted to 60%)' : 'CO Not Attained (Special Improvement - 15% Add)'}
+                              {isNowAttained
+                                ? '✓ Attained via CQI'
+                                : (isOverallBelowThreshold ? 'CO Not Attained (Converted to 60%)' : 'CO Not Attained (Special Improvement - 15% Add)')}
                             </div>
                             <input
                               type="number"
@@ -3295,6 +3439,12 @@ export default function CQIEntry({
                                 padding: '4px 8px',
                                 fontSize: 13,
                                 textAlign: 'center',
+                                fontWeight: 700,
+                                border: `2px solid ${isNowAttained ? '#16a34a' : '#fecaca'}`,
+                                color: isNowAttained ? '#16a34a' : '#dc2626',
+                                background: isNowAttained ? '#f0fdf4' : '#ffffff',
+                                outline: 'none',
+                                transition: 'border-color 0.2s ease, background 0.2s ease, color 0.2s ease',
                               }}
                             />
                             {cqiErrors[`${student.id}_${coKey}`] && (

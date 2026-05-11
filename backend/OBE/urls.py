@@ -23,6 +23,7 @@ urlpatterns = [
     path('cqi-save/<str:subject_id>', views.cqi_save),
     path('cqi-published/<str:subject_id>', views.cqi_published),
     path('cqi-publish/<str:subject_id>', views.cqi_publish),
+    path('cqi-reset-page/<str:subject_id>', views.cqi_reset_page),
 
     path('ssa1-published/<str:subject_id>', views.ssa1_published),
     path('ssa1-publish/<str:subject_id>', views.ssa1_publish),
@@ -127,6 +128,7 @@ urlpatterns = [
     path('iqac/template-apply', views.obe_template_apply),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),
     path('iqac/final-internal-marks/student/<int:student_id>', views.final_internal_marks_by_student),
+    path('iqac/dashboard-analytics', views.iqac_dashboard_analytics),
 
     # IQAC QP Pattern config
     path('iqac/qp-pattern', views.qp_pattern_get),

@@ -15,6 +15,16 @@ CQI_BELOW_RATE = 0.6
 CQI_ABOVE_RATE = 0.15
 QP1FINAL_WEIGHTS = [2.0, 4.0, 3.0, 1.0, 2.0, 2.0, 1.0, 2.0, 2.0, 2.0, 4.0, 3.0, 4.0, 4.0, 4.0]
 
+# TCPL Model Exam per-component weights — used for independent scaling so that
+# Theory / Lab / Record contributions are not diluted by being summed as raw
+# marks before a single (raw/raw_max)*weight scaling pass.
+_TCPL_THEORY_W = (2.0, 2.0, 2.0, 2.0, 4.0)   # per-CO theory weight
+_TCPL_LAB_W = 1.0                            # per-CO lab weight (applies to all 5)
+_TCPL_RECORD_W = 2.0                         # CO5 only, when record-marks toggle enabled
+_TCPL_LAB_SHARE_MAX = 30.0 / 5.0             # = 6.0
+_TCPL_RECORD_NORM_MAX = 2.0                  # record avg normalised to /2 raw
+_TCPL_CO_TOTAL_W = (3.0, 3.0, 3.0, 3.0, 7.0)  # sum of component weights per CO
+
 
 def _safe_text(value):
     return str(value or '').strip()
@@ -75,6 +85,36 @@ def _parse_co34(raw):
 
 
 def _parse_question_co_numbers(raw):
+    def _from_text(value):
+        s = str(value or '').strip().upper().replace('CO', '')
+        if not s:
+            return []
+        out = []
+        for ch in s:
+            if ch in {'1', '2', '3', '4', '5'}:
+                out.append(int(ch))
+        if out:
+            # preserve order while de-duplicating
+            seen = set()
+            uniq = []
+            for n in out:
+                if n not in seen:
+                    seen.add(n)
+                    uniq.append(n)
+            return uniq
+
+        if '&' in s or ',' in s or '/' in s:
+            parts = s.replace('&', ',').replace('/', ',').split(',')
+            parsed = []
+            for p in parts:
+                n = _safe_int(p)
+                if n is not None:
+                    parsed.append(n)
+            return parsed
+
+        n = _safe_int(s)
+        return [n] if n is not None else []
+
     if isinstance(raw, list):
         out = []
         for x in raw:
@@ -82,33 +122,13 @@ def _parse_question_co_numbers(raw):
             if n is not None:
                 out.append(n)
                 continue
-            s = str(x or '').upper()
-            if s.startswith('CO'):
-                n2 = _safe_int(s[2:])
-                if n2 is not None:
-                    out.append(n2)
+            out.extend(_from_text(x))
         return out
 
     if isinstance(raw, (int, float)):
-        n = _safe_int(raw)
-        return [n] if n is not None else []
+        return _from_text(raw)
 
-    s = str(raw or '').strip().upper()
-    if not s:
-        return []
-    if '&' in s or ',' in s or '/' in s:
-        parts = s.replace('CO', '').replace('&', ',').replace('/', ',').split(',')
-        out = []
-        for p in parts:
-            n = _safe_int(p)
-            if n is not None:
-                out.append(n)
-        return out
-    if s.startswith('CO'):
-        n = _safe_int(s[2:])
-        return [n] if n is not None else []
-    n = _safe_int(s)
-    return [n] if n is not None else []
+    return _from_text(raw)
 
 
 def _qp1_final_question_weight(question_co_raw, target_co_num, offset=0):
@@ -422,7 +442,7 @@ def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=
     model_sheet = _get_model_sheet_data(subject.id, ta_id, class_type)
     model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
     model_marks = _extract_model_co_marks_for_student(
-        model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type,
+        model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type, qp_type=qp_type,
     )
 
     # ── Scale helper ──
@@ -566,6 +586,13 @@ def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=
             v = _clamp(v, 0.0, mx)
         final_co_values[co] = _round2(v)
 
+    # ── Consistency: if rounded total didn't change, use base CO values ──
+    _base_total_rounded = _round2(base_total)
+    if final_total == _base_total_rounded:
+        for co in range(1, 6):
+            if co_values.get(co) is not None:
+                final_co_values[co] = _safe_float(co_values[co])
+
     _raw_100 = (final_total / max_total) * 100.0 if max_total > 0 else None
     _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
     _raw_base_100 = (base_total / max_total) * 100.0 if max_total > 0 else None
@@ -668,7 +695,8 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
     w_review2  = _w('review2', 'weight')
     max_review2 = _w('review2', 'max') or 50.0
     w_model    = _w('model', 'weight')
-    max_model  = _w('model', 'max') or 100.0
+    # max_model is resolved from the actual sheet (ciaExamMax) after helpers are defined below
+    max_model  = None
 
     max_total = w_ssa1 + w_review1 + w_ssa2 + w_review2 + w_model  # should = 60
     if max_total <= 0:
@@ -682,9 +710,8 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
             return None
         return _clamp((float(raw) / float(out_of)) * float(weight), 0, float(weight))
 
-    def _get_prbl_lab_total(assessment_key, student_id):
-        """Read a PRBL Review/Model total from draft (if newer) or LabPublishedSheet."""
-        # Draft (preferred when newer than published or published is absent)
+    def _get_prbl_sheet_data(assessment_key):
+        """Return the active sheet data dict for the given PRBL assessment key."""
         draft_rows = list(
             AssessmentDraft.objects.filter(subject_id=subject.id, assessment=assessment_key)
             .order_by('-updated_at')
@@ -694,7 +721,6 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
         draft_updated = getattr(draft_row, 'updated_at', None) if draft_row else None
         draft_is_ta_scoped = draft_row is not None and getattr(draft_row, 'teaching_assignment_id', None) == ta_id
 
-        # LabPublishedSheet (the persistent published copy)
         pub_rows = list(
             LabPublishedSheet.objects.filter(subject_id=subject.id, assessment=assessment_key)
             .order_by('-updated_at')
@@ -714,9 +740,72 @@ def _compute_prbl_final_total(*, ta, subject, student, ta_id, return_details=Fal
                 use_draft = True
 
         data = draft_data if use_draft else pub_data
+        return data if isinstance(data, dict) else None
+
+    def _get_prbl_lab_sheet_max(assessment_key):
+        """Return the faculty-set maximum marks for a PRBL review/model sheet.
+
+        For PRBL model reviews, the faculty sets the total marks via the Mark Manager
+        which stores component maxes in `reviewComponents` (e.g. [{id:'co1',max:50}]).
+        The actual denominator for scaling is the SUM of those component maxes.
+        Falls back to `ciaExamMax` if present, then returns None.
+        """
+        data = _get_prbl_sheet_data(assessment_key)
         if not isinstance(data, dict):
             return None
+        sheet = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+        if not isinstance(sheet, dict):
+            return None
+        # Primary: sum of reviewComponents maxes (this is what the Mark Manager sets)
+        review_comps = sheet.get('reviewComponents')
+        if isinstance(review_comps, list) and review_comps:
+            total = sum(
+                (_safe_float(c.get('max')) or 0.0)
+                for c in review_comps
+                if isinstance(c, dict)
+            )
+            if total > 0:
+                return total
+        # Fallback: explicit ciaExamMax key
+        val = _safe_float(sheet.get('ciaExamMax'))
+        return val if val and val > 0 else None
+
+    def _get_prbl_lab_total(assessment_key, student_id):
+        """Read a PRBL Review/Model total from draft (if newer) or LabPublishedSheet."""
+        data = _get_prbl_sheet_data(assessment_key)
+        if not isinstance(data, dict):
+            return None
+        # Extract mark consistently with the Excel builder: check ciaExam first,
+        # then reviewComponentMarks, rather than data.marks (which may yield wrong totals).
+        sheet = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+        if not isinstance(sheet, dict):
+            return _extract_model_total_for_student(data, student_id)
+        rows_by = sheet.get('rowsByStudentId')
+        if not isinstance(rows_by, dict):
+            return _extract_model_total_for_student(data, student_id)
+        srow = rows_by.get(str(student_id)) or rows_by.get(student_id)
+        if not isinstance(srow, dict) or bool(srow.get('absent')):
+            return None
+        direct = _safe_float(srow.get('ciaExam'))
+        if direct is not None:
+            return round(direct, 2)
+        comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
+        total = 0.0
+        has_any = False
+        for v in comps.values():
+            n = _safe_float(v)
+            if n is not None:
+                has_any = True
+                total += float(n)
+        if has_any:
+            return round(total, 2)
+        # Last fallback to generic extractor
         return _extract_model_total_for_student(data, student_id)
+
+    # ── Resolve max_model from the actual sheet the faculty configured ──
+    # This ensures that whatever total marks the faculty set in the Mark Manager
+    # is used for scaling (e.g. 50), rather than the global config default (100).
+    max_model = _get_prbl_lab_sheet_max('model') or _w('model', 'max') or 100.0
 
     # ── Raw marks ──
     ssa1_map = _assessment_map(Ssa1Mark, 'mark', subject.id, [sid], ta_id)
@@ -868,14 +957,75 @@ def _extract_cia_total_for_student(sheet, sid):
     return None
 
 
+def _extract_cia_per_co_for_student(sheet, sid, pattern):
+    """Extract per-CO CIA marks for a student using the IQAC QP pattern.
+
+    Parameters:
+        sheet   – CIA sheet data dict (from _get_cia_sheet_data)
+        sid     – student ID (int)
+        pattern – QP pattern dict with 'marks' and 'cos' lists, or None
+
+    Returns:
+        (per_co_raw, per_co_max, has_data)
+        per_co_raw: {1: float, 2: float, ...} – raw mark sum routed to each CO
+        per_co_max: {1: float, 2: float, ...} – max mark sum per CO from pattern
+        has_data: bool – whether any marks were found
+
+        Returns (None, None, False) if the pattern is missing/empty
+        or the student row is absent / not found.
+    """
+    if not pattern or not isinstance(pattern, dict):
+        return None, None, False
+    p_marks = pattern.get('marks') if isinstance(pattern.get('marks'), list) else []
+    p_cos   = pattern.get('cos')   if isinstance(pattern.get('cos'),   list) else []
+    if not p_marks:
+        return None, None, False
+
+    rows_map = sheet.get('rowsByStudentId') if isinstance(sheet, dict) and isinstance(sheet.get('rowsByStudentId'), dict) else {}
+    row = rows_map.get(str(sid)) or rows_map.get(sid) or {}
+    if not isinstance(row, dict) or bool(row.get('absent')):
+        return None, None, False
+
+    qvals = row.get('q') if isinstance(row.get('q'), dict) else row
+
+    per_co_raw = {}   # {co_num: sum_of_marks}
+    per_co_max = {}   # {co_num: sum_of_max_marks}
+    has_any = False
+
+    for qi in range(len(p_marks)):
+        q_max = _safe_float(p_marks[qi])
+        if q_max is None or q_max <= 0:
+            continue
+        co_raw_tag = p_cos[qi] if qi < len(p_cos) else None
+        # Parse CO number (1-5) from tag, e.g. "CO3", 3, "3"
+        co_num = 0
+        if co_raw_tag is not None:
+            digits = ''.join(c for c in str(co_raw_tag) if c.isdigit())
+            co_num = int(digits[0]) if digits else 0
+        if co_num < 1 or co_num > 5:
+            continue
+        per_co_max[co_num] = per_co_max.get(co_num, 0.0) + float(q_max)
+        n = _safe_float(qvals.get(f'q{qi + 1}'))
+        if n is not None:
+            has_any = True
+            per_co_raw[co_num] = per_co_raw.get(co_num, 0.0) + _clamp(float(n), 0.0, float(q_max))
+
+    return per_co_raw, per_co_max, has_any
+
+
 def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=False, _weight_cfg=None, _class_type='ENGLISH'):
     """Compute Final Internal Mark for ENGLISH class-type.
 
     Three-cycle structure (all marks map to CO1–CO5):
 
-    Cycle 1: SSA1 (CO1+CO2) + FA1 (CO1+CO2) + CIA1 (CO1–CO5 equal)
-    Cycle 2: SSA2 (CO3+CO4) + FA2 (CO3+CO4) + CIA2 (CO1–CO5 equal)
+    Cycle 1: SSA1 (CO1+CO2) + FA1 (CO1+CO2) + CIA1 (per-CO via IQAC QP pattern, or equal split)
+    Cycle 2: SSA2 (CO3+CO4) + FA2 (CO3+CO4) + CIA2 (per-CO via IQAC QP pattern, or equal split)
     Cycle 3: Model  (CO1–CO5 per-column, each 20 marks)
+
+    CIA per-CO routing: when an IQAC QP pattern is defined for CIA1/CIA2,
+    each question's mark is routed to the CO specified in the pattern (matching
+    the frontend's readEngCiaForCo logic). Falls back to flat equal split
+    across CO1–CO5 when no pattern exists.
 
     Grand total = 40.
     Displayed as /100 via the standard 40→100 scaling on the Internal Mark page.
@@ -942,20 +1092,101 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
     fa1_raw  = _safe_float(_assessment_map(Formative1Mark, 'total', subject.id, [sid], ta_id).get(sid))
     fa2_raw  = _safe_float(_assessment_map(Formative2Mark, 'total', subject.id, [sid], ta_id).get(sid))
 
-    # ── CIA totals ──
-    cia1_raw = _extract_cia_total_for_student(_get_cia_sheet_data(subject.id, ta_id, 'cia1'), sid)
-    cia2_raw = _extract_cia_total_for_student(_get_cia_sheet_data(subject.id, ta_id, 'cia2'), sid)
+    # ── Per-CO SSA splits (matching frontend ssaCoSplits) ──
+    ssa1_co_map = ['co1', 'co2']  # SSA1 splits into these COs
+    ssa2_co_map = ['co3', 'co4']  # SSA2 splits into these COs
+    ssa1_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa1', ssa1_co_map)
+    ssa2_splits = _extract_ssa_co_splits_for_ta(subject.id, ta_id, 'ssa2', ssa2_co_map)
+    ssa1_split = ssa1_splits.get(sid) or {}
+    ssa2_split = ssa2_splits.get(sid) or {}
 
-    # ── Model per-CO ──
+    # Per-CO SSA1 marks: use splits when available, fall back to total/nCos
+    ssa1_per_co = {}
+    for co in ssa1_cos:
+        v = _safe_float(ssa1_split.get(f'co{co}'))
+        if v is not None:
+            ssa1_per_co[co] = v
+        elif ssa1_raw is not None:
+            ssa1_per_co[co] = ssa1_raw / len(ssa1_cos)
+
+    # Per-CO SSA2 marks: use splits when available, fall back to total/nCos
+    ssa2_per_co = {}
+    for co in ssa2_cos:
+        v = _safe_float(ssa2_split.get(f'co{co}'))
+        if v is not None:
+            ssa2_per_co[co] = v
+        elif ssa2_raw is not None:
+            ssa2_per_co[co] = ssa2_raw / len(ssa2_cos)
+
+    # ── Per-CO FA marks (matching frontend ef1Co1/ef1Co2/ef2Co3/ef2Co4) ──
+    # FA1: skill1+att1 → CO1, skill2+att2 → CO2
+    # FA2: skill1+att1 → CO3, skill2+att2 → CO4
+    def _fetch_fa_row(model_cls):
+        """Fetch a single formative row for this student, preferring TA-scoped."""
+        qs = (
+            model_cls.objects.filter(subject_id=subject.id, student_id=sid)
+            .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
+            .values('teaching_assignment_id', 'skill1', 'skill2', 'att1', 'att2', 'total')
+        )
+        best = None
+        for row in qs:
+            is_ta = row.get('teaching_assignment_id') == ta_id
+            if best is None or (not best.get('_is_ta') and is_ta):
+                best = {**row, '_is_ta': is_ta}
+        return best or {}
+
+    fa1_row = _fetch_fa_row(Formative1Mark)
+    fa2_row = _fetch_fa_row(Formative2Mark)
+
+    # Compute per-CO FA marks: each CO gets its own (skill+att) value
+    # Max per CO for FA is max_fa / nCos (e.g. 20/2 = 10 per CO)
+    fa1_max_per_co = max_fa1 / len(fa1_cos) if fa1_cos else max_fa1
+    fa2_max_per_co = max_fa2 / len(fa2_cos) if fa2_cos else max_fa2
+
+    fa1_per_co = {}  # {co_num: raw_mark}
+    for i, co in enumerate(fa1_cos):
+        sk = _safe_float(fa1_row.get(f'skill{i + 1}'))
+        at = _safe_float(fa1_row.get(f'att{i + 1}'))
+        if sk is not None and at is not None:
+            fa1_per_co[co] = _clamp(float(sk) + float(at), 0.0, fa1_max_per_co)
+
+    fa2_per_co = {}  # {co_num: raw_mark}
+    for i, co in enumerate(fa2_cos):
+        sk = _safe_float(fa2_row.get(f'skill{i + 1}'))
+        at = _safe_float(fa2_row.get(f'att{i + 1}'))
+        if sk is not None and at is not None:
+            fa2_per_co[co] = _clamp(float(sk) + float(at), 0.0, fa2_max_per_co)
+
+    # ── Resolve batch / QP type early (needed for CIA patterns + Model) ──
     batch_id     = getattr(getattr(ta, 'section', None), 'batch_id', None)
     qp_type_en   = _resolve_qp_type(ta)   # e.g. 'ELECTIVE1' or None
+
+    # ── CIA sheet data + QP patterns for per-CO routing ──
+    cia1_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia1')
+    cia2_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia2')
+    cia1_raw = _extract_cia_total_for_student(cia1_sheet, sid)
+    cia2_raw = _extract_cia_total_for_student(cia2_sheet, sid)
+
+    # Fetch IQAC QP patterns for CIA1/CIA2 so we can route marks per-CO
+    # (matching the frontend's readEngCiaForCo logic exactly).
+    cia1_patt = _get_qp_pattern(class_type=_class_type, qp_type=qp_type_en, exam='CIA1', batch_id=batch_id)
+    cia2_patt = _get_qp_pattern(class_type=_class_type, qp_type=qp_type_en, exam='CIA2', batch_id=batch_id)
+
+    # Extract per-CO CIA marks using the pattern-based routing
+    cia1_per_co_raw, cia1_per_co_max, cia1_has_per_co = _extract_cia_per_co_for_student(cia1_sheet, sid, cia1_patt)
+    cia2_per_co_raw, cia2_per_co_max, cia2_has_per_co = _extract_cia_per_co_for_student(cia2_sheet, sid, cia2_patt)
+    # Use per-CO routing only when the pattern actually has CO-tagged questions
+    use_cia1_per_co = cia1_per_co_max is not None and any(cia1_per_co_max.get(c, 0) > 0 for c in range(1, 6))
+    use_cia2_per_co = cia2_per_co_max is not None and any(cia2_per_co_max.get(c, 0) > 0 for c in range(1, 6))
+
+    # ── Model per-CO ──
     model_patt   = _get_qp_pattern(class_type=_class_type, qp_type=qp_type_en, exam='MODEL', batch_id=batch_id)
     if not model_patt:
         # Built-in default: 5 columns, one per CO, 20 marks each
         model_patt = {'marks': [20, 20, 20, 20, 20], 'cos': [1, 2, 3, 4, 5]}
     model_sheet    = _get_model_sheet_data(subject.id, ta_id, _class_type)
     model_co_marks = _extract_model_co_marks_for_student(
-        model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_patt, class_type=_class_type,
+        model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_patt, class_type=_class_type, qp_type=qp_type_en,
     )
     model_co_max = {}
     if isinstance(model_co_marks, dict):
@@ -969,59 +1200,104 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
     # co_max_w[co] = sum of weights for components where this student has data (used for CQI)
     co_parts = {c: [] for c in range(1, 6)}
     co_max_w  = {c: 0.0 for c in range(1, 6)}
-    N_CIA_COS = 5   # CIA always splits equally across CO1–CO5
+    N_CIA_COS = 5   # CIA fallback: split equally across CO1–CO5
 
-    # SSA1 → equal split across ssa1_cos
+    # SSA1 → per-CO individual marks (matching frontend ssa1Co1Mark/ssa1Co2Mark)
     if ssa1_cos:
         w_per = w_ssa1 / len(ssa1_cos)
+        max_per_co_ssa1 = max_ssa1 / len(ssa1_cos) if len(ssa1_cos) > 0 else max_ssa1
         for co in ssa1_cos:
             co_max_w[co] += w_per
-            v = _scale(ssa1_raw, max_ssa1, w_per)
-            if v is not None:
-                co_parts[co].append(v)
+            co_mark = ssa1_per_co.get(co)
+            if co_mark is not None:
+                v = _scale(co_mark, max_per_co_ssa1, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
 
-    # FA1 → equal split across fa1_cos
+    # FA1 → per-CO individual marks (matching frontend ef1Co1/ef1Co2)
     if fa1_cos:
         w_per = w_fa1 / len(fa1_cos)
         for co in fa1_cos:
             co_max_w[co] += w_per
-            v = _scale(fa1_raw, max_fa1, w_per)
+            co_mark = fa1_per_co.get(co)
+            if co_mark is not None:
+                v = _scale(co_mark, fa1_max_per_co, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
+            elif fa1_raw is not None:
+                # Fallback: if per-CO FA marks unavailable, use total equally
+                v = _scale(fa1_raw, max_fa1, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
+
+    # CIA1 → per-CO routing when IQAC pattern is available, else flat equal split
+    w_per_cia1 = w_cia1 / N_CIA_COS
+    if use_cia1_per_co:
+        # Route each CO's share based on actual question marks routed to that CO
+        for co in range(1, N_CIA_COS + 1):
+            co_max_w[co] += w_per_cia1
+            co_raw_mark = cia1_per_co_raw.get(co) if cia1_per_co_raw else None
+            co_max_mark = cia1_per_co_max.get(co, 0.0) if cia1_per_co_max else 0.0
+            if co_raw_mark is not None and co_max_mark > 0:
+                v = _clamp((float(co_raw_mark) / float(co_max_mark)) * float(w_per_cia1), 0.0, float(w_per_cia1))
+                co_parts[co].append(v)
+            elif cia1_has_per_co and co_raw_mark is None and co_max_mark > 0:
+                # Student had no marks for this CO but other COs did have marks — contribute 0
+                pass
+    else:
+        # Fallback: flat equal split across all 5 COs
+        for co in range(1, N_CIA_COS + 1):
+            co_max_w[co] += w_per_cia1
+            v = _scale(cia1_raw, max_cia1, w_per_cia1)
             if v is not None:
                 co_parts[co].append(v)
 
-    # CIA1 → equally across CO1–CO5
-    w_per_cia = w_cia1 / N_CIA_COS
-    for co in range(1, N_CIA_COS + 1):
-        co_max_w[co] += w_per_cia
-        v = _scale(cia1_raw, max_cia1, w_per_cia)
-        if v is not None:
-            co_parts[co].append(v)
-
-    # SSA2 → equal split across ssa2_cos
+    # SSA2 → per-CO individual marks (matching frontend ssa2Co3Mark/ssa2Co4Mark)
     if ssa2_cos:
         w_per = w_ssa2 / len(ssa2_cos)
+        max_per_co_ssa2 = max_ssa2 / len(ssa2_cos) if len(ssa2_cos) > 0 else max_ssa2
         for co in ssa2_cos:
             co_max_w[co] += w_per
-            v = _scale(ssa2_raw, max_ssa2, w_per)
-            if v is not None:
-                co_parts[co].append(v)
+            co_mark = ssa2_per_co.get(co)
+            if co_mark is not None:
+                v = _scale(co_mark, max_per_co_ssa2, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
 
-    # FA2 → equal split across fa2_cos
+    # FA2 → per-CO individual marks (matching frontend ef2Co3/ef2Co4)
     if fa2_cos:
         w_per = w_fa2 / len(fa2_cos)
         for co in fa2_cos:
             co_max_w[co] += w_per
-            v = _scale(fa2_raw, max_fa2, w_per)
+            co_mark = fa2_per_co.get(co)
+            if co_mark is not None:
+                v = _scale(co_mark, fa2_max_per_co, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
+            elif fa2_raw is not None:
+                # Fallback: if per-CO FA marks unavailable, use total equally
+                v = _scale(fa2_raw, max_fa2, w_per)
+                if v is not None:
+                    co_parts[co].append(v)
+
+    # CIA2 → per-CO routing when IQAC pattern is available, else flat equal split
+    w_per_cia2 = w_cia2 / N_CIA_COS
+    if use_cia2_per_co:
+        for co in range(1, N_CIA_COS + 1):
+            co_max_w[co] += w_per_cia2
+            co_raw_mark = cia2_per_co_raw.get(co) if cia2_per_co_raw else None
+            co_max_mark = cia2_per_co_max.get(co, 0.0) if cia2_per_co_max else 0.0
+            if co_raw_mark is not None and co_max_mark > 0:
+                v = _clamp((float(co_raw_mark) / float(co_max_mark)) * float(w_per_cia2), 0.0, float(w_per_cia2))
+                co_parts[co].append(v)
+            elif cia2_has_per_co and co_raw_mark is None and co_max_mark > 0:
+                pass
+    else:
+        for co in range(1, N_CIA_COS + 1):
+            co_max_w[co] += w_per_cia2
+            v = _scale(cia2_raw, max_cia2, w_per_cia2)
             if v is not None:
                 co_parts[co].append(v)
-
-    # CIA2 → equally across CO1–CO5
-    w_per_cia = w_cia2 / N_CIA_COS
-    for co in range(1, N_CIA_COS + 1):
-        co_max_w[co] += w_per_cia
-        v = _scale(cia2_raw, max_cia2, w_per_cia)
-        if v is not None:
-            co_parts[co].append(v)
 
     # Model → per-CO individual entry
     if model_co_marks:
@@ -1109,6 +1385,16 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
             v = _clamp(v, 0.0, mx)
         final_co_values[co] = _round2(v)
 
+    # ── Consistency: if rounded total didn't change, use base CO values ──
+    # When CQI adds are small enough that the rounded /40 total is unchanged,
+    # the per-CO values should also remain unchanged to avoid confusing
+    # discrepancies in the Excel export where COs differ but totals are equal.
+    _base_total_rounded = _round2(base_total)
+    if final_total == _base_total_rounded:
+        for co in range(1, 6):
+            if co_values.get(co) is not None:
+                final_co_values[co] = _safe_float(co_values[co])
+
     _raw_100       = (final_total / max_total) * 100.0 if max_total > 0 else None
     _total_100     = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
     _raw_base_100  = (base_total / max_total) * 100.0 if max_total > 0 else None
@@ -1152,6 +1438,7 @@ def _compute_english_final_total(*, ta, subject, student, ta_id, return_details=
         'class_type':   _class_type,
         'qp_type':      None,
     }
+
 
 
 # ─── FOREIGN_LANG Class-type Support ─────────────────────────────────────────
@@ -1355,7 +1642,7 @@ def _get_model_sheet_data(subject_id, ta_id, class_type):
     return sheet if isinstance(sheet, dict) else (payload if isinstance(payload, dict) else {})
 
 
-def _extract_model_co_marks_for_student(*, model_sheet, student_id, reg_no, model_pattern, class_type=None):
+def _extract_model_co_marks_for_student(*, model_sheet, student_id, reg_no, model_pattern, class_type=None, qp_type=None):
     if not isinstance(model_sheet, dict):
         return None
 
@@ -1374,18 +1661,32 @@ def _extract_model_co_marks_for_student(*, model_sheet, student_id, reg_no, mode
     cos = pattern.get('cos') if isinstance(pattern.get('cos'), list) else []
 
     ct = _safe_text(class_type).upper()
+    qp = _normalize_qp_type_key(qp_type)
+    is_theory_qp2 = ct == 'THEORY' and qp == 'QP2'
     if not marks:
-        if ct in ('TCPR', 'TCPL'):
-            # TCPR/TCPL MODEL: 12 theory questions (COs 1-4 only).
+        if ct == 'TCPR':
+            # TCPR MODEL: 12 theory questions (COs 1-4 only).
             # The separate REVIEW/LAB (30 marks → CO5) is handled by the
-            # caller (_compute_tcpr_final_total / _compute_tcpl_final_total).
+            # caller (_compute_tcpr_final_total).
             marks = [2, 2, 2, 2, 2, 2, 2, 2, 16, 16, 16, 16]
+        elif ct == 'TCPL':
+            # TCPL MODEL: 15 theory questions (CO1..CO5), total = 100.
+            # Q1..Q10 = 2 marks, Q11..Q15 = 16 marks.
+            marks = [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 16, 16, 16, 16, 16]
+        elif is_theory_qp2:
+            # Theory QP2 MODEL: 16 questions, Q16(10) split across all COs → each CO max = 20.
+            marks = [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 14, 14, 14, 14, 14, 10]
         else:
             # Standard theory MODEL defaults.
             marks = [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 14, 14, 14, 14, 14, 10]
     if not cos or len(cos) != len(marks):
-        if ct in ('TCPR', 'TCPL'):
+        if ct == 'TCPR':
             cos = [1, 1, 2, 2, 3, 3, 4, 4, 1, 2, 3, 4][: len(marks)]
+        elif ct == 'TCPL':
+            cos = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5][: len(marks)]
+        elif is_theory_qp2 and len(marks) == 16:
+            # Theory QP2: Q16 (10 marks) split equally across all 5 COs → each CO max = 20.
+            cos = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, [1, 2, 3, 4, 5]]
         else:
             cos = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5][: len(marks)]
         if len(cos) < len(marks):
@@ -1513,11 +1814,13 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     if ssa2_co4 is None and ssa2_total is not None:
         ssa2_co4 = _safe_float(ssa2_total) / 2.0
 
+    pattern_class_type = 'THEORY' if class_type == 'THEORY_PMBL' else class_type
+
     cia1_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia1')
     cia2_sheet = _get_cia_sheet_data(subject.id, ta_id, 'cia2')
 
-    cia1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
-    cia2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
+    cia1_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='CIA1', batch_id=batch_id)
+    cia2_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='CIA2', batch_id=batch_id)
 
     def _build_cia_questions(sheet, pattern, is_cia1=True):
         qs = sheet.get('questions') if isinstance(sheet.get('questions'), list) else []
@@ -1637,14 +1940,15 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
         f2_co4 = _safe_float(f2.get('skill2')) + _safe_float(f2.get('att2'))
 
     # Model CO marks
-    model_sheet = _get_model_sheet_data(subject.id, ta_id, class_type)
-    model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
+    model_sheet = _get_model_sheet_data(subject.id, ta_id, pattern_class_type)
+    model_pattern = _get_qp_pattern(class_type=pattern_class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
     model_marks = _extract_model_co_marks_for_student(
         model_sheet=model_sheet,
         student_id=sid,
         reg_no=reg_no,
         model_pattern=model_pattern,
-        class_type=class_type,
+        class_type=pattern_class_type,
+        qp_type=qp_type,
     )
 
     def _scale(mark, max_mark, out_of):
@@ -1830,11 +2134,21 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
             v = _clamp(v, 0.0, mx)
         final_co_values[co] = _round2(v)
 
+    # ── Consistency: if rounded total didn't change, use base CO values ──
+    # When CQI adds are small enough that the rounded /40 total is unchanged,
+    # the per-CO values should also remain unchanged to avoid confusing
+    # discrepancies in the Excel export where COs differ but totals are equal.
+    _base_total_rounded = _round2(base_total)
+    if final_total == _base_total_rounded:
+        for co in co_loop:
+            if co_values.get(co) is not None:
+                final_co_values[co] = _safe_float(co_values[co])
+
     # OE Theory (QP1FINAL) courses convert to 60 instead of 100
     scaled_max = 60.0 if is_qp1_final else 100.0
-    _raw_100 = (final_total / 40.0) * scaled_max if 40.0 > 0 else None
+    _raw_100 = (final_total / max_total) * scaled_max if max_total > 0 else None
     _total_100 = int(Decimal(str(float(_raw_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_100 is not None else None
-    _raw_base_100 = (base_total / 40.0) * scaled_max if 40.0 > 0 and base_total is not None else None
+    _raw_base_100 = (base_total / max_total) * scaled_max if max_total > 0 and base_total is not None else None
     _base_total_100 = int(Decimal(str(float(_raw_base_100 or 0))).quantize(Decimal('1'), rounding=ROUND_HALF_UP)) if _raw_base_100 is not None else None
     return {
         'total_40': final_total,
@@ -2238,7 +2552,7 @@ def _compute_tcpr_final_total(*, ta, subject, student, ta_id, return_details=Fal
     # Model marks
     model_sheet   = _get_model_sheet_data(subject.id, ta_id, class_type)
     model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
-    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type)
+    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type, qp_type=qp_type)
 
     # ── Model LAB/REVIEW column contribution (30-mark REVIEW field for TCPR) ──
     _model_row_raw = {}
@@ -2956,7 +3270,7 @@ def _compute_tcpl_final_total(*, ta, subject, student, ta_id, return_details=Fal
     # ── Model marks ──
     model_sheet   = _get_model_sheet_data(subject.id, ta_id, class_type)
     model_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='MODEL', batch_id=batch_id)
-    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type)
+    model_marks   = _extract_model_co_marks_for_student(model_sheet=model_sheet, student_id=sid, reg_no=reg_no, model_pattern=model_pattern, class_type=class_type, qp_type=qp_type)
 
     # ── Model LAB column contribution (30-mark LAB/REVIEW field) ──
     # The frontend stores per-student lab value and optional record marks for CO5.
@@ -2973,49 +3287,65 @@ def _compute_tcpl_final_total(*, ta, subject, student, ta_id, return_details=Fal
     _LAB_MODEL_MAX = 30.0
     _lab_m = _clamp(_lab_raw_m, 0.0, _LAB_MODEL_MAX) if _lab_raw_m is not None else None
 
-    if _lab_m is not None:
-        # Check if record-marks-for-CO5 mode is enabled (stored at sheet level)
-        _record_cfg = model_sheet.get('recordMarksForCo5') if isinstance(model_sheet, dict) else {}
-        _record_en = isinstance(_record_cfg, dict) and bool(_record_cfg.get('enabled'))
-        _record_exp_n = int(_record_cfg.get('expCount') or 0) if isinstance(_record_cfg, dict) else 0
-        _record_max_pe = float(_record_cfg.get('maxPerExp') or 10.0) if isinstance(_record_cfg, dict) else 10.0
+    # Read record-marks config once (used both for the optional TCPR/TCPL augmentation
+    # below and for the TCPL independent-component scaling pass).
+    _record_cfg = model_sheet.get('recordMarksForCo5') if isinstance(model_sheet, dict) else {}
+    _record_en = isinstance(_record_cfg, dict) and bool(_record_cfg.get('enabled'))
+    _record_exp_n = int(_record_cfg.get('expCount') or 0) if isinstance(_record_cfg, dict) else 0
+    _record_max_pe = float(_record_cfg.get('maxPerExp') or _TCPL_RECORD_NORM_MAX) if isinstance(_record_cfg, dict) else _TCPL_RECORD_NORM_MAX
 
+    _tcpr_mode = (class_type or '').upper() in ('TCPR',)
+    _has_record_data = bool(
+        _record_en
+        and isinstance(_model_row_raw.get('recordMarksCo5'), list)
+        and any(_safe_float(x) is not None for x in _model_row_raw.get('recordMarksCo5'))
+    )
+
+    if _tcpr_mode and _lab_m is not None:
+        # TCPR: entire LAB (REVIEW) → CO5 only. Untouched by the TCPL refactor.
         if model_marks is None:
             model_marks = {
                 'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0,
                 'max': {'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0},
             }
+        model_marks['co5'] = (model_marks.get('co5') or 0.0) + _lab_m
+        model_marks['max']['co5'] = (model_marks['max'].get('co5') or 0.0) + _LAB_MODEL_MAX
+    elif not _tcpr_mode:
+        # TCPL: independently scale Theory / Lab / Record per component before summing,
+        # so a strong Lab or Record contribution is not diluted by a weak Theory term.
+        # Bootstrap model_marks if we have any TCPL signal (lab or record) but no theory.
+        if model_marks is None and (_lab_m is not None or _has_record_data):
+            model_marks = {
+                'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0,
+                'max': {'co1': 0.0, 'co2': 0.0, 'co3': 0.0, 'co4': 0.0, 'co5': 0.0},
+            }
 
-        _tcpr_mode = (class_type or '').upper() in ('TCPR',)
-        if _tcpr_mode:
-            # TCPR: entire LAB (REVIEW) → CO5 only
-            model_marks['co5'] = (model_marks.get('co5') or 0.0) + _lab_m
-            model_marks['max']['co5'] = (model_marks['max'].get('co5') or 0.0) + _LAB_MODEL_MAX
-        elif _record_en:
-            # TCPL record mode: CO1-CO4 equal, CO5 = CIA(lab*4/30) + record-avg*(2/maxPerExp)
-            _equal_share = _LAB_MODEL_MAX / 5.0
-            for _cn in range(1, 5):
-                _ck = f'co{_cn}'
-                model_marks[_ck] = (model_marks.get(_ck) or 0.0) + (_lab_m / 5.0)
-                model_marks['max'][_ck] = (model_marks['max'].get(_ck) or 0.0) + _equal_share
-            _cia_co5 = (_lab_m / _LAB_MODEL_MAX) * 4.0
-            _rec_marks_raw = _model_row_raw.get('recordMarksCo5')
-            _rec_val = 0.0
-            if isinstance(_rec_marks_raw, list):
-                _sliced = _rec_marks_raw[:_record_exp_n] if _record_exp_n else _rec_marks_raw
-                _valid_recs = [_safe_float(x) for x in _sliced if _safe_float(x) is not None]
-                if _valid_recs:
-                    _avg_rec = sum(_valid_recs) / len(_valid_recs)
-                    _rec_val = _clamp(_avg_rec / _record_max_pe, 0.0, 1.0) * 2.0
-            model_marks['co5'] = (model_marks.get('co5') or 0.0) + _cia_co5 + _rec_val
-            model_marks['max']['co5'] = (model_marks['max'].get('co5') or 0.0) + 4.0 + 2.0
-        else:
-            # TCPL standard: equal split across all 5 COs
-            _equal_share = _LAB_MODEL_MAX / 5.0
-            for _cn in range(1, 6):
-                _ck = f'co{_cn}'
-                model_marks[_ck] = (model_marks.get(_ck) or 0.0) + (_lab_m / 5.0)
-                model_marks['max'][_ck] = (model_marks['max'].get(_ck) or 0.0) + _equal_share
+        if model_marks is not None:
+            # Snapshot the raw theory totals/caps before we overwrite with weighted values.
+            _theory_raw = {f'co{_i}': float(model_marks.get(f'co{_i}') or 0.0) for _i in range(1, 6)}
+            _theory_max = {f'co{_i}': float(model_marks['max'].get(f'co{_i}') or 0.0) for _i in range(1, 6)}
+
+            _lab_share = (_lab_m or 0.0) / 5.0  # equal split across all 5 COs
+
+            _record_norm = 0.0
+            if _record_en:
+                _rec_marks_raw = _model_row_raw.get('recordMarksCo5')
+                if isinstance(_rec_marks_raw, list):
+                    _sliced = _rec_marks_raw[:_record_exp_n] if _record_exp_n else _rec_marks_raw
+                    _valid_recs = [_safe_float(x) for x in _sliced if _safe_float(x) is not None]
+                    if _valid_recs:
+                        _avg = sum(_valid_recs) / len(_valid_recs)
+                        _record_norm = _clamp(_avg / (_record_max_pe or _TCPL_RECORD_NORM_MAX), 0.0, 1.0) * _TCPL_RECORD_W
+
+            for _i in range(1, 6):
+                _ck = f'co{_i}'
+                _t_max = _theory_max[_ck]
+                _t_raw = _theory_raw[_ck]
+                _theory_weighted = (_t_raw / _t_max) * _TCPL_THEORY_W[_i - 1] if _t_max > 0 else 0.0
+                _lab_weighted = (_lab_share / _TCPL_LAB_SHARE_MAX) * _TCPL_LAB_W
+                _record_weighted = _record_norm if _i == 5 else 0.0
+                model_marks[_ck] = _theory_weighted + _lab_weighted + _record_weighted
+                model_marks['max'][_ck] = _TCPL_CO_TOTAL_W[_i - 1]
 
     # ── Assemble per-CO slots ──
     co_parts = {}

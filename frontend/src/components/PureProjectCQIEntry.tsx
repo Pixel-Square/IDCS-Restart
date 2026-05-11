@@ -211,6 +211,7 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [saving, setSaving]         = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [resettingMarks, setResettingMarks] = useState(false);
   const [statusMsg, setStatusMsg]   = useState<string | null>(null);
 
   // Edit-request modal
@@ -648,6 +649,10 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
               <th style={hStyle}>CQI Status</th>
               <th style={hStyle}>CQI Mark<br /><span style={{ fontWeight: 400, fontSize: 10 }}>(0–{CQI_INPUT_MAX})</span></th>
               <th style={hStyle}>After CQI<br /><span style={{ fontWeight: 400, fontSize: 10 }}>/{TOTAL_MAX}</span></th>
+              <th style={{ ...hStyle, backgroundColor: '#ecfeff', color: '#0f766e', minWidth: 140 }}>
+                GRAND TOTAL<br />
+                <span style={{ fontWeight: 600, fontSize: 10, color: '#0e7490' }}>(AFTER CQI) /{TOTAL_MAX}</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -753,19 +758,48 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
                       </div>
                     ) : '—'}
                   </td>
+                  {/* Grand Total (After CQI) */}
+                  <td style={{ ...cellStyle, padding: '6px 8px' }}>
+                    {r.afterCqi != null && r.combined != null ? (() => {
+                      const afterPct = (r.afterCqi / TOTAL_MAX) * 100;
+                      const beforePct = (r.combined / TOTAL_MAX) * 100;
+                      const deltaMark = round2(r.afterCqi - r.combined);
+                      const deltaPct = round2(afterPct - beforePct);
+                      const isBelow = r.afterCqi < THRESHOLD_MARKS;
+                      return (
+                        <div style={{ backgroundColor: isBelow ? '#fff1f2' : '#ecfdf5', padding: 6, borderRadius: 6 }}>
+                          <div style={{ color: isBelow ? '#ef4444' : '#047857', fontSize: 14, fontWeight: 800 }}>
+                            {round2(r.afterCqi)} / {TOTAL_MAX}
+                          </div>
+                          <div style={{ fontSize: 12, color: isBelow ? '#ef4444' : '#0f766e', fontWeight: 700, marginTop: 2 }}>
+                            {round2(afterPct)}%
+                          </div>
+                          {deltaMark > 0 ? (
+                            <div style={{ fontSize: 10, color: '#16a34a', marginTop: 2, fontWeight: 600 }}>
+                              +{deltaMark} (+{deltaPct}%)
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>—</div>
+                          )}
+                        </div>
+                      );
+                    })() : (
+                      <span style={{ color: '#94a3b8' }}>—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
+                <td colSpan={10} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
                   No student data available. Ensure Review 1 and Review 2 are published first.
                 </td>
               </tr>
             )}
             {rows.length > 0 && filteredRows.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
+                <td colSpan={10} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
                   No students match the filter &ldquo;{regNoFilter}&rdquo;.
                 </td>
               </tr>
@@ -804,6 +838,75 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
           </button>
         </div>
       )}
+
+      {/* Reset Marks — always visible */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <button
+          onClick={async () => {
+            if (!subjectId || teachingAssignmentId == null) return;
+            const confirmMsg = isPublished
+              ? 'Reset & Unpublish CQI marks? This will clear published data and unlock this page.'
+              : 'Reset CQI marks for all students? This clears the saved draft.';
+            if (!window.confirm(confirmMsg)) return;
+            setResettingMarks(true);
+            setStatusMsg(null);
+            try {
+              if (isPublished) {
+                const res = await fetchWithAuth(
+                  `/api/obe/cqi-reset-page/${encodeURIComponent(subjectId)}`,
+                  {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      teaching_assignment_id: teachingAssignmentId,
+                      assessment_type: 'project_combined',
+                      page_key: 'project_combined_cqi',
+                      co_numbers: [1],
+                    }),
+                  },
+                );
+                if (!res.ok) throw new Error(`Reset failed (${res.status})`);
+                setCqiEntries({});
+                setPublishedAt(null);
+                setSavedAt(null);
+                setPublishConsumedApprovals(null);
+                refreshLock();
+                refreshMarkEntryEditWindow({ silent: true });
+                setStatusMsg('CQI reset & unpublished successfully.');
+              } else {
+                setCqiEntries({});
+                const res = await fetchWithAuth(
+                  `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
+                  {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                      teaching_assignment_id: teachingAssignmentId,
+                      assessment_type: 'project_combined',
+                      page_key: 'project_combined_cqi',
+                      co_numbers: [1],
+                      entries: {},
+                    }),
+                  },
+                );
+                if (!res.ok) throw new Error(`Reset draft failed (${res.status})`);
+                setSavedAt(null);
+                setStatusMsg('CQI draft reset.');
+              }
+            } catch (e: any) {
+              setStatusMsg(`Error: ${e?.message || 'Reset failed'}`);
+            } finally {
+              setResettingMarks(false);
+            }
+          }}
+          disabled={resettingMarks || saving || publishing}
+          style={{
+            padding: '8px 18px', borderRadius: 6, border: 'none',
+            background: resettingMarks ? '#94a3b8' : '#dc2626', color: '#fff',
+            fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          }}
+        >
+          {resettingMarks ? 'Resetting…' : isPublished ? 'Reset & Unpublish' : 'Reset Marks'}
+        </button>
+      </div>
 
       {/* Status message */}
       {statusMsg && (
