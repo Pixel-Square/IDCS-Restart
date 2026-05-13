@@ -21,6 +21,7 @@ from .views import (
     course_internal_summary,
     get_pattern_for_exam,
     faculty_course_info,
+    faculty_courses_status,
     faculty_exam_info,
     faculty_exam_marks,
     faculty_exam_publish,
@@ -57,6 +58,7 @@ urlpatterns = [
     # Helper endpoints
     path('courses/<uuid:course_id>/internal-summary/', course_internal_summary, name='course-internal-summary'),
     path('courses/<uuid:course_id>/pattern/<str:exam_type>/', get_pattern_for_exam, name='get-pattern-for-exam'),
+    path('faculty/courses/', faculty_courses_status, name='faculty-courses-status'),
     path('faculty/courses/<int:ta_id>/', faculty_course_info, name='faculty-course-info'),
     path('exams/<uuid:exam_id>/', faculty_exam_info, name='faculty-exam-info'),
     path('exams/<uuid:exam_id>/marks/', faculty_exam_marks, name='faculty-exam-marks'),

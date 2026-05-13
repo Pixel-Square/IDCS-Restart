@@ -8,6 +8,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, Users, CheckCircle, Clock, AlertCircle, ChevronRight, RefreshCw, Filter, Search } from 'lucide-react';
 import { fetchMyTeachingAssignments, TeachingAssignmentItem } from '../../../services/obe';
+import fetchWithAuth from '../../../services/fetchAuth';
 
 interface Course {
   id: number;
@@ -43,6 +44,17 @@ export default function CourseListPage() {
       // Use existing teaching assignments API
       const teachingAssignments = await fetchMyTeachingAssignments();
       
+      // Fetch real mark-entry statuses from academic-v2 in one batch call
+      let statusMap: Record<string, 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'> = {};
+      try {
+        const statusResp = await fetchWithAuth('/api/academic-v2/faculty/courses/');
+        if (statusResp.ok) {
+          statusMap = await statusResp.json();
+        }
+      } catch (_) {
+        // Non-fatal: fall back to NOT_STARTED
+      }
+
       // Map teaching assignments to course format
       const mappedCourses: Course[] = teachingAssignments.map((ta: TeachingAssignmentItem) => ({
         id: ta.id,
@@ -54,7 +66,7 @@ export default function CourseListPage() {
         semester: ta.semester,
         academic_year: ta.academic_year || '',
         is_elective: !!ta.elective_subject_id,
-        status: 'NOT_STARTED' as const, // Default status - can be enhanced later
+        status: statusMap[String(ta.id)] ?? 'NOT_STARTED',
         qp_type: (ta as any)?.question_paper_type || (ta as any)?.qp_type || null,
       }));
       

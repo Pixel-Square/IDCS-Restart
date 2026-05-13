@@ -22,4 +22,6 @@ urlpatterns = [
     path('v2/marks/pure-lab/',    views.v2_pure_lab_marks,    name='reporting_v2_pure_lab_marks'),
     # API 5 · SPECIAL
     path('v2/marks/special/',     views.v2_special_marks,     name='reporting_v2_special_marks'),
+    # API 6 · Course dashboard fact rows for Power BI
+    path('v2/dashboard/course/',  views.v2_course_dashboard,  name='reporting_v2_course_dashboard'),
 ]

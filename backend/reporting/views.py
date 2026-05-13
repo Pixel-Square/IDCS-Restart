@@ -12,7 +12,7 @@ from .permissions import CanViewPowerBIDataOrApiKey
 from .services import query_reporting_view
 from .simple_query import get_simple_marks_data
 # v2 reporting endpoints must use Academic 2.1 data only (avoid obe_* tables).
-from .services_v2_acv2 import query_v2_marks
+from .services_v2_acv2 import query_v2_course_dashboard, query_v2_marks
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,21 @@ def _v2_filters_from_request(request):
     }
 
 
+def _v2_dashboard_filters_from_request(request):
+    q = request.query_params
+    return {
+        'year': q.get('year'),
+        'sem': q.get('sem'),
+        'dept': q.get('dept'),
+        'section': q.get('section'),
+        'course_code': q.get('course_code'),
+        'qp_type': q.get('qp_type'),
+        'faculty_user_id': q.get('faculty_user_id'),
+        'course_type': q.get('course_type'),
+        'exam': q.get('exam'),
+    }
+
+
 def _v2_mark_response(request, format_key: str):
     filters = _v2_filters_from_request(request)
     q = request.query_params
@@ -244,3 +259,43 @@ def v2_special_marks(request):
              final_internal, co1, co2, co3, co4, co5
     """
     return _v2_mark_response(request, 'special')
+
+
+@api_view(['GET'])
+@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
+@permission_classes([CanViewPowerBIDataOrApiKey])
+def v2_course_dashboard(request):
+    """API 6 - Power BI course dashboard fact rows from Academic 2.1.
+
+    Grain: one row per student x exam assignment.
+    Filters: sem, dept, section, course_code, qp_type, faculty_user_id,
+             course_type, exam, page, page_size, pass_percent.
+    """
+    q = request.query_params
+    filters = _v2_dashboard_filters_from_request(request)
+    try:
+        result = query_v2_course_dashboard(
+            filters=filters,
+            page=q.get('page'),
+            page_size=q.get('page_size'),
+            pass_percent=q.get('pass_percent'),
+        )
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=400)
+
+    page = _to_positive_int(q.get('page', 1), 1)
+    page_size = _to_positive_int(q.get('page_size', 500), 500)
+    out_format = str(q.get('format', 'json')).strip().lower()
+
+    if out_format == 'csv':
+        return _as_csv_response('powerbi_v2_course_dashboard.csv', result.columns, result.rows)
+
+    return Response({
+        'format_key': 'course-dashboard',
+        'count': len(result.rows),
+        'total': result.total,
+        'page': page,
+        'page_size': page_size,
+        'columns': result.columns,
+        'rows': result.rows,
+    })

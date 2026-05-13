@@ -1528,6 +1528,23 @@ export default function MarkEntryPage() {
               </button>
             )
           )}
+
+          {/* Request Generate — when locked under publish control and Mark Manager is confirmed */}
+          {!canImport && isLocked && publishControlEnabled &&
+            examInfo.mark_manager?.enabled &&
+            examInfo.mark_manager?.confirmed && !hasPending && (
+            <button
+              onClick={() => {
+                setEditReason('Mark Manager generation required');
+                openRequestEditModal();
+              }}
+              disabled={processingAction === 'request_edit'}
+              className="px-4 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
+            >
+              {processingAction === 'request_edit' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Settings2 className="w-3.5 h-3.5" />}
+              Request Generate
+            </button>
+          )}
         </div>
 
       {/* Publish Confirmation Modal */}
@@ -2512,14 +2529,24 @@ export default function MarkEntryPage() {
                     {q.btl_level !== null ? (
                       <div className="text-[10px] text-indigo-500 font-normal">BT{q.btl_level}</div>
                     ) : (
-                      <select
-                        value={questionBtls[q.id] ?? ''}
-                        onChange={e => setQuestionBtls(prev => ({ ...prev, [q.id]: e.target.value ? Number(e.target.value) : null }))}
-                        className="mt-0.5 text-[10px] border rounded px-1 py-0.5 w-full"
-                      >
-                        <option value="">BTL?</option>
-                        {[1,2,3,4,5,6].map(l => <option key={l} value={l}>BT{l}</option>)}
-                      </select>
+                      <div className="relative">
+                        {!questionBtls[q.id] && (
+                          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                        )}
+                        <select
+                          value={questionBtls[q.id] ?? ''}
+                          onChange={e => setQuestionBtls(prev => ({ ...prev, [q.id]: e.target.value ? Number(e.target.value) : null }))}
+                          className={`mt-0.5 text-[10px] border rounded px-1 py-0.5 w-full transition-colors ${
+                            !questionBtls[q.id]
+                              ? 'border-amber-400 bg-amber-50 text-amber-700 font-semibold animate-pulse'
+                              : 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                          }`}
+                          title={!questionBtls[q.id] ? 'Select BTL level to enable mark entry for this column' : undefined}
+                        >
+                          <option value="">BTL?</option>
+                          {[1,2,3,4,5,6].map(l => <option key={l} value={l}>BT{l}</option>)}
+                        </select>
+                      </div>
                     )}
                   </th>
                 ))}
@@ -2554,8 +2581,9 @@ export default function MarkEntryPage() {
                     const cellKey = `${student.id}:question:${q.id}`;
                     const displayValue = editingCell?.key === cellKey ? editingCell.value : (student.co_marks[q.id] ?? '');
                     const selected = isCellInSelection(index, qIdx);
+                    const btlNotSelected = q.btl_level === null && !questionBtls[q.id];
                     return (
-                      <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''}`}>
+                      <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''} ${btlNotSelected ? 'bg-amber-50/40' : ''}`}>
                         <div className="relative group w-full">
                           <input
                             type="number"
@@ -2563,8 +2591,8 @@ export default function MarkEntryPage() {
                             data-field-type="question"
                             data-qid={q.id}
                             value={displayValue}
-                            onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent })}
-                            onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent })}
+                            onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent || btlNotSelected })}
+                            onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'question', qId: q.id, disabled: !canImport || student.is_absent || btlNotSelected })}
                             onFocus={e => {
                               setEditingCell({ key: cellKey, value: e.currentTarget.value ?? '' });
                             }}
@@ -2582,12 +2610,22 @@ export default function MarkEntryPage() {
                             }}
                             onPaste={e => handleCellPaste(e, { studentId: student.id, fieldType: 'question', qId: q.id })}
                             onKeyDown={handleCellKeyDown}
-                            disabled={!canImport || student.is_absent}
+                            disabled={!canImport || student.is_absent || btlNotSelected}
                             min="0"
                             max={q.max_marks}
                             step={wholeNumber ? '1' : '0.01'}
-                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${selected ? 'ring-2 ring-blue-400' : ''}`}
+                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:text-gray-400 ${
+                              btlNotSelected
+                                ? 'disabled:bg-amber-50 border-amber-200 cursor-not-allowed'
+                                : 'disabled:bg-gray-100'
+                            } ${selected ? 'ring-2 ring-blue-400' : ''}`}
+                            title={btlNotSelected ? 'Select BTL level in the column header first' : undefined}
                           />
+                          {btlNotSelected && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <span className="text-[9px] text-amber-500 font-bold opacity-60">BTL?</span>
+                            </div>
+                          )}
                           {cellLabel && (
                             <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
                               {cellLabel.label}

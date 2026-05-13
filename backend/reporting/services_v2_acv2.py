@@ -42,6 +42,14 @@ def _parse_int(val: Any, default: int, cap: int) -> int:
     return max(1, min(n, cap))
 
 
+def _parse_float(val: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        n = float(val)
+    except Exception:
+        return default
+    return max(lo, min(n, hi))
+
+
 def _filters(filters: dict[str, Any]) -> dict[str, str | None]:
     def norm(v: Any) -> str | None:
         if v is None:
@@ -191,6 +199,160 @@ def query_v2_marks(
         total = int((cursor.fetchone() or [0])[0] or 0)
 
         cursor.execute(data_sql, [*where_params, psz, offset])
+        desc = cursor.description or []
+        columns = [d.name for d in desc]
+        rows_raw = cursor.fetchall()
+
+    rows: list[dict[str, Any]] = [dict(zip(columns, row)) for row in rows_raw]
+    return V2QueryResult(columns=columns, rows=rows, total=total)
+
+
+def query_v2_course_dashboard(
+    *,
+    filters: dict[str, Any],
+    page: Any = None,
+    page_size: Any = None,
+    pass_percent: Any = None,
+) -> V2QueryResult:
+    """Power BI-friendly course dashboard fact table from Academic 2.1.
+
+    Grain: one row per student x exam assignment, with joined section/course and
+    final internal-mark totals.
+    """
+
+    pg = _parse_int(page, default=1, cap=100_000)
+    psz = _parse_int(page_size, default=500, cap=20_000)
+    pct = _parse_float(pass_percent, default=50.0, lo=0.0, hi=100.0)
+    offset = (pg - 1) * psz
+
+    f = _filters(filters)
+    qp_type = (str(filters.get('qp_type') or '').strip() or None)
+    faculty_user_id = (str(filters.get('faculty_user_id') or '').strip() or None)
+    course_type = (str(filters.get('course_type') or '').strip() or None)
+    exam = (str(filters.get('exam') or '').strip() or None)
+
+    clauses: list[str] = [
+        'acvsm.student_id IS NOT NULL',
+    ]
+    params: list[Any] = []
+
+    if f['sem']:
+        clauses.append('CAST(sem.number AS TEXT) = %s')
+        params.append(f['sem'])
+
+    if f['dept']:
+        clauses.append('(d.code ILIKE %s OR d.name ILIKE %s)')
+        params.extend([f['dept'], f['dept']])
+
+    if f['section']:
+        clauses.append('sec.section_name ILIKE %s')
+        params.append(f['section'])
+
+    if f['course_code']:
+        clauses.append('ac.subject_code ILIKE %s')
+        params.append(f['course_code'])
+
+    if qp_type:
+        clauses.append('COALESCE(ea.qp_type, '''') ILIKE %s')
+        params.append(qp_type)
+
+    if faculty_user_id:
+        clauses.append('CAST(sec.faculty_user_id AS TEXT) = %s')
+        params.append(faculty_user_id)
+
+    if course_type:
+        clauses.append('UPPER(COALESCE(ct.name, ac.class_type_name, '''')) = UPPER(%s)')
+        params.append(course_type)
+
+    if exam:
+        clauses.append('(ea.exam ILIKE %s OR ea.exam_display_name ILIKE %s)')
+        params.extend([exam, exam])
+
+    where_sql = ' WHERE ' + ' AND '.join(clauses)
+
+    from_sql = """
+        FROM acv2_student_mark acvsm
+        JOIN acv2_exam_assignment ea ON acvsm.exam_assignment_id = ea.id
+        JOIN acv2_section sec ON ea.section_id = sec.id
+        JOIN acv2_course ac ON sec.course_id = ac.id
+        LEFT JOIN acv2_class_type ct ON ac.class_type_id = ct.id
+        LEFT JOIN academics_subject subj ON ac.subject_id = subj.id
+        LEFT JOIN academics_course crs ON subj.course_id = crs.id
+        LEFT JOIN academics_department d ON crs.department_id = d.id
+        LEFT JOIN academics_semester sem ON ac.semester_id = sem.id
+        LEFT JOIN accounts_user staff_u ON sec.faculty_user_id = staff_u.id
+        LEFT JOIN acv2_internal_mark aim
+            ON aim.section_id = sec.id
+           AND aim.student_id = acvsm.student_id
+    """
+
+    select_sql = """
+        SELECT
+            'N/A'::text AS year,
+            COALESCE(sem.number::text, '1') AS sem,
+            COALESCE(d.code, '')::text AS dept_code,
+            COALESCE(d.name, '')::text AS dept_name,
+            CAST(sec.id AS text) AS section_id,
+            COALESCE(sec.section_name, '')::text AS section,
+            CAST(ac.id AS text) AS course_id,
+            COALESCE(ac.subject_code, '')::text AS course_code,
+            COALESCE(ac.subject_name, '')::text AS course_name,
+            UPPER(COALESCE(ct.name, ac.class_type_name, '')) AS course_type,
+            COALESCE(ea.qp_type, '')::text AS qp_type,
+            CAST(sec.faculty_user_id AS text) AS faculty_user_id,
+            TRIM(CONCAT(COALESCE(staff_u.first_name, ''), ' ', COALESCE(staff_u.last_name, ''))) AS faculty_name,
+            CAST(ea.id AS text) AS exam_assignment_id,
+            COALESCE(ea.exam, '')::text AS exam_code,
+            COALESCE(NULLIF(ea.exam_display_name, ''), ea.exam, '')::text AS exam_name,
+            COALESCE(ea.status, 'DRAFT')::text AS exam_status,
+            ea.published_at AS published_at,
+            CAST(acvsm.student_id AS text) AS student_id,
+            acvsm.reg_no AS reg_no,
+            acvsm.student_name AS student_name,
+            acvsm.is_absent AS is_absent,
+            acvsm.is_exempted AS is_exempted,
+            COALESCE(acvsm.remarks, '')::text AS remarks,
+            ea.max_marks AS exam_max_marks,
+            ea.weight AS exam_weight,
+            acvsm.total_mark AS exam_total_mark,
+            acvsm.weighted_mark AS exam_weighted_mark,
+            acvsm.co1_mark AS exam_co1_mark,
+            acvsm.co2_mark AS exam_co2_mark,
+            acvsm.co3_mark AS exam_co3_mark,
+            acvsm.co4_mark AS exam_co4_mark,
+            acvsm.co5_mark AS exam_co5_mark,
+            aim.co1_total AS internal_co1_total,
+            aim.co2_total AS internal_co2_total,
+            aim.co3_total AS internal_co3_total,
+            aim.co4_total AS internal_co4_total,
+            aim.co5_total AS internal_co5_total,
+            aim.final_mark AS internal_final_mark,
+            aim.max_mark AS internal_max_mark,
+            ROUND(COALESCE(aim.max_mark, 0) * %s / 100.0, 2) AS pass_mark,
+            CASE
+                WHEN aim.final_mark IS NULL THEN NULL
+                WHEN aim.final_mark >= ROUND(COALESCE(aim.max_mark, 0) * %s / 100.0, 2) THEN TRUE
+                ELSE FALSE
+            END AS is_pass
+    """
+
+    order_sql = """
+        ORDER BY
+            COALESCE(ac.subject_code, ''),
+            COALESCE(sec.section_name, ''),
+            acvsm.reg_no,
+            COALESCE(ea.exam_display_name, ea.exam, ''),
+            ea.created_at
+    """
+
+    count_sql = 'SELECT COUNT(*) ' + from_sql + where_sql
+    data_sql = select_sql + from_sql + where_sql + order_sql + ' LIMIT %s OFFSET %s'
+
+    with connection.cursor() as cursor:
+        cursor.execute(count_sql, params)
+        total = int((cursor.fetchone() or [0])[0] or 0)
+
+        cursor.execute(data_sql, [pct, pct, *params, psz, offset])
         desc = cursor.description or []
         columns = [d.name for d in desc]
         rows_raw = cursor.fetchall()

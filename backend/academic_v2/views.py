@@ -1356,6 +1356,7 @@ def faculty_course_info(request, ta_id):
         or getattr(es, 'question_paper_type', None)
         or ''
     ).strip()
+    curriculum_qp_type_code = qp_type_code
 
     # Look up AcV2ClassType - curriculum class_type_code is authoritative.
     # Do NOT fall back to an arbitrary class type; that would hide setup issues
@@ -1388,6 +1389,15 @@ def faculty_course_info(request, ta_id):
         ea_qs = ea_qs.filter(qp_type__iexact=qp_type_code)
     exam_assignments = list(ea_qs)
 
+    # If curriculum does not have qp_type, infer it from existing exam assignments.
+    # This allows faculty pages to show exam components even when curriculum setup is incomplete.
+    if not qp_type_code:
+        for _ea in exam_assignments:
+            _t = (getattr(_ea, 'qp_type', '') or '').strip()
+            if _t:
+                qp_type_code = _t
+                break
+
     # ClassType exam_assignments filtered to this qp_type (normalized)
     ct_ea_configs = []
     if acv2_ct and acv2_ct.exam_assignments:
@@ -1401,7 +1411,7 @@ def faculty_course_info(request, ta_id):
     # from QP patterns (class_type + qp_type). We still read weights from
     # ClassType.exam_assignments by matching exam_display_name.
     derived_ea_configs = []
-    if acv2_ct and qp_type_code and not ct_ea_configs:
+    if acv2_ct and qp_type_code:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
             qp_type__iexact=qp_type_code,
@@ -1437,7 +1447,20 @@ def faculty_course_info(request, ta_id):
                 'customize_questions': bool((w_conf.get('customize_questions') if isinstance(w_conf, dict) else None) or False),
             })
 
-    effective_ea_configs = ct_ea_configs or derived_ea_configs
+    def _ea_config_key(ea_conf):
+        if not isinstance(ea_conf, dict):
+            return ''
+        return str(ea_conf.get('exam_display_name') or ea_conf.get('exam') or '').strip().lower()
+
+    effective_ea_configs = []
+    seen_ea_config_keys = set()
+    for ea_conf in ct_ea_configs + derived_ea_configs:
+        cfg_key = _ea_config_key(ea_conf)
+        if cfg_key:
+            if cfg_key in seen_ea_config_keys:
+                continue
+            seen_ea_config_keys.add(cfg_key)
+        effective_ea_configs.append(ea_conf)
 
     # Build weight + order lookup from ClassType config (single source of truth)
     norm_exam_key = lambda s: (str(s or '').strip().lower())
@@ -1487,15 +1510,16 @@ def faculty_course_info(request, ta_id):
         draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         marks = draft.get('marks', {})
         entered_count = sum(1 for v in marks.values() if v is not None and v != '')
-        published_locked = ea.status in PUBLISHED_EXAM_STATUSES
+        is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES  # PUBLISHED, APPROVED, LOCKED
+        has_been_published = bool(is_strictly_locked or ea.published_at)
         cycle_state = _get_exam_cycle_state(
             ea,
             semester_id=getattr(sec, 'semester_id', None),
             class_type=acv2_ct,
         )
-        is_locked = bool(published_locked or cycle_state['cycle_locked'])
+        is_locked = bool(is_strictly_locked or cycle_state['cycle_locked'])
 
-        if published_locked:
+        if has_been_published:
             sm_status = 'COMPLETED'
         elif marks:
             sm_status = 'IN_PROGRESS'
@@ -1529,8 +1553,8 @@ def faculty_course_info(request, ta_id):
             'lock_reason': cycle_state['cycle_lock_reason'],
             'cycle_name': cycle_state['cycle_name'],
             'cycle_code': cycle_state['cycle_code'],
-            'can_view': bool(published_locked),
-            'can_edit': bool((not published_locked) and (not cycle_state['cycle_locked'])),
+            'can_view': bool(has_been_published),
+            'can_edit': bool((not is_strictly_locked) and (not cycle_state['cycle_locked'])),
             'due_date': None,
             'status': sm_status,
             'kind': ea_kind,
@@ -1685,6 +1709,15 @@ def faculty_course_info(request, ta_id):
                         'covered_cos': covered_cos,
                     },
                 )
+                ea_update_fields = []
+                if qp_type_val and (ea_obj.qp_type or '').strip() != qp_type_val:
+                    ea_obj.qp_type = qp_type_val
+                    ea_update_fields.append('qp_type')
+                if display_name and (ea_obj.exam_display_name or '').strip() != display_name:
+                    ea_obj.exam_display_name = display_name
+                    ea_update_fields.append('exam_display_name')
+                if ea_update_fields:
+                    ea_obj.save(update_fields=ea_update_fields)
                 # Get per-CO weights from class type config
                 co_weights_for_new = ea_conf.get('co_weights', {})
                 if co_weights_for_new:
@@ -1749,10 +1782,89 @@ def faculty_course_info(request, ta_id):
         'qp_type': qp_type_code or None,
         'setup_status': {
             'class_type_assigned': bool(acv2_ct),
-            'qp_type_assigned': bool(qp_type_code),
+            # Preserve whether curriculum/elective explicitly has qp_type configured
+            'qp_type_assigned': bool(curriculum_qp_type_code),
         },
         'exams': exams,
     })
+
+
+# ============================================================================
+# FACULTY COURSES STATUS (batch, for CourseListPage)
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def faculty_courses_status(request):
+    """Return lightweight mark-entry status for all active teaching assignments
+    of the current user.  Used by CourseListPage to show real completion state.
+
+    Returns: { "<ta_id>": "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED" }
+    """
+    from academics.models import TeachingAssignment
+
+    ta_ids = list(
+        TeachingAssignment.objects.filter(
+            staff__user=request.user,
+            is_active=True,
+        ).values_list('id', flat=True)
+    )
+    if not ta_ids:
+        return Response({})
+
+    # Map section → ta_id
+    sections = AcV2Section.objects.filter(
+        teaching_assignment_id__in=ta_ids,
+    ).values('id', 'teaching_assignment_id')
+    section_to_ta: dict = {str(s['id']): s['teaching_assignment_id'] for s in sections}
+
+    if not section_to_ta:
+        return Response({str(ta): 'NOT_STARTED' for ta in ta_ids})
+
+    # Fetch lightweight EA info (no draft_data needed – use published_at / status)
+    eas = AcV2ExamAssignment.objects.filter(
+        section_id__in=section_to_ta.keys(),
+    ).values('section_id', 'status', 'published_at', 'draft_data')
+
+    # Initialise all TAs as NOT_STARTED
+    result: dict = {str(ta): 'NOT_STARTED' for ta in ta_ids}
+
+    for ea in eas:
+        ta_id = str(section_to_ta[str(ea['section_id'])])
+        if result.get(ta_id) == 'COMPLETED':
+            continue  # Already at max
+
+        is_published = (
+            ea['status'] in PUBLISHED_EXAM_STATUSES
+            or bool(ea.get('published_at'))
+        )
+        if is_published:
+            result[ta_id] = 'IN_PROGRESS'  # At least one published
+            continue
+
+        # Check draft_data for any entered marks
+        draft = ea.get('draft_data') or {}
+        if isinstance(draft, dict):
+            marks = draft.get('marks', {})
+            if any(v is not None and v != '' for v in marks.values()):
+                result[ta_id] = 'IN_PROGRESS'
+
+    # If ALL exam assignments for a TA are published → COMPLETED
+    # Build per-TA counts
+    total_per_ta: dict = {}
+    published_per_ta: dict = {}
+    for ea in eas:
+        ta_id = str(section_to_ta[str(ea['section_id'])])
+        total_per_ta[ta_id] = total_per_ta.get(ta_id, 0) + 1
+        is_pub = ea['status'] in PUBLISHED_EXAM_STATUSES or bool(ea.get('published_at'))
+        if is_pub:
+            published_per_ta[ta_id] = published_per_ta.get(ta_id, 0) + 1
+
+    for ta_id, total in total_per_ta.items():
+        if total > 0 and published_per_ta.get(ta_id, 0) == total:
+            result[ta_id] = 'COMPLETED'
+
+    return Response(result)
 
 
 # ============================================================================
@@ -2602,7 +2714,7 @@ def faculty_course_co_summary(request, ta_id):
                 ct_ea_configs.append(ea_conf)
 
     derived_ea_configs = []
-    if class_type and qp_type_code and not ct_ea_configs:
+    if class_type and qp_type_code:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
             qp_type__iexact=qp_type_code,
@@ -2641,7 +2753,20 @@ def faculty_course_co_summary(request, ta_id):
                 'mm_exam_weight': (w_conf.get('mm_exam_weight') if isinstance(w_conf, dict) else None) or 0,
             })
 
-    effective_ea_configs = ct_ea_configs or derived_ea_configs
+    def _ea_config_key(ea_conf):
+        if not isinstance(ea_conf, dict):
+            return ''
+        return str(ea_conf.get('exam_display_name') or ea_conf.get('exam') or '').strip().lower()
+
+    effective_ea_configs = []
+    seen_ea_config_keys = set()
+    for ea_conf in ct_ea_configs + derived_ea_configs:
+        cfg_key = _ea_config_key(ea_conf)
+        if cfg_key:
+            if cfg_key in seen_ea_config_keys:
+                continue
+            seen_ea_config_keys.add(cfg_key)
+        effective_ea_configs.append(ea_conf)
 
     # Normalization helper for matching exams between DB and ClassType config
     norm_exam_key = lambda s: (str(s or '').strip().lower())
@@ -3571,6 +3696,27 @@ def faculty_course_co_summary(request, ta_id):
                 # If Mark Manager Exam is enabled, still expose exam key for UI
                 if einfo.get('cia_enabled'):
                     exam_entry['exam'] = 0
+                # Fallback for non-QP single-mark exams: distribute total_mark evenly
+                # across covered COs so they appear in CO Summary instead of showing 0.
+                if sm and not sm.is_absent and sm.total_mark is not None and not einfo.get('_qp_cos'):
+                    covered = einfo.get('covered_cos') or []
+                    if covered:
+                        total_val = float(sm.total_mark or 0)
+                        per_co = round(total_val / len(covered), 4)
+                        direct_raw = {co_num: per_co for co_num in covered}
+                        computed_total_from_questions = round(total_val, 2)
+                        # Persist to DB so downstream reports stay in sync (best-effort)
+                        try:
+                            new_vals = [round(direct_raw.get(i, 0.0), 2) for i in range(1, 6)]
+                            old_vals = [
+                                round(float(getattr(sm, f'co{i}_mark', 0) or 0), 2)
+                                for i in range(1, 6)
+                            ]
+                            if new_vals != old_vals:
+                                sm.co1_mark, sm.co2_mark, sm.co3_mark, sm.co4_mark, sm.co5_mark = new_vals
+                                sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark'])
+                        except Exception:
+                            pass
 
             # Raw CO marks from AcV2StudentMark co1..co5 fields
             for co_num in range(1, co_count + 1):

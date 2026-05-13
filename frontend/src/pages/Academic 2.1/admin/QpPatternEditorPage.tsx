@@ -579,17 +579,33 @@ export default function QpPatternEditorPage() {
       }
 
       setDeleteModalOpen(false);
-      setPendingDelete(null);
       setDeletePassword('');
 
-      // Refresh lists + clear selection if needed
+      // Capture before setPendingDelete clears the ref
+      const deletedType = pendingDelete.object_type;
+      const deletedLabel = pendingDelete.label;
+      setPendingDelete(null);
+
+      // For qp_pattern: FIRST remove exam assignment from ClassType JSON,
+      // THEN reload — so the useEffect doesn't re-insert the stale entry.
+      if (deletedType === 'qp_pattern' && selectedClassTypeId) {
+        const patternKey = normalizeExamDisplayKey(deletedLabel);
+        const nextAssignments = localExamAssignments.filter(e =>
+          normalizeExamDisplayKey(e.exam_display_name || e.exam || '') !== patternKey
+        );
+        await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
+          method: 'PATCH',
+          body: JSON.stringify({ exam_assignments: nextAssignments }),
+        });
+      }
+
       await loadData();
 
-      if (pendingDelete.object_type === 'qp_pattern') {
+      if (deletedType === 'qp_pattern') {
         setSelectedPatternId(null);
         setSelectedExamRef(null);
       }
-      if (pendingDelete.object_type === 'qp_type') {
+      if (deletedType === 'qp_type') {
         setSelectedQpType('');
         setSelectedPatternId(null);
         setSelectedExamRef(null);
@@ -729,6 +745,14 @@ export default function QpPatternEditorPage() {
         customize_questions: !!ex.customize_questions,
         enabled: ex.enabled !== false,
       } satisfies ExamAssignment;
+    });
+    // Deduplicate: keep only the first occurrence of each qp_type + exam_display_name pair
+    const seen = new Set<string>();
+    return normalized.filter(e => {
+      const key = `${String(e.qp_type || '').trim()}:${normalizeExamDisplayKey(e.exam_display_name || e.exam || '')}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   }, []);
 
@@ -1603,7 +1627,10 @@ export default function QpPatternEditorPage() {
           const examName = String(savedPattern?.name || selectedExamRef.exam_display_name || '').trim();
           const exists = prev.some(e =>
             String(e.qp_type || '').trim() === targetQpType &&
-            normalizeExamDisplayKey(e.exam || e.exam_display_name || '') === normalizeExamDisplayKey(examName)
+            (
+              normalizeExamDisplayKey(e.exam_display_name || '') === normalizeExamDisplayKey(examName) ||
+              normalizeExamDisplayKey(e.exam || '') === normalizeExamDisplayKey(examName)
+            )
           );
           if (exists) return null;
           return [
@@ -1830,6 +1857,7 @@ export default function QpPatternEditorPage() {
                       id: pattern?.id,
                     });
                     setIsEditing(false);
+                    setExamEditorModalOpen(true);
                   }}
                   className={`p-3 cursor-pointer border-b last:border-b-0 hover:bg-gray-50 ${
                     (() => {
@@ -3264,6 +3292,8 @@ export default function QpPatternEditorPage() {
           open={examEditorModalOpen}
           onClose={() => setExamEditorModalOpen(false)}
           isEditing={isEditing}
+          onSave={async () => { await handleSave(); }}
+          onDelete={resolvedPattern ? handleDelete : undefined}
           selectedExamAssignmentItem={selectedExamAssignmentItem}
           selectedQpType={selectedQpType}
           localRows={localRows}
@@ -3271,6 +3301,7 @@ export default function QpPatternEditorPage() {
           onRemoveQuestion={removeQuestion}
           onUpdateRow={updateRow}
           onOpenQuestionSettings={openQuestionSettings}
+          onReplaceRows={(rows) => { setLocalRows(rows); markDirty(); }}
           cqiEditorOpen={cqiEditorModalOpen}
           cqiVariables={cqiVariables}
           tokenMeta={tokenMeta as any}

@@ -164,6 +164,38 @@ export default function InternalMarkPage() {
     return { ...coSummary, exams: nextExams };
   }, [coSummary, courseInfo]);
 
+  const resolvedPowerBiEmbedUrl = useMemo(() => {
+    if (!powerBiEmbedUrl || !courseInfo) return '';
+
+    const replacements: Record<string, string> = {
+      course_id: String(courseInfo.id || ''),
+      course_code: String(courseInfo.course_code || ''),
+      course_name: String(courseInfo.course_name || ''),
+      section: String(courseInfo.section || ''),
+      semester: String(courseInfo.semester ?? ''),
+      sem: String(courseInfo.semester ?? ''),
+      qp_type: String(courseInfo.qp_type || ''),
+      class_type: String(courseInfo.class_type?.name || ''),
+      department: String(courseInfo.department || ''),
+    };
+
+    let nextUrl = powerBiEmbedUrl;
+    for (const [key, value] of Object.entries(replacements)) {
+      nextUrl = nextUrl.replaceAll(`{${key}}`, encodeURIComponent(value));
+    }
+
+    try {
+      const url = new URL(nextUrl);
+      url.searchParams.set('course_code', replacements.course_code);
+      url.searchParams.set('section', replacements.section);
+      url.searchParams.set('sem', replacements.sem);
+      if (replacements.qp_type) url.searchParams.set('qp_type', replacements.qp_type);
+      return url.toString();
+    } catch {
+      return nextUrl;
+    }
+  }, [powerBiEmbedUrl, courseInfo]);
+
   const exportReport = async () => {
     try {
       const response = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/export-report/`);
@@ -343,7 +375,7 @@ export default function InternalMarkPage() {
       )}
 
       {/* Setup status banner */}
-      {(!courseInfo.setup_status.class_type_assigned || !courseInfo.setup_status.qp_type_assigned) && (
+      {(!courseInfo.setup_status.class_type_assigned || (!courseInfo.setup_status.qp_type_assigned && !courseInfo.qp_type)) && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
           <div>
@@ -352,7 +384,7 @@ export default function InternalMarkPage() {
               {!courseInfo.setup_status.class_type_assigned && (
                 <li>Class type is not configured in Academic 2.1 — contact the administrator.</li>
               )}
-              {!courseInfo.setup_status.qp_type_assigned && (
+              {(!courseInfo.setup_status.qp_type_assigned && !courseInfo.qp_type) && (
                 <li>QP type is not assigned to this course — contact the administrator to set it in the curriculum.</li>
               )}
             </ul>
@@ -431,10 +463,10 @@ export default function InternalMarkPage() {
             )}
           </div>
           <div className="p-4">
-            {powerBiEmbedUrl ? (
+            {resolvedPowerBiEmbedUrl ? (
               <iframe
                 title="Power BI Dashboard"
-                src={powerBiEmbedUrl}
+                src={resolvedPowerBiEmbedUrl}
                 className="w-full h-[70vh] rounded border"
                 allowFullScreen
               />
@@ -442,7 +474,7 @@ export default function InternalMarkPage() {
               <div className="p-8 text-center text-gray-500">
                 Power BI dashboard is not configured.
                 <div className="text-sm text-gray-400 mt-1">
-                  Set VITE_POWERBI_EMBED_URL in .env.local to embed.
+                  Set VITE_POWERBI_EMBED_URL in .env.local. You can use placeholders like {'{course_code}'}, {'{section}'}, {'{sem}'}, and {'{qp_type}'}.
                 </div>
               </div>
             )}
@@ -462,7 +494,7 @@ export default function InternalMarkPage() {
             )}
           </div>
           <div className="divide-y">
-            {!courseInfo.setup_status.class_type_assigned || !courseInfo.setup_status.qp_type_assigned ? (
+            {((!courseInfo.setup_status.class_type_assigned) || (!courseInfo.setup_status.qp_type_assigned && !courseInfo.qp_type)) && courseInfo.exams.length === 0 ? (
               <div className="p-8 text-center text-amber-700">
                 <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-amber-400" />
                 <p className="font-medium">Exam assignments are not available yet.</p>
