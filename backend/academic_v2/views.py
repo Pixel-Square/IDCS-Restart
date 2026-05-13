@@ -91,6 +91,86 @@ from .services.publish_control import check_publish_control, create_edit_request
 from .services.mark_calculation import compute_section_internal_marks
 
 
+PUBLISHED_EXAM_STATUSES = {'PUBLISHED', 'APPROVED', 'LOCKED'}
+
+
+def _resolve_qp_pattern_for_exam_assignment(exam_assignment, class_type=None):
+    qp_type = str(getattr(exam_assignment, 'qp_type', '') or '').strip()
+    exam_display_name = str(getattr(exam_assignment, 'exam_display_name', '') or '').strip()
+    exam_code = str(getattr(exam_assignment, 'exam', '') or '').strip()
+    exam_names = []
+    for value in [exam_display_name, exam_code]:
+        if value and value not in exam_names:
+            exam_names.append(value)
+
+    qp_type_candidates = []
+    for value in [qp_type, exam_code, re.sub(r'\s+', '_', exam_display_name).upper() if exam_display_name else '']:
+        normalized = str(value or '').strip()
+        if normalized and normalized not in qp_type_candidates:
+            qp_type_candidates.append(normalized)
+
+    if not qp_type_candidates:
+        return None
+
+    # Match using the same fallback order already used while syncing exam assignments:
+    # class-specific by display name/code, global by display name/code, then qp_type-only.
+    candidate_filters = []
+    for qp_type_candidate in qp_type_candidates:
+        for exam_name in exam_names:
+            if class_type is not None:
+                candidate_filters.append({'name__iexact': exam_name, 'qp_type__iexact': qp_type_candidate, 'class_type': class_type, 'is_active': True})
+            candidate_filters.append({'name__iexact': exam_name, 'qp_type__iexact': qp_type_candidate, 'is_active': True})
+        if class_type is not None:
+            candidate_filters.append({'qp_type__iexact': qp_type_candidate, 'class_type': class_type, 'is_active': True})
+        candidate_filters.append({'qp_type__iexact': qp_type_candidate, 'is_active': True})
+
+    fallback_pattern = None
+    for filters in candidate_filters:
+        pattern = AcV2QpPattern.objects.filter(**filters).order_by('-updated_at').first()
+        if pattern is None:
+            continue
+        if getattr(pattern, 'cycle_id', None):
+            return pattern
+        if fallback_pattern is None:
+            fallback_pattern = pattern
+    return fallback_pattern
+
+
+def _get_exam_cycle_state(exam_assignment, semester_id=None, class_type=None):
+    pattern = _resolve_qp_pattern_for_exam_assignment(exam_assignment, class_type=class_type)
+    cycle = getattr(pattern, 'cycle', None)
+    if cycle is None:
+        return {
+            'cycle_locked': False,
+            'cycle_lock_reason': None,
+            'cycle_id': None,
+            'cycle_name': None,
+            'cycle_code': None,
+            'cycle_active': None,
+            'semester_active': None,
+        }
+
+    semester_active = cycle.is_semester_active(semester_id)
+    cycle_locked = not semester_active
+    reason = None
+    if cycle_locked:
+        reason = (
+            f'{cycle.name} is inactive for this semester.'
+            if cycle.is_active else
+            f'{cycle.name} is inactive for all semesters.'
+        )
+
+    return {
+        'cycle_locked': cycle_locked,
+        'cycle_lock_reason': reason,
+        'cycle_id': str(cycle.id),
+        'cycle_name': cycle.name,
+        'cycle_code': cycle.code,
+        'cycle_active': bool(cycle.is_active),
+        'semester_active': semester_active,
+    }
+
+
 # ============================================================================
 # SEMESTER CONFIG (Admin)
 # ============================================================================
@@ -331,7 +411,7 @@ class AcV2CycleViewSet(viewsets.ModelViewSet):
     Academic Cycle CRUD.
     List, create, update, and soft-delete academic cycles.
     """
-    queryset = AcV2Cycle.objects.filter(is_active=True)
+    queryset = AcV2Cycle.objects.all()
     serializer_class = AcV2CycleSerializer
     permission_classes = [IsAuthenticated]
 
@@ -1407,9 +1487,15 @@ def faculty_course_info(request, ta_id):
         draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         marks = draft.get('marks', {})
         entered_count = sum(1 for v in marks.values() if v is not None and v != '')
-        is_locked = ea.status in ('PUBLISHED', 'APPROVED')
+        published_locked = ea.status in PUBLISHED_EXAM_STATUSES
+        cycle_state = _get_exam_cycle_state(
+            ea,
+            semester_id=getattr(sec, 'semester_id', None),
+            class_type=acv2_ct,
+        )
+        is_locked = bool(published_locked or cycle_state['cycle_locked'])
 
-        if is_locked:
+        if published_locked:
             sm_status = 'COMPLETED'
         elif marks:
             sm_status = 'IN_PROGRESS'
@@ -1439,6 +1525,12 @@ def faculty_course_info(request, ta_id):
             'entered_count': entered_count,
             'total_students': student_count,
             'is_locked': is_locked,
+            'cycle_locked': cycle_state['cycle_locked'],
+            'lock_reason': cycle_state['cycle_lock_reason'],
+            'cycle_name': cycle_state['cycle_name'],
+            'cycle_code': cycle_state['cycle_code'],
+            'can_view': bool(published_locked),
+            'can_edit': bool((not published_locked) and (not cycle_state['cycle_locked'])),
             'due_date': None,
             'status': sm_status,
             'kind': ea_kind,
@@ -1599,6 +1691,11 @@ def faculty_course_info(request, ta_id):
                     co_weights_for_new = {int(k): v for k, v in co_weights_for_new.items()}
                 _new_kind = 'cqi' if str(ea_conf.get('kind', '')).lower() == 'cqi' else 'exam'
                 _new_cqi_sub = ea_conf.get('cqi', {})
+                cycle_state = _get_exam_cycle_state(
+                    ea_obj,
+                    semester_id=getattr(sec, 'semester_id', None),
+                    class_type=acv2_ct,
+                )
                 exams.append({
                     'id': str(ea_obj.id),
                     'name': display_name,
@@ -1608,7 +1705,13 @@ def faculty_course_info(request, ta_id):
                     'co_weights': co_weights_for_new,  # Per-CO weights
                     'entered_count': 0,
                     'total_students': student_count,
-                    'is_locked': False,
+                    'is_locked': bool(cycle_state['cycle_locked']),
+                    'cycle_locked': cycle_state['cycle_locked'],
+                    'lock_reason': cycle_state['cycle_lock_reason'],
+                    'cycle_name': cycle_state['cycle_name'],
+                    'cycle_code': cycle_state['cycle_code'],
+                    'can_view': False,
+                    'can_edit': not cycle_state['cycle_locked'],
                     'due_date': None,
                     'status': 'NOT_STARTED',
                     'kind': _new_kind,
@@ -1714,7 +1817,17 @@ def faculty_exam_info(request, exam_id):
         open_remaining_seconds = None
         due_remaining_seconds = None
 
-    is_locked = bool(ctrl.get('is_locked', False))
+    course_class_type = None
+    try:
+        course_class_type = ea.section.course.class_type
+    except Exception:
+        course_class_type = None
+    cycle_state = _get_exam_cycle_state(
+        ea,
+        semester_id=getattr(acad_sec, 'semester_id', None),
+        class_type=course_class_type,
+    )
+    is_locked = bool(ctrl.get('is_locked', False) or cycle_state['cycle_locked'])
 
     dept_name = ''
     if acad_sec and acad_sec.managing_department:
@@ -1840,9 +1953,14 @@ def faculty_exam_info(request, exam_id):
         'due_date': ea.edit_window_until.isoformat() if ea.edit_window_until else None,
         'status': ea.status,
         'is_locked': is_locked,
+        'cycle_locked': cycle_state['cycle_locked'],
+        'lock_reason': cycle_state['cycle_lock_reason'],
+        'cycle_name': cycle_state['cycle_name'],
+        'cycle_code': cycle_state['cycle_code'],
         'has_pending_edit_request': bool(getattr(ea, 'has_pending_edit_request', False)),
         'publish_control': {
             **ctrl,
+            'is_editable': bool(ctrl.get('is_editable', not is_locked)) and not cycle_state['cycle_locked'],
             'open_from': open_from.isoformat() if open_from else None,
             'due_at': due_at.isoformat() if due_at else None,
             'is_open': semester_config.is_open() if semester_config else True,
@@ -2087,6 +2205,14 @@ def faculty_exam_publish(request, exam_id):
         section__faculty_user=request.user,
     )
 
+    cycle_state = _get_exam_cycle_state(
+        ea,
+        semester_id=getattr(getattr(ea.section, 'course', None), 'semester_id', None),
+        class_type=getattr(getattr(ea.section, 'course', None), 'class_type', None),
+    )
+    if cycle_state['cycle_locked']:
+        return Response({'detail': cycle_state['cycle_lock_reason'] or 'This cycle is locked for this semester.'}, status=403)
+
     if not ea.is_editable():
         return Response({'detail': 'This exam is locked and cannot be published.'}, status=403)
 
@@ -2246,6 +2372,14 @@ def faculty_exam_marks(request, exam_id):
             })
 
         return Response({'students': students})
+
+    cycle_state = _get_exam_cycle_state(
+        ea,
+        semester_id=getattr(getattr(ea.section, 'course', None), 'semester_id', None),
+        class_type=getattr(getattr(ea.section, 'course', None), 'class_type', None),
+    )
+    if cycle_state['cycle_locked']:
+        return Response({'detail': cycle_state['cycle_lock_reason'] or 'This cycle is locked for this semester.'}, status=403)
 
     # POST — save marks
     if not ea.is_editable():
@@ -2607,11 +2741,41 @@ def faculty_course_co_summary(request, ta_id):
         s = str(expr or '').strip()
         if not s:
             return ''
+        # CQI editor token picker can build adjacent token expressions that
+        # semantically mean addition.
+        s = re.sub(r'\]\s+\[', '] + [', s)
         # Replace token form [TOKEN] with identifier TOKEN (or 0 if unknown).
         def repl(m):
             key = str(m.group(1) or '').strip().upper()
             return key if key in allowed_names else '0'
         return re.sub(r'\[([A-Za-z0-9_-]+)\]', repl, s)
+
+    def _build_cqi_if_from_clauses(clauses) -> str:
+        parts = []
+        for idx, clause in enumerate(clauses or []):
+            if not isinstance(clause, dict):
+                continue
+            token = str(clause.get('token') or '').strip().upper()
+            rhs = str(clause.get('rhs') or '').strip()
+            if token not in {'BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'} or not rhs:
+                continue
+            rhs = re.sub(r'\]\s+\[', '] + [', rhs)
+            if idx == 0 and token == 'BEFORE_CQI':
+                is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', rhs))
+                parts.append(f'([{token}] {rhs})' if is_comparator_only else f'({rhs})')
+            else:
+                parts.append(f'([{token}] {rhs})')
+        return ' && '.join(p for p in parts if p)
+
+    def _resolve_cqi_if_expr(cond: dict) -> str:
+        if not isinstance(cond, dict):
+            return ''
+        clauses = cond.get('if_clauses') if isinstance(cond.get('if_clauses'), list) else []
+        if clauses:
+            built = _build_cqi_if_from_clauses(clauses)
+            if built:
+                return built
+        return str(cond.get('if', '') or '').strip()
 
     _ALLOWED_FUNCS = {
         'min': min,
@@ -2687,7 +2851,9 @@ def faculty_course_co_summary(request, ta_id):
         expr_n = _normalize_cqi_expr(expr, allowed_names)
         if not expr_n:
             return False
-        # Support AND/OR written as words
+        # Support JS-style and word-style boolean operators from saved configs.
+        expr_n = expr_n.replace('&&', ' and ')
+        expr_n = expr_n.replace('||', ' or ')
         expr_n = re.sub(r'\bAND\b', 'and', expr_n, flags=re.IGNORECASE)
         expr_n = re.sub(r'\bOR\b', 'or', expr_n, flags=re.IGNORECASE)
         try:
@@ -3559,7 +3725,7 @@ def faculty_course_co_summary(request, ta_id):
                         for cond in conds:
                             if not isinstance(cond, dict):
                                 continue
-                            if_expr = str(cond.get('if', '') or '').strip()
+                            if_expr = _resolve_cqi_if_expr(cond)
                             then_expr = str(cond.get('then', '') or '').strip()
                             if if_expr and _safe_eval_cqi_bool(if_expr, vars_map):
                                 if then_expr:
@@ -3577,9 +3743,18 @@ def faculty_course_co_summary(request, ta_id):
                     mapped = round(float(mapped or 0.0), 2)
                     exam_entry[f'co{co_n}'] = mapped
                     total_val += mapped
-                    # CQI contributes directly to CO totals (no weight).
+
+                    # CQI contributes directly to CO totals and MUST also populate weighted_marks,
+                    # because InternalMarkPage/CO summary reads weighted_marks keys like:
+                    #   "<examAssignmentId>_CO<coNum>"
                     try:
                         student_entry['co_totals'][co_n - 1] = round(float(student_entry['co_totals'][co_n - 1] or 0.0) + mapped, 2)
+                    except Exception:
+                        pass
+
+                    try:
+                        wm_key = f"{einfo['id']}_CO{co_n}"
+                        student_entry['weighted_marks'][wm_key] = round(float(mapped or 0.0), 2)
                     except Exception:
                         pass
 
@@ -3605,6 +3780,7 @@ def faculty_course_co_summary(request, ta_id):
             cqi_config = {
                 'name': str(_raw.get('name', '') or ''),
                 'code': str(_raw.get('code', '') or ''),
+                'cycle_id': str(_raw.get('cycle_id', '') or ''),
                 'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
                 'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
                 'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
@@ -3940,6 +4116,7 @@ def faculty_course_cqi_publish(request, ta_id: int):
     """
     from academics.models import TeachingAssignment
     from .models import AcV2CqiAssignment, AcV2CqiAttained
+    from .services.mark_calculation import compute_section_internal_marks
 
     ta = get_object_or_404(
         TeachingAssignment.objects.select_related('staff'),
@@ -3972,6 +4149,12 @@ def faculty_course_cqi_publish(request, ta_id: int):
             'published_by': user_id,
         },
     )
+
+    try:
+        for acv2_section in ta.acv2_sections.select_related('course__class_type').all():
+            compute_section_internal_marks(acv2_section)
+    except Exception:
+        pass
 
     return Response({
         'status': 'ok',
@@ -4205,4 +4388,3 @@ def faculty_exam_import_marks(request, exam_id):
         'total_in_class': len(reg_to_student),
         'students': imported_students,
     })
-

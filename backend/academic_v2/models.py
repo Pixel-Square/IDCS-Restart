@@ -1399,6 +1399,7 @@ class AcV2Cycle(models.Model):
     code = models.CharField(max_length=30, unique=True, db_index=True)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
+    inactive_semester_ids = models.JSONField(default=list, blank=True)
 
     college = models.ForeignKey(
         'college.College',
@@ -1419,6 +1420,14 @@ class AcV2Cycle(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+    def is_semester_active(self, semester_id):
+        if not self.is_active:
+            return False
+        if semester_id in (None, ''):
+            return True
+        normalized = {str(item).strip() for item in (self.inactive_semester_ids or []) if str(item).strip()}
+        return str(semester_id).strip() not in normalized
 
 
 # ============================================================================

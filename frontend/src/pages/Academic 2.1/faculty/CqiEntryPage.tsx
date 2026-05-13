@@ -13,6 +13,18 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Save, Send, CheckCircle, AlertTriangle, Info } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
+type CqiIfClauseToken = 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI';
+
+type CqiIfClause = { token: CqiIfClauseToken; rhs: string };
+
+type CqiAdminCondition = {
+  if: string;
+  then: string;
+  color?: string;
+  // stored by editor UI; evaluator must use it for pinned Before_CQI + AND behavior
+  if_clauses?: CqiIfClause[];
+};
+
 type CqiAdminConfig = {
   name: string;
   code: string;
@@ -20,7 +32,7 @@ type CqiAdminConfig = {
   exams?: string[];
   custom_vars?: Array<{ code: string; label?: string; expr: string }>;
   formula: string;
-  conditions: Array<{ if: string; then: string; color?: string }>;
+  conditions: CqiAdminCondition[];
   else_formula: string;
 };
 
@@ -60,6 +72,10 @@ const THRESHOLD_PERCENT = 58;
 
 function normalizeExamCode(input: string) {
   return String(input || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function normalizeImplicitTokenSums(input: string) {
+  return String(input || '').replace(/\]\s+\[/g, '] + [');
 }
 
 function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)); }
@@ -251,12 +267,18 @@ function resolveTokenValue(key: string, ctx: Record<string, number>, coNum?: num
 
 function evalFormula(formula: string, ctx: Record<string, number>, coNum?: number): number {
   if (!formula.trim()) return 0;
-  const substituted = formula.replace(/\[([A-Z0-9_-]+)\]/gi, (_, key) => {
+  const normalizedFormula = normalizeImplicitTokenSums(formula);
+  const substituted = normalizedFormula.replace(/\[([A-Z0-9_-]+)\]/gi, (_, key) => {
     const val = resolveTokenValue(key, ctx, coNum);
     return Number.isFinite(val) ? String(val) : '0';
   });
   try {
-    const val = parseExprInner(tokenizeExpr(substituted), { i: 0 });
+    const tokens = tokenizeExpr(substituted);
+    const pos = { i: 0 };
+    const val = parseExprInner(tokens, pos);
+    // Mirror backend behavior: malformed expressions must fail instead of
+    // silently succeeding on a partially parsed prefix.
+    if (pos.i !== tokens.length) return 0;
     return Number.isFinite(val) ? val : 0;
   } catch { return 0; }
 }
@@ -265,13 +287,13 @@ function evalCondition(condition: string, ctx: Record<string, number>, coNum?: n
 }
 
 function extractTokenKeys(text: string): string[] {
-  const raw = String(text || '').match(/\[[^\]]+\]/g) || [];
+  const raw = normalizeImplicitTokenSums(text).match(/\[[^\]]+\]/g) || [];
   const keys = raw.map((t) => t.slice(1, -1).trim().toUpperCase()).filter(Boolean);
   return Array.from(new Set(keys));
 }
 
 function substituteTokens(text: string, ctx: Record<string, number>, coNum: number): string {
-  return String(text || '').replace(/\[([A-Z0-9_-]+)\]/gi, (_, key) => {
+  return normalizeImplicitTokenSums(text).replace(/\[([A-Z0-9_-]+)\]/gi, (_, key) => {
     const v = resolveTokenValue(key, ctx, coNum);
     return String(round2(Number(v) || 0));
   });
@@ -286,7 +308,7 @@ function buildContext(
   examMarks?: Record<string, Record<string, number>>,
   weightedMarks?: Record<string, number>,
   customVars?: Array<{ code: string; label?: string; expr: string }>,
-  cqiTotals?: { beforeValue: number; beforePct: number; afterValue: number; afterPct: number },
+  cqiTotals?: { beforeValue: number; beforePct: number; afterValue: number; afterPct: number; beforeMax: number },
 ): Record<string, number> {
   const ctx: Record<string, number> = {};
   const totalRaw = coTotals.reduce((s, v) => s + (Number.isFinite(v) ? v : 0), 0);
@@ -317,6 +339,7 @@ function buildContext(
     ctx['BEFORE_CQI'] = round2(Number(cqiTotals.beforeValue) || 0);
     ctx['AFTER_CQI'] = round2(Number(cqiTotals.afterValue) || 0);
     ctx['TOTAL_CQI'] = round2(Number(cqiTotals.beforePct) || 0);
+    ctx['CQI-TOTAL-MAX'] = round2(Number(cqiTotals.beforeMax) || 0);
   }
   const co_count = coTotals.length;
   for (const ex of exams) {
@@ -453,23 +476,139 @@ function executeTaskScript(script: string, ctx: Record<string, number>, coNum: n
   }
 }
 
-function firstNotAttainedCondition(cfg: CqiAdminConfig | null): { if: string; then: string } | null {
-  if (!cfg) return null;
-  const list = Array.isArray(cfg.conditions) ? cfg.conditions : [];
-  for (const c of list) {
-    if (String(c.if || '').trim()) return c;
+function evalIfClauses(cond: CqiAdminCondition, ctxBase: Record<string, number>, coNum: number): boolean {
+  const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : null;
+  if (!clauses || clauses.length === 0) {
+    const ifRaw = String(cond.if || '');
+    if (!ifRaw.trim()) return false;
+    return evalCondition(ifRaw, ctxBase, coNum);
   }
-  return null;
+
+  // Pinned Before_CQI is clause[0]. Additional clauses are AND'ed.
+  const clauseVals = clauses
+    .filter((c) => c && c.token && String(c.rhs || '').trim().length > 0)
+    .map((c) => {
+      const tok = c.token;
+      // evaluator expects token variables like [BEFORE_CQI], [AFTER_CQI], [TOTAL_CQI]
+      const tokenExpr = `[${tok}]`;
+      // Clause rhs is expression like "< 58" or "< 1.74" etc.
+      const expr = `${tokenExpr} ${String(c.rhs || '').trim()}`;
+      return evalCondition(expr, ctxBase, coNum);
+    });
+
+  if (clauseVals.length === 0) return false;
+  return clauseVals.every(Boolean);
+}
+
+function parseConditionClauses(raw: string): CqiIfClause[] {
+  const s = String(raw || '').trim();
+  if (!s) return [];
+  const parts = s.split(/\s*(?:&&|\bAND\b)\s*/i).map((part) => String(part || '').trim()).filter(Boolean);
+  const clauses: CqiIfClause[] = [];
+  for (const part of parts) {
+    const match = part.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*)\)?$/);
+    if (!match) continue;
+    const token = String(match[1] || '').toUpperCase();
+    const rhs = String(match[2] || '').trim().replace(/\)+$/g, '').trim();
+    if (token === 'BEFORE_CQI' || token === 'AFTER_CQI' || token === 'TOTAL_CQI') {
+      clauses.push({ token: token as CqiIfClauseToken, rhs });
+    }
+  }
+  return clauses;
+}
+
+function hasConditionClauses(cond: CqiAdminCondition | null | undefined): boolean {
+  return Boolean(
+    Array.isArray(cond?.if_clauses)
+    && cond!.if_clauses!.some((clause) => clause && clause.token && String(clause.rhs || '').trim().length > 0)
+  );
+}
+
+function hasConditionMatcher(cond: CqiAdminCondition | null | undefined): boolean {
+  if (!cond) return false;
+  return hasConditionClauses(cond) || Boolean(String(cond.if || '').trim());
+}
+
+function buildConditionExpressionFromClauses(clauses: CqiIfClause[]): string {
+  return (Array.isArray(clauses) ? clauses : [])
+    .map((clause, idx) => {
+      const rhs = String(clause?.rhs || '').trim();
+      if (!clause?.token || !rhs) return '';
+      if (idx === 0 && clause.token === 'BEFORE_CQI') {
+        const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
+        return isComparatorOnly ? `([${clause.token}] ${rhs})` : `(${rhs})`;
+      }
+      return `([${clause.token}] ${rhs})`;
+    })
+    .filter(Boolean)
+    .join(' && ');
+}
+
+function evaluateConditionMatcher(cond: CqiAdminCondition, ctxBase: Record<string, number>, coNum: number): boolean {
+  const ifRaw = getConditionExpressionText(cond);
+  if (ifRaw) return evalCondition(ifRaw, ctxBase, coNum);
+  return false;
+}
+
+function getConditionExpressionText(cond: CqiAdminCondition): string {
+  if (hasConditionClauses(cond)) {
+    return buildConditionExpressionFromClauses(cond.if_clauses || []);
+  }
+  const parsedClauses = parseConditionClauses(String(cond.if || ''));
+  if (parsedClauses.length > 0) {
+    return buildConditionExpressionFromClauses(parsedClauses);
+  }
+  return String(cond.if || '').trim();
 }
 
 function firstMatchedCondition(cfg: CqiAdminConfig | null, ctxBase: Record<string, number>, coNum: number) {
   if (!cfg) return null;
   const list = Array.isArray(cfg.conditions) ? cfg.conditions : [];
+
   for (const c of list) {
-    if (!String(c.if || '').trim()) continue;
-    if (evalCondition(String(c.if || ''), ctxBase, coNum)) return c;
+    if (!c) continue;
+    if (evaluateConditionMatcher(c, ctxBase, coNum)) return c;
   }
   return null;
+}
+
+function evaluateCqiOutcome(
+  expression: string,
+  ctxBase: Record<string, number>,
+  cqiInput: number | null,
+  coNum: number,
+): { addRaw: number; ctxAfter: Record<string, number> } {
+  const ctx = { ...ctxBase };
+  ctx['CQI'] = cqiInput != null && Number.isFinite(cqiInput) ? Number(cqiInput) : 0;
+  ctx['X'] = ctx['CQI'];
+  syncCurrentCoAliases(ctx, coNum);
+
+  const beforeRaw = Number(ctxBase['CO-RAW'] ?? 0) || 0;
+  const coMax = Number(ctxBase['CO-MAX'] ?? 0) || 0;
+
+  let addRaw = 0;
+  if (scriptHasAssignment(expression)) {
+    executeTaskScript(expression, ctx, coNum);
+    let afterRaw = Number(ctx['CO-RAW'] ?? beforeRaw) || beforeRaw;
+    afterRaw = clamp(afterRaw, 0, coMax > 0 ? coMax : afterRaw);
+    addRaw = round2(Math.max(0, afterRaw - beforeRaw));
+    ctx['CO-RAW'] = afterRaw;
+    syncCurrentCoAliases(ctx, coNum);
+  } else {
+    const mapped = evalFormula(expression, ctx, coNum);
+    const maxAdd = coMax > 0 ? Math.max(0, coMax - beforeRaw) : Math.max(0, mapped);
+    addRaw = round2(clamp(Number(mapped) || 0, 0, maxAdd));
+    ctx['CO-RAW'] = round2(beforeRaw + addRaw);
+    syncCurrentCoAliases(ctx, coNum);
+  }
+
+  const beforeTotal = Number(ctxBase['BEFORE_CQI'] ?? 0) || 0;
+  const totalMax = Number(ctxBase['CQI-TOTAL-MAX'] ?? 0) || 0;
+  const afterTotal = round2(beforeTotal + addRaw);
+  ctx['AFTER_CQI'] = afterTotal;
+  ctx['TOTAL_CQI'] = round2(totalMax > 0 ? (afterTotal / totalMax) * 100 : Number(ctxBase['TOTAL_CQI'] ?? 0) || 0);
+
+  return { addRaw, ctxAfter: ctx };
 }
 
 function evaluateCqiImpact(
@@ -478,43 +617,20 @@ function evaluateCqiImpact(
   cqiInput: number | null,
   coNum: number,
 ): { addRaw: number; notAttainedBefore: boolean; notAttainedAfter: boolean } {
-  const cond = firstNotAttainedCondition(cfg);
-  const notAttainedBefore = !!cond && evalCondition(cond.if, ctxBase, coNum);
+  const matchedBefore = firstMatchedCondition(cfg, ctxBase, coNum);
+  const notAttainedBefore = Boolean(matchedBefore);
 
-  if (!notAttainedBefore) {
+  if (!matchedBefore) {
     return { addRaw: 0, notAttainedBefore: false, notAttainedAfter: false };
   }
 
-  const ctx = { ...ctxBase };
-  ctx['CQI'] = cqiInput != null && Number.isFinite(cqiInput) ? Number(cqiInput) : 0;
-  ctx['X'] = ctx['CQI'];
-  syncCurrentCoAliases(ctx, coNum);
-
-  // Execute THEN tasks for the first matching condition, else fallback to ELSE.
-  let matched = false;
-  for (const c of cfg.conditions || []) {
-    if (!String(c.if || '').trim()) continue;
-    if (evalCondition(c.if, ctxBase, coNum)) {
-      executeTaskScript(c.then || '', ctx, coNum);
-      matched = true;
-      break;
-    }
-  }
-  if (!matched) {
-    executeTaskScript(cfg.else_formula || '', ctx, coNum);
+  const outcomeExpr = String(matchedBefore.then || '').trim() || String(cfg.else_formula || '').trim();
+  if (!outcomeExpr) {
+    return { addRaw: 0, notAttainedBefore: true, notAttainedAfter: true };
   }
 
-  // Clamp to CO max and compute add in RAW space
-  const beforeRaw = Number(ctxBase['CO-RAW'] ?? 0) || 0;
-  const coMax = Number(ctxBase['CO-MAX'] ?? 0) || 0;
-  let afterRaw = Number(ctx['CO-RAW'] ?? beforeRaw) || beforeRaw;
-  afterRaw = clamp(afterRaw, 0, coMax > 0 ? coMax : afterRaw);
-  const addRaw = round2(Math.max(0, afterRaw - beforeRaw));
-
-  // Re-check not-attained status after applying tasks
-  ctx['CO-RAW'] = afterRaw;
-  syncCurrentCoAliases(ctx, coNum);
-  const notAttainedAfter = !!cond && evalCondition(cond.if, ctx, coNum);
+  const { addRaw, ctxAfter } = evaluateCqiOutcome(outcomeExpr, ctxBase, cqiInput, coNum);
+  const notAttainedAfter = Boolean(firstMatchedCondition(cfg, ctxAfter, coNum));
 
   return { addRaw, notAttainedBefore: true, notAttainedAfter };
 }
@@ -538,11 +654,11 @@ export default function CqiEntryPage() {
   const isPublished = Boolean(publishedLog?.published_at);
   const tableBlocked = isPublished || publishing;
   const cqiConfig = coSummary?.cqi_config ?? null;
-  // A config is only "active" if it has at least one IF and a THEN with assignment, or an ELSE with assignment.
+  // A config is active if it has at least one condition with a THEN expression/task, or an ELSE expression/task.
   const hasCqiConfig = Boolean(
     cqiConfig && (
-      (cqiConfig.conditions || []).some(c => String(c.if || '').trim() && scriptHasAssignment(String(c.then || '')))
-      || scriptHasAssignment(String(cqiConfig.else_formula || ''))
+      (cqiConfig.conditions || []).some((c) => hasConditionMatcher(c) && String(c.then || '').trim())
+      || Boolean(String(cqiConfig.else_formula || '').trim())
     )
   );
 
@@ -570,27 +686,46 @@ export default function CqiEntryPage() {
     return configured.length > 0 ? configured : allCoNumbers;
   }, [allCoNumbers, cqiConfig?.cos, coSummary?.co_count]);
 
-  const coMaxByCo = useMemo(() => {
+  const coMaxByCoSelected = useMemo(() => {
     const n = coSummary?.co_count ?? 0;
+    const outOf = Number(coSummary?.total_internal_marks ?? 40) || 40;
+
+    // Match InternalMarkPage weighted-space max denominators for the
+    // CQI-selected exam assignments:
+    // - InternalMarkPage weighted per CO = (raw / co_max) * co_weight
+    // - For "max" we assume raw == co_max, so weighted max per CO becomes co_weight
+    //   scaled to the exam's contribution in the final internal-mark outOf space.
+    //
+    // We approximate scaling like:
+    //   examContributionTotal = (exam.weight / 100) * outOf
+    // Then distribute that examContributionTotal across covered COs proportional
+    // to admin co_weights (fallback to even split when missing/zero).
     const out = Array.from({ length: n }, () => 0);
+
     for (const ex of consideredExams || []) {
       const covered = Array.isArray(ex.covered_cos) ? ex.covered_cos : [];
-      for (const coNum of covered) {
+      if (!covered.length) continue;
+
+      const nCovered = covered.length || 1;
+
+      // InternalMarkPage CO cells use CO-wise "y" that is already in the weighted-space
+      // that matches `weighted_marks[${examId}_CO${co}]` rollups.
+      // Therefore for CQI denominator we must sum the same effective CO weights directly,
+      // without rescaling by course outOf/internal total.
+      for (let i = 0; i < covered.length; i++) {
+        const coNum = covered[i];
         if (!coNum || coNum < 1 || coNum > n) continue;
-        const base = Number(ex.co_weights?.[String(coNum)] ?? (ex as any)?.co_weights?.[coNum] ?? ex.weight_per_co ?? 0);
-        out[coNum - 1] += Number.isFinite(base) ? base : 0;
-      }
-      if (ex.cia_enabled && ex.cia_weight) {
-        const nCos = covered.length || 1;
-        const share = Number(ex.cia_weight) / nCos;
-        for (const coNum of covered) {
-          if (!coNum || coNum < 1 || coNum > n) continue;
-          out[coNum - 1] += Number.isFinite(share) ? share : 0;
-        }
+
+        const base =
+          Number((ex.co_weights as any)?.[String(coNum)] ?? (ex.co_weights as any)?.[coNum] ?? (ex as any)?.weight_per_co ?? 0) || 0;
+        const ciaShare = (ex.cia_enabled && ex.cia_weight) ? (Number(ex.cia_weight) / nCovered) : 0;
+
+        out[coNum - 1] += (Number.isFinite(base) ? base : 0) + (Number.isFinite(ciaShare) ? ciaShare : 0);
       }
     }
+
     return out.map((v) => round2(v));
-  }, [coSummary?.co_count, consideredExams]);
+  }, [coSummary?.co_count, coSummary?.total_internal_marks, consideredExams]);
 
   const loadAll = async () => {
     if (!courseId) return;
@@ -670,43 +805,64 @@ export default function CqiEntryPage() {
     const hasExamFilter = Array.isArray(cqiConfig?.exams) && (cqiConfig!.exams || []).length > 0;
     return students.map((s, idx) => {
       const studentId = String(s.student_id || s.reg_no);
+      // CQI Entry must be computed in INTERNALMARKPage *weighted* space.
+      // InternalMarkPage uses `weighted_marks` for per-CO weighted contributions.
       const totals = s.co_totals || [];
       const co_count = coSummary?.co_count ?? totals.length;
 
-      // If admin selected specific exams for CQI, recompute per-CO totals from exam_marks for display + evaluation.
-      let evalTotals = totals;
-      if (hasExamFilter && s.exam_marks && exams.length > 0) {
+      // Weighted obtained per CO (sum across considered exam assignments, using InternalMarkPage logic)
+      // For normal exam components: weighted_marks[`${examId}_CO${co}`]
+      // For CIA split columns: weighted_marks[`${examId}_exam_CO${co}`]
+      let evalTotals = Array.from({ length: co_count }, (_, i) => totals[i] ?? 0);
+      if (s.weighted_marks && s.weighted_marks && exams.length > 0) {
         const next = Array.from({ length: co_count }, () => 0);
         for (const ex of exams) {
-          const marks = s.exam_marks?.[ex.id] || {};
+          // Regular per-CO weighted marks
           for (let co = 1; co <= co_count; co++) {
-            next[co - 1] += Number(marks[`co${co}`] ?? 0);
+            const key = `${ex.id}_CO${co}`;
+            const v = Number(s.weighted_marks?.[key] ?? 0);
+            next[co - 1] += Number.isFinite(v) ? v : 0;
+
+            // CIA split weighted contributions are already reflected in weighted_marks[`${ex.id}_CO${co}`]
+            // (per InternalMarkPage CO weighted space). Do not double-count exam split columns here.
           }
         }
         evalTotals = next.map((v) => round2(v));
       }
 
-      const perCo = displayCoNumbers.map((coNum) => ({
-        coNum,
-        value: round2(Number(evalTotals[coNum - 1] ?? 0)),
-        max: round2(Number(coMaxByCo[coNum - 1] ?? 0)),
-      }));
-      const beforeValue = round2(perCo.reduce((sum, c) => sum + c.value, 0));
-      const beforeMax = round2(perCo.reduce((sum, c) => sum + c.max, 0));
-      const beforePct = beforeMax > 0 ? (beforeValue / beforeMax) * 100 : 0;
+      // IMPORTANT:
+      // BEFORE CQI must roll up exactly from the CO column "x/y":
+      // - x  => perCo.value
+      // - y  => perCo.max
+      const perCo = displayCoNumbers.map((coNum) => {
+        const x = Number(evalTotals[coNum - 1] ?? 0);
+        const y = Number(coMaxByCoSelected[coNum - 1] ?? 0);
+        return {
+          coNum,
+          value: round2(x),
+          max: round2(y),
+        };
+      });
+
+      const beforeValueRaw = perCo.reduce((sum, c) => sum + (Number.isFinite(c.value) ? c.value : 0), 0);
+      const beforeMaxRaw = perCo.reduce((sum, c) => sum + (Number.isFinite(c.max) ? c.max : 0), 0);
+
+      const beforeValue = round2(beforeValueRaw);
+      const beforeMax = round2(beforeMaxRaw);
+      const beforePct = beforeMaxRaw > 0 ? (beforeValueRaw / beforeMaxRaw) * 100 : 0;
 
       const perCoMeta = perCo.map((c) => {
         const baseTotals = { beforeValue, beforePct, afterValue: beforeValue, afterPct: beforePct };
         const ctxBase = buildContext(
           evalTotals,
-          coMaxByCo,
+          coMaxByCoSelected,
           0,
           c.coNum,
           exams,
           s.exam_marks,
           s.weighted_marks,
           cqiConfig?.custom_vars,
-          baseTotals,
+          { ...baseTotals, beforeMax },
         );
         const notAttainedBefore = hasCqiConfig && cqiConfig
           ? evaluateCqiImpact(cqiConfig, ctxBase, null, c.coNum).notAttainedBefore
@@ -745,6 +901,7 @@ export default function CqiEntryPage() {
         perCo: perCoMeta.map(({ ctxBase, matchedCond, ...rest }) => rest),
         perCoMeta,
         beforeValue,
+        beforeMax,
         beforePct,
         afterValue: round2(afterValue),
         afterPct,
@@ -755,7 +912,7 @@ export default function CqiEntryPage() {
         totalHighlightColor,
       };
     });
-  }, [coSummary, consideredExams, displayCoNumbers, coMaxByCo, entries, cqiConfig, hasCqiConfig]);
+  }, [coSummary, consideredExams, displayCoNumbers, coMaxByCoSelected, entries, cqiConfig, hasCqiConfig]);
 
   if (loading) return <div className="p-6 flex items-center justify-center min-h-[400px]"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
   if (!coSummary) return <div className="p-6 text-center text-red-600">Failed to load CQI</div>;
@@ -826,10 +983,41 @@ export default function CqiEntryPage() {
           <span className="font-semibold">Active CQI Formula (admin-defined)</span>
           <div>COs: <span className="font-medium">{displayCoNumbers.map((n) => `CO${n}`).join(', ')}</span></div>
           <div>Exams considered: <span className="font-medium">{(consideredExams || []).map((e) => e.short_name || e.name).filter(Boolean).join(', ') || '—'}</span></div>
-          {(cqiConfig!.conditions || []).map((c, i) => (
-            <div key={i}>IF&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{c.if}</code>&nbsp;THEN&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{c.then}</code></div>
-          ))}
-          {cqiConfig!.else_formula && <div>ELSE&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{cqiConfig!.else_formula}</code></div>}
+          {(cqiConfig!.conditions || []).map((c, i) => {
+            const clauses = Array.isArray(c.if_clauses) ? c.if_clauses : [];
+            const hasPinned = clauses.length > 0;
+            const toIfText = () => {
+              if (!hasPinned) return String(c.if || '');
+              return clauses
+                .filter((cl) => cl && cl.token && String(cl.rhs || '').trim())
+                .map((cl, idx) => {
+                  const tok = cl.token;
+                  const rhs = normalizeImplicitTokenSums(String(cl.rhs || '').trim());
+                  // Editor stores token types as BEFORE_CQI / AFTER_CQI / TOTAL_CQI
+                  const label =
+                    tok === 'BEFORE_CQI' ? 'Before CQI' :
+                    tok === 'AFTER_CQI' ? 'After CQI' :
+                    tok === 'TOTAL_CQI' ? 'Total CQI' : tok;
+                  const usesComparator = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
+                  if (idx === 0) {
+                    return `${label} = ${rhs}`;
+                  }
+                  return `${idx === 0 ? '' : ' AND '}${usesComparator ? `${label} ${rhs}` : `${label} = ${rhs}`}`;
+                })
+                .join('')
+                .trim();
+            };
+
+            return (
+              <div key={i}>
+                IF&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{toIfText() || String(c.if || '')}</code>
+                &nbsp;THEN&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{String(c.then || '')}</code>
+              </div>
+            );
+          })}
+          {cqiConfig!.else_formula && (
+            <div>ELSE&nbsp;<code className="font-mono bg-blue-100 px-1 rounded">{String(cqiConfig!.else_formula || '')}</code></div>
+          )}
         </div>
       )}
 
@@ -858,21 +1046,25 @@ export default function CqiEntryPage() {
                     <td className="px-3 py-2 font-mono text-xs text-gray-900">{r.regNo}</td>
                     <td className="px-3 py-2 text-gray-900">{r.name}</td>
                     <td className="px-3 py-2 text-center font-semibold">
-                      <div className="text-gray-900">{round2(r.beforeValue)}</div>
-                      <div className="text-xs text-gray-500">({round2(r.beforePct)}%)</div>
+                      <div className="inline-flex min-w-[92px] flex-col rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 shadow-sm">
+                        <div className="text-gray-900">{round2(r.beforeValue)}</div>
+                        <div className="text-xs text-gray-500">({round2(r.beforePct)}%)</div>
+                      </div>
                     </td>
-                    <td className={`px-3 py-2 text-center font-semibold ${r.afterValue > r.beforeValue ? 'bg-green-50' : ''}`}>
-                      <div className="text-gray-900">{round2(r.afterValue)}</div>
-                      <div className="text-xs text-gray-500">({round2(r.afterPct)}%)</div>
-                      {r.delta > 0 && <div className="text-xs text-green-600 mt-0.5">+{round2(r.delta)}</div>}
+                    <td className="px-3 py-2 text-center font-semibold">
+                      <div className={`inline-flex min-w-[92px] flex-col rounded-2xl border px-3 py-2 shadow-sm ${r.afterValue > r.beforeValue ? 'border-green-200 bg-green-50' : 'border-slate-200 bg-white'}`}>
+                        <div className="text-gray-900">{round2(r.afterValue)}</div>
+                        <div className="text-xs text-gray-500">({round2(r.afterPct)}%)</div>
+                        {r.delta > 0 && <div className="mt-0.5 text-xs text-green-600">+{round2(r.delta)}</div>}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-center font-bold">
                       <div
-                        className="inline-block px-2 py-1 rounded"
+                        className="inline-flex min-w-[96px] flex-col rounded-2xl border border-slate-200 px-3 py-2 shadow-sm"
                         style={r.totalHighlightColor ? { backgroundColor: r.totalHighlightColor } : undefined}
                       >
-                        <div className="text-gray-900 text-sm font-extrabold">{round2(r.beforePct)}%</div>
-                        <div className="text-xs text-gray-500 mt-1">{round2(r.beforeValue)}</div>
+                        <div className="text-gray-900 text-sm font-extrabold">{round2(r.afterPct)}%</div>
+                        <div className="text-xs text-gray-500 mt-1">{round2(r.afterValue)}</div>
                       </div>
                     </td>
                     {r.perCo.map((c) => {
@@ -886,18 +1078,24 @@ export default function CqiEntryPage() {
                       const notAttainedBefore = Boolean(cMeta?.notAttainedBefore);
                       const matchedCond = (cMeta?.matchedCond as any) || null;
                       const matchedColor = String(cMeta?.matchedColor || '').trim();
+
+                      /**
+                       * Edit+color are driven by IF match (now based on if_clauses).
+                       * - If matchedCond exists => student row/CO should show matchedCond.color (red by admin)
+                       * - Input becomes editable for that matched row/CO only (notAttainedBefore must be true too).
+                       */
                       const allowInput = !tableBlocked && hasCqiConfig && cqiConfig && notAttainedBefore && !!matchedCond;
 
                       const ctxBase = buildContext(
                         r.coTotals,
-                        coMaxByCo,
+                        coMaxByCoSelected,
                         0,
                         c.coNum,
                         consideredExams,
                         r.examMarks,
                         r.weightedMarks,
                         cqiConfig?.custom_vars,
-                        { beforeValue: r.beforeValue, beforePct: r.beforePct, afterValue: r.afterValue, afterPct: r.afterPct },
+                        { beforeValue: r.beforeValue, beforePct: r.beforePct, afterValue: r.afterValue, afterPct: r.afterPct, beforeMax: r.beforeMax },
                       );
 
                       let addRaw = 0;
@@ -909,19 +1107,19 @@ export default function CqiEntryPage() {
                       }
 
                       const isCqiAttained = notAttainedBefore && hasInput && !notAttainedAfter;
-                      const bg = !hasCqiConfig
-                        ? 'bg-amber-50'
-                        : (!notAttainedBefore ? 'bg-green-50' : (matchedColor ? '' : (allowInput ? 'bg-red-50' : '')));
+                      const cellTone = !hasCqiConfig
+                        ? 'border-amber-200 bg-amber-50'
+                        : (!notAttainedBefore ? 'border-green-200 bg-green-50' : (matchedColor ? '' : (allowInput ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white')));
 
                       const debugBlock = (() => {
                         if (!debugOpen || !hasCqiConfig || !cqiConfig) return null;
                         const conds = Array.isArray(cqiConfig.conditions) ? cqiConfig.conditions : [];
                         const condEvaluations = conds
-                          .filter((x) => String(x.if || '').trim())
+                          .filter((x) => hasConditionMatcher(x))
                           .map((x, i) => {
-                            const ifRaw = String(x.if || '');
+                            const ifRaw = getConditionExpressionText(x);
                             const ifSub = substituteTokens(ifRaw, ctxBase, c.coNum);
-                            const ok = evalCondition(ifRaw, ctxBase, c.coNum);
+                            const ok = evaluateConditionMatcher(x, ctxBase, c.coNum);
                             return { i, ifRaw, ifSub, ok, thenRaw: String(x.then || '') };
                           });
                         const matched = condEvaluations.find((x) => x.ok) || null;
@@ -990,50 +1188,55 @@ export default function CqiEntryPage() {
                       return (
                         <td
                           key={c.coNum}
-                          className={`px-3 py-2 text-center ${bg}`}
+                          className="px-3 py-2 text-center"
                           style={matchedColor ? { backgroundColor: matchedColor } : undefined}
                         >
-                          <div className="text-sm text-gray-600 mb-1">{round2(c.value)} / {round2(c.max)}</div>
-                          {!hasCqiConfig ? (
-                            <div>
-                              <div className="text-[11px] font-semibold mb-1 text-amber-600">⚠ Formula not set</div>
-                              <input
-                                type="number" inputMode="decimal"
-                                value={current ?? ''}
-                                onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
-                                disabled={tableBlocked}
-                                placeholder="Enter CQI"
-                                className="w-[90px] px-2 py-1 text-sm text-center rounded border border-gray-300 bg-white disabled:bg-gray-100"
-                              />
-                            </div>
-                          ) : !notAttainedBefore ? (
-                            <div className="text-xs font-semibold text-green-700">✓ ATTAINED</div>
-                          ) : (
-                            <div>
-                              {isCqiAttained ? (
-                                <div className="text-[11px] font-bold mb-1 text-red-600">CQI ATTAINED</div>
-                              ) : hasCqiConfig ? (
-                                <div className="text-[11px] font-semibold mb-1 text-red-700">
-                                  CO Not Attained{hasInput && addRaw > 0 && <span className="ml-1 text-green-700">+{round2(addRaw)}</span>}
-                                </div>
-                              ) : (
-                                <div className="text-[11px] font-semibold mb-1 text-amber-500">⚠ Formula not set</div>
-                              )}
-                              {allowInput ? (
+                          <div
+                            className={`rounded-2xl border px-3 py-3 shadow-sm ${cellTone}`}
+                            style={matchedColor ? { backgroundColor: matchedColor, borderColor: matchedColor } : undefined}
+                          >
+                            <div className="mb-2 text-sm font-semibold text-gray-700">{round2(c.value)} / {round2(c.max)}</div>
+                            {!hasCqiConfig ? (
+                              <div>
+                                <div className="mb-2 text-[11px] font-semibold text-amber-600">Formula not set</div>
                                 <input
                                   type="number" inputMode="decimal"
                                   value={current ?? ''}
                                   onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
                                   disabled={tableBlocked}
                                   placeholder="Enter CQI"
-                                  className="w-[90px] px-2 py-1 text-sm text-center rounded border border-gray-300 bg-white disabled:bg-gray-100"
+                                  className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
                                 />
-                              ) : (
-                                <div className="text-[11px] text-gray-400">—</div>
-                              )}
-                              {debugBlock}
-                            </div>
-                          )}
+                              </div>
+                            ) : !notAttainedBefore ? (
+                              <div className="text-xs font-semibold text-green-700">Attained</div>
+                            ) : (
+                              <div>
+                                {isCqiAttained ? (
+                                  <div className="mb-2 text-[11px] font-bold text-red-600">CQI Attained</div>
+                                ) : hasCqiConfig ? (
+                                  <div className="mb-2 text-[11px] font-semibold text-red-700">
+                                    CO Not Attained{hasInput && addRaw > 0 && <span className="ml-1 text-green-700">+{round2(addRaw)}</span>}
+                                  </div>
+                                ) : (
+                                  <div className="mb-2 text-[11px] font-semibold text-amber-500">Formula not set</div>
+                                )}
+                                {allowInput ? (
+                                  <input
+                                    type="number" inputMode="decimal"
+                                    value={current ?? ''}
+                                    onChange={(e) => setEntry(r.studentId, coKey, e.target.value)}
+                                    disabled={tableBlocked}
+                                    placeholder="Enter CQI"
+                                    className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
+                                  />
+                                ) : (
+                                  <div className="text-[11px] text-gray-400">—</div>
+                                )}
+                                {debugBlock}
+                              </div>
+                            )}
+                          </div>
                         </td>
                       );
                     })}

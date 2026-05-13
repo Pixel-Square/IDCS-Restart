@@ -2769,10 +2769,112 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                     cleaned.append(s)
             return cleaned
 
+        def _normalize_assessment_key(raw):
+            s = re.sub(r'[^A-Z0-9]+', '', str(raw or '').upper())
+            if not s:
+                return ''
+            if s.startswith('SSA1'):
+                return 'ssa1'
+            if s.startswith('SSA2'):
+                return 'ssa2'
+            if s.startswith('FORMATIVE1') or s.startswith('FA1') or s.startswith('LAB1'):
+                return 'formative1'
+            if s.startswith('FORMATIVE2') or s.startswith('FA2') or s.startswith('LAB2'):
+                return 'formative2'
+            if s.startswith('REVIEW1'):
+                return 'review1'
+            if s.startswith('REVIEW2'):
+                return 'review2'
+            if s.startswith('CIA1') or s.startswith('CYCLE1'):
+                return 'cia1'
+            if s.startswith('CIA2') or s.startswith('CYCLE2'):
+                return 'cia2'
+            if s.startswith('MODEL') or s.startswith('RECORD') or s.startswith('CYCLE3'):
+                return 'model'
+            return ''
+
+        def _assessment_states_for_assignment(assignment: TeachingAssignment, enabled_keys):
+            enabled_list = [str(item or '').strip().lower() for item in (enabled_keys or []) if str(item or '').strip()]
+            if not enabled_list:
+                return []
+
+            try:
+                from academic_v2.models import AcV2Section, AcV2ExamAssignment, AcV2QpPattern
+            except Exception:
+                return []
+
+            acv2_section = (
+                AcV2Section.objects
+                .select_related('course__class_type')
+                .filter(teaching_assignment=assignment)
+                .first()
+            )
+            if acv2_section is None:
+                return []
+
+            semester_id = getattr(getattr(assignment, 'section', None), 'semester_id', None)
+            class_type = getattr(getattr(acv2_section, 'course', None), 'class_type', None)
+            exam_rows = list(
+                AcV2ExamAssignment.objects.filter(section=acv2_section)
+                .only('id', 'exam', 'exam_display_name', 'qp_type')
+                .order_by('created_at')
+            )
+
+            states_by_key = {}
+            for exam_row in exam_rows:
+                assessment_key = _normalize_assessment_key(exam_row.exam_display_name or exam_row.exam)
+                if not assessment_key or assessment_key not in enabled_list or assessment_key in states_by_key:
+                    continue
+
+                qp_type = str(exam_row.qp_type or '').strip()
+                exam_name = str(exam_row.exam_display_name or exam_row.exam or '').strip()
+                pattern = None
+                if qp_type and exam_name:
+                    scoped = AcV2QpPattern.objects.filter(
+                        is_active=True,
+                        qp_type__iexact=qp_type,
+                        name__iexact=exam_name,
+                    )
+                    if class_type is not None:
+                        pattern = scoped.filter(class_type=class_type).order_by('-updated_at').first()
+                    if pattern is None:
+                        pattern = scoped.filter(class_type__isnull=True).order_by('-updated_at').first()
+
+                cycle = getattr(pattern, 'cycle', None)
+                semester_active = True
+                locked = False
+                reason = None
+                if cycle is not None:
+                    semester_active = cycle.is_semester_active(semester_id)
+                    locked = not semester_active
+                    reason = (
+                        f'{cycle.name} is inactive for this semester.'
+                        if cycle.is_active else
+                        f'{cycle.name} is inactive for all semesters.'
+                    ) if locked else None
+
+                states_by_key[assessment_key] = {
+                    'key': assessment_key,
+                    'locked': locked,
+                    'reason': reason,
+                    'cycle_id': str(cycle.id) if cycle is not None else None,
+                    'cycle_name': cycle.name if cycle is not None else None,
+                    'cycle_code': cycle.code if cycle is not None else None,
+                    'cycle_active': bool(cycle.is_active) if cycle is not None else None,
+                    'semester_active': semester_active if cycle is not None else None,
+                    'semester_id': str(semester_id) if semester_id is not None else None,
+                    'exam_assignment_id': str(exam_row.id),
+                    'exam_display_name': exam_name,
+                }
+
+            return [states_by_key[key] for key in enabled_list if key in states_by_key]
+
         user = request.user
         row = _resolve_curriculum_row(ta)
         if request.method == 'GET':
             meta = {'mode': 'TEACHING_ASSIGNMENT', 'locked': False, 'can_edit': True}
+            enabled_values = getattr(ta, 'enabled_assessments', [])
+            assessment_states = _assessment_states_for_assignment(ta, enabled_values)
             if _is_special_course_row(row):
                 sel = None
                 master_id = getattr(row, 'master_id', None) if row is not None else None
@@ -2884,9 +2986,9 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                         if latest_req else None
                     ),
                 }
-                return Response({'enabled_assessments': enabled, 'meta': meta})
+                return Response({'enabled_assessments': enabled, 'meta': meta, 'assessment_states': _assessment_states_for_assignment(ta, enabled)})
 
-            return Response({'enabled_assessments': getattr(ta, 'enabled_assessments', []), 'meta': meta})
+            return Response({'enabled_assessments': enabled_values, 'meta': meta, 'assessment_states': assessment_states})
 
         if not serializer_check_user_can_manage(user, ta):
             return Response({'detail': 'You do not have permission to change enabled assessments for this teaching assignment.'}, status=403)
@@ -3007,6 +3109,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                         'locked': True,
                         'can_edit': _user_is_iqac_admin(user),
                     },
+                    'assessment_states': _assessment_states_for_assignment(ta, cleaned),
                 }
             )
 
@@ -3016,7 +3119,11 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'detail': 'Failed to save enabled assessments', 'error': str(e)}, status=500)
 
-        return Response({'enabled_assessments': cleaned, 'meta': {'mode': 'TEACHING_ASSIGNMENT', 'locked': False, 'can_edit': True}})
+        return Response({
+            'enabled_assessments': cleaned,
+            'meta': {'mode': 'TEACHING_ASSIGNMENT', 'locked': False, 'can_edit': True},
+            'assessment_states': _assessment_states_for_assignment(ta, cleaned),
+        })
 
     def enabled_assessments_request_edit(self, request, pk=None):
         """Faculty: request IQAC approval to edit SPECIAL_GLOBAL enabled assessments.

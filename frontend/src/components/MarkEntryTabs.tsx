@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Lock } from 'lucide-react';
 import { lsGet, lsRemove, lsSet } from '../utils/localStorage';
 import { normalizeClassType, normalizeObeClassType } from '../constants/classTypes';
 import Formative1List from './Formative1List';
@@ -262,17 +263,26 @@ function TabButton({
   active,
   label,
   onClick,
+  disabled,
+  locked,
+  title,
 }: {
   active: boolean;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
+  locked?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`obe-assess-btn${active ? ' active' : ''}`}
+      disabled={disabled}
+      title={title}
+      className={`obe-assess-btn${active ? ' active' : ''} ${disabled ? 'opacity-60 cursor-not-allowed' : ''} ${locked ? 'relative pr-8' : ''}`}
     >
       {label}
+      {locked && <Lock className="absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />}
     </button>
   );
 }
@@ -284,20 +294,29 @@ function TabButtonExtended({
   onClick,
   isCqi,
   uniqueId,
+  disabled,
+  locked,
+  title,
 }: {
   active: boolean;
   label: string;
   onClick: () => void;
   isCqi?: boolean;
   uniqueId?: string;
+  disabled?: boolean;
+  locked?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`obe-assess-btn${isCqi ? ' obe-assess-btn-cqi' : ''}${active ? ' active' : ''}`}
+      disabled={disabled}
+      title={title}
+      className={`obe-assess-btn${isCqi ? ' obe-assess-btn-cqi' : ''}${active ? ' active' : ''} ${disabled ? 'opacity-60 cursor-not-allowed' : ''} ${locked ? 'relative pr-8' : ''}`}
       {...(uniqueId ? { 'data-cqi-id': uniqueId } as any : {})}
     >
       {label}
+      {locked && <Lock className="absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />}
     </button>
   );
 }
@@ -418,10 +437,37 @@ export default function MarkEntryTabs({
 }: Props) {
   const [active, setActive] = useState<TabKey>('dashboard');
 
+  const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
+  const [taError, setTaError] = useState<string | null>(null);
+  const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
+  const [facultyEnabledAssessments, setFacultyEnabledAssessments] = useState<string[] | null | undefined>(undefined);
+  const [facultyAssessmentStates, setFacultyAssessmentStates] = useState<OBE.EnabledAssessmentState[]>([]);
+  const [showFacultyPanel, setShowFacultyPanel] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [cqiConfig, setCqiConfig] = useState<{ options: string[]; divider: number; multiplier: number } | null>(null);
+  const [assessmentNotice, setAssessmentNotice] = useState<string | null>(null);
+  const assessmentStateMap = useMemo(() => {
+    const next = new Map<string, OBE.EnabledAssessmentState>();
+    for (const state of facultyAssessmentStates || []) {
+      const key = String(state?.key || '').trim().toLowerCase();
+      if (!key || next.has(key)) continue;
+      next.set(key, state);
+    }
+    return next;
+  }, [facultyAssessmentStates]);
+
   // Dispatch a custom event before switching tabs so child components can auto-save
   const switchTab = React.useCallback((nextTab: TabKey) => {
     if (nextTab === active) return;
-    // Fire a synchronous event so each entry component can save draft before unmount
+    const nextAssessmentKey = tabToAssessmentKey(nextTab);
+    if (nextAssessmentKey) {
+      const nextState = facultyAssessmentStates.find((item) => item.key === nextAssessmentKey);
+      if (nextState?.locked) {
+        setAssessmentNotice(nextState.reason || `${nextState.cycle_name || 'This cycle'} is locked for the selected semester.`);
+        return;
+      }
+    }
     try {
       window.dispatchEvent(new CustomEvent('obe:before-tab-switch', { detail: { from: active, to: nextTab } }));
     } catch {
@@ -431,16 +477,8 @@ export default function MarkEntryTabs({
     if (subjectId) {
       lsSet(`markEntry_activeTab_${subjectId}`, nextTab);
     }
-  }, [active, subjectId]);
-
-  const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
-  const [taError, setTaError] = useState<string | null>(null);
-  const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
-  const [facultyEnabledAssessments, setFacultyEnabledAssessments] = useState<string[] | null | undefined>(undefined);
-  const [showFacultyPanel, setShowFacultyPanel] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [cqiConfig, setCqiConfig] = useState<{ options: string[]; divider: number; multiplier: number } | null>(null);
+    setAssessmentNotice(null);
+  }, [active, facultyAssessmentStates, subjectId]);
 
   const activeAssessmentKey = useMemo(() => tabToAssessmentKey(active), [active]);
   const [activeGate, setActiveGate] = useState<{ loading: boolean; enabled: boolean; open: boolean; error: string | null }>({
@@ -654,7 +692,6 @@ export default function MarkEntryTabs({
   // If faculty has set enabled assessments for the selected TA, prefer that.
   const effectiveEnabled = facultyEnabledAssessments === undefined ? enabledAssessments : facultyEnabledAssessments;
   const baseVisibleTabs = useMemo(() => getVisibleTabs(effectiveClassTypeForTabs, effectiveEnabled), [effectiveClassTypeForTabs, enabledAssessments, facultyEnabledAssessments]);
-
   const isPrblRaw = useMemo(() => {
     const raw = String(effectiveClassType ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     return raw === 'PRBL' || raw.includes('PRBL');
@@ -978,23 +1015,21 @@ export default function MarkEntryTabs({
     let mounted = true;
     if (!subjectId) return;
     if (selectedTaId == null) {
+      setFacultyAssessmentStates([]);
       setFacultyEnabledAssessments(undefined);
       return;
     }
-    if (!isSpecial) {
-      // Exam selection applies only to SPECIAL courses
-      setFacultyEnabledAssessments(undefined);
-      return;
-    }
-    // Load faculty-specific enabled assessments for the selected TA
     (async () => {
       try {
         const info = await OBE.fetchTeachingAssignmentEnabledAssessmentsInfo(Number(selectedTaId));
         const arr = info?.enabled_assessments;
         if (!mounted) return;
-        setFacultyEnabledAssessments(Array.isArray(arr) && arr.length ? arr : null);
+        setFacultyAssessmentStates(Array.isArray(info?.assessment_states) ? info.assessment_states : []);
+        setFacultyEnabledAssessments(isSpecial ? (Array.isArray(arr) && arr.length ? arr : null) : undefined);
+        setAssessmentNotice(null);
       } catch (e: any) {
         if (!mounted) return;
+        setFacultyAssessmentStates([]);
         setFacultyEnabledAssessments(undefined);
         setTaError(e?.message || 'Failed to load faculty enabled assessments');
       }
@@ -1006,6 +1041,15 @@ export default function MarkEntryTabs({
     if (!subjectId) return;
     lsSet(`markEntry_activeTab_${subjectId}`, active);
   }, [subjectId, active]);
+
+  useEffect(() => {
+    const activeKey = tabToAssessmentKey(active);
+    if (!activeKey) return;
+    const state = assessmentStateMap.get(String(activeKey));
+    if (!state?.locked) return;
+    setAssessmentNotice(state.reason || `${state.cycle_name || 'This cycle'} is locked for the selected semester.`);
+    setActive('dashboard');
+  }, [active, assessmentStateMap]);
   
 
   const counts = useMemo(() => {
@@ -1174,22 +1218,47 @@ export default function MarkEntryTabs({
         </div>
       ) : null}
 
+      {assessmentNotice && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {assessmentNotice}
+        </div>
+      )}
+
       <div className="obe-assess-nav" aria-label="Mark Entry sub-tabs">
         <span className="obe-assess-nav-label">Assessment Exams</span>
         <div className="obe-assess-nav-row">
           {visibleTabs.map((t) => (
             <React.Fragment key={t.key}>
-              {t.cqi ? (
-                <TabButtonExtended
-                  active={active === t.key}
-                  label={t.label}
-                  onClick={() => switchTab(t.key)}
-                  isCqi
-                  uniqueId={String(t.key)}
-                />
-              ) : (
-                <TabButton active={active === t.key} label={t.label} onClick={() => switchTab(t.key)} />
-              )}
+              {(() => {
+                const assessmentKey = tabToAssessmentKey(t.key);
+                const state = assessmentKey ? assessmentStateMap.get(String(assessmentKey)) : undefined;
+                const locked = Boolean(state?.locked);
+                const title = locked
+                  ? (state?.reason || `${state?.cycle_name || 'Cycle'} is locked for this semester.`)
+                  : undefined;
+
+                return t.cqi ? (
+                  <TabButtonExtended
+                    active={active === t.key}
+                    label={t.label}
+                    onClick={() => switchTab(t.key)}
+                    isCqi
+                    uniqueId={String(t.key)}
+                    disabled={locked}
+                    locked={locked}
+                    title={title}
+                  />
+                ) : (
+                  <TabButton
+                    active={active === t.key}
+                    label={t.label}
+                    onClick={() => switchTab(t.key)}
+                    disabled={locked}
+                    locked={locked}
+                    title={title}
+                  />
+                );
+              })()}
             </React.Fragment>
           ))}
         </div>

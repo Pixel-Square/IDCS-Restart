@@ -8,7 +8,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, BookOpen, Users, CheckCircle, Clock, AlertCircle,
-  Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle,
+  Edit2, Eye, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
@@ -24,6 +24,12 @@ interface ExamMark {
   entered_count: number;
   total_students: number;
   is_locked: boolean;
+  cycle_locked?: boolean;
+  lock_reason?: string | null;
+  cycle_name?: string | null;
+  cycle_code?: string | null;
+  can_view?: boolean;
+  can_edit?: boolean;
   due_date: string | null;
   status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'LOCKED';
   kind?: 'exam' | 'cqi';
@@ -221,12 +227,7 @@ export default function InternalMarkPage() {
         const em = s.exam_marks[ex.id] || {};
         if (isW) {
           for (const co of ex.covered_cos) {
-            if (ex.kind === 'cqi') {
-              const v = (em as any)[`co${co}`];
-              row.push(typeof v === 'number' ? v : '');
-            } else {
-              row.push(s.weighted_marks[`${ex.id}_CO${co}`] ?? '');
-            }
+            row.push(s.weighted_marks[`${ex.id}_CO${co}`] ?? '');
           }
           if (ex.cia_enabled) {
             for (const co of ex.covered_cos) {
@@ -264,8 +265,13 @@ export default function InternalMarkPage() {
   };
 
   /* ─── status helpers ─── */
-  const getStatusBadge = (status: string, locked: boolean) => {
-    if (locked) return <span className="flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded text-sm"><Lock className="w-3 h-3" />Locked</span>;
+  const getStatusBadge = (status: string, exam: ExamMark) => {
+    if (exam.cycle_locked) {
+      return <span className="flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded text-sm"><Lock className="w-3 h-3" />Locked</span>;
+    }
+    if ((exam.can_view && !exam.can_edit) || (exam.is_locked && status === 'COMPLETED')) {
+      return <span className="flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-700 rounded text-sm"><Eye className="w-3 h-3" />View Only</span>;
+    }
     switch (status) {
       case 'COMPLETED': return <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-sm"><CheckCircle className="w-3 h-3" />Completed</span>;
       case 'IN_PROGRESS': return <span className="flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-sm"><Clock className="w-3 h-3" />In Progress</span>;
@@ -289,6 +295,16 @@ export default function InternalMarkPage() {
 
   const totalEntered = courseInfo.exams.reduce((sum, e) => sum + (e.status === 'COMPLETED' ? 1 : 0), 0);
   const totalExams = courseInfo.exams.length;
+  const openExam = (exam: ExamMark) => {
+    const canEdit = exam.can_edit ?? (!exam.is_locked && !exam.cycle_locked);
+    const canView = exam.can_view ?? false;
+    if (!canEdit && !canView) return;
+    if (exam.kind === 'cqi') {
+      navigate(`/academic-v2/course/${courseId}/cqi`);
+      return;
+    }
+    navigate(`/academic-v2/exam/${exam.id}`);
+  };
 
   /* ─── render ─── */
   return (
@@ -460,17 +476,20 @@ export default function InternalMarkPage() {
               <div className="p-8 text-center text-gray-500">No exam components configured for QP type <strong>{courseInfo.qp_type}</strong></div>
             ) : courseInfo.exams.map((exam) => {
               const isCqi = exam.kind === 'cqi';
+              const canEdit = exam.can_edit ?? (!exam.is_locked && !exam.cycle_locked);
+              const canView = exam.can_view ?? false;
+              const showAction = canEdit || canView;
+              const actionLabel = canEdit ? (isCqi ? 'Enter CQI' : 'Enter Marks') : 'View';
+              const actionIcon = canEdit ? Edit2 : Eye;
+              const ActionIcon = actionIcon;
+              const actionClasses = canEdit
+                ? (isCqi ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700')
+                : 'bg-slate-600 hover:bg-slate-700';
               return (
               <div
                 key={exam.id}
-                className={`p-4 cursor-pointer ${isCqi ? 'bg-purple-50 hover:bg-purple-100 border-l-4 border-purple-400' : 'hover:bg-gray-50'}`}
-                onClick={() => {
-                  if (isCqi) {
-                    navigate(`/academic-v2/course/${courseId}/cqi`);
-                  } else {
-                    navigate(`/academic-v2/exam/${exam.id}`);
-                  }
-                }}
+                className={`p-4 ${showAction ? 'cursor-pointer' : 'cursor-default'} ${isCqi ? 'bg-purple-50 border-l-4 border-purple-400' : ''} ${showAction ? (isCqi ? 'hover:bg-purple-100' : 'hover:bg-gray-50') : ''}`}
+                onClick={() => openExam(exam)}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
@@ -524,26 +543,32 @@ export default function InternalMarkPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    {getStatusBadge(exam.status, exam.is_locked)}
+                    {getStatusBadge(exam.status, exam)}
                     <div className="w-32">
                       <div className="flex justify-between text-xs text-gray-500 mb-1">
                         <span>Progress</span><span>{exam.entered_count}/{exam.total_students}</span>
                       </div>
                       {getProgressBar(exam.entered_count, exam.total_students)}
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isCqi) {
-                          navigate(`/academic-v2/course/${courseId}/cqi`);
-                        } else {
-                          navigate(`/academic-v2/exam/${exam.id}`);
-                        }
-                      }}
-                      className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white ${isCqi ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'}`}
-                    >
-                      <Edit2 className="w-4 h-4" /> {isCqi ? 'Enter CQI' : 'Enter Marks'}
-                    </button>
+                    {showAction ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openExam(exam);
+                        }}
+                        title={exam.lock_reason || undefined}
+                        className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg text-white ${actionClasses}`}
+                      >
+                        <ActionIcon className="w-4 h-4" /> {actionLabel}
+                      </button>
+                    ) : (
+                      <span
+                        title={exam.lock_reason || undefined}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-red-200 bg-red-50 text-red-700"
+                      >
+                        <Lock className="w-4 h-4" /> Locked
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -677,8 +702,7 @@ function COSummaryTab({
     }
     // Weighted
     if (col.isCqi) {
-      const em = s.exam_marks[exams[col.examIdx].id];
-      return em ? (em[`co${col.co}`] as number) ?? '' : '';
+      return s.weighted_marks[`${exams[col.examIdx].id}_CO${col.co}`] ?? '';
     }
     if (col.isExamSplit) {
       // Exam split column (weighted) - fetched from backend weighted_marks

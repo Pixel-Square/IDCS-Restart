@@ -277,9 +277,24 @@ export type EnabledAssessmentsMeta = {
   } | null;
 };
 
+export type EnabledAssessmentState = {
+  key: string;
+  locked: boolean;
+  reason?: string | null;
+  cycle_id?: string | null;
+  cycle_name?: string | null;
+  cycle_code?: string | null;
+  cycle_active?: boolean | null;
+  semester_active?: boolean | null;
+  semester_id?: string | null;
+  exam_assignment_id?: string | null;
+  exam_display_name?: string | null;
+};
+
 export type EnabledAssessmentsInfoResponse = {
   enabled_assessments: string[];
   meta?: EnabledAssessmentsMeta;
+  assessment_states?: EnabledAssessmentState[];
 };
 
 export async function fetchTeachingAssignmentEnabledAssessmentsInfo(teachingAssignmentId: number): Promise<EnabledAssessmentsInfoResponse> {
@@ -291,6 +306,7 @@ export async function fetchTeachingAssignmentEnabledAssessmentsInfo(teachingAssi
   return {
     enabled_assessments: Array.isArray(data?.enabled_assessments) ? data.enabled_assessments.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : [],
     meta: data?.meta || undefined,
+    assessment_states: Array.isArray(data?.assessment_states) ? data.assessment_states : [],
   };
 }
 
@@ -312,6 +328,7 @@ export async function setTeachingAssignmentEnabledAssessmentsInfo(teachingAssign
   return {
     enabled_assessments: Array.isArray(data?.enabled_assessments) ? data.enabled_assessments : [],
     meta: data?.meta || undefined,
+    assessment_states: Array.isArray(data?.assessment_states) ? data.assessment_states : [],
   };
 }
 

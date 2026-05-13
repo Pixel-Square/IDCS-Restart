@@ -472,11 +472,28 @@ class AcV2QpTypeSerializer(serializers.ModelSerializer):
 class AcV2CycleSerializer(serializers.ModelSerializer):
     """Serializer for Academic Cycle"""
 
+    inactive_semester_ids = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=True,
+    )
+
+    def validate_inactive_semester_ids(self, value):
+        cleaned = []
+        seen = set()
+        for item in value or []:
+            normalized = str(item or '').strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            cleaned.append(normalized)
+        return cleaned
+
     class Meta:
         model = AcV2Cycle
         fields = [
             'id', 'name', 'code', 'description',
-            'college', 'is_active',
+            'college', 'is_active', 'inactive_semester_ids',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
