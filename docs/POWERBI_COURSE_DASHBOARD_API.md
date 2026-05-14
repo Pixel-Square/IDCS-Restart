@@ -25,7 +25,7 @@ This is the correct grain for Power BI because it lets you build:
 
 - pass rate
 - fail rate
-- topper and low performer lists
+    BaseUrl   = "http://127.0.0.1:8001",
 - exam-wise performance
 - student-wise performance
 - section-wise comparisons
@@ -35,6 +35,15 @@ This is the correct grain for Power BI because it lets you build:
 
 All filters are optional.
 
+
+    RootUrl = Text.TrimEnd(BaseUrl, "/"),
+
+    AddOptionalTextFilter = (recordValue as record, fieldName as text, fieldValue as any) as record =>
+        let
+            normalized = if fieldValue = null then null else Text.Trim(Text.From(fieldValue)),
+            nextRecord = if normalized = null or normalized = "" then recordValue else Record.AddField(recordValue, fieldName, normalized)
+        in
+            nextRecord,
 - `page`: page number, default `1`
 - `page_size`: row count per page, default `500`
 - `course_code`: example `MEB1221`
@@ -43,17 +52,17 @@ All filters are optional.
 - `dept`: department code or name
 - `qp_type`: example `WD`, `SSA`, `CIA`
 - `faculty_user_id`: faculty user id
-- `course_type`: example `THEORY`, `LAB`, `TCPR`
-- `exam`: filters by `exam` or `exam_display_name`
-- `pass_percent`: pass threshold percentage, default `50`
-- `format=csv`: optional CSV download mode
-
+            withCourse = AddOptionalTextFilter(base, "course_code", CourseCode),
+            withSection = AddOptionalTextFilter(withCourse, "section", Section),
+            withSem = AddOptionalTextFilter(withSection, "sem", Sem),
+            withQpType = AddOptionalTextFilter(withSem, "qp_type", QpType),
+            withFaculty = AddOptionalTextFilter(withQpType, "faculty_user_id", FacultyUserId)
 ## Returned Columns
 
 - `year`
 - `sem`
 - `dept_code`
-- `dept_name`
+            url = RootUrl & "/api/reporting/v2/dashboard/course/",
 - `section_id`
 - `section`
 - `course_id`
@@ -101,8 +110,8 @@ Leave filter values as `null` to fetch all courses and all sections. Set them on
 
 ```powerquery
 let
-    BaseUrl   = "http://127.0.0.1:8001",
-    ApiKey    = "REPLACE_WITH_REPORTING_API_KEY",
+    BaseUrl   = "https://idcs.zynix.us/",
+    ApiKey    = "RPT_2026_61HAja_DpYo-9eGxaEEEDguVQYDiMdg7eFp9uL4eLl34We9-GGFKjg",
     PageSize  = 500,
 
     CourseCode = null,
@@ -171,6 +180,21 @@ You do **not** need one Power Query per course.
 - To fetch all courses and all sections: keep `CourseCode = null`, `Section = null`, and `Sem = null`.
 - To fetch one faculty only: set `FacultyUserId`.
 - To fetch one course only: set `CourseCode` and optionally `Section` and `Sem`.
+
+If you want all courses and all sections, keep these exactly as `null`:
+
+- `CourseCode = null`
+- `Section = null`
+- `Sem = null`
+- `QpType = null`
+- `FacultyUserId = null`
+
+Also make sure `BaseUrl` can be either:
+
+- `https://idcs.zynix.us`
+- `https://idcs.zynix.us/`
+
+The template now trims the trailing slash automatically.
 
 Recommended approach:
 
