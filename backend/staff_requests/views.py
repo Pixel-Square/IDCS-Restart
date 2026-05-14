@@ -1369,9 +1369,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             if from_date.year != to_date.year:
                 return Response({'error': 'Selected slots must belong to the same year'}, status=status.HTTP_400_BAD_REQUEST)
 
-            if from_date <= today:
-                return Response({'error': 'Vacation can be applied only for slots after the current date'}, status=status.HTTP_400_BAD_REQUEST)
-
             if self._has_confirm_vacation_overlap(request.user, from_date, to_date):
                 return Response(
                     {'error': 'Selected dates are part of HR compulsory vacation slots and cannot be applied manually'},
@@ -2486,6 +2483,12 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
 
         logger = logging.getLogger(__name__)
 
+        if self._is_vacation_application_template(staff_request.template):
+            try:
+                self._process_vacation_application(staff_request)
+            except Exception as e:
+                logger.exception('Failed to process vacation application for request %s: %s', staff_request.id, str(e))
+
         if self._is_vacation_cancellation_template(staff_request.template):
             try:
                 self._process_vacation_cancellation(staff_request)
@@ -2745,6 +2748,31 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         lop_balance.balance = lop_count
         lop_balance.save(update_fields=['balance', 'updated_at'])
         return lop_count
+
+    def _process_vacation_application(self, staff_request):
+        """Clear attendance status for past vacation dates and recalculate LOP."""
+        from staff_attendance.models import AttendanceRecord
+
+        form_data = staff_request.form_data or {}
+        date_list = self._get_date_list_from_form_data(form_data)
+        if not date_list:
+            return
+
+        today = timezone.localdate()
+        past_dates = [d for d in date_list if d <= today]
+        if not past_dates:
+            return
+
+        for d in past_dates:
+            record = AttendanceRecord.objects.filter(user=staff_request.applicant, date=d).first()
+            if not record:
+                continue
+            record.status = None
+            record.fn_status = None
+            record.an_status = None
+            record.save()
+
+        self._recalculate_lop_for_user(staff_request.applicant)
 
     def _process_vacation_cancellation(self, cancel_request):
         """Finalize approved vacation cancellation and restore day statuses to regular flow."""
@@ -4693,9 +4721,13 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         exp_rem_months = exp_months % 12
 
         entitlement = self._get_vacation_entitlement_days(request.user)
-        used = self._vacation_used_days(request.user, year)
-        remaining = max(0, entitlement - used)
         today = timezone.localdate()
+        semester = self._get_vacation_semester_for_date(month_start) or self._get_vacation_semester_for_date(today)
+        if semester:
+            used = self._vacation_used_days(request.user, semester.from_date, semester.to_date)
+        else:
+            used = 0
+        remaining = max(0, entitlement - used)
         user_dept_id = self._get_user_department_id(request.user)
 
         app_template = self._get_vacation_template_for_user(request.user, cancellation=False)
@@ -4748,7 +4780,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                     and remaining >= slot_days
                     and not last_req
                     and not overlaps_confirmed
-                    and slot.from_date > today
                 ),
                 'multi_group_key': group_key,
                 'multi_select_allowed': bool(group_key and int(group_sizes.get(group_key, 0)) > 1),

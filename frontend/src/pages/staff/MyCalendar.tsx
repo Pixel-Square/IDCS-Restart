@@ -192,7 +192,7 @@ export default function MyCalendarPage() {
 
   const fetchHolidays = async () => {
     try {
-      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/holidays/`);
+      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/holidays/my_holidays/`);
       setHolidays(response.data);
     } catch (err) {
       // ignore holidays fetch errors

@@ -53,6 +53,7 @@ interface Department {
   code: string;
   name: string;
   short_name: string;
+  is_teaching?: boolean;
 }
 
 interface StaffOption {
@@ -2043,24 +2044,57 @@ const StaffAttendanceUpload: React.FC = () => {
                   {allDepartments.length === 0 ? (
                     <p className="text-xs text-gray-400">Loading departments...</p>
                   ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-44 overflow-y-auto border border-gray-200 rounded-md p-2 bg-white">
-                      {allDepartments.map((dept) => (
-                        <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                          <input
-                            type="checkbox"
-                            checked={holidayDeptIds.includes(dept.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setHolidayDeptIds(prev => [...prev, dept.id]);
-                              } else {
-                                setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
-                              }
-                            }}
-                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                          />
-                          <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
-                        </label>
-                      ))}
+                    <div className="max-h-52 overflow-y-auto border border-gray-200 rounded-md p-2 bg-white space-y-2">
+                      {/* Teaching departments */}
+                      {allDepartments.some(d => d.is_teaching !== false) && (
+                        <div>
+                          <p className="text-xs font-semibold text-blue-700 mb-1">Teaching Departments</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                            {allDepartments.filter(d => d.is_teaching !== false).map((dept) => (
+                              <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={holidayDeptIds.includes(dept.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setHolidayDeptIds(prev => [...prev, dept.id]);
+                                    } else {
+                                      setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
+                                    }
+                                  }}
+                                  className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                                />
+                                <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Non-teaching departments */}
+                      {allDepartments.some(d => d.is_teaching === false) && (
+                        <div>
+                          <p className="text-xs font-semibold text-orange-700 mb-1">Non-Teaching Departments</p>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                            {allDepartments.filter(d => d.is_teaching === false).map((dept) => (
+                              <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={holidayDeptIds.includes(dept.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setHolidayDeptIds(prev => [...prev, dept.id]);
+                                    } else {
+                                      setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
+                                    }
+                                  }}
+                                  className="h-4 w-4 text-orange-600 border-gray-300 rounded"
+                                />
+                                <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   {holidayDeptIds.length > 0 && (
