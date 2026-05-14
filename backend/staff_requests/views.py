@@ -1369,9 +1369,6 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             if from_date.year != to_date.year:
                 return Response({'error': 'Selected slots must belong to the same year'}, status=status.HTTP_400_BAD_REQUEST)
 
-            if from_date <= today:
-                return Response({'error': 'Vacation can be applied only for slots after the current date'}, status=status.HTTP_400_BAD_REQUEST)
-
             if self._has_confirm_vacation_overlap(request.user, from_date, to_date):
                 return Response(
                     {'error': 'Selected dates are part of HR compulsory vacation slots and cannot be applied manually'},
