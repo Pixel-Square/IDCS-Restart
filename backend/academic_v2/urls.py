@@ -35,6 +35,20 @@ from .views import (
     faculty_exam_import_marks,
     admin_secure_delete,
     admin_pass_mark_settings,
+    # Bypass API
+    bypass_start,
+    bypass_end,
+    bypass_add_log,
+    bypass_reset_course,
+    bypass_reset_exam,
+    bypass_send_message,
+    bypass_create_share_link,
+    bypass_validate_share,
+    bypass_session_detail,
+    bypass_sessions_list,
+    admin_courses_list,
+    admin_course_faculty,
+    faculty_reset_notices,
 )
 
 app_name = 'academic_v2'
@@ -72,6 +86,23 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/cqi-draft/', faculty_course_cqi_draft, name='faculty-course-cqi-draft'),
     path('faculty/courses/<int:ta_id>/cqi-published/', faculty_course_cqi_published, name='faculty-course-cqi-published'),
     path('faculty/courses/<int:ta_id>/cqi-publish/', faculty_course_cqi_publish, name='faculty-course-cqi-publish'),
+    path('faculty/courses/<int:ta_id>/reset-notices/', faculty_reset_notices, name='faculty-reset-notices'),
     path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
     path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
+
+    # Admin CourseManager
+    path('admin/courses/', admin_courses_list, name='admin-courses-list'),
+    path('admin/courses/<int:ta_id>/faculty/', admin_course_faculty, name='admin-course-faculty'),
+
+    # Admin Bypass
+    path('admin/bypass/sessions/', bypass_sessions_list, name='bypass-sessions-list'),
+    path('admin/bypass/start/', bypass_start, name='bypass-start'),
+    path('admin/bypass/<uuid:session_id>/end/', bypass_end, name='bypass-end'),
+    path('admin/bypass/<uuid:session_id>/log/', bypass_add_log, name='bypass-add-log'),
+    path('admin/bypass/<uuid:session_id>/reset-course/', bypass_reset_course, name='bypass-reset-course'),
+    path('admin/bypass/<uuid:session_id>/reset-exam/<uuid:exam_id>/', bypass_reset_exam, name='bypass-reset-exam'),
+    path('admin/bypass/<uuid:session_id>/send-message/', bypass_send_message, name='bypass-send-message'),
+    path('admin/bypass/<uuid:session_id>/share/', bypass_create_share_link, name='bypass-create-share'),
+    path('admin/bypass/share/<str:token>/', bypass_validate_share, name='bypass-validate-share'),
+    path('admin/bypass/<uuid:session_id>/detail/', bypass_session_detail, name='bypass-session-detail'),
 ]

@@ -14,6 +14,7 @@ import {
   BarChart2,
   Grid3x3,
   Settings,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface AdminPage {
@@ -87,6 +88,13 @@ const adminPages: AdminPage[] = [
     description: 'System-wide configuration — pass mark thresholds and more',
     icon: <Settings size={32} />,
     order: 9,
+  },
+  {
+    title: 'Course Manager',
+    path: '/academic-v2/admin/course-manager',
+    description: 'Browse all courses, faculty assignments, and bypass mark entry restrictions',
+    icon: <ShieldAlert size={32} />,
+    order: 10,
   },
 ];
 

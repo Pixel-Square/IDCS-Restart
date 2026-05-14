@@ -128,6 +128,12 @@ const AcV2CourseListPage = React.lazy(() => import('./pages/Academic 2.1/faculty
 const AcV2MarkEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'));
 const AcV2InternalMarkPage = React.lazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'));
 const AcV2CqiEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CqiEntryPage'));
+const AcV2CourseManagerDashboard = React.lazy(() => import('./pages/Academic 2.1/admin/CourseManagerDashboard'));
+const AcV2CourseFacultyPage = React.lazy(() => import('./pages/Academic 2.1/admin/CourseFacultyPage'));
+const AcV2AdminBypassCoursePage = React.lazy(() => import('./pages/Academic 2.1/admin/AdminBypassCoursePage'));
+const AcV2BypassLogsPage = React.lazy(() => import('./pages/Academic 2.1/admin/BypassLogsPage'));
+const AcV2BypassShareLandingPage = React.lazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'));
+const AcV2PassMarkSettingsPage = React.lazy(() => import('./pages/Academic 2.1/admin/SettingsPage'));
 
 type RoleObj = { name: string };
 type Me = {
@@ -907,6 +913,91 @@ export default function App() {
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2MarkEntryPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                {/* Academic 2.1 Admin - Course Manager & Bypass */}
+                <Route
+                  path="/academic-v2/admin/course-manager"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CourseManagerDashboard />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/course-manager/:taId/faculty"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CourseFacultyPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/bypass/:sessionId/course/:courseId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2AdminBypassCoursePage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/bypass/logs"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2BypassLogsPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                {/* Shared bypass link landing — handles its own auth check & redirect */}
+                <Route
+                  path="/academic-v2/bypass-share/:token"
+                  element={
+                    <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                      <AcV2BypassShareLandingPage />
+                    </React.Suspense>
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/pass-mark"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STAFF'}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2PassMarkSettingsPage />
                         </React.Suspense>
                       }
                     />

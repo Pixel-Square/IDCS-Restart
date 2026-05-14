@@ -47,11 +47,17 @@ from .serializers import (
 from .models import AcV2PassMarkSetting
 
 
+def _has_admin_bypass_access(user):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    return bool(user.is_staff or user.is_superuser or user.has_perm('academic_v2.page.admin'))
+
+
 @api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def admin_pass_mark_settings(request):
     """Get or update the global pass mark setting (singleton — auto-creates if missing)."""
-    if not request.user.is_staff:
+    if not _has_admin_bypass_access(request.user):
         return Response({'detail': 'Permission denied'}, status=403)
     obj, _ = AcV2PassMarkSetting.objects.get_or_create(
         defaults={'out_of': 100, 'pass_mark': 50, 'label': 'Default'},
@@ -74,7 +80,7 @@ def admin_secure_delete(request):
     - object_type = 'qp_type' (AcV2QpType)
     - object_type = 'qp_pattern' (AcV2QpPattern)  [includes exam templates where class_type is null]
     """
-    if not request.user.is_staff:
+    if not _has_admin_bypass_access(request.user):
         return Response({'detail': 'Permission denied'}, status=403)
 
     password = str(request.data.get('password', '') or '')
@@ -232,7 +238,7 @@ class AcV2SemesterConfigViewSet(viewsets.ModelViewSet):
             )
         
         # Verify user is staff/admin
-        if not request.user.is_staff:
+        if not _has_admin_bypass_access(request.user):
             return Response({'detail': 'Permission denied'}, status=403)
         
         # Verify password
@@ -321,7 +327,7 @@ class AcV2SemesterConfigViewSet(viewsets.ModelViewSet):
             )
         
         # Verify user is staff/admin
-        if not request.user.is_staff:
+        if not _has_admin_bypass_access(request.user):
             return Response({'detail': 'Permission denied'}, status=403)
         
         # Verify password
@@ -651,7 +657,7 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
         """Save draft marks."""
         exam = self.get_object()
         
-        if not exam.is_editable():
+        if not _has_admin_bypass_access(request.user) and not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked and cannot be edited.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -683,7 +689,7 @@ class AcV2ExamAssignmentViewSet(viewsets.ModelViewSet):
         """Publish marks."""
         exam = self.get_object()
         
-        if not exam.is_editable():
+        if not _has_admin_bypass_access(request.user) and not exam.is_editable():
             return Response(
                 {'error': 'This exam is locked and cannot be edited.'},
                 status=status.HTTP_403_FORBIDDEN
@@ -1360,19 +1366,27 @@ def get_pattern_for_exam(request, course_id, exam_type):
 def faculty_course_info(request, ta_id):
     """Return course information for a teaching assignment, including exam
     assignments configured for the class type. Used by the faculty
-    InternalMarkPage."""
+    InternalMarkPage. Admins (is_staff) can access any TA by passing bypass_session_id."""
     from academics.models import TeachingAssignment, StudentSectionAssignment
 
-    ta = get_object_or_404(
-        TeachingAssignment.objects.select_related(
-            'curriculum_row', 'elective_subject', 'section',
-            'section__semester', 'section__managing_department',
-            'staff',
-        ),
-        id=ta_id,
-        staff__user=request.user,
-        is_active=True,
+    is_admin_bypass = _has_admin_bypass_access(request.user)
+
+    # Also allow access if the user accessed a bypass session for this TA via share link
+    has_share_bypass = not is_admin_bypass and AcV2BypassSession.objects.filter(
+        teaching_assignment_id=ta_id,
+    ).filter(
+        Q(faculty_user=request.user) | Q(shared_accessed_by=request.user)
+    ).exists()
+
+    ta_qs = TeachingAssignment.objects.select_related(
+        'curriculum_row', 'elective_subject', 'section',
+        'section__semester', 'section__managing_department',
+        'staff',
     )
+    if is_admin_bypass or has_share_bypass:
+        ta = get_object_or_404(ta_qs, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(ta_qs, id=ta_id, staff__user=request.user, is_active=True)
 
     cr = ta.curriculum_row
     es = ta.elective_subject
@@ -1909,17 +1923,17 @@ def faculty_exam_info(request, exam_id):
     """Return exam information for a specific AcV2ExamAssignment."""
     from academics.models import TeachingAssignment
 
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related(
-            'section__teaching_assignment__section',
-            'section__teaching_assignment__section__semester',
-            'section__teaching_assignment__section__managing_department',
-            'section__teaching_assignment__curriculum_row',
-            'section__teaching_assignment__elective_subject',
-        ),
-        id=exam_id,
-        section__faculty_user=request.user,
+    ea_qs = AcV2ExamAssignment.objects.select_related(
+        'section__teaching_assignment__section',
+        'section__teaching_assignment__section__semester',
+        'section__teaching_assignment__section__managing_department',
+        'section__teaching_assignment__curriculum_row',
+        'section__teaching_assignment__elective_subject',
     )
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
     ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
@@ -2343,21 +2357,21 @@ def _ensure_due_auto_publish(exam_assignment):
 @permission_classes([IsAuthenticated])
 def faculty_exam_publish(request, exam_id):
     """Publish an exam (locks if publish control is enabled)."""
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related('section__course__semester'),
-        id=exam_id,
-        section__faculty_user=request.user,
-    )
+    ea_qs = AcV2ExamAssignment.objects.select_related('section__course__semester')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
 
     cycle_state = _get_exam_cycle_state(
         ea,
         semester_id=getattr(getattr(ea.section, 'course', None), 'semester_id', None),
         class_type=getattr(getattr(ea.section, 'course', None), 'class_type', None),
     )
-    if cycle_state['cycle_locked']:
+    if cycle_state['cycle_locked'] and not _has_admin_bypass_access(request.user):
         return Response({'detail': cycle_state['cycle_lock_reason'] or 'This cycle is locked for this semester.'}, status=403)
 
-    if not ea.is_editable():
+    if not _has_admin_bypass_access(request.user) and not ea.is_editable():
         return Response({'detail': 'This exam is locked and cannot be published.'}, status=403)
 
     semester_config = ea.get_semester_config()
@@ -2428,13 +2442,13 @@ def faculty_exam_marks(request, exam_id):
     """GET: List students with current marks. POST: Save marks."""
     from academics.models import TeachingAssignment, StudentSectionAssignment
 
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related(
-            'section__teaching_assignment__section',
-        ),
-        id=exam_id,
-        section__faculty_user=request.user,
+    ea_qs = AcV2ExamAssignment.objects.select_related(
+        'section__teaching_assignment__section',
     )
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
     ea = _ensure_due_auto_publish(ea)
 
     ta = ea.section.teaching_assignment
@@ -2522,11 +2536,11 @@ def faculty_exam_marks(request, exam_id):
         semester_id=getattr(getattr(ea.section, 'course', None), 'semester_id', None),
         class_type=getattr(getattr(ea.section, 'course', None), 'class_type', None),
     )
-    if cycle_state['cycle_locked']:
+    if cycle_state['cycle_locked'] and not _has_admin_bypass_access(request.user):
         return Response({'detail': cycle_state['cycle_lock_reason'] or 'This cycle is locked for this semester.'}, status=403)
 
     # POST — save marks
-    if not ea.is_editable():
+    if not _has_admin_bypass_access(request.user) and not ea.is_editable():
         return Response({'detail': 'Exam is locked'}, status=403)
 
     raw_marks_data = request.data.get('marks', [])
@@ -2571,11 +2585,11 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
     Faculty confirms their Mark Manager CO setup (user_define mode).
     Generates question rows from their config and updates the QP pattern + ExamAssignment.
     """
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related('section'),
-        id=exam_id,
-        section__faculty_user=request.user,
-    )
+    ea_qs = AcV2ExamAssignment.objects.select_related('section')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
 
     if ea.status in ('PUBLISHED', 'APPROVED'):
         # Allow re-configuration if there's an active edit window (approved edit request)
@@ -2684,16 +2698,15 @@ def faculty_course_co_summary(request, ta_id):
     import ast
     import math
 
-    ta = get_object_or_404(
-        TeachingAssignment.objects.select_related(
-            'curriculum_row', 'elective_subject', 'section',
-            'section__semester', 'section__managing_department',
-            'staff',
-        ),
-        id=ta_id,
-        staff__user=request.user,
-        is_active=True,
+    ta_qs = TeachingAssignment.objects.select_related(
+        'curriculum_row', 'elective_subject', 'section',
+        'section__semester', 'section__managing_department',
+        'staff',
     )
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(ta_qs, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(ta_qs, id=ta_id, staff__user=request.user, is_active=True)
 
     cr = ta.curriculum_row
     es = ta.elective_subject
@@ -4105,15 +4118,15 @@ def faculty_exam_export_template(request, exam_id):
     from io import BytesIO
     from django.http import HttpResponse
 
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related(
-            'section__teaching_assignment__section',
-            'section__teaching_assignment__curriculum_row',
-            'section__teaching_assignment__elective_subject',
-        ),
-        id=exam_id,
-        section__faculty_user=request.user,
+    ea_qs = AcV2ExamAssignment.objects.select_related(
+        'section__teaching_assignment__section',
+        'section__teaching_assignment__curriculum_row',
+        'section__teaching_assignment__elective_subject',
     )
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
 
     ta = ea.section.teaching_assignment
     acad_sec = ta.section
@@ -4300,17 +4313,13 @@ def faculty_course_cqi_draft(request, ta_id: int):
     from academics.models import TeachingAssignment
     from .models import AcV2CqiAssignment
 
-    ta = get_object_or_404(
-        TeachingAssignment.objects.select_related(
-            'curriculum_row',
-            'elective_subject',
-            'section',
-            'staff',
-        ),
-        id=ta_id,
-        staff__user=request.user,
-        is_active=True,
+    ta_qs = TeachingAssignment.objects.select_related(
+        'curriculum_row', 'elective_subject', 'section', 'staff',
     )
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(ta_qs, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(ta_qs, id=ta_id, staff__user=request.user, is_active=True)
 
     if request.method == 'GET':
         obj = AcV2CqiAssignment.objects.filter(teaching_assignment=ta).first()
@@ -4375,12 +4384,11 @@ def faculty_course_cqi_published(request, ta_id: int):
     from academics.models import TeachingAssignment
     from .models import AcV2CqiAttained
 
-    ta = get_object_or_404(
-        TeachingAssignment.objects.select_related('staff'),
-        id=ta_id,
-        staff__user=request.user,
-        is_active=True,
-    )
+    _ta_qs_cqi_pub = TeachingAssignment.objects.select_related('staff')
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(_ta_qs_cqi_pub, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(_ta_qs_cqi_pub, id=ta_id, staff__user=request.user, is_active=True)
 
     obj = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
     if obj is None:
@@ -4407,12 +4415,11 @@ def faculty_course_cqi_publish(request, ta_id: int):
     from .models import AcV2CqiAssignment, AcV2CqiAttained
     from .services.mark_calculation import compute_section_internal_marks
 
-    ta = get_object_or_404(
-        TeachingAssignment.objects.select_related('staff'),
-        id=ta_id,
-        staff__user=request.user,
-        is_active=True,
-    )
+    _ta_qs_cqi_publish = TeachingAssignment.objects.select_related('staff')
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(_ta_qs_cqi_publish, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(_ta_qs_cqi_publish, id=ta_id, staff__user=request.user, is_active=True)
 
     body = request.data if isinstance(request.data, dict) else {}
     entries = body.get('entries')
@@ -4463,16 +4470,14 @@ def faculty_exam_import_marks(request, exam_id):
     import openpyxl
     from io import BytesIO
 
-    ea = get_object_or_404(
-        AcV2ExamAssignment.objects.select_related(
-            'section__teaching_assignment__section',
-        ),
-        id=exam_id,
-        section__faculty_user=request.user,
-    )
+    ea_qs = AcV2ExamAssignment.objects.select_related('section__teaching_assignment__section')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
 
     # Check if import is allowed: Allow if DRAFT, or if there's an active edit window
-    if ea.status in ('PUBLISHED', 'APPROVED'):
+    if not _has_admin_bypass_access(request.user) and ea.status in ('PUBLISHED', 'APPROVED'):
         # Allow import if there's an active edit_window_until
         if not ea.edit_window_until or timezone.now() >= ea.edit_window_until:
             return Response({'detail': 'Exam is locked'}, status=403)
@@ -4677,3 +4682,701 @@ def faculty_exam_import_marks(request, exam_id):
         'total_in_class': len(reg_to_student),
         'students': imported_students,
     })
+
+
+# ============================================================================
+# ADMIN BYPASS API VIEWS
+# ============================================================================
+
+from .models import AcV2BypassSession, AcV2BypassLog
+from django.utils import timezone as _tz
+import os as _os
+
+
+def _require_admin(request):
+    if not request.user or not request.user.is_authenticated:
+        return Response({'detail': 'Authentication required.'}, status=401)
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Admin access required.'}, status=403)
+    return None
+
+
+def _serialize_session(session, include_logs=False):
+    faculty = session.faculty_user
+    shared_by = session.shared_by
+    shared_accessed_by = session.shared_accessed_by
+    data = {
+        'id': str(session.id),
+        'admin': {
+            'id': session.admin.id,
+            'name': session.admin.get_full_name() or session.admin.username,
+        },
+        'faculty': {
+            'id': faculty.id,
+            'name': faculty.get_full_name() or faculty.username,
+        } if faculty else None,
+        'teaching_assignment_id': session.teaching_assignment_id,
+        'course_code': session.course_code,
+        'course_name': session.course_name,
+        'section_name': session.section_name,
+        'started_at': session.started_at.isoformat(),
+        'ended_at': session.ended_at.isoformat() if session.ended_at else None,
+        'duration_seconds': session.duration_seconds,
+        'share_token': session.share_token or None,
+        'share_expires_at': session.share_expires_at.isoformat() if session.share_expires_at else None,
+        'share_max_uses': session.share_max_uses,
+        'share_use_count': session.share_use_count,
+        'shared_by': {
+            'id': shared_by.id,
+            'name': shared_by.get_full_name() or shared_by.username,
+        } if shared_by else None,
+        'shared_accessed_by': {
+            'id': shared_accessed_by.id,
+            'name': shared_accessed_by.get_full_name() or shared_accessed_by.username,
+        } if shared_accessed_by else None,
+    }
+    if include_logs:
+        data['logs'] = [_serialize_log(lg) for lg in session.logs.all()]
+    return data
+
+
+def _serialize_log(log):
+    actor = log.actor
+    return {
+        'id': str(log.id),
+        'action': log.action,
+        'description': log.description,
+        'extra': log.extra,
+        'created_at': log.created_at.isoformat(),
+        'actor': {
+            'id': actor.id,
+            'name': actor.get_full_name() or actor.username,
+        } if actor else None,
+    }
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_start(request):
+    """
+    Start a bypass session.
+    Body: { teaching_assignment_id, course_code, course_name, section_name, faculty_user_id }
+    Returns: { session_id }
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    ta_id = request.data.get('teaching_assignment_id')
+    course_code = request.data.get('course_code', '')
+    course_name = request.data.get('course_name', '')
+    section_name = request.data.get('section_name', '')
+    faculty_user_id = request.data.get('faculty_user_id')
+
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    faculty = None
+    if faculty_user_id:
+        try:
+            faculty = User.objects.get(id=faculty_user_id)
+        except User.DoesNotExist:
+            pass
+
+    session = AcV2BypassSession.objects.create(
+        admin=request.user,
+        faculty_user=faculty,
+        teaching_assignment_id=ta_id,
+        course_code=course_code,
+        course_name=course_name,
+        section_name=section_name,
+    )
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_ENTER,
+        description=f"Admin bypass started for {course_code} – {section_name}",
+        extra={
+            'teaching_assignment_id': ta_id,
+            'faculty_user_id': faculty_user_id,
+        },
+    )
+    return Response({'session_id': str(session.id)}, status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_end(request, session_id):
+    """End a bypass session."""
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    if not session.ended_at:
+        session.ended_at = _tz.now()
+        session.save(update_fields=['ended_at'])
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_EXIT,
+        description=f"Admin bypass exited. Duration: {session.duration_seconds}s",
+        extra={'duration_seconds': session.duration_seconds},
+    )
+    return Response({'status': 'ended', 'duration_seconds': session.duration_seconds})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_add_log(request, session_id):
+    """
+    Add a log entry to a bypass session (generic – for mark edits, publishes, etc.)
+    Body: { action, description, extra }
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    action = request.data.get('action', AcV2BypassLog.ACTION_OTHER)
+    description = request.data.get('description', '')
+    extra = request.data.get('extra', {})
+
+    log = AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=action,
+        description=description,
+        extra=extra if isinstance(extra, dict) else {},
+    )
+    return Response(_serialize_log(log), status=201)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_reset_course(request, session_id):
+    """
+    Reset ALL exam assignments for a teaching assignment (section).
+    Deletes student marks and draft marks. Sets exam status back to DRAFT.
+    Only affects the specific teaching_assignment_id linked to the bypass session.
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    ta_id = session.teaching_assignment_id
+    if not ta_id:
+        return Response({'detail': 'No teaching assignment linked to this session.'}, status=400)
+
+    with transaction.atomic():
+        # Get the AcV2Section for this teaching assignment
+        from .models import AcV2Section
+        sections = AcV2Section.objects.filter(teaching_assignment_id=ta_id)
+        if not sections.exists():
+            return Response({'detail': 'No sections found for this teaching assignment.'}, status=404)
+
+        exam_assignments = AcV2ExamAssignment.objects.filter(section__in=sections)
+        exam_count = exam_assignments.count()
+
+        # Delete marks
+        deleted_marks, _ = AcV2StudentMark.objects.filter(exam_assignment__in=exam_assignments).delete()
+        deleted_drafts, _ = AcV2DraftMark.objects.filter(exam_assignment__in=exam_assignments).delete()
+
+        # Reset exam status to DRAFT
+        exam_assignments.update(
+            status='DRAFT',
+            published_at=None,
+            published_by=None,
+            published_data={},
+            draft_data={},
+            has_pending_edit_request=False,
+            edit_window_until=None,
+            edit_window_until_publish=False,
+            last_saved_at=None,
+        )
+
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_RESET_COURSE,
+        description=f"Course reset: {session.course_code} – {session.section_name}. {exam_count} exams reset.",
+        extra={
+            'teaching_assignment_id': ta_id,
+            'exam_count': exam_count,
+            'deleted_marks': deleted_marks,
+            'deleted_drafts': deleted_drafts,
+        },
+    )
+    return Response({
+        'status': 'reset',
+        'exam_count': exam_count,
+        'deleted_marks': deleted_marks,
+        'deleted_drafts': deleted_drafts,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_reset_exam(request, session_id, exam_id):
+    """
+    Reset a single exam assignment (marks + status) by its UUID.
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    exam = get_object_or_404(AcV2ExamAssignment, id=exam_id)
+
+    with transaction.atomic():
+        deleted_marks, _ = AcV2StudentMark.objects.filter(exam_assignment=exam).delete()
+        deleted_drafts, _ = AcV2DraftMark.objects.filter(exam_assignment=exam).delete()
+        exam.status = 'DRAFT'
+        exam.published_at = None
+        exam.published_by = None
+        exam.published_data = {}
+        exam.draft_data = {}
+        exam.has_pending_edit_request = False
+        exam.edit_window_until = None
+        exam.edit_window_until_publish = False
+        exam.last_saved_at = None
+        exam.save()
+
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_RESET_EXAM,
+        description=f"Exam reset: {exam.exam_display_name or exam.exam} (ID: {exam_id})",
+        extra={
+            'exam_id': str(exam_id),
+            'exam_name': exam.exam_display_name or exam.exam,
+            'deleted_marks': deleted_marks,
+            'deleted_drafts': deleted_drafts,
+        },
+    )
+    return Response({
+        'status': 'reset',
+        'exam_id': str(exam_id),
+        'deleted_marks': deleted_marks,
+        'deleted_drafts': deleted_drafts,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_send_message(request, session_id):
+    """
+    Send a WhatsApp message to the faculty being bypassed.
+    Body: { message, mobile? }  — mobile defaults to faculty's profile mobile.
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    message = str(request.data.get('message', '')).strip()
+    if not message:
+        return Response({'detail': 'message is required.'}, status=400)
+
+    # Resolve mobile number
+    mobile = str(request.data.get('mobile', '') or '').strip()
+    if not mobile and session.faculty_user:
+        try:
+            sp = session.faculty_user.staff_profile
+            mobile = str(sp.mobile or '').strip()
+        except Exception:
+            pass
+        if not mobile:
+            try:
+                mobile = str(session.faculty_user.mobile or '').strip()
+            except Exception:
+                pass
+
+    if not mobile:
+        return Response({'detail': 'No mobile number found for faculty.'}, status=400)
+
+    from accounts.services.sms import send_whatsapp
+    result = send_whatsapp(mobile, message)
+
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_MESSAGE,
+        description=f"WhatsApp sent to {mobile}: {message[:100]}",
+        extra={
+            'mobile': mobile,
+            'message': message,
+            'result': str(result),
+        },
+    )
+    return Response({'status': 'sent', 'mobile': mobile})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bypass_create_share_link(request, session_id):
+    """
+    Generate a time-limited shared bypass link.
+    Body: { expires_at } — ISO datetime string.
+    Returns: { share_token, share_url, expires_at }
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    session = get_object_or_404(AcV2BypassSession, id=session_id)
+    expires_at_str = request.data.get('expires_at')
+    if not expires_at_str:
+        return Response({'detail': 'expires_at is required.'}, status=400)
+
+    from django.utils.dateparse import parse_datetime
+    expires_at = parse_datetime(str(expires_at_str))
+    if not expires_at:
+        return Response({'detail': 'Invalid expires_at datetime format.'}, status=400)
+
+    token = AcV2BypassSession.generate_share_token()
+    max_uses = int(request.data.get('max_uses', 1) or 1)
+    max_uses = max(1, min(max_uses, 50))  # clamp 1–50
+    session.share_token = token
+    session.share_expires_at = expires_at
+    session.shared_by = request.user
+    session.share_max_uses = max_uses
+    session.share_use_count = 0
+    session.save(update_fields=['share_token', 'share_expires_at', 'shared_by', 'share_max_uses', 'share_use_count'])
+
+    site_root = str(
+        getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
+        or _os.getenv('VITE_API_BASE')
+        or 'https://idcs.zynix.us'
+    ).rstrip('/')
+    share_url = f"{site_root}/academic-v2/bypass-share/{token}"
+
+    AcV2BypassLog.objects.create(
+        session=session,
+        actor=request.user,
+        action=AcV2BypassLog.ACTION_SHARE,
+        description=f"Shared bypass link created. Expires: {expires_at.isoformat()}",
+        extra={
+            'share_token': token,
+            'share_url': share_url,
+            'expires_at': expires_at.isoformat(),
+        },
+    )
+    return Response({
+        'share_token': token,
+        'share_url': share_url,
+        'expires_at': expires_at.isoformat(),
+    }, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def bypass_session_detail(request, session_id):
+    """
+    Get a single bypass session by ID.
+    Accessible to admins OR the faculty user who is the target of the session.
+    This allows faculty who accessed via a shared bypass link to load session info
+    without needing admin permissions.
+    """
+    try:
+        session = AcV2BypassSession.objects.select_related(
+            'admin', 'faculty_user', 'shared_by', 'shared_accessed_by'
+        ).get(id=session_id)
+    except (AcV2BypassSession.DoesNotExist, Exception):
+        return Response({'detail': 'Session not found.'}, status=404)
+
+    user = request.user
+    is_admin = _has_admin_bypass_access(user)
+    is_target = session.faculty_user_id == user.id
+    if not (is_admin or is_target):
+        return Response({'detail': 'Permission denied.'}, status=403)
+
+    return Response(_serialize_session(session))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def bypass_validate_share(request, token):
+    """
+    Validate a shared bypass token and return the session details.
+    If valid and not yet claimed, marks it as accessed by current user.
+    """
+    session = AcV2BypassSession.objects.filter(share_token=token).first()
+    if not session:
+        return Response({'valid': False, 'detail': 'Invalid token.'}, status=404)
+
+    if session.share_expires_at and _tz.now() > session.share_expires_at:
+        return Response({'valid': False, 'detail': 'Share link has expired.'}, status=410)
+
+    user = request.user
+
+    # Check if this user already accessed this session (allow re-entry without counting again)
+    already_accessed = AcV2BypassLog.objects.filter(
+        session=session,
+        actor=user,
+        action=AcV2BypassLog.ACTION_SHARE_ACCESSED,
+    ).exists()
+
+    if not already_accessed:
+        # New user — check if the usage limit has been reached
+        if session.share_max_uses and session.share_use_count >= session.share_max_uses:
+            return Response(
+                {'valid': False, 'detail': f'This share link has reached its usage limit ({session.share_max_uses} user(s) allowed).'},
+                status=403,
+            )
+        # Increment use count and record who accessed
+        session.share_use_count = (session.share_use_count or 0) + 1
+        if not session.shared_accessed_by:
+            session.shared_accessed_by = user
+        session.save(update_fields=['share_use_count', 'shared_accessed_by'])
+
+        site_root = str(
+            getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
+            or _os.getenv('VITE_API_BASE')
+            or 'https://idcs.zynix.us'
+        ).rstrip('/')
+        share_url = f"{site_root}/academic-v2/bypass-share/{session.share_token}"
+
+        AcV2BypassLog.objects.create(
+            session=session,
+            actor=user,
+            action=AcV2BypassLog.ACTION_SHARE_ACCESSED,
+            description=f"Shared bypass accessed by {user.get_full_name() or user.username}",
+            extra={
+                'user_id': user.id,
+                'share_url': share_url,
+                'share_token': session.share_token,
+            },
+        )
+
+    return Response({
+        'valid': True,
+        'session': _serialize_session(session),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def bypass_sessions_list(request):
+    """List all bypass sessions with logs (admin only)."""
+    err = _require_admin(request)
+    if err:
+        return err
+
+    sessions = AcV2BypassSession.objects.select_related(
+        'admin', 'faculty_user', 'shared_by', 'shared_accessed_by'
+    ).prefetch_related('logs__actor').order_by('-started_at')
+
+    # Optional filter by faculty_user_id or admin_id
+    faculty_id = request.query_params.get('faculty_id')
+    if faculty_id:
+        sessions = sessions.filter(faculty_user_id=faculty_id)
+
+    result = [_serialize_session(s, include_logs=True) for s in sessions[:200]]
+    return Response(result)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def admin_courses_list(request):
+    """
+    List all AcV2 sections (courses) for admin CourseManager.
+    Optionally filter by search query.
+    Returns section info with faculty details.
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    search = (request.query_params.get('search') or '').strip()
+
+    from .models import AcV2Section, AcV2Course
+    from django.db.models import Count, Q as DQ
+
+    qs = AcV2Section.objects.select_related(
+        'course', 'course__class_type', 'course__semester',
+        'faculty_user', 'teaching_assignment',
+        'teaching_assignment__section',
+        'teaching_assignment__section__batch__department',
+    ).prefetch_related('exam_assignments').order_by(
+        'course__subject_code', 'section_name'
+    )
+
+    if search:
+        qs = qs.filter(
+            DQ(course__subject_code__icontains=search)
+            | DQ(course__subject_name__icontains=search)
+            | DQ(section_name__icontains=search)
+            | DQ(faculty_user__first_name__icontains=search)
+            | DQ(faculty_user__last_name__icontains=search)
+        )
+
+    def _section_data(sec):
+        faculty = sec.faculty_user
+        course = sec.course
+        total_exams = sec.exam_assignments.count()
+        published = sum(1 for e in sec.exam_assignments.all() if e.status == 'PUBLISHED')
+        ta = sec.teaching_assignment
+        dept = ''
+        semester_name = ''
+        try:
+            dept = ta.section.batch.department.name if ta and ta.section and ta.section.batch and ta.section.batch.department else ''
+        except Exception:
+            pass
+        try:
+            semester_name = str(course.semester) if course else ''
+        except Exception:
+            pass
+
+        # Faculty profile photo
+        faculty_photo = None
+        if faculty:
+            try:
+                img = faculty.staff_profile.profile_image
+                if img:
+                    site_root = str(
+                        getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
+                        or _os.getenv('VITE_API_BASE')
+                        or 'https://idcs.zynix.us'
+                    ).rstrip('/')
+                    faculty_photo = f"{site_root}/media/{str(img).lstrip('/')}"
+            except Exception:
+                pass
+
+        return {
+            'section_id': str(sec.id),
+            'ta_id': sec.teaching_assignment_id,
+            'course_code': course.subject_code if course else '',
+            'course_name': course.subject_name if course else '',
+            'class_type': course.class_type.name if course and course.class_type else course.class_type_name if course else '',
+            'section_name': sec.section_name,
+            'semester': semester_name,
+            'department': dept,
+            'total_exams': total_exams,
+            'published_exams': published,
+            'faculty': {
+                'id': faculty.id,
+                'name': faculty.get_full_name() or faculty.username,
+                'photo': faculty_photo,
+            } if faculty else None,
+        }
+
+    data = [_section_data(s) for s in qs[:500]]
+    return Response(data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def admin_course_faculty(request, ta_id):
+    """
+    Get all faculty who are teaching the same course code (same subject_code),
+    returned with their sections and exam status.
+    Actually returns the specific section info for a given ta_id.
+    """
+    err = _require_admin(request)
+    if err:
+        return err
+
+    from .models import AcV2Section
+    try:
+        section = AcV2Section.objects.select_related(
+            'course', 'course__class_type', 'course__semester',
+            'faculty_user', 'teaching_assignment',
+        ).prefetch_related('exam_assignments').get(teaching_assignment_id=ta_id)
+    except AcV2Section.DoesNotExist:
+        return Response({'detail': 'Section not found.'}, status=404)
+
+    course = section.course
+    # Find all sections teaching the same subject_code in the same semester
+    from .models import AcV2Course
+    sibling_sections = AcV2Section.objects.filter(
+        course__subject_code=course.subject_code,
+        course__semester=course.semester,
+    ).select_related(
+        'course', 'faculty_user', 'teaching_assignment',
+    ).prefetch_related('exam_assignments').exclude(id=section.id)
+
+    def _faculty_card(sec):
+        faculty = sec.faculty_user
+        total_exams = sec.exam_assignments.count()
+        published = sum(1 for e in sec.exam_assignments.all() if e.status == 'PUBLISHED')
+        faculty_photo = None
+        if faculty:
+            try:
+                img = faculty.staff_profile.profile_image
+                if img:
+                    site_root = str(
+                        getattr(__import__('django.conf', fromlist=['settings']).settings, 'VITE_API_BASE', '')
+                        or _os.getenv('VITE_API_BASE')
+                        or 'https://idcs.zynix.us'
+                    ).rstrip('/')
+                    faculty_photo = f"{site_root}/media/{str(img).lstrip('/')}"
+            except Exception:
+                pass
+        return {
+            'section_id': str(sec.id),
+            'ta_id': sec.teaching_assignment_id,
+            'section_name': sec.section_name,
+            'total_exams': total_exams,
+            'published_exams': published,
+            'faculty': {
+                'id': faculty.id,
+                'name': faculty.get_full_name() or faculty.username,
+                'photo': faculty_photo,
+            } if faculty else None,
+        }
+
+    return Response({
+        'course_code': course.subject_code,
+        'course_name': course.subject_name,
+        'sections': [_faculty_card(section)] + [_faculty_card(s) for s in sibling_sections],
+    })
+
+
+# ============================================================================
+# FACULTY RESET NOTICES  (no migration required – queries existing BypassLog)
+# ============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def faculty_reset_notices(request, ta_id: int):
+    """
+    Return recent RESET_COURSE / RESET_EXAM bypass-log entries for this TA.
+    Used by InternalMarkPage to show an animated warning popup to the faculty.
+    Dismissal is tracked client-side via localStorage (keyed by log id).
+    Only returns logs from the last 60 days.
+    """
+    from datetime import timedelta
+
+    cutoff = _tz.now() - timedelta(days=60)
+
+    logs = (
+        AcV2BypassLog.objects
+        .filter(
+            session__teaching_assignment_id=ta_id,
+            action__in=[AcV2BypassLog.ACTION_RESET_COURSE, AcV2BypassLog.ACTION_RESET_EXAM],
+            created_at__gte=cutoff,
+        )
+        .select_related('session__admin', 'actor')
+        .order_by('-created_at')[:20]
+    )
+
+    result = []
+    for log in logs:
+        admin_user = log.actor or log.session.admin if log.session else None
+        admin_name = (admin_user.get_full_name() or admin_user.username) if admin_user else 'Admin'
+        result.append({
+            'id': str(log.id),
+            'action': log.action,
+            'description': log.description,
+            'extra': log.extra or {},
+            'created_at': log.created_at.isoformat(),
+            'reset_by': {
+                'name': admin_name,
+                'role': 'IQAC / Admin',
+            },
+            'course_code': log.session.course_code if log.session else '',
+            'section_name': log.session.section_name if log.session else '',
+        })
+
+    return Response(result)

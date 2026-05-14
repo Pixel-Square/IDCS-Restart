@@ -4,6 +4,19 @@ import { Mail, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { getMe, impersonateLogin, login } from "../../services/auth";
 import Navbar from "../../components/navigation/Navbar";
 
+const POST_LOGIN_REDIRECT_KEY = 'postLoginRedirect';
+
+function getPostLoginRedirect(): string {
+  try {
+    const saved = localStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+    if (saved) {
+      localStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+      return saved;
+    }
+  } catch { /* ignore */ }
+  return '/dashboard';
+}
+
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -99,7 +112,7 @@ export default function Login() {
       }
 
       // Normal user: proceed directly.
-      window.location.href = "/dashboard";
+      window.location.href = getPostLoginRedirect();
     } catch (err) {
       const serverMsg = extractServerMessage(err) || extractNetworkMessage(err) || "Login failed";
       setError(serverMsg);
@@ -111,7 +124,7 @@ export default function Login() {
   const handleContinueAsSelf = () => {
     // Clear password from memory once we no longer need it.
     setPassword("");
-    window.location.href = "/dashboard";
+    window.location.href = getPostLoginRedirect();
   };
 
   const handleSubmitImpersonate = async (e: React.FormEvent) => {
@@ -133,9 +146,7 @@ export default function Login() {
       setTargetIdentifier("");
       setReason("");
 
-      window.location.href = "/dashboard";
-    } catch (err) {
-      const serverMsg = extractServerMessage(err) || extractNetworkMessage(err) || "Impersonation failed";
+      window.location.href = getPostLoginRedirect();
       setError(serverMsg);
     } finally {
       setLoading(false);

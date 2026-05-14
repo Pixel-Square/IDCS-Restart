@@ -13,6 +13,7 @@ import {
 import fetchWithAuth from '../../../services/fetchAuth';
 import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
+import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
 
 /* ─── types ─── */
 
@@ -101,6 +102,10 @@ export default function InternalMarkPage() {
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
   const [coView, setCoView] = useState<'raw' | 'weighted'>('raw');
 
+  // Reset notices popup
+  const [resetNotices, setResetNotices] = useState<ResetNotice[]>([]);
+  const [showResetPopup, setShowResetPopup] = useState(false);
+
   const dedupedCourseExams = useMemo(() => {
     if (!courseInfo?.exams || courseInfo.exams.length === 0) return [] as ExamMark[];
     const seen = new Set<string>();
@@ -121,6 +126,23 @@ export default function InternalMarkPage() {
   }, [courseInfo]);
 
   useEffect(() => { loadData(); }, [courseId]);
+
+  // Fetch reset notices from admin bypass logs for this course
+  useEffect(() => {
+    if (!courseId) return;
+    fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/reset-notices/`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((notices: ResetNotice[]) => {
+        const unread = notices.filter(
+          (n) => !localStorage.getItem(`reset_notice_dismissed_${n.id}`)
+        );
+        if (unread.length > 0) {
+          setResetNotices(unread);
+          setShowResetPopup(true);
+        }
+      })
+      .catch(() => {});
+  }, [courseId]);
 
   const loadData = async () => {
     try {
@@ -300,6 +322,13 @@ export default function InternalMarkPage() {
   /* ─── render ─── */
   return (
     <div className="p-4 md:p-6 max-w-[1400px] mx-auto space-y-4">
+      {/* Reset notice popup — shown when admin has reset this course/exam */}
+      {showResetPopup && resetNotices.length > 0 && (
+        <ResetNoticePopup
+          notices={resetNotices}
+          onDismissAll={() => setShowResetPopup(false)}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">

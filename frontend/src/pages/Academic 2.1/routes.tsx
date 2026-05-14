@@ -19,6 +19,12 @@ const PassMarkSettingsPage = React.lazy(() => import('./admin/SettingsPage'));
 const CourseListPage = React.lazy(() => import('./faculty/CourseListPage'));
 const MarkEntryPage = React.lazy(() => import('./faculty/MarkEntryPage'));
 const InternalMarkPage = React.lazy(() => import('./faculty/InternalMarkPage'));
+// Bypass / Course Manager
+const CourseManagerPage = React.lazy(() => import('./admin/CourseManagerPage'));
+const CourseFacultyPage = React.lazy(() => import('./admin/CourseFacultyPage'));
+const AdminBypassCoursePage = React.lazy(() => import('./admin/AdminBypassCoursePage'));
+const BypassLogsPage = React.lazy(() => import('./admin/BypassLogsPage'));
+const CourseManagerDashboard = React.lazy(() => import('./admin/CourseManagerDashboard'));
 
 export const academicV2Routes: RouteObject[] = [
   // Admin Routes - Dashboard
@@ -57,6 +63,27 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/admin/pass-mark',
     element: <PassMarkSettingsPage />,
+  },
+  // Course Manager + Bypass
+  {
+    path: 'academic-v2/admin/course-manager',
+    element: <CourseManagerDashboard />,
+  },
+  {
+    path: 'academic-v2/admin/course-manager/courses',
+    element: <CourseManagerPage />,
+  },
+  {
+    path: 'academic-v2/admin/course-manager/:taId/faculty',
+    element: <CourseFacultyPage />,
+  },
+  {
+    path: 'academic-v2/admin/bypass/:sessionId/course/:courseId',
+    element: <AdminBypassCoursePage />,
+  },
+  {
+    path: 'academic-v2/admin/bypass/logs',
+    element: <BypassLogsPage />,
   },
   
   // Faculty Routes

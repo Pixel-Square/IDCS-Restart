@@ -9,10 +9,21 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Upload, Download, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Upload, Download, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2, ShieldAlert } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { getApiBase } from '../../../services/apiBase';
 import krlogo from '../../../assets/krlogo.png';
+import { BYPASS_SESSION_KEY } from '../admin/bypass/BypassContext';
+
+/** Read the active bypass session (if any) from sessionStorage */
+function readBypassSession(): { session_id: string; course_code: string; course_name: string; faculty_name: string } | null {
+  try {
+    const raw = sessionStorage.getItem(BYPASS_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 const initialsFromName = (name: string) =>
   (name || '')
@@ -118,6 +129,65 @@ interface MarkManagerData {
   whole_number?: boolean;
   arrow_keys?: boolean;
   cos: Record<string, MarkManagerCOConfig>;
+}
+
+/** Pinned bypass header shown in MarkEntryPage when accessed via admin bypass. */
+function BypassPinnedBar({
+  facultyName,
+  startedAt,
+  onBack,
+}: {
+  facultyName: string;
+  startedAt?: string;
+  onBack: () => void;
+}) {
+  const [elapsed, setElapsed] = React.useState(0);
+  React.useEffect(() => {
+    if (!startedAt) return;
+    const start = new Date(startedAt).getTime();
+    const tick = () => setElapsed(Math.floor((Date.now() - start) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = elapsed % 60;
+  const timeStr = h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+
+  return (
+    <div
+      className="fixed top-0 left-0 right-0 z-[1000] bg-amber-900 text-white shadow-lg"
+      style={{ paddingLeft: '1rem', paddingRight: '1rem' }}
+    >
+      <div className="max-w-screen-2xl mx-auto flex items-center justify-between h-12">
+        {/* Left: badge + info */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-amber-700 rounded-full px-3 py-1 text-sm font-semibold">
+            <ShieldAlert className="w-4 h-4 text-amber-300" />
+            <span className="text-amber-200">ADMIN BYPASS</span>
+          </div>
+          <span className="text-sm text-amber-100 hidden sm:inline">
+            {facultyName}
+          </span>
+          {startedAt && (
+            <span className="text-xs text-amber-300 font-mono bg-amber-800 px-2 py-0.5 rounded">
+              {timeStr}
+            </span>
+          )}
+        </div>
+        {/* Right: back button */}
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 rounded-lg text-sm font-medium transition-colors"
+        >
+          ← Back to Course
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function MarkEntryPage() {
@@ -1298,8 +1368,13 @@ export default function MarkEntryPage() {
 
   const pc = examInfo.publish_control;
   const publishControlEnabled = !!pc?.publish_control_enabled;
-  const isEditable = pc?.is_editable ?? !examInfo.is_locked;
-  const isLocked = pc?.is_locked ?? examInfo.is_locked;
+
+  // Admin bypass: all locks and restrictions are lifted
+  const bypassSession = readBypassSession();
+  const isBypassMode = !!bypassSession;
+
+  const isEditable = isBypassMode ? true : (pc?.is_editable ?? !examInfo.is_locked);
+  const isLocked = isBypassMode ? false : (pc?.is_locked ?? examInfo.is_locked);
   const hasPending = !!(examInfo.has_pending_edit_request || pc?.has_pending_request);
 
   const nowMs = Date.now();
@@ -1331,7 +1406,15 @@ export default function MarkEntryPage() {
   const isLockedByPublished = isLocked && (examInfo.status === 'PUBLISHED' || examInfo.status === 'LOCKED');
 
   return (
-    <div className="p-2 w-full max-w-none h-screen flex flex-col gap-2">
+    <div className={`p-2 w-full max-w-none h-screen flex flex-col gap-2${isBypassMode ? ' pt-14' : ''}`}>
+      {/* Admin bypass pinned header — fixed at top, same style as BypassHeader */}
+      {isBypassMode && bypassSession && (
+        <BypassPinnedBar
+          facultyName={bypassSession.faculty_name}
+          startedAt={bypassSession.started_at}
+          onBack={() => navigate(-1)}
+        />
+      )}
       {/* Header row */}
       <div className="flex items-center gap-3 shrink-0">
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg">

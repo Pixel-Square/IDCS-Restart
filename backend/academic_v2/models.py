@@ -1539,3 +1539,133 @@ class AcV2PassMarkSetting(models.Model):
 
     def __str__(self):
         return f"{self.label}: {self.pass_mark}/{self.out_of}"
+
+
+# ============================================================================
+# ADMIN BYPASS SESSION + LOGS
+# ============================================================================
+
+import secrets as _secrets
+
+class AcV2BypassSession(models.Model):
+    """
+    Tracks an admin's bypass session into a faculty's course.
+    Created when admin clicks "Bypass" and updated when they exit.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='acv2_bypass_sessions_admin',
+    )
+    # The faculty whose course is being bypassed
+    faculty_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='acv2_bypass_sessions_faculty',
+    )
+    # Teaching assignment (section) being bypassed
+    teaching_assignment_id = models.IntegerField(null=True, blank=True)
+    course_code = models.CharField(max_length=64, blank=True)
+    course_name = models.CharField(max_length=255, blank=True)
+    section_name = models.CharField(max_length=64, blank=True)
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+
+    # Shared bypass link token (if admin shared the link)
+    share_token = models.CharField(max_length=64, blank=True, db_index=True)
+    share_expires_at = models.DateTimeField(null=True, blank=True)
+    shared_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='acv2_bypass_sessions_shared',
+    )
+    # If this session was created via shared link, track who used it
+    shared_accessed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='acv2_bypass_sessions_accessed',
+    )
+    # Share link usage limits — how many unique users may access this link
+    share_max_uses = models.PositiveIntegerField(default=1)
+    share_use_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'acv2_bypass_session'
+        verbose_name = 'Bypass Session'
+        verbose_name_plural = 'Bypass Sessions'
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f"Bypass by {self.admin} on {self.course_code} @ {self.started_at.strftime('%Y-%m-%d %H:%M')}"
+
+    @property
+    def duration_seconds(self):
+        end = self.ended_at or timezone.now()
+        return int((end - self.started_at).total_seconds())
+
+    @classmethod
+    def generate_share_token(cls):
+        return _secrets.token_urlsafe(32)
+
+
+class AcV2BypassLog(models.Model):
+    """
+    Audit log entry for actions taken during a bypass session.
+    """
+    ACTION_ENTER = 'ENTER'
+    ACTION_EXIT = 'EXIT'
+    ACTION_RESET_COURSE = 'RESET_COURSE'
+    ACTION_RESET_EXAM = 'RESET_EXAM'
+    ACTION_MESSAGE = 'MESSAGE'
+    ACTION_MARK_EDIT = 'MARK_EDIT'
+    ACTION_PUBLISH = 'PUBLISH'
+    ACTION_UNPUBLISH = 'UNPUBLISH'
+    ACTION_SHARE = 'SHARE'
+    ACTION_SHARE_ACCESSED = 'SHARE_ACCESSED'
+    ACTION_OTHER = 'OTHER'
+
+    ACTION_CHOICES = [
+        (ACTION_ENTER, 'Bypass Entered'),
+        (ACTION_EXIT, 'Bypass Exited'),
+        (ACTION_RESET_COURSE, 'Course Reset'),
+        (ACTION_RESET_EXAM, 'Exam Reset'),
+        (ACTION_MESSAGE, 'WhatsApp Message Sent'),
+        (ACTION_MARK_EDIT, 'Marks Edited'),
+        (ACTION_PUBLISH, 'Exam Published'),
+        (ACTION_UNPUBLISH, 'Exam Unpublished'),
+        (ACTION_SHARE, 'Bypass Link Shared'),
+        (ACTION_SHARE_ACCESSED, 'Shared Bypass Accessed'),
+        (ACTION_OTHER, 'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session = models.ForeignKey(
+        AcV2BypassSession,
+        on_delete=models.CASCADE,
+        related_name='logs',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='acv2_bypass_logs',
+    )
+    action = models.CharField(max_length=30, choices=ACTION_CHOICES, default=ACTION_OTHER)
+    description = models.TextField(blank=True)
+    extra = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'acv2_bypass_log'
+        verbose_name = 'Bypass Log'
+        verbose_name_plural = 'Bypass Logs'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"[{self.action}] {self.description[:60]}"
