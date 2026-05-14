@@ -24,12 +24,16 @@ import {
   isForeignLangExamWeights,
   getForeignLangExamWeightConfig,
   DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS,
+  isTamilExamWeights,
+  getTamilExamWeightConfig,
+  DEFAULT_TAMIL_EXAM_WEIGHTS,
   type LabCycleWeights,
   type LabCycleCoWeight,
   type ProjectWeights,
   type ProjectPrblWeights,
   type EnglishExamWeights,
   type ForeignLangExamWeights,
+  type TamilExamWeights,
 } from '../../utils/internalMarkWeights';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
@@ -49,7 +53,7 @@ const DEFAULT_INTERNAL_MARK_WEIGHTS_TCPL_21 = [
   3.0, 3.0, 3.0, 3.0, 7.0,
 ];
 
-const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'AUDIT'] as const;
+const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'AUDIT', 'TAMIL'] as const;
 const STRUCTURED_WEIGHT_CLASS_TYPES = ['LAB', 'PRACTICAL', 'PROJECT'] as const;
 
 
@@ -57,7 +61,7 @@ type WeightsRow = {
   ssa1: number | string;
   cia1: number | string;
   formative1: number | string;
-  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights | EnglishExamWeights;
+  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights | EnglishExamWeights | ForeignLangExamWeights | TamilExamWeights;
 };
 
 const INTERNAL_CELL_PADDING = 6;
@@ -307,6 +311,8 @@ function buildDefaults(): Record<string, WeightsRow> {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_ENGLISH_EXAM_WEIGHTS));
           } else if (k === 'FOREIGN_LANG') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS));
+          } else if (k === 'TAMIL') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_TAMIL_EXAM_WEIGHTS));
           } else if (k === 'PROJECT') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_WEIGHTS));
           } else if (k === 'THEORY') {
@@ -392,6 +398,12 @@ function applyAny(src: any): Record<string, WeightsRow> {
 
     // FOREIGN_LANG: structured 3-cycle weights – pass through as-is
     if (k === 'FOREIGN_LANG' && isForeignLangExamWeights(rawIm)) {
+      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+      continue;
+    }
+
+    // TAMIL: structured 3-cycle weights – pass through as-is
+    if (k === 'TAMIL' && isTamilExamWeights(rawIm)) {
       out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
       continue;
     }
@@ -552,6 +564,17 @@ export default function AcademicControllerWeightsPage() {
 
         // FOREIGN_LANG: structured 3-cycle weights – pass through as-is
         if (k === 'FOREIGN_LANG' && isForeignLangExamWeights(w?.internal_mark_weights)) {
+          normalized[k] = {
+            ssa1: Number(w?.ssa1) || 0,
+            cia1: Number(w?.cia1) || 0,
+            formative1: Number(w?.formative1) || 0,
+            internal_mark_weights: w.internal_mark_weights,
+          };
+          continue;
+        }
+
+        // TAMIL: structured 3-cycle weights – pass through as-is
+        if (k === 'TAMIL' && isTamilExamWeights(w?.internal_mark_weights)) {
           normalized[k] = {
             ssa1: Number(w?.ssa1) || 0,
             cia1: Number(w?.cia1) || 0,

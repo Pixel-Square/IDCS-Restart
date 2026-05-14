@@ -992,7 +992,11 @@ export default function CQIEntry({
         // 1) Server draft sheet, 2) server published sheet, 3) localStorage fallback.
         // This avoids stale browser cache mismatches against Internal Mark computation.
         const canUseLocalModel = !isLabLike && !isProject;
-        const needsMe = canUseLocalModel && coNumbers.some((co) => co >= 1 && co <= 5);
+        // Only include MODEL marks when this CQI page's assessmentType is 'model'.
+        // CIA1/CIA2 CQI pages should NOT pull in model exam marks — they only cover
+        // their own cycle's assessments (SSA1+CIA1+FA1 or SSA2+CIA2+FA2).
+        const isModelAssessment = String(assessmentType || '').toLowerCase() === 'model';
+        const needsMe = canUseLocalModel && isModelAssessment && coNumbers.some((co) => co >= 1 && co <= 5);
         const pickModelSheetFromPayload = (raw: any) => {
           if (!raw || typeof raw !== 'object') return null;
           const payload = raw?.sheet && typeof raw.sheet === 'object'
@@ -1028,6 +1032,9 @@ export default function CQIEntry({
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           } else if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+            candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
+            candidates.push(`model_theory_sheet_${subjectId}_none`);
+          } else if (ct === 'TAMIL') {
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           }
@@ -1069,8 +1076,10 @@ export default function CQIEntry({
           modelSheet = readLocalModelSheet();
         }
         
-        // QP1 FINAL YEAR detection: theory + QP1FINAL type.
-        const isQp1FinalCqi = ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey);
+        // QP1 FINAL YEAR detection: theory + QP1FINAL type, OR Tamil + TAM_THEORY.
+        const isQp1FinalCqi =
+          (ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey)) ||
+          (ct === 'TAMIL' && qpTypeKey === 'TAM_THEORY');
 
         // Fetch published marks based on class type and enabled assessments.
         const needs12 = coNumbers.some((co) => co === 1 || co === 2);
@@ -3173,12 +3182,12 @@ export default function CQIEntry({
                 const coData: any = studentTotals[coKey];
                 if (!coData) return;
 
-                // For already-attained COs, use the prior published value
+                // For already-attained COs (published in a prior CQI page), do NOT add
+                // their CQI marks to this page's AFTER CQI total. Only this page's own
+                // COs (CO3/CO4/CO5 for model CQI) should contribute CQI marks.
                 const isAlreadyAttained = priorPublishedCos.has(coNum);
-                const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
-                const input = isAlreadyAttained
-                  ? (priorEntry[coKey] ?? null)
-                  : (cqiEntries[student.id]?.[coKey] ?? null);
+                if (isAlreadyAttained) return;
+                const input = cqiEntries[student.id]?.[coKey] ?? null;
                 if (input == null) return;
 
                 const coVal = Number(coData.value);
@@ -3389,27 +3398,12 @@ export default function CQIEntry({
                             }}>
                               CQI ALREADY ATTAINED
                             </div>
-                            {priorValue != null && Number.isFinite(Number(priorValue)) ? (
-                              <div style={{
-                                display: 'inline-block',
-                                padding: '4px 14px',
-                                background: '#dbeafe',
-                                borderRadius: 6,
-                                fontWeight: 800,
-                                fontSize: 14,
-                                color: '#1e40af',
-                                border: '1px solid #93c5fd',
-                              }}>
-                                {round2(Number(priorValue))} / 10
-                              </div>
-                            ) : (
-                              <div style={{
-                                fontSize: 12,
-                                color: '#6b7280',
-                              }}>
-                                (no mark entered)
-                              </div>
-                            )}
+                            <div style={{
+                              fontSize: 12,
+                              color: '#6b7280',
+                            }}>
+                              (handled in prior CQI)
+                            </div>
                             <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>
                               Published — read-only
                             </div>

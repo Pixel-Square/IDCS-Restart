@@ -1482,6 +1482,47 @@ def _compute_foreign_lang_final_total(*, ta, subject, student, ta_id, return_det
     )
 
 
+# ─── TAMIL Class-type Support ──────────────────────────────────────────────────
+# Tamil courses share the same 3-cycle structure as ENGLISH/FOREIGN_LANG but
+# use a separate class-type key so their QP patterns and weights are independent.
+
+TAMIL_DEFAULT_WEIGHTS = {
+    **{k: v for k, v in ENGLISH_DEFAULT_WEIGHTS.items() if k != 'type'},
+    'type': 'tamil_exam_weights',
+}
+
+
+def _get_tamil_exam_weights():
+    """Return tamil_exam_weights dict from ClassTypeWeights, or the
+    built-in default.  Never returns None so callers always get a usable config.
+    """
+    from OBE.models import ClassTypeWeights
+
+    row = ClassTypeWeights.objects.filter(class_type='TAMIL').first()
+    im = getattr(row, 'internal_mark_weights', None) if row else None
+    if isinstance(im, dict) and im.get('type') == 'tamil_exam_weights':
+        return im
+    return TAMIL_DEFAULT_WEIGHTS
+
+
+def _compute_tamil_final_total(*, ta, subject, student, ta_id, return_details=False):
+    """Compute Final Internal Mark for TAMIL class-type.
+
+    Shares the same 3-cycle computation as ENGLISH (SSA1+FA1+CIA1 /
+    SSA2+FA2+CIA2 / Model) but resolves weights and QP patterns under
+    class_type='TAMIL'.
+    """
+    return _compute_english_final_total(
+        ta=ta,
+        subject=subject,
+        student=student,
+        ta_id=ta_id,
+        return_details=return_details,
+        _weight_cfg=_get_tamil_exam_weights(),
+        _class_type='TAMIL',
+    )
+
+
 def _extract_ssa_co_splits_for_ta(subject_id, ta_id, assessment_key, co_keys):
     from OBE.models import AssessmentDraft
 
@@ -1778,7 +1819,10 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     qp_type = _resolve_qp_type(ta)
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
 
-    is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+    is_qp1_final = (
+        'QP1FINAL' in str(qp_type or '').upper().replace(' ', '') or
+        str(qp_type or '').upper().strip() == 'TAM_THEORY'
+    )
     weights = list(QP1FINAL_WEIGHTS) if is_qp1_final else _get_internal_weight_slots(class_type)
     max_total = float(sum(weights))
 
@@ -3588,6 +3632,17 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                 if fl_result is not None:
                     total = fl_result
 
+            # TAMIL: same 3-cycle structure as ENGLISH/FOREIGN_LANG, separate class-type.
+            # Exception: TAM_THEORY uses the theory-like QP1FINAL path (already computed above).
+            if total is None and ta_class_type == 'TAMIL':
+                qp_for_tamil = str(_resolve_qp_type(ta) or '').upper().strip()
+                if qp_for_tamil != 'TAM_THEORY':
+                    tamil_result = _compute_tamil_final_total(
+                        ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
+                    )
+                    if tamil_result is not None:
+                        total = tamil_result
+
             # TCPR: Theory-like but with Review1/Review2 instead of Formatives
             if total is None and ta_class_type == 'TCPR':
                 tcpr_result = _compute_tcpr_final_total(
@@ -3647,7 +3702,7 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
             # TCPL uses the sum of its 21-slot weights (typically 50), others use 40.
             if ta_class_type == 'PROJECT':
                 prbl_max_mark = 100
-            elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG'}:
+            elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG', 'TAMIL'}:
                 prbl_max_mark = 60
             elif ta_class_type == 'TCPL':
                 prbl_max_mark = int(sum(_get_tcpl_weight_slots()))

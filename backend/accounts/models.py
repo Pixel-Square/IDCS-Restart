@@ -431,6 +431,15 @@ class SiteConfiguration(models.Model):
         blank=True,
         help_text='Map of {path: [roles]} that should show the Under Construction screen.',
     )
+    app_conditions = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            'Application access conditions. Shape: '
+            '{"application": {"require_profile": true, "require_phone": true}, '
+            '"marks": {"require_profile": true, "require_phone": true}}'
+        ),
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

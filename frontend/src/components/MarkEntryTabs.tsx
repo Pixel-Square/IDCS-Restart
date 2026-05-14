@@ -669,9 +669,13 @@ export default function MarkEntryTabs({
   }, [effectiveClassType]);
 
   // QP1FINAL: Theory courses with QP1FINAL question paper type get a single combined CQI after MODEL
+  // TAM_THEORY: Tamil courses with TAM_THEORY QP type replicate the same 3-CO QP1FINAL logic
   const isQp1Final = useMemo(() => {
     const qp = String(questionPaperType || '').trim().toUpperCase().replace(/\s/g, '');
-    return normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
+    return (
+      (normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL') ||
+      (normalizedEffectiveClassType === 'TAMIL' && qp === 'TAM_THEORY')
+    );
   }, [normalizedEffectiveClassType, questionPaperType]);
 
   const cqiPlacements = useMemo(() => {
@@ -705,6 +709,7 @@ export default function MarkEntryTabs({
       ] as CqiPlacement[];
     }
     // QP1FINAL (Theory): single combined CQI after MODEL covering all three cycles
+    // TAM_THEORY (Tamil): same 3-CO structure
     if (isQp1Final) {
       return [
         { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3'] },
@@ -736,7 +741,9 @@ export default function MarkEntryTabs({
         cqiLabel = 'CQI (Final)';
       } else if ((isPrblRaw && placement.assessmentType === 'model' && normalizedEffectiveClassType === 'PROJECT') ||
           (isQp1Final && placement.assessmentType === 'model')) {
-        cqiLabel = 'CQI (CYCLE1, CYCLE2, CYCLE3)';
+        cqiLabel = normalizedEffectiveClassType === 'TAMIL'
+          ? 'CQI (CYCLE1, CYCLE2, CYCLE3)'
+          : 'CQI (CYCLE1, CYCLE2, CYCLE3)';
       } else if (placement.assessmentType === 'project_combined' && normalizedEffectiveClassType === 'PROJECT') {
         cqiLabel = 'CQI (Combined)';
       } else if (normalizedEffectiveClassType === 'ENGLISH' &&

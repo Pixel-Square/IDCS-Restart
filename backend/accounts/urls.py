@@ -30,6 +30,7 @@ from .views import (
     ProfileImageUpdateRequestView,
     ProfileImageUpdateRequestReviewView,
     UCStateView,
+    AppConditionsView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
@@ -74,4 +75,6 @@ urlpatterns = [
     path('settings/whatsapp/clear-session/', WhatsAppGatewayClearSessionView.as_view(), name='settings_whatsapp_clear_session'),
     # Under-construction state (read: any auth, write: IQAC only)
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
+    # Application/feature access conditions (read: any auth, write: IQAC only)
+    path('app-conditions/', AppConditionsView.as_view(), name='app_conditions'),
 ]

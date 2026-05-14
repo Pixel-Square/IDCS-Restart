@@ -641,7 +641,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const qpTypeNorm = useMemo(() => String(qpTypeProp ?? '').trim().toUpperCase(), [qpTypeProp]);
   const isQp1Final = useMemo(
-    () => effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm),
+    () =>
+      // Standard THEORY + QP1FINAL/QP1FINALYEAR
+      (effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm)) ||
+      // TAMIL + TAM_THEORY → same 3-CO structure, same QP1FINAL weights, scaled to 60
+      (effectiveClassType === 'TAMIL' && qpTypeNorm === 'TAM_THEORY'),
     [effectiveClassType, qpTypeNorm],
   );
 
@@ -1083,7 +1087,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         // Preload IQAC QP patterns (CIA entry uses these to override question maxima/count).
         // Internal Marks must match the same question definitions, especially when drafts exist
         // (draft snapshots don't store `questions`).
-        const qpForPattern = ct === 'THEORY' ? (qpTypeNorm || null) : null;
+        // THEORY and TAMIL pass the QP type when fetching IQAC CIA patterns.
+        // Other class types (TCPR/TCPL/LAB/ENGLISH/etc.) save patterns with question_paper_type=null.
+        const _qpTypeClasses = new Set(['THEORY', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG']);
+        const qpForPattern = _qpTypeClasses.has(ct ?? '') ? (qpTypeNorm || null) : null;
         const fetchPattern = async (exam: 'CIA1' | 'CIA2'): Promise<IqacPattern | null> => {
           if (!ct) return null;
           let best: IqacPattern | null = null;

@@ -15,7 +15,7 @@ import {
 import { fetchAssessmentMasterConfig, saveAssessmentMasterConfig } from '../../services/cdapDb';
 import { fetchQpTypes, type QuestionPaperTypeItem } from '../../services/curriculum';
 
-type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB' | 'SPECIAL' | 'ENGLISH' | 'FOREIGN_LANG';
+type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB' | 'SPECIAL' | 'ENGLISH' | 'TAMIL' | 'FOREIGN_LANG';
 
 export default function AcademicControllerQPPage(): JSX.Element {
   const [tab, setTab] = useState<'qp' | 'custom'>('qp');
@@ -63,6 +63,10 @@ export default function AcademicControllerQPPage(): JSX.Element {
       // For ENGLISH, auto-select ELECTIVE1 if available
       const e1 = qpTypes.find((qp) => qp.code === 'ELECTIVE1');
       setSelectedQpType(e1 ? e1.code : 'ELECTIVE1');
+    } else if (selectedClassType === 'TAMIL') {
+      // For TAMIL, auto-select TAM_THEORY if available
+      const tam = qpTypes.find((qp) => qp.code === 'TAM_THEORY');
+      setSelectedQpType(tam ? tam.code : 'TAM_THEORY');
     } else if (selectedClassType === 'FOREIGN_LANG') {
       // For FOREIGN_LANG, auto-select FLC_QP if available
       const flc = qpTypes.find((qp) => qp.code === 'FLC_QP');
@@ -86,6 +90,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
       { key: 'LAB', label: 'LAB' },
       { key: 'SPECIAL', label: 'Special' },
       { key: 'ENGLISH', label: 'English' },
+      { key: 'TAMIL', label: 'Tamil' },
       { key: 'FOREIGN_LANG', label: 'Foreign Language' },
     ],
     []
@@ -274,10 +279,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const visibleCosForExam = useMemo((): number[] => {
     const exam = tab === 'custom' ? selectedCustomExam : selectedExam;
     if (!isCoWisePattern) return [1, 2, 3, 4, 5];
+    // QP1FINAL (THEORY) and TAM_THEORY (TAMIL) both use [2,3] CO range for Cycle-2 exams.
     const qpCode = (selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL')
       ? (selectedQpType || '').toUpperCase().replace(/\s+/g, '')
-      : '';
-    const isQp1Final = qpCode === 'QP1FINAL' || qpCode === 'QP1FINALYEAR';
+      : (selectedClassType === 'TAMIL')
+        ? (selectedQpType || '').toUpperCase().replace(/\s+/g, '')
+        : '';
+    const isQp1Final =
+      qpCode === 'QP1FINAL' || qpCode === 'QP1FINALYEAR' ||
+      (selectedClassType === 'TAMIL' && qpCode === 'TAM_THEORY');
     if (exam === 'SSA1' || exam === 'FORMATIVE1') return [1, 2];
     if (exam === 'SSA2' || exam === 'FORMATIVE2') return isQp1Final ? [2, 3] : [3, 4];
     return [1, 2, 3, 4, 5];
@@ -285,7 +295,8 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
   const backendKey = useMemo(() => {
     const class_type = selectedClassType;
-    const question_paper_type = (selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') ? selectedQpType : null;
+    const qpTypeClasses: ClassType[] = ['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'];
+    const question_paper_type = qpTypeClasses.includes(selectedClassType) ? selectedQpType : null;
     return {
       class_type,
       question_paper_type,
@@ -295,7 +306,8 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
   const customBackendKey = useMemo(() => {
     const class_type = selectedClassType;
-    const question_paper_type = (selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') ? selectedQpType : null;
+    const qpTypeClasses: ClassType[] = ['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'];
+    const question_paper_type = qpTypeClasses.includes(selectedClassType) ? selectedQpType : null;
     return {
       batch_id: selectedBatchId,
       class_type,
@@ -802,11 +814,18 @@ export default function AcademicControllerQPPage(): JSX.Element {
         })}
       </div>
 
-      {(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && (() => {
-        // For SPECIAL: show only CSD; for THEORY: show all except CSD
+      {(['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'] as ClassType[]).includes(selectedClassType) && (() => {
+        // For SPECIAL: show only CSD; for TAMIL: show only TAM_THEORY; for ENGLISH: show only ELECTIVE1;
+        // for FOREIGN_LANG: show only FLC_QP; for THEORY: show all except special-use codes
         const filteredQpTypes = selectedClassType === 'SPECIAL'
           ? qpTypes.filter((qp) => qp.code === 'CSD')
-          : qpTypes.filter((qp) => qp.code !== 'CSD');
+          : selectedClassType === 'TAMIL'
+          ? qpTypes.filter((qp) => qp.code === 'TAM_THEORY')
+          : selectedClassType === 'ENGLISH'
+          ? qpTypes.filter((qp) => qp.code === 'ELECTIVE1')
+          : selectedClassType === 'FOREIGN_LANG'
+          ? qpTypes.filter((qp) => qp.code === 'FLC_QP')
+          : qpTypes.filter((qp) => qp.code !== 'CSD' && qp.code !== 'TAM_THEORY');
         return (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
           <div style={{ fontSize: 13, color: '#6b7280', fontWeight: 800, marginRight: 8 }}>Question Paper Type:</div>

@@ -49,8 +49,8 @@ export function getNormalizedInternalMarkWeights(
   const ct = normalizeClassType(classType || '');
   const rawWeights = weightItem?.internal_mark_weights;
 
-  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
-    const cfg = ct === 'ENGLISH' ? getEnglishExamWeightConfig(rawWeights) : getForeignLangExamWeightConfig(rawWeights);
+  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG' || ct === 'TAMIL') {
+    const cfg = ct === 'ENGLISH' ? getEnglishExamWeightConfig(rawWeights) : ct === 'TAMIL' ? getTamilExamWeightConfig(rawWeights) : getForeignLangExamWeightConfig(rawWeights);
     const perCo = (entry: EnglishCycleEntry, fallbackCos: number[]) => {
       const cos = Array.isArray(entry?.cos) && entry.cos.length ? entry.cos : fallbackCos;
       const n = Math.max(1, cos.length);
@@ -144,11 +144,13 @@ export function getInternalMarkWeightSlotsForCo(
     }
   }
 
-  // ENGLISH / FOREIGN_LANG: both CIA1 and CIA2 contribute to ALL 5 COs
-  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
+  // ENGLISH / FOREIGN_LANG / TAMIL: both CIA1 and CIA2 contribute to ALL 5 COs
+  if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG' || ct === 'TAMIL') {
     const rawWeights = weightItem?.internal_mark_weights;
     const cfg = ct === 'ENGLISH'
       ? getEnglishExamWeightConfig(rawWeights)
+      : ct === 'TAMIL'
+      ? getTamilExamWeightConfig(rawWeights)
       : getForeignLangExamWeightConfig(rawWeights);
     const cia1Per = Number(cfg.cia1?.weight || 0) / 5;
     const cia2Per = Number(cfg.cia2?.weight || 0) / 5;
@@ -458,4 +460,37 @@ export function isForeignLangExamWeights(w: any): w is ForeignLangExamWeights {
 export function getForeignLangExamWeightConfig(raw: any): ForeignLangExamWeights {
   if (isForeignLangExamWeights(raw)) return raw;
   return JSON.parse(JSON.stringify(DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS));
+}
+
+// ─── TAMIL Exam Weights (same 3-cycle structure as ENGLISH/FOREIGN_LANG) ─────
+
+export type TamilExamWeights = {
+  type: 'tamil_exam_weights';
+  ssa1:  EnglishCycleEntry;
+  fa1:   EnglishCycleEntry;
+  cia1:  EnglishCycleEntry;
+  ssa2:  EnglishCycleEntry;
+  fa2:   EnglishCycleEntry;
+  cia2:  EnglishCycleEntry;
+  model: EnglishModelEntry;
+};
+
+export const DEFAULT_TAMIL_EXAM_WEIGHTS: TamilExamWeights = {
+  type: 'tamil_exam_weights',
+  ssa1:  { max: 20, weight: 3.0,  cos: [1, 2] },
+  fa1:   { max: 20, weight: 5.0,  cos: [1, 2] },
+  cia1:  { max: 60, weight: 6.0 },
+  ssa2:  { max: 20, weight: 3.0,  cos: [3, 4] },
+  fa2:   { max: 20, weight: 5.0,  cos: [3, 4] },
+  cia2:  { max: 60, weight: 6.0 },
+  model: { max_per_co: 20, co_weights: [2.4, 2.4, 2.4, 2.4, 2.4] },
+};
+
+export function isTamilExamWeights(w: any): w is TamilExamWeights {
+  return w != null && typeof w === 'object' && !Array.isArray(w) && w.type === 'tamil_exam_weights';
+}
+
+export function getTamilExamWeightConfig(raw: any): TamilExamWeights {
+  if (isTamilExamWeights(raw)) return raw;
+  return JSON.parse(JSON.stringify(DEFAULT_TAMIL_EXAM_WEIGHTS));
 }

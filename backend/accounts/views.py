@@ -1827,3 +1827,43 @@ class UCStateView(APIView):
         cfg.under_construction = normalized
         cfg.save(update_fields=['under_construction', 'updated_at'])
         return Response({'under_construction': cfg.under_construction}, status=status.HTTP_200_OK)
+
+
+class AppConditionsView(APIView):
+    """Read/update app access conditions (e.g. require profile/phone for marks)."""
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    _DEFAULT_CONDITIONS = {
+        'application': {'require_profile': True, 'require_phone': True},
+        'marks': {'require_profile': False, 'require_phone': False},
+    }
+
+    def get(self, request):
+        from .models import SiteConfiguration
+        cfg = SiteConfiguration.get()
+        conditions = cfg.app_conditions if isinstance(cfg.app_conditions, dict) else {}
+        merged = {}
+        for section, defaults in self._DEFAULT_CONDITIONS.items():
+            section_val = conditions.get(section) if isinstance(conditions.get(section), dict) else {}
+            merged[section] = {k: bool(section_val.get(k, v)) for k, v in defaults.items()}
+        return Response({'conditions': merged}, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        if not _user_is_iqac(request.user):
+            return Response({'detail': 'Only IQAC users can update this.'}, status=status.HTTP_403_FORBIDDEN)
+
+        data = (request.data or {}).get('conditions')
+        if not isinstance(data, dict):
+            return Response({'detail': 'conditions must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized: dict = {}
+        for section, defaults in self._DEFAULT_CONDITIONS.items():
+            section_val = data.get(section) if isinstance(data.get(section), dict) else {}
+            normalized[section] = {k: bool(section_val.get(k, v)) for k, v in defaults.items()}
+
+        from .models import SiteConfiguration
+        cfg = SiteConfiguration.get()
+        cfg.app_conditions = normalized
+        cfg.save(update_fields=['app_conditions', 'updated_at'])
+        return Response({'conditions': normalized}, status=status.HTTP_200_OK)

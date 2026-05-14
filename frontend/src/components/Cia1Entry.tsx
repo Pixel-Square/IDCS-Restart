@@ -356,8 +356,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         return;
       }
 
-      // Only THEORY uses QP1/QP2. For TCPR/TCPL/LAB, IQAC saves patterns with question_paper_type = null.
-      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey ? qpTypeKey : null) : null;
+      // THEORY, TAMIL, ENGLISH, and FOREIGN_LANG use QP-type-specific patterns.
+      // For TCPR/TCPL/LAB, IQAC saves patterns with question_paper_type = null.
+      const _qpTypeClasses = new Set(['THEORY', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG']);
+      const qpForApi = _qpTypeClasses.has(classTypeKey) ? (qpTypeKey ? qpTypeKey : null) : null;
 
       const examForApi = assessmentKey === 'cia2' ? 'CIA2' : 'CIA1';
       let res: any = null;

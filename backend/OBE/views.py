@@ -1638,10 +1638,12 @@ def _enforce_mark_entry_not_blocked(
     teaching_assignment_id: int | None = None,
 ):
     """Block edits after publish unless an IQAC approval window is active."""
-    # Check master config to see if publish lock is active globally
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=str(assessment).lower(), teaching_assignment_id=teaching_assignment_id)
+    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
+
     master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
     master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
-    if not master_cfg.get('edit_requests_enabled', True):
+    if global_unlimited or (not master_cfg.get('edit_requests_enabled', True)):
         return None
 
     user = getattr(request, 'user', None)
@@ -1893,8 +1895,8 @@ def _normalise_class_type_weights_array(class_type: str, arr):
     expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
     defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
 
-    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG – pass through as-is
-    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights'):
+    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG/TAMIL – pass through as-is
+    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights', 'tamil_exam_weights'):
         return arr
 
     if not isinstance(arr, list):
@@ -2465,8 +2467,8 @@ def class_type_weights_upsert(request):
             im = None
             try:
                 im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
-                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG – store as-is
-                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights'):
+                # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG/TAMIL – store as-is
+                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights', 'tamil_exam_weights'):
                     im = im_raw
                 elif isinstance(im_raw, list):
                     im = []
@@ -3707,6 +3709,8 @@ def _normalize_obe_class_type(value) -> str:
         return 'AUDIT'
     if compact == 'SPECIAL':
         return 'SPECIAL'
+    if compact == 'TAMIL':
+        return 'TAMIL'
     return raw or 'THEORY'
 
 
@@ -8783,13 +8787,18 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
     if gate is not None:
         return gate
 
-    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
-    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
-    unlimited_publish = not master_cfg.get('edit_requests_enabled', True)
-
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
     section_name = _resolve_section_name_from_ta(ta)
+
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
+
+    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
+    unlimited_publish = global_unlimited or (not master_cfg.get('edit_requests_enabled', True))
+
+
 
     try:
         lock = _get_mark_table_lock_if_exists(
@@ -8966,7 +8975,17 @@ def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: s
     except OperationalError:
         return Response({'detail': 'Database unavailable.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
+    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
+
+    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
+    unlimited_publish = global_unlimited or (not master_cfg.get('edit_requests_enabled', True))
+
     entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and bool(getattr(lock, 'mark_manager_locked', False))
+    if _has_obe_master_permission(getattr(request, 'user', None)) or unlimited_publish:
+        entry_open = True
+
     return Response(
         {
             'status': 'ok',

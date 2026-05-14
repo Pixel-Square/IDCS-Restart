@@ -21,10 +21,10 @@ type SemesterRow = { id: number; number: number | null };
 
 const SEMESTER_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-type ClassTypeKey = 'THEORY' | 'LAB' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PRBL' | 'PROJECT' | 'AUDIT' | 'SPECIAL';
+type ClassTypeKey = 'THEORY' | 'LAB' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PRBL' | 'PROJECT' | 'AUDIT' | 'SPECIAL' | 'TAMIL';
 
 // Mirrored from backend: curriculum.models.CLASS_TYPE_CHOICES
-const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'TCPL', 'TCPR', 'PRACTICAL', 'PRBL', 'PROJECT', 'AUDIT', 'SPECIAL'];
+const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'TCPL', 'TCPR', 'PRACTICAL', 'PRBL', 'PROJECT', 'AUDIT', 'SPECIAL', 'TAMIL'];
 
 const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   THEORY: 'Theory',
@@ -36,6 +36,7 @@ const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   PROJECT: 'Project',
   AUDIT: 'Audit',
   SPECIAL: 'Special',
+  TAMIL: 'Tamil',
 };
 
 // Assessment mapping MUST match what faculty sees in Mark Entry tabs (see MarkEntryTabs.getVisibleTabs).
@@ -117,6 +118,7 @@ function expectedAssessmentsForClassType(classType: ClassTypeKey, subjectsForLea
   }
 
   // TCPL uses formative keys as LAB 1/LAB 2; assessments remain the same keys.
+  // TAMIL uses the same 3-cycle flow as THEORY (SSA1+FA1+CIA1 / SSA2+FA2+CIA2 / Model).
   // THEORY/AUDIT/default follow the full theory flow.
   return THEORY_DEFAULT_ASSESSMENTS;
 }
@@ -162,6 +164,7 @@ function normalizeClassType(v: any): ClassTypeKey {
   if (k === 'PROJECT') return 'PROJECT';
   if (k === 'AUDIT') return 'AUDIT';
   if (k === 'SPECIAL') return 'SPECIAL';
+  if (k === 'TAMIL') return 'TAMIL';
   return 'THEORY';
 }
 

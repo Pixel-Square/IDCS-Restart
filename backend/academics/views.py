@@ -10137,6 +10137,7 @@ class StudentMarksView(APIView):
         ta_ids_by_code = defaultdict(list)
         ta_meta_by_code = {}
         ta_subject_by_code = {}
+        ta_obj_by_code = {}  # section-matched TA object keyed by course code (for on-the-fly compute)
         try:
             ay_active = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
         except Exception:
@@ -10204,10 +10205,15 @@ class StudentMarksView(APIView):
                                 ta_subj = None
                             if ta_subj is not None:
                                 ta_subject_by_code[tcode] = ta_subj
+
+                            # Keep full TA object for on-the-fly mark computation (section-exact only).
+                            if is_section_match:
+                                ta_obj_by_code[tcode] = ta
         except Exception:
             ta_ids_by_code = defaultdict(list)
             ta_meta_by_code = {}
             ta_subject_by_code = {}
+            ta_obj_by_code = {}
 
         try:
             from OBE.models import LabPublishedSheet, ModelPublishedSheet, ObeCqiPublished
@@ -10220,6 +10226,7 @@ class StudentMarksView(APIView):
         # - curriculum rows (core)
         # - elective choices
         # - any Subject rows resolved for the student
+        # - any TeachingAssignment codes for the student's section (covers lab/theory/special etc.)
         codes_set = set()
         for c in (allowed_codes or []):
             cc = str(c or '').strip()
@@ -10232,6 +10239,14 @@ class StudentMarksView(APIView):
             sc = str(getattr(s, 'code', '') or '').strip()
             if sc:
                 codes_set.add(sc)
+        # Include TA codes that are SECTION-MATCHED (exact section, not null-section global TAs)
+        # so lab/theory/special courses that lack a CurriculumDepartment entry still appear.
+        # Null-section TAs are shared/global and must NOT be used to add extra courses.
+        for tc, meta in (ta_meta_by_code or {}).items():
+            if meta.get('section_match'):
+                tc = str(tc or '').strip()
+                if tc:
+                    codes_set.add(tc)
 
         # Map code -> Subject (prefer course-specific Subject when available)
         subject_by_code = {}
@@ -10268,6 +10283,143 @@ class StudentMarksView(APIView):
                         bi_data_by_subj[sid] = d
         except Exception:
             pass
+
+        # FinalInternalMark: stores the persisted final mark (with CQI) per subject/student.
+        # This is the authoritative source for the "100" column in Internal Mark page.
+        fim_by_subj_id: dict = {}
+        try:
+            from OBE.models import FinalInternalMark as _FinalInternalMark
+            fim_qs = (
+                _FinalInternalMark.objects.filter(student=sp)
+                .values('subject_id', 'final_mark', 'max_mark', 'teaching_assignment_id')
+            )
+            for fim in fim_qs:
+                sid = fim['subject_id']
+                if sid is None:
+                    continue
+                # Prefer TA-scoped row; fallback to any row for the subject
+                existing = fim_by_subj_id.get(sid)
+                is_ta_scoped = fim.get('teaching_assignment_id') is not None
+                if existing is None or is_ta_scoped:
+                    fim_by_subj_id[sid] = fim
+        except Exception:
+            fim_by_subj_id = {}
+
+        # For subjects still missing a FinalInternalMark (e.g., staff hasn't run recompute yet),
+        # compute on-the-fly using the same service functions that populate FinalInternalMark.
+        # This ensures THEORY / LAB / SPECIAL / PROJECT etc. all show marks without a manual recompute.
+        try:
+            from OBE.services.final_internal_marks import (
+                _compute_weighted_final_total_theory_like,
+                _compute_tcpr_final_total,
+                _compute_tcpl_final_total,
+                _compute_lab_final_total,
+                _compute_project_final_total,
+                _compute_english_final_total,
+                _compute_foreign_lang_final_total,
+                _compute_tamil_final_total,
+                _compute_prbl_final_total,
+                _resolve_class_type as _fim_resolve_class_type,
+                _get_internal_weight_slots,
+            )
+            _fim_service_available = True
+        except Exception:
+            _fim_service_available = False
+
+        if _fim_service_available:
+            _student_ref = {'id': sp.id, 'reg_no': getattr(sp, 'reg_no', '')}
+            for code, ta in (ta_obj_by_code or {}).items():
+                subj_for_code = ta_subject_by_code.get(code) or subject_by_code.get(code)
+                if subj_for_code is None:
+                    continue
+                subj_id = getattr(subj_for_code, 'id', None)
+                if subj_id is None or subj_id in fim_by_subj_id:
+                    continue  # already have a FIM record; skip
+                ta_id = getattr(ta, 'id', None)
+                if ta_id is None:
+                    continue
+                try:
+                    ct = _fim_resolve_class_type(ta)
+                    computed_total = None
+
+                    # Try theory-like path first (handles THEORY, SPECIAL, THEORY_PMBL)
+                    computed_total = _compute_weighted_final_total_theory_like(
+                        ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                    )
+
+                    if computed_total is None and ct == 'TCPR':
+                        computed_total = _compute_tcpr_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct == 'PROJECT':
+                        computed_total = _compute_project_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct in ('LAB', 'PRACTICAL'):
+                        computed_total = _compute_lab_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id, class_type=ct
+                        )
+                    if computed_total is None and ct == 'TCPL':
+                        computed_total = _compute_tcpl_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct == 'PRBL':
+                        computed_total = _compute_prbl_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct == 'ENGLISH':
+                        computed_total = _compute_english_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct == 'FOREIGN_LANG':
+                        computed_total = _compute_foreign_lang_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+                    if computed_total is None and ct == 'TAMIL':
+                        computed_total = _compute_tamil_final_total(
+                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
+                        )
+
+                    if computed_total is not None:
+                        # Determine max_mark from class type weight slots
+                        try:
+                            weights = _get_internal_weight_slots(ct)
+                            max_mark = float(sum(weights)) if weights else 40.0
+                        except Exception:
+                            max_mark = 40.0
+                        fim_by_subj_id[subj_id] = {
+                            'subject_id': subj_id,
+                            'final_mark': computed_total,
+                            'max_mark': max_mark,
+                            'teaching_assignment_id': ta_id,
+                            '_computed_live': True,
+                        }
+                except Exception:
+                    pass
+
+        import decimal as _decimal_mod
+        from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
+
+        def _build_fim_marks(fim_row):
+            """Return dict with final_mark and final_mark_100 from a FinalInternalMark row dict."""
+            if not fim_row:
+                return {}
+            fm = fim_row.get('final_mark')
+            mm = fim_row.get('max_mark')
+            try:
+                fm_f = float(fm) if fm is not None else None
+                mm_f = float(mm) if mm is not None else None
+            except (TypeError, ValueError):
+                return {}
+            if fm_f is None:
+                return {}
+            result = {'final_mark': fm_f}
+            if mm_f and mm_f > 0:
+                raw_100 = (fm_f / mm_f) * 100.0
+                total_100 = int(_Decimal(str(float(raw_100))).quantize(_Decimal('1'), rounding=_ROUND_HALF_UP))
+                result['final_mark_100'] = total_100
+                result['final_mark_max'] = mm_f
+            return result
 
         out_courses = []
 
@@ -10535,6 +10687,7 @@ class StudentMarksView(APIView):
                         'has_cqi': has_cqi,
                         **({'cos': cos} if cos is not None else {}),
                         'bi': {k: (float(v) if isinstance(v, decimal.Decimal) else v) for k, v in bi_data_by_subj.get(getattr(subj, 'id', None), {}).items() if v is not None} if getattr(subj, 'id', None) else {},
+                        **_build_fim_marks(fim_by_subj_id.get(getattr(subj, 'id', None))),
                     },
                 }
             )
