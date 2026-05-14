@@ -46,9 +46,15 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [leavePolicy, setLeavePolicy] = useState<LeavePolicy>({});
   const [attendanceAction, setAttendanceAction] = useState<AttendanceAction>({});
 
+  const normalizedTemplateName = String(name || '').trim().toLowerCase();
   const isLateEntryTemplateName =
-    String(name || '').trim().toLowerCase() === 'late entry permission' ||
-    String(name || '').trim().toLowerCase() === 'late entry permission - spl';
+    normalizedTemplateName === 'late entry permission' ||
+    normalizedTemplateName === 'late entry permission - spl';
+  const isVacationTemplateName =
+    normalizedTemplateName === 'vacation application' ||
+    normalizedTemplateName === 'vacation application - spl' ||
+    normalizedTemplateName === 'vacation cancellation form' ||
+    normalizedTemplateName === 'vacation cancellation form - spl';
 
   useEffect(() => {
     if (template) {
@@ -195,7 +201,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
         if (!leavePolicy.reset_period) {
           return 'Reset period is required for late entry templates';
         }
-      } else {
+      } else if (!isVacationTemplateName) {
         if (!leavePolicy.from_date || !leavePolicy.to_date) {
           return 'From date and to date are required for neutral forms';
         }
@@ -218,10 +224,12 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     try {
       const normalizedLeavePolicy: LeavePolicy = { ...leavePolicy };
       if (normalizedLeavePolicy.action === 'neutral') {
-        if (isLateEntryTemplateName) {
+        if (isLateEntryTemplateName || isVacationTemplateName) {
           delete normalizedLeavePolicy.from_date;
           delete normalizedLeavePolicy.to_date;
           delete normalizedLeavePolicy.split_date;
+          delete normalizedLeavePolicy.reset_period;
+          delete normalizedLeavePolicy.reset_duration;
         } else {
           delete normalizedLeavePolicy.reset_period;
           delete normalizedLeavePolicy.reset_duration;
