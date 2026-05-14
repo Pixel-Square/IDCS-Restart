@@ -144,6 +144,9 @@ class AcV2ClassType(models.Model):
     #   ...
     # ]
     exam_assignments = models.JSONField(default=list, blank=True)
+
+    # Shared CQI custom variables available to all CQI configs in this class type.
+    cqi_global_custom_vars = models.JSONField(default=list, blank=True)
     
     # Default number of COs
     default_co_count = models.IntegerField(default=5)
@@ -1281,7 +1284,11 @@ class AcV2QpAssignment(models.Model):
     # Snapshot of the question table for quick access in DB/admin.
     # Stored as an array of rows: [{title, max_marks, btl_level, co_number, enabled}, ...]
     question_table = models.JSONField(default=list, blank=True)
-    
+
+    # Optional pass mark (whole number) for this exam within the QP type.
+    # When set, overrides the percentage-based pass mark calculation in reporting.
+    pass_mark = models.PositiveSmallIntegerField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
@@ -1400,6 +1407,7 @@ class AcV2Cycle(models.Model):
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
     inactive_semester_ids = models.JSONField(default=list, blank=True)
+    order = models.IntegerField(default=0, db_index=True)
 
     college = models.ForeignKey(
         'college.College',
@@ -1416,7 +1424,7 @@ class AcV2Cycle(models.Model):
         db_table = 'acv2_cycle'
         verbose_name = 'Academic Cycle'
         verbose_name_plural = 'Academic Cycles'
-        ordering = ['-created_at']
+        ordering = ['order', 'name']
 
     def __str__(self):
         return f"{self.name} ({self.code})"
@@ -1504,3 +1512,30 @@ class AcV2CqiAttained(models.Model):
 
     def __str__(self):
         return f"CQI Attained - TA {getattr(self.teaching_assignment, 'id', '')}"
+
+
+# ============================================================================
+# PASS MARK SETTINGS
+# ============================================================================
+
+class AcV2PassMarkSetting(models.Model):
+    """
+    Global pass mark configuration used in result analysis PDF and reports.
+    out_of: the denominator (e.g. 100)
+    pass_mark: the minimum mark to pass (e.g. 50)
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    out_of = models.IntegerField(default=100, help_text='Total marks (denominator)')
+    pass_mark = models.IntegerField(default=50, help_text='Minimum marks to pass')
+    label = models.CharField(max_length=100, default='Default', help_text='Label for this setting')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_pass_mark_setting'
+        verbose_name = 'Pass Mark Setting'
+        verbose_name_plural = 'Pass Mark Settings'
+        ordering = ['out_of']
+
+    def __str__(self):
+        return f"{self.label}: {self.pass_mark}/{self.out_of}"

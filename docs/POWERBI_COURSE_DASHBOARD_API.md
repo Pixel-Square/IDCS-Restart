@@ -85,8 +85,12 @@ All filters are optional.
 - `remarks`
 - `exam_max_marks`
 - `exam_weight`
-- `exam_total_mark`
+- `exam_total_mark` — Calculated as the sum of all CO marks (`exam_co1_mark` + `exam_co2_mark` + `exam_co3_mark` + `exam_co4_mark` + `exam_co5_mark`).
 - `exam_weighted_mark`
+ - `student_profile_path` — Relative media path to the student's profile image (e.g. `profile_images/abc123.jpg`). Combine with your `BaseUrl`/`RootUrl` to form a full image URL for Power BI.
+ - `faculty_profile_path` — Relative media path to the faculty's profile image (e.g. `profile_images/xyz789.jpg`). Combine with your `BaseUrl`/`RootUrl` to form a full image URL for Power BI.
+ - `student_photo_url` — Full HTTPS URL to the student's profile image (e.g. `https://idcs.zynix.us/media/profile_images/5de21a4010fa4065b281e929be89b977.jpg`). Returned by the API when possible.
+ - `faculty_photo_url` — Full HTTPS URL to the faculty's profile image (e.g. `https://idcs.zynix.us/media/profile_images/xyz789.jpg`). Returned by the API when possible.
 - `exam_co1_mark`
 - `exam_co2_mark`
 - `exam_co3_mark`
@@ -99,8 +103,8 @@ All filters are optional.
 - `internal_co5_total`
 - `internal_final_mark`
 - `internal_max_mark`
-- `pass_mark`
-- `is_pass`
+- `pass_mark` — Effective pass mark for this exam. Uses the **whole-number pass mark** set on the QP type's exam assignment in the QP Pattern Editor when available; otherwise falls back to `internal_max_mark × pass_percent / 100` (default 50%). Set per exam in *Admin → QP Pattern Editor → select Class Type & QP Type → Pass Mark field on each exam row*.
+- `is_pass` — Determined by comparing the sum of CO marks (`exam_co1_mark` + `exam_co2_mark` + `exam_co3_mark` + `exam_co4_mark` + `exam_co5_mark`) against `pass_mark`. Returns `true` if sum >= `pass_mark`, `false` otherwise. Returns `null` if `pass_mark` is not set.
 
 ## Power Query Template
 
@@ -110,7 +114,7 @@ Leave filter values as `null` to fetch all courses and all sections. Set them on
 
 ```powerquery
 let
-    BaseUrl   = "https://idcs.zynix.us/",
+    BaseUrl   = "https://idcs.zynix.us",
     ApiKey    = "RPT_2026_61HAja_DpYo-9eGxaEEEDguVQYDiMdg7eFp9uL4eLl34We9-GGFKjg",
     PageSize  = 500,
 
@@ -120,6 +124,8 @@ let
     QpType     = null,
     FacultyUserId = null,
     PassPercent = "50",
+
+    RootUrl = Text.TrimEnd(BaseUrl, "/"),
 
     BuildQuery = (page as number) as record =>
         let
@@ -138,7 +144,7 @@ let
 
     GetPage = (page as number) as record =>
         let
-            url = BaseUrl & "/api/reporting/v2/dashboard/course/",
+            url = RootUrl & "/api/reporting/v2/dashboard/course/",
             resp =
                 Json.Document(
                     Web.Contents(
@@ -172,6 +178,25 @@ let
 in
     TableOut
 ```
+
+    ## Student Profile Photos
+
+    - `student_profile_path` is a relative media path (for example `profile_images/abc123.jpg`). The API does not assume a host so you must combine it with your `BaseUrl`/`RootUrl` to form a full HTTP URL.
+
+    Power Query (add full image URL columns):
+
+    ```powerquery
+    TableWithPhotos = Table.AddColumn(TableOut, "student_photo_url", each if Text.Trim([student_profile_path] & "") = "" then null else RootUrl & "/media/" & Text.TrimStart([student_profile_path], "/")),
+    TableWithPhotos2 = Table.AddColumn(TableWithPhotos, "faculty_photo_url", each if Text.Trim([faculty_profile_path] & "") = "" then null else RootUrl & "/media/" & Text.TrimStart([faculty_profile_path], "/"))
+    ```
+
+    Use `TableWithPhotos2` as the downstream table when loading into Power BI.
+
+    Power BI (show images):
+
+    - After loading the table, select the `photo_url` column in the Data view, then on the ribbon choose **Modeling → Data Category → Image URL**.
+    - Use `photo_url` in a Table visual or any visual that supports image URLs to display student photos. Ensure the Power BI machine can access your `RootUrl/media/...` URLs (public or reachable from Power BI Desktop).
+
 
 ## How To Use The Same Query For All Courses
 

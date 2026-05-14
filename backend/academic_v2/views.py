@@ -42,7 +42,27 @@ from .serializers import (
     AcV2UserPatternOverrideSerializer,
     AcV2QpTypeSerializer,
     AcV2CycleSerializer,
+    AcV2PassMarkSettingSerializer,
 )
+from .models import AcV2PassMarkSetting
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_pass_mark_settings(request):
+    """Get or update the global pass mark setting (singleton — auto-creates if missing)."""
+    if not request.user.is_staff:
+        return Response({'detail': 'Permission denied'}, status=403)
+    obj, _ = AcV2PassMarkSetting.objects.get_or_create(
+        defaults={'out_of': 100, 'pass_mark': 50, 'label': 'Default'},
+        label='Default',
+    )
+    if request.method == 'GET':
+        return Response(AcV2PassMarkSettingSerializer(obj).data)
+    serializer = AcV2PassMarkSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
 
 
 @api_view(['POST'])
@@ -420,11 +440,23 @@ class AcV2CycleViewSet(viewsets.ModelViewSet):
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
-        return qs.order_by('name')
+        return qs.order_by('order', 'name')
 
     def perform_destroy(self, instance):
         instance.is_active = False
         instance.save()
+
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder(self, request):
+        """Accept [{id, order}, ...] and bulk-update cycle display order."""
+        items = request.data if isinstance(request.data, list) else []
+        if not items:
+            return Response({'detail': 'Expected a list of {id, order} objects.'}, status=400)
+        from django.db import transaction
+        with transaction.atomic():
+            for item in items:
+                AcV2Cycle.objects.filter(pk=item.get('id')).update(order=item.get('order', 0))
+        return Response({'detail': 'Reordered successfully.'})
 
 
 # ============================================================================
@@ -2912,6 +2944,56 @@ def faculty_course_co_summary(request, ta_id):
         'ceil': math.ceil,
     }
 
+    def _normalize_cqi_token_code(value: str) -> str:
+        return re.sub(r'^_+|_+$', '', re.sub(r'[^A-Z0-9]+', '_', str(value or '').strip().upper()))
+
+    def _normalize_cqi_custom_vars(values) -> list:
+        out = []
+        if not isinstance(values, list):
+            return out
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            code = _normalize_cqi_token_code(item.get('code') or '')
+            label = str(item.get('label') or '')
+            expr = str(item.get('expr') or '')
+            if not code and not label and not expr:
+                continue
+            out.append({
+                'code': code,
+                'label': label,
+                'expr': expr,
+            })
+        return out
+
+    def _co_list_from_value(raw_co):
+        if isinstance(raw_co, list):
+            result = []
+            for val in raw_co:
+                try:
+                    num = int(val)
+                except Exception:
+                    continue
+                if 1 <= num <= co_count:
+                    result.append(num)
+            return result
+        try:
+            num = int(raw_co)
+        except Exception:
+            return []
+        return [num] if 1 <= num <= co_count else []
+
+    def _count_mark_manager_items_for_co(exam_info: dict, co_num: int) -> int:
+        qp_cos_local = exam_info.get('_qp_cos') or []
+        qp_enabled_local = exam_info.get('_qp_enabled') or [True] * len(qp_cos_local)
+        count = 0
+        for idx, raw_co in enumerate(qp_cos_local):
+            if idx < len(qp_enabled_local) and not qp_enabled_local[idx]:
+                continue
+            if co_num in _co_list_from_value(raw_co):
+                count += 1
+        return count
+
     def _safe_eval_cqi_num(expr: str, vars_map: dict) -> float:
         """Safely evaluate a numeric expression for CQI mapping."""
         allowed_names = set(str(k).upper() for k in (vars_map or {}).keys())
@@ -3830,11 +3912,27 @@ def faculty_course_co_summary(request, ta_id):
                     except Exception:
                         pass
 
+            shared_custom_vars = _normalize_cqi_custom_vars(getattr(class_type, 'cqi_global_custom_vars', []))
+
             for einfo in pending_cqi:
                 cqi_sub = einfo.get('_cqi_sub') if isinstance(einfo, dict) else {}
                 conds = cqi_sub.get('conditions', []) if isinstance(cqi_sub, dict) else []
                 else_expr = str(cqi_sub.get('else_formula', '') or '') if isinstance(cqi_sub, dict) else ''
                 legacy_value_expr = str(cqi_sub.get('co_value_expr', '') or '') if isinstance(cqi_sub, dict) else ''
+                selected_exam_codes = set(
+                    _normalize_cqi_token_code(x)
+                    for x in (cqi_sub.get('exams', []) if isinstance(cqi_sub, dict) and isinstance(cqi_sub.get('exams'), list) else [])
+                    if _normalize_cqi_token_code(x)
+                )
+                local_custom_vars = _normalize_cqi_custom_vars(cqi_sub.get('custom_vars', []) if isinstance(cqi_sub, dict) else [])
+                combined_custom_vars = []
+                seen_custom_codes = set()
+                for cv in [*shared_custom_vars, *local_custom_vars]:
+                    code = cv.get('code') or ''
+                    if not code or code in seen_custom_codes:
+                        continue
+                    seen_custom_codes.add(code)
+                    combined_custom_vars.append(cv)
 
                 exam_entry = { 'is_absent': False }
                 total_val = 0.0
@@ -3864,6 +3962,50 @@ def faculty_course_co_summary(request, ta_id):
                         'AFTER_CQI': float((before_co or 0.0) + (cqi_in or 0.0)),
                         'TOTAL_CQI': float((before_total_all or 0.0) + (sum_raw_cqi or 0.0)),
                     }
+
+                    exam_marks_map = student_entry.get('exam_marks') or {}
+                    weighted_marks_map = student_entry.get('weighted_marks') or {}
+                    for source_exam in exams_data:
+                        if source_exam.get('kind') == 'cqi':
+                            continue
+                        exam_code = _normalize_cqi_token_code(source_exam.get('exam_display_name') or source_exam.get('exam') or '')
+                        if not exam_code:
+                            continue
+                        if selected_exam_codes and exam_code not in selected_exam_codes:
+                            continue
+                        exam_key = source_exam.get('id')
+                        exam_marks = exam_marks_map.get(exam_key, {}) if isinstance(exam_marks_map, dict) else {}
+                        if not isinstance(exam_marks, dict):
+                            exam_marks = {}
+                        co_raw = float(exam_marks.get(f'co{co_n}', 0) or 0)
+                        co_weight = float(weighted_marks_map.get(f"{exam_key}_CO{co_n}", 0) or 0) if isinstance(weighted_marks_map, dict) else 0.0
+                        co_max_map = source_exam.get('co_max_map') or {}
+                        try:
+                            co_max = float(co_max_map.get(co_n, source_exam.get('max_per_co') or 0) or 0)
+                        except Exception:
+                            co_max = 0.0
+
+                        vars_map[f'{exam_code}-TOTAL'] = co_max
+                        vars_map[f'{exam_code}-OBT'] = co_raw
+                        vars_map[f'{exam_code}-WEIGHT'] = co_weight
+                        vars_map[f'COX-{exam_code}-OBT'] = co_raw
+                        vars_map[f'COX-{exam_code}-WEIGHT'] = co_weight
+
+                        if source_exam.get('mark_manager_enabled') or source_exam.get('cia_enabled'):
+                            item_count = _count_mark_manager_items_for_co(source_exam, co_n)
+                            vars_map[f'COX-{exam_code}-AVG'] = round((co_raw / item_count), 4) if item_count > 0 else 0.0
+                            vars_map[f'{exam_code}-EXAM-OBT'] = float(exam_marks.get('exam', 0) or 0) if source_exam.get('cia_enabled') else 0.0
+                            vars_map[f'{exam_code}-EXAM-WEIGHT'] = float(source_exam.get('cia_weight') or 0) if source_exam.get('cia_enabled') else 0.0
+
+                    for custom_var in combined_custom_vars:
+                        code = custom_var.get('code') or ''
+                        expr = str(custom_var.get('expr') or '').strip()
+                        if not code or not expr:
+                            continue
+                        try:
+                            vars_map[code] = _safe_eval_cqi_num(expr, vars_map)
+                        except Exception:
+                            vars_map[code] = 0.0
 
                     mapped = None
                     # Condition ladder: first match wins.
@@ -3930,6 +4072,7 @@ def faculty_course_co_summary(request, ta_id):
                 'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
                 'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
                 'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
+                'global_custom_vars': getattr(class_type, 'cqi_global_custom_vars', []) if isinstance(getattr(class_type, 'cqi_global_custom_vars', []), list) else [],
                 'co_value_expr': str(_raw.get('co_value_expr', '') or ''),
                 'formula': str(_raw.get('formula', '') or ''),
                 'conditions': _raw.get('conditions', []) if isinstance(_raw.get('conditions'), list) else [],

@@ -84,6 +84,7 @@ interface ClassType {
   total_internal_marks?: number;
   default_co_count?: number;
   exam_assignments?: ExamAssignment[];
+  cqi_global_custom_vars?: Array<{ code: string; label?: string; expr: string }>;
   allow_customize_questions?: boolean;
 }
 
@@ -119,6 +120,7 @@ interface ExamAssignment {
   default_cos: number[];
   customize_questions: boolean;
   enabled?: boolean;
+  pass_mark?: number | null; // Optional whole-number pass mark for this exam within its QP type
 }
 
 interface QpType {
@@ -309,6 +311,53 @@ function isCqiAssignment(exam: ExamAssignment | null | undefined): boolean {
 
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
+const CQI_TOKEN_SECTION_ORDER = ['custom', 'cqi', 'co_raw', 'co_weight', 'mm_avg', 'exam'] as const;
+type CqiTokenSectionKey = typeof CQI_TOKEN_SECTION_ORDER[number];
+
+const CQI_TOKEN_SECTION_META: Record<CqiTokenSectionKey, {
+  title: string;
+  description: string;
+  headerClass: string;
+  panelClass: string;
+}> = {
+  custom: {
+    title: 'Custom Variables',
+    description: 'Shared reusable formulas available across all QP types in this class type.',
+    headerClass: 'bg-indigo-100 text-indigo-700',
+    panelClass: 'border-indigo-200 bg-indigo-50/50',
+  },
+  cqi: {
+    title: 'CQI Core',
+    description: 'Base CQI inputs and derived CQI totals.',
+    headerClass: 'bg-fuchsia-100 text-fuchsia-700',
+    panelClass: 'border-fuchsia-200 bg-fuchsia-50/50',
+  },
+  co_raw: {
+    title: 'CO(x) Raw Marks',
+    description: 'Per-exam CO raw marks for the currently processed CO.',
+    headerClass: 'bg-sky-100 text-sky-700',
+    panelClass: 'border-sky-200 bg-sky-50/50',
+  },
+  co_weight: {
+    title: 'CO(x) Weights',
+    description: 'Per-exam weighted marks for the currently processed CO.',
+    headerClass: 'bg-emerald-100 text-emerald-700',
+    panelClass: 'border-emerald-200 bg-emerald-50/50',
+  },
+  mm_avg: {
+    title: 'Mark Manager Averages',
+    description: 'Average per enabled Mark Manager item for the current CO.',
+    headerClass: 'bg-amber-100 text-amber-800',
+    panelClass: 'border-amber-200 bg-amber-50/50',
+  },
+  exam: {
+    title: 'Exam Component',
+    description: 'Exam raw mark and configured exam weight when Mark Manager Exam is enabled.',
+    headerClass: 'bg-rose-100 text-rose-700',
+    panelClass: 'border-rose-200 bg-rose-50/50',
+  },
+};
+
 function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] {
   const vars: CqiVar[] = [];
   const push = (code: string, label: string, kind: CqiVar['kind'] = 'base') => {
@@ -339,14 +388,22 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   push('COX-TOTAL-RAW', 'CO(x) total (raw) — placeholder for current CO');
   push('COX-TOTAL-WEIGHT', 'CO(x) total (weighted %) — placeholder for current CO');
 
-  // Per-exam variables
+  // Per-exam variables (CO→EXAM format only: [COX-EXAMCODE-OBT])
   for (const ex of exams) {
     const examCode = normalizeTypeCode(ex.exam_display_name || ex.exam || 'EXAM');
     if (!examCode) continue;
     push(`${examCode}-TOTAL`, `${ex.exam_display_name || ex.exam} CO(x) max (current column)`);
     push(`${examCode}-OBT`, `${ex.exam_display_name || ex.exam} CO(x) obtained (raw, current column)`);
-    push(`${examCode}-COX-OBT`, `${ex.exam_display_name || ex.exam} CO(x) obtained (raw, current column)`);
+    push(`${examCode}-WEIGHT`, `${ex.exam_display_name || ex.exam} CO(x) weighted mark (current column)`);
+    // CO→EXAM format only (removed duplicate EXAM→CO format)
     push(`COX-${examCode}-OBT`, `CO(x) ${ex.exam_display_name || ex.exam} obtained (raw, current column)`);
+    push(`COX-${examCode}-WEIGHT`, `CO(x) ${ex.exam_display_name || ex.exam} weighted mark (current column)`);
+    // If exam has a Mark Manager, also expose the Mark Manager Exam column as a token
+    if (ex.mark_manager_enabled) {
+      push(`COX-${examCode}-AVG`, `CO(x) ${ex.exam_display_name || ex.exam} average per Mark Manager item`);
+      push(`${examCode}-EXAM-OBT`, `${ex.exam_display_name || ex.exam} Exam (Mark Manager) obtained`);
+      push(`${examCode}-EXAM-WEIGHT`, `${ex.exam_display_name || ex.exam} Exam (Mark Manager) weight`);
+    }
   }
 
   return vars;
@@ -359,6 +416,28 @@ function normalizeCustomVarCode(input: string) {
   const upper = raw.toUpperCase();
   const cleaned = upper.replace(/[^A-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
   return cleaned;
+}
+
+function normalizeCustomVarList(values: any): Array<{ code: string; label?: string; expr: string }> {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      code: normalizeCustomVarCode(item.code),
+      label: item.label == null ? '' : String(item.label || ''),
+      expr: String(item.expr || ''),
+    }))
+    .filter((item) => item.code || item.label || item.expr);
+}
+
+function getCqiTokenSection(variable: CqiVar): CqiTokenSectionKey {
+  const code = String(variable.code || '').toUpperCase();
+  if (variable.kind === 'custom') return 'custom';
+  if (code === 'CQI' || code === 'X' || code === 'BEFORE_CQI' || code === 'AFTER_CQI' || code === 'TOTAL_CQI') return 'cqi';
+  if (/-EXAM-(OBT|WEIGHT)$/.test(code)) return 'exam';
+  if (/-AVG$/.test(code)) return 'mm_avg';
+  if (/(^|-)WEIGHT$/.test(code) || /-WEIGHT$/.test(code)) return 'co_weight';
+  return 'co_raw';
 }
 
 export default function QpPatternEditorPage() {
@@ -417,6 +496,8 @@ export default function QpPatternEditorPage() {
   // Exam assignments (weights) live on ClassType config
   const [localExamAssignments, setLocalExamAssignments] = useState<ExamAssignment[]>([]);
   const [examAssignmentsDirty, setExamAssignmentsDirty] = useState(false);
+  const [globalCqiCustomVars, setGlobalCqiCustomVars] = useState<Array<{ code: string; label?: string; expr: string }>>([]);
+  const [savingGlobalCqiCustomVars, setSavingGlobalCqiCustomVars] = useState(false);
 
   const cqiConfigRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -645,7 +726,7 @@ export default function QpPatternEditorPage() {
 
   const normalizeExamAssignmentsForEditing = React.useCallback((raw: any[], templates: QpPattern[]) => {
     const safeList = Array.isArray(raw) ? raw : [];
-    return safeList.map((ex) => {
+    const normalized = safeList.map((ex) => {
       const exam = String(ex.exam ?? ex.qp_type ?? '').trim();
       const qpType = String(ex.qp_type ?? exam).trim();
       const examDisplayName = String(ex.exam_display_name ?? ex.exam_title ?? exam).trim();
@@ -744,6 +825,7 @@ export default function QpPatternEditorPage() {
         default_cos: kind === 'cqi' && cqi?.cos?.length ? cqi.cos : derivedCos,
         customize_questions: !!ex.customize_questions,
         enabled: ex.enabled !== false,
+        pass_mark: ex.pass_mark != null ? Number(ex.pass_mark) : null,
       } satisfies ExamAssignment;
     });
     // Deduplicate: keep only the first occurrence of each qp_type + exam_display_name pair
@@ -760,6 +842,7 @@ export default function QpPatternEditorPage() {
   useEffect(() => {
     if (!selectedClassType) {
       setLocalExamAssignments([]);
+      setGlobalCqiCustomVars([]);
       setExamAssignmentsDirty(false);
       return;
     }
@@ -768,6 +851,7 @@ export default function QpPatternEditorPage() {
       patterns.filter(p => p.class_type == null)
     );
     setLocalExamAssignments(normalized);
+    setGlobalCqiCustomVars(normalizeCustomVarList(selectedClassType.cqi_global_custom_vars));
     setExamAssignmentsDirty(false);
   }, [selectedClassType, patterns]);
 
@@ -886,7 +970,7 @@ export default function QpPatternEditorPage() {
     const maxCo = Number(selectedClassType?.default_co_count ?? 5) || 5;
     const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
     const baseVars = generateCqiVariables(baseExams, maxCo);
-    const custom = (selectedExamAssignmentItem?.exam?.cqi?.custom_vars || [])
+    const sharedCustom = normalizeCustomVarList(globalCqiCustomVars)
       .filter((v) => v && typeof v === 'object')
       .map((v: any) => {
         const code = normalizeCustomVarCode(v.code);
@@ -895,8 +979,25 @@ export default function QpPatternEditorPage() {
         return { code, token: `[${code}]`, label: `Custom variable — ${label}`, kind: 'custom' as const };
       })
       .filter(Boolean) as CqiVar[];
-    return [...custom, ...baseVars];
-  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars]);
+    const legacyCustom = (selectedExamAssignmentItem?.exam?.cqi?.custom_vars || [])
+      .filter((v) => v && typeof v === 'object')
+      .map((v: any) => {
+        const code = normalizeCustomVarCode(v.code);
+        if (!code) return null;
+        const label = String(v.label || '').trim() || code;
+        return { code, token: `[${code}]`, label: `Legacy custom variable — ${label}`, kind: 'custom' as const };
+      })
+      .filter((v) => !!v && !sharedCustom.some((s) => s.code === v.code)) as CqiVar[];
+    return [...sharedCustom, ...legacyCustom, ...baseVars];
+  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars]);
+
+  const groupedCqiVariables = React.useMemo(() => {
+    return CQI_TOKEN_SECTION_ORDER.map((sectionKey) => ({
+      key: sectionKey,
+      meta: CQI_TOKEN_SECTION_META[sectionKey],
+      items: cqiVariables.filter((variable) => getCqiTokenSection(variable) === sectionKey),
+    })).filter((section) => section.items.length > 0);
+  }, [cqiVariables]);
 
   const updateCqi = (updater: (prev: NonNullable<ExamAssignment['cqi']>) => NonNullable<ExamAssignment['cqi']>) => {
     if (!selectedExamAssignmentItem || !selectedIsCqi) return;
@@ -923,6 +1024,32 @@ export default function QpPatternEditorPage() {
       return next;
     });
     markExamDirty();
+  };
+
+  const updateGlobalCqiCustomVars = (updater: (prev: Array<{ code: string; label?: string; expr: string }>) => Array<{ code: string; label?: string; expr: string }>) => {
+    setGlobalCqiCustomVars((prev) => normalizeCustomVarList(updater(prev)));
+  };
+
+  const saveGlobalCqiCustomVars = async () => {
+    if (!selectedClassTypeId) return;
+    setSavingGlobalCqiCustomVars(true);
+    try {
+      const normalized = normalizeCustomVarList(globalCqiCustomVars);
+      const res = await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cqi_global_custom_vars: normalized }),
+      });
+      if (!res.ok) throw new Error('Failed to save shared custom variables');
+      const updated = await res.json();
+      setClassTypes((prev) => prev.map((ct) => (ct.id === selectedClassTypeId ? { ...ct, ...updated } : ct)));
+      setGlobalCqiCustomVars(normalizeCustomVarList((updated as any)?.cqi_global_custom_vars || normalized));
+      setMessage({ type: 'success', text: 'Shared CQI custom variables saved' });
+    } catch (error) {
+      console.error(error);
+      setMessage({ type: 'error', text: 'Failed to save shared CQI custom variables' });
+    } finally {
+      setSavingGlobalCqiCustomVars(false);
+    }
   };
 
   const tokenMeta = React.useCallback((code: string) => {
@@ -961,25 +1088,45 @@ export default function QpPatternEditorPage() {
       };
     }
 
+    if (/-EXAM-(OBT|WEIGHT)$/.test(c)) {
+      return {
+        group: 'EXAM PART',
+        badge: 'EXAM',
+        badgeClass: 'bg-rose-100 text-rose-700',
+        rowClass: 'bg-rose-50',
+        tokenClass: 'text-rose-800',
+      };
+    }
+
+    if (/-AVG$/.test(c)) {
+      return {
+        group: 'MM AVG',
+        badge: 'MM AVG',
+        badgeClass: 'bg-amber-100 text-amber-800',
+        rowClass: 'bg-amber-50',
+        tokenClass: 'text-amber-900',
+      };
+    }
+
     // CO-first alias: CO1-SSA1-RAW / COx-SSA1-OBT / etc.
     if (/^CO(\d+|X)-.*-(RAW|WEIGHT|TOTAL|OBT|DIFF)$/.test(c)) {
       return {
         group: 'CO→EXAM',
-        badge: 'CO→EXAM',
-        badgeClass: 'bg-amber-100 text-amber-700',
-        rowClass: '',
-        tokenClass: 'text-gray-800',
+        badge: c.endsWith('-WEIGHT') ? 'CO WT' : 'CO RAW',
+        badgeClass: c.endsWith('-WEIGHT') ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700',
+        rowClass: c.endsWith('-WEIGHT') ? 'bg-emerald-50' : 'bg-sky-50',
+        tokenClass: c.endsWith('-WEIGHT') ? 'text-emerald-800' : 'text-sky-800',
       };
     }
 
-    // Exam-first: SSA1-CO1-RAW / SSA1-COx-OBT / SSA1-TOTAL / SSA1-OBT
-    if (/-CO(\d+|X)-(RAW|WEIGHT|TOTAL|OBT|DIFF)$/.test(c) || /-(TOTAL|OBT|DIFF)$/.test(c)) {
+    // Exam-first: SSA1-CO1-RAW / SSA1-COx-OBT / SSA1-TOTAL / SSA1-OBT / SSA1-WEIGHT
+    if (/-CO(\d+|X)-(RAW|WEIGHT|TOTAL|OBT|DIFF)$/.test(c) || /-(TOTAL|OBT|WEIGHT|DIFF)$/.test(c)) {
       return {
         group: 'EXAM',
-        badge: 'EXAM',
-        badgeClass: 'bg-emerald-100 text-emerald-700',
-        rowClass: '',
-        tokenClass: 'text-gray-800',
+        badge: c.endsWith('-WEIGHT') ? 'CO WT' : 'CO RAW',
+        badgeClass: c.endsWith('-WEIGHT') ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700',
+        rowClass: c.endsWith('-WEIGHT') ? 'bg-emerald-50' : 'bg-sky-50',
+        tokenClass: c.endsWith('-WEIGHT') ? 'text-emerald-800' : 'text-sky-800',
       };
     }
 
@@ -1136,10 +1283,36 @@ export default function QpPatternEditorPage() {
       if (!base) continue;
 
       // Custom variables
+      const sharedCustomList = normalizeCustomVarList(globalCqiCustomVars);
       const customList = Array.isArray(base.custom_vars) ? base.custom_vars : [];
       const seenCodes = new Set<string>();
+      const sharedSeenCodes = new Set<string>();
+
+      for (let i = 0; i < sharedCustomList.length; i++) {
+        const cv = sharedCustomList[i] as any;
+        const code = normalizeCustomVarCode(cv?.code);
+        const label = String(cv?.label || '').trim();
+        const expr = String(cv?.expr || '').trim();
+        if (!code && !label && !expr) continue;
+        if (!code) return `Shared custom variable ${i + 1}: token code is required`;
+        if (sharedSeenCodes.has(code)) return `Shared custom variable ${i + 1}: duplicate token code [${code}]`;
+        if (baseAllowedTokens.has(`[${code}]`)) return `Shared custom variable ${i + 1}: token code [${code}] conflicts with an existing token`;
+        const allowedForExpr = new Set<string>([
+          ...Array.from(baseAllowedTokens),
+          ...Array.from(sharedSeenCodes).map((c) => `[${c}]`),
+        ]);
+        if (!expr) return `Shared custom variable ${i + 1} ([${code}]): expression is required`;
+        const errExpr = validateExpression(expr, {
+          label: `Shared custom variable ${i + 1} ([${code}])`,
+          allowedTokens: allowedForExpr,
+        });
+        if (errExpr) return errExpr;
+        sharedSeenCodes.add(code);
+      }
+
       // For IF/THEN/ELSE we allow base tokens + all custom tokens.
       const allCustomTokens: string[] = [];
+      for (const code of Array.from(sharedSeenCodes)) allCustomTokens.push(`[${code}]`);
       for (let i = 0; i < customList.length; i++) {
         const cv = customList[i] as any;
         const code = normalizeCustomVarCode(cv?.code);
@@ -1156,11 +1329,14 @@ export default function QpPatternEditorPage() {
         const expr = String(cv?.expr || '').trim();
         if (!code && !label && !expr) continue;
         if (!code) return `${title} · Custom variable ${i + 1}: token code is required`;
-        if (seenCodes.has(code)) return `${title} · Custom variable ${i + 1}: duplicate token code [${code}]`;
+        if (seenCodes.has(code) || sharedSeenCodes.has(code)) return `${title} · Custom variable ${i + 1}: duplicate token code [${code}]`;
         if (baseAllowedTokens.has(`[${code}]`)) return `${title} · Custom variable ${i + 1}: token code [${code}] conflicts with an existing token`;
         seenCodes.add(code);
         if (!expr) return `${title} · Custom variable ${i + 1} ([${code}]): expression is required`;
-        const prevCustomTokens = Array.from(seenCodes).filter((c) => c !== code).map((c) => `[${c}]`);
+        const prevCustomTokens = [
+          ...Array.from(sharedSeenCodes).map((c) => `[${c}]`),
+          ...Array.from(seenCodes).filter((c) => c !== code).map((c) => `[${c}]`),
+        ];
         const allowedForExpr = new Set<string>([...Array.from(baseAllowedTokens), ...prevCustomTokens]);
         const errExpr = validateExpression(expr, {
           label: `${title} · Custom variable ${i + 1} ([${code}])`,
@@ -1266,12 +1442,16 @@ export default function QpPatternEditorPage() {
     });
     const res = await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
       method: 'PATCH',
-      body: JSON.stringify({ exam_assignments: examAssignmentsPayload }),
+      body: JSON.stringify({
+        exam_assignments: examAssignmentsPayload,
+        cqi_global_custom_vars: normalizeCustomVarList(globalCqiCustomVars),
+      }),
     });
     if (!res.ok) throw new Error('Failed to save exam assignments');
     const updated = await res.json();
     setClassTypes(prev => prev.map(ct => (ct.id === selectedClassTypeId ? { ...ct, ...updated } : ct)));
     setLocalExamAssignments(normalizeExamAssignmentsForEditing((updated as any)?.exam_assignments || examAssignmentsPayload, patterns.filter(p => p.class_type == null)));
+    setGlobalCqiCustomVars(normalizeCustomVarList((updated as any)?.cqi_global_custom_vars || globalCqiCustomVars));
     setExamAssignmentsDirty(false);
   };
 
@@ -1874,6 +2054,30 @@ export default function QpPatternEditorPage() {
                       <div className="font-medium">{exam.exam_display_name || exam.exam}</div>
                       <div className="text-xs text-gray-500">
                         {selectedClassType?.display_name || selectedClassType?.name || 'Class'} · {selectedQpType || 'Type'}
+                      </div>
+                      <div className="flex items-center gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                        <label className="text-xs text-gray-500">Pass Mark:</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          placeholder="—"
+                          value={exam.pass_mark ?? ''}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            const val = raw === '' ? null : Math.max(0, Math.floor(Number(raw)));
+                            const globalIdx = visibleExamAssignmentItems[visibleIndex]?.idx;
+                            if (globalIdx == null) return;
+                            setLocalExamAssignments((prev) => {
+                              const next = [...prev];
+                              next[globalIdx] = { ...next[globalIdx], pass_mark: val };
+                              return next;
+                            });
+                            markExamDirty();
+                          }}
+                          className="w-16 text-xs border rounded px-1 py-0.5 text-center"
+                          title="Optional whole-number pass mark for this exam"
+                        />
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -3274,10 +3478,17 @@ export default function QpPatternEditorPage() {
           onAddQuestion={addQuestion}
           onOpenQuestionSettings={openQuestionSettings}
           cqiVariables={cqiVariables}
+          groupedCqiVariables={groupedCqiVariables}
           tokenMeta={tokenMeta}
           tokenInsertRequested={tokenPickerOpen}
           onRequestTokenPicker={(insert) => openTokenPicker(insert)}
           updateCqi={updateCqi}
+          availableExamAssignments={visibleExamAssignments.filter((exam) => !isCqiAssignment(exam))}
+          sharedCustomVars={globalCqiCustomVars}
+          updateSharedCustomVars={updateGlobalCqiCustomVars}
+          onSaveSharedCustomVars={saveGlobalCqiCustomVars}
+          savingSharedCustomVars={savingGlobalCqiCustomVars}
+          onEnableEditing={() => setIsEditing(true)}
           parseIfClauses={parseIfClauses}
           buildIfFromClauses={buildIfFromClauses}
           appendToken={appendToken}
@@ -3304,8 +3515,14 @@ export default function QpPatternEditorPage() {
           onReplaceRows={(rows) => { setLocalRows(rows); markDirty(); }}
           cqiEditorOpen={cqiEditorModalOpen}
           cqiVariables={cqiVariables}
+          groupedCqiVariables={groupedCqiVariables}
           tokenMeta={tokenMeta as any}
           updateCqi={updateCqi}
+          availableExamAssignments={visibleExamAssignments.filter((exam) => !isCqiAssignment(exam))}
+          sharedCustomVars={globalCqiCustomVars}
+          updateSharedCustomVars={updateGlobalCqiCustomVars}
+          onSaveSharedCustomVars={saveGlobalCqiCustomVars}
+          savingSharedCustomVars={savingGlobalCqiCustomVars}
           parseIfClauses={parseIfClauses as any}
           buildIfFromClauses={buildIfFromClauses as any}
           appendToken={appendToken}
@@ -3344,32 +3561,49 @@ export default function QpPatternEditorPage() {
             </div>
 
             <div className="flex-1 overflow-y-auto border rounded-lg">
-              <div className="divide-y">
-                {(cqiVariables || [])
-                  .filter((v) => {
-                    const q = tokenPickerSearch.trim().toLowerCase();
-                    if (!q) return true;
-                    return v.token.toLowerCase().includes(q) || v.label.toLowerCase().includes(q) || v.code.toLowerCase().includes(q);
-                  })
-                  .map((v) => (
-                    <button
-                      key={v.code}
-                      type="button"
-                      onClick={() => {
-                        tokenInsertRef.current?.insert(v.token);
-                        setTokenPickerOpen(false);
-                        tokenInsertRef.current = null;
-                      }}
-                      className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-3 ${v.kind === 'custom' ? 'bg-indigo-50' : tokenMeta(v.code).rowClass}`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={`text-[10px] px-2 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : tokenMeta(v.code).badgeClass}`}>{v.kind === 'custom' ? 'CUSTOM' : tokenMeta(v.code).badge}</span>
-                        <code className={`text-sm font-mono ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : tokenMeta(v.code).tokenClass}`}>{v.token}</code>
-                        <span className="text-sm text-gray-700 truncate">{v.label}</span>
+              <div className="space-y-3 p-3">
+                {groupedCqiVariables
+                  .map((section) => ({
+                    ...section,
+                    items: section.items.filter((v) => {
+                      const q = tokenPickerSearch.trim().toLowerCase();
+                      if (!q) return true;
+                      return v.token.toLowerCase().includes(q) || v.label.toLowerCase().includes(q) || v.code.toLowerCase().includes(q);
+                    }),
+                  }))
+                  .filter((section) => section.items.length > 0)
+                  .map((section) => (
+                    <div key={section.key} className={`rounded-xl border ${section.meta.panelClass}`}>
+                      <div className="px-3 py-2 border-b border-black/5 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">{section.meta.title}</div>
+                          <div className="text-[11px] text-gray-500">{section.meta.description}</div>
+                        </div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${section.meta.headerClass}`}>{section.items.length}</span>
                       </div>
-                    </button>
+                      <div className="divide-y divide-black/5">
+                        {section.items.map((v) => (
+                          <button
+                            key={v.code}
+                            type="button"
+                            onClick={() => {
+                              tokenInsertRef.current?.insert(v.token);
+                              setTokenPickerOpen(false);
+                              tokenInsertRef.current = null;
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-white/70 flex items-center justify-between gap-3"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`text-[10px] px-2 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : tokenMeta(v.code).badgeClass}`}>{v.kind === 'custom' ? 'CUSTOM' : tokenMeta(v.code).badge}</span>
+                              <code className={`text-sm font-mono ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : tokenMeta(v.code).tokenClass}`}>{v.token}</code>
+                            </div>
+                            <span className="text-sm text-gray-700 truncate">{v.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   ))}
-                {(cqiVariables || []).length === 0 && (
+                {cqiVariables.length === 0 && (
                   <div className="p-4 text-sm text-gray-400 text-center">No variables available</div>
                 )}
               </div>

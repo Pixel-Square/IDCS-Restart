@@ -13,6 +13,7 @@ import {
   CheckCircle,
   BarChart2,
   Grid3x3,
+  Settings,
 } from 'lucide-react';
 
 interface AdminPage {
@@ -79,6 +80,13 @@ const adminPages: AdminPage[] = [
     description: 'Set CO weight distributions for assigned exams by QP type',
     icon: <Grid3x3 size={32} />,
     order: 8,
+  },
+  {
+    title: 'Settings',
+    path: '/academic-v2/admin/pass-mark',
+    description: 'System-wide configuration — pass mark thresholds and more',
+    icon: <Settings size={32} />,
+    order: 9,
   },
 ];
 

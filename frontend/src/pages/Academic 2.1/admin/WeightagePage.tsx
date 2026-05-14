@@ -423,7 +423,7 @@ export default function WeightagePage() {
                           <div>
                             <div className="text-[10px] text-gray-500 mb-1.5 font-medium uppercase tracking-wide">Without Exam</div>
                             <div className="flex flex-wrap gap-1.5">
-                              {(exam.default_cos || []).map(co => {
+                              {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -469,7 +469,7 @@ export default function WeightagePage() {
                                   }}
                                   className="w-14 px-1 py-0.5 border rounded text-center text-xs focus:ring-1 focus:ring-amber-400" />
                               </div>
-                              {(exam.default_cos || []).map(co => {
+                              {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -501,7 +501,7 @@ export default function WeightagePage() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
-                          {(exam.default_cos || []).map(co => {
+                          {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
                             const coKey = String(co);
                             const coWeight = (exam.co_weights || {})[coKey] ?? 0;
                             return (

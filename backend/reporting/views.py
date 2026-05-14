@@ -8,7 +8,12 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .authentication import ReportingApiKeyAuthentication
-from .permissions import CanViewPowerBIDataOrApiKey
+from .permissions import (
+    CanViewCourseDashboardOrApiKey,
+    CanViewPowerBIDataOrApiKey,
+    can_access_reporting,
+    is_reporting_api_key_auth,
+)
 from .services import query_reporting_view
 from .simple_query import get_simple_marks_data
 # v2 reporting endpoints must use Academic 2.1 data only (avoid obe_* tables).
@@ -138,6 +143,7 @@ def _v2_dashboard_filters_from_request(request):
     q = request.query_params
     return {
         'year': q.get('year'),
+        'course_id': q.get('course_id'),
         'sem': q.get('sem'),
         'dept': q.get('dept'),
         'section': q.get('section'),
@@ -263,7 +269,7 @@ def v2_special_marks(request):
 
 @api_view(['GET'])
 @authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
-@permission_classes([CanViewPowerBIDataOrApiKey])
+@permission_classes([CanViewCourseDashboardOrApiKey])
 def v2_course_dashboard(request):
     """API 6 - Power BI course dashboard fact rows from Academic 2.1.
 
@@ -273,6 +279,12 @@ def v2_course_dashboard(request):
     """
     q = request.query_params
     filters = _v2_dashboard_filters_from_request(request)
+
+    # For normal faculty JWT access, force data scope to the logged-in faculty user.
+    # Reporting users / API-key clients retain broader filtering ability.
+    if (not is_reporting_api_key_auth(request)) and (not can_access_reporting(getattr(request, 'user', None))):
+        filters['faculty_user_id'] = str(getattr(request.user, 'id', '') or '')
+
     try:
         result = query_v2_course_dashboard(
             filters=filters,

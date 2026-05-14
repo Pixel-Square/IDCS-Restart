@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { Plus, X, Settings2, GripVertical } from 'lucide-react';
+import { Edit3, Plus, Save, X } from 'lucide-react';
 
 interface QuestionDef {
   title: string;
@@ -56,34 +56,7 @@ interface CycleOption {
   is_active?: boolean;
 }
 
-const BTL_LEVELS = [1, 2, 3, 4, 5, 6];
-const CO_NUMBERS = [1, 2, 3, 4, 5];
-const CO_COMBINATIONS: number[][] = (() => {
-  const result: number[][] = [];
-  const gen = (start: number, len: number, current: number[]) => {
-    if (current.length === len) { result.push([...current]); return; }
-    for (let i = start; i <= 5; i++) { current.push(i); gen(i + 1, len, current); current.pop(); }
-  };
-  for (let len = 2; len <= 5; len++) gen(1, len, []);
-  return result;
-})();
 
-const coLabel = (co: number | number[] | null): string => {
-  if (co == null) return '—';
-  if (Array.isArray(co)) return co.map(c => `CO${c}`).join(' & ');
-  return `CO${co}`;
-};
-
-function coToSelectVal(co: number | number[] | null): string {
-  if (co == null) return '';
-  if (Array.isArray(co)) return co.join(',');
-  return String(co);
-}
-function selectValToCo(val: string): number | number[] | null {
-  if (!val) return null;
-  if (val.includes(',')) return val.split(',').map(Number);
-  return Number(val);
-}
 
 type HighlightToken = { type: 'token' | 'op' | 'paren' | 'number' | 'ident' | 'text'; value: string };
 
@@ -179,6 +152,7 @@ type Props = {
 
   // state + editing permissions
   isEditing: boolean;
+  onEnableEditing?: () => void;
 
   // question table state
   localRows: QuestionDef[];
@@ -189,6 +163,11 @@ type Props = {
 
   // CQI editor state
   cqiVariables: CqiVar[];
+  groupedCqiVariables: Array<{
+    key: string;
+    meta: { title: string; description: string; headerClass: string; panelClass: string };
+    items: CqiVar[];
+  }>;
   tokenMeta: (code: string) => { badge: string; badgeClass: string; rowClass: string; tokenClass: string };
 
   // token insertion
@@ -197,6 +176,11 @@ type Props = {
 
   // update function
   updateCqi: (updater: (prev: NonNullable<ExamAssignment['cqi']>) => NonNullable<ExamAssignment['cqi']>) => void;
+  availableExamAssignments: ExamAssignment[];
+  sharedCustomVars: Array<{ code: string; label?: string; expr: string }>;
+  updateSharedCustomVars: (updater: (prev: Array<{ code: string; label?: string; expr: string }>) => Array<{ code: string; label?: string; expr: string }>) => void;
+  onSaveSharedCustomVars: () => Promise<void> | void;
+  savingSharedCustomVars?: boolean;
 
   // helpers for IF clause building (parent already has these in file; we keep minimal rendering here)
   parseIfClauses: (raw: string) => CqiIfClause[];
@@ -224,175 +208,32 @@ export default function QpCqiEditorPopup(props: Props) {
               {props.selectedExamAssignment?.exam_display_name || props.selectedExamAssignment?.exam || 'CQI'} · {props.selectedExamAssignment?.qp_type || '-'}
             </div>
           </div>
-          <button onClick={props.onClose} className="p-2 rounded hover:bg-gray-100" title="Close">
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {!props.isEditing && props.onEnableEditing && (
+              <button
+                type="button"
+                onClick={props.onEnableEditing}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100"
+                title="Enable editing for CQI"
+              >
+                <Edit3 className="w-3.5 h-3.5" /> Enable Edit
+              </button>
+            )}
+            <button onClick={props.onClose} className="p-2 rounded hover:bg-gray-100" title="Close">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Body - Horizontal layout */}
         <div className="p-4">
-          <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-            {/* Left: Question Table */}
-            <div className="xl:col-span-5">
-              <div className="border rounded-lg overflow-hidden bg-white">
-                <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-800">Question Table</div>
-                    <div className="text-xs text-gray-500">Required for CQI preview/edit</div>
-                  </div>
-                  {props.isEditing && (
-                    <button onClick={props.onAddQuestion} className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 text-blue-700 rounded text-sm hover:bg-blue-200">
-                      <Plus className="w-4 h-4" />
-                      Add Row
-                    </button>
-                  )}
-                </div>
-
-                <div className="overflow-auto max-h-[520px]">
-                  <table className="w-full text-sm table-fixed">
-                    <thead className="bg-gray-50 border-b">
-                      <tr>
-                        {props.isEditing && <th className="w-8 px-2 py-2 text-gray-400 text-xs font-semibold">#</th>}
-                        <th className="w-20 px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Enabled</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Question Title</th>
-                        <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Max</th>
-                        <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">BTL</th>
-                        <th className="w-56 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">CO</th>
-                        <th className="w-14 px-2 py-2"></th>
-                        {props.isEditing && <th className="px-2 py-2 w-8"></th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {props.localRows.length === 0 ? (
-                        <tr>
-                          <td
-                            colSpan={(props.isEditing ? 1 : 0) + 1 + 1 + 1 + 1 + 1 + 1 + (props.isEditing ? 1 : 0)}
-                            className="text-center py-10 text-gray-400"
-                          >
-                            No questions yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        props.localRows.map((row, idx) => (
-                          <tr key={idx} className={`hover:bg-gray-50 ${!row.enabled ? 'opacity-60' : ''}`}>
-                            {props.isEditing && (
-                              <td className="px-2 py-2 text-center text-gray-300 cursor-grab">
-                                <GripVertical className="w-4 h-4 inline" />
-                              </td>
-                            )}
-                            <td className="px-3 py-2 text-center">
-                              <input
-                                type="checkbox"
-                                checked={row.enabled}
-                                disabled={!props.isEditing}
-                                onChange={(e) => props.onUpdateRow(idx, 'enabled', e.target.checked)}
-                                className="w-4 h-4 accent-blue-600"
-                              />
-                            </td>
-                            <td className="px-3 py-2">
-                              {props.isEditing ? (
-                                <input
-                                  value={row.title}
-                                  onChange={(e) => props.onUpdateRow(idx, 'title', e.target.value)}
-                                  className="w-full px-2 py-2 border rounded focus:ring-1 focus:ring-blue-500 text-sm"
-                                  placeholder={`Q${idx + 1}`}
-                                />
-                              ) : (
-                                <span className="font-medium truncate inline-block max-w-full align-middle">{row.title}</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              {props.isEditing ? (
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={row.max_marks}
-                                  onChange={(e) => props.onUpdateRow(idx, 'max_marks', Number(e.target.value))}
-                                  className="w-20 px-2 py-2 border rounded text-center focus:ring-1 focus:ring-blue-500 text-sm"
-                                />
-                              ) : (
-                                <span className="font-semibold text-gray-700">{row.max_marks}</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              {props.isEditing ? (
-                                <select
-                                  value={row.btl_level ?? ''}
-                                  onChange={(e) => props.onUpdateRow(idx, 'btl_level', e.target.value ? Number(e.target.value) : null)}
-                                  className="px-2 py-2 border rounded text-sm focus:ring-1 focus:ring-blue-500"
-                                >
-                                  <option value="">User Selection</option>
-                                  {BTL_LEVELS.map(l => <option key={l} value={l}>BT{l}</option>)}
-                                </select>
-                              ) : row.btl_level ? (
-                                <span className="bg-indigo-100 text-indigo-700 text-xs px-2 py-0.5 rounded">BT{row.btl_level}</span>
-                              ) : (
-                                <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded">User Sel.</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-center">
-                              {props.isEditing ? (
-                                <select
-                                  value={coToSelectVal(row.co_number)}
-                                  onChange={(e) => props.onUpdateRow(idx, 'co_number', selectValToCo(e.target.value))}
-                                  className="w-full max-w-[14rem] px-2 py-2 border rounded text-sm focus:ring-1 focus:ring-blue-500"
-                                >
-                                  <option value="">—</option>
-                                  <optgroup label="Single CO">
-                                    {CO_NUMBERS.map(c => <option key={c} value={String(c)}>CO{c}</option>)}
-                                  </optgroup>
-                                  <optgroup label="Combination COs (mark split equally)" style={{ background: '#f3e8ff' }}>
-                                    {CO_COMBINATIONS.map(combo => {
-                                      const val = combo.join(',');
-                                      const label = combo.map(c => `CO${c}`).join(' & ');
-                                      return (
-                                        <option key={val} value={val} style={{ background: '#f3e8ff' }}>
-                                          {label}
-                                        </option>
-                                      );
-                                    })}
-                                  </optgroup>
-                                </select>
-                              ) : row.co_number != null ? (
-                                <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-0.5 rounded inline-block max-w-[14rem] truncate">
-                                  {coLabel(row.co_number)}
-                                </span>
-                              ) : (
-                                <span className="text-gray-300">—</span>
-                              )}
-                            </td>
-                            <td className="px-2 py-2 text-center">
-                              <button
-                                onClick={() => props.onOpenQuestionSettings?.(idx)}
-                                className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded disabled:opacity-40"
-                                title="Question settings"
-                                disabled={!props.onOpenQuestionSettings}
-                              >
-                                <Settings2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                            {props.isEditing && (
-                              <td className="px-2 py-2 text-center">
-                                <button onClick={() => props.onRemoveQuestion(idx)} className="p-1 text-red-500 hover:text-red-700">
-                                  <X className="w-4 h-4" />
-                                </button>
-                              </td>
-                            )}
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: CQI settings */}
-            <div className="xl:col-span-7">
+          <div className="grid grid-cols-1 gap-4">
+            {/* CQI settings (full width — Question Table removed for CQI exam type) */}
+            <div>
               <div className="border rounded-lg p-4 bg-white">
                 <div className="mb-3">
                   <div className="text-sm font-semibold text-gray-900">CQI Configuration</div>
-                  <div className="text-xs text-gray-500">No Mark Manager · edited values saved in class type exam assignments</div>
+                  <div className="text-xs text-gray-500">Uses class type exam assignments, shared tokens, and Mark Manager aware exam tokens.</div>
                 </div>
 
                 {/* Name / Code */}
@@ -462,16 +303,80 @@ export default function QpCqiEditorPopup(props: Props) {
                   </div>
                 </div>
 
-                {/* Token Creator */}
+                {/* Exam Assignments Considered */}
+                <div className="mt-4">
+                  <div className="text-xs text-gray-500 mb-2">Exam Assignments Considered</div>
+                  <div className="text-[11px] text-gray-400 mb-2">
+                    If none are selected, all exam assignments for this QP type are considered.
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    {(() => {
+                      const allCodes = props.availableExamAssignments
+                        .map((e) => String(e.exam_display_name || e.exam || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, ''))
+                        .filter(Boolean);
+                      const rawSelected = cqi?.exams || [];
+                      const selectedSet = new Set(
+                        (Array.isArray(rawSelected) && rawSelected.length > 0 ? rawSelected : allCodes)
+                          .map((x) => String(x || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, ''))
+                          .filter(Boolean)
+                      );
+                      return props.availableExamAssignments.map((availableExam) => {
+                        const code = String(availableExam.exam_display_name || availableExam.exam || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                        const label = String(availableExam.exam_display_name || availableExam.exam || code);
+                        const checked = code ? selectedSet.has(code) : false;
+                        return (
+                          <label key={code || label} className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!props.isEditing || !code}
+                              onChange={(e) => {
+                                if (!code) return;
+                                props.updateCqi((prev) => {
+                                  const init = new Set(
+                                    (Array.isArray(prev.exams) && prev.exams.length > 0 ? prev.exams : allCodes)
+                                      .map((x) => String(x || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, ''))
+                                      .filter(Boolean)
+                                  );
+                                  if (e.target.checked) init.add(code);
+                                  else init.delete(code);
+                                  return { ...prev, exams: Array.from(init).sort((a, b) => a.localeCompare(b)) };
+                                });
+                              }}
+                              className="w-5 h-5"
+                            />
+                            <span className="text-gray-800">{label}</span>
+                          </label>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+
+                {/* Shared Token Creator */}
                 <div className="mt-5 border-t pt-4">
-                  <div className="text-sm font-semibold text-gray-900 mb-1">Custom Variables (Tokens)</div>
-                  <div className="text-xs text-gray-500 mb-3">Create reusable tokens and use them in IF/THEN/ELSE.</div>
+                  <div className="flex items-center justify-between gap-3 mb-1">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">Shared Custom Variables</div>
+                      <div className="text-xs text-gray-500">Saved at class type level and available across all QP types in this class type.</div>
+                    </div>
+                    {props.isEditing && (
+                      <button
+                        type="button"
+                        onClick={() => void props.onSaveSharedCustomVars()}
+                        disabled={!!props.savingSharedCustomVars}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 disabled:opacity-60"
+                      >
+                        <Save className="w-3.5 h-3.5" /> {props.savingSharedCustomVars ? 'Saving…' : 'Save Shared Tokens'}
+                      </button>
+                    )}
+                  </div>
 
                   <div className="space-y-2">
-                    {(cqi?.custom_vars || []).length === 0 ? (
+                    {props.sharedCustomVars.length === 0 ? (
                       <div className="text-xs text-gray-400">No custom variables created</div>
                     ) : (
-                      (cqi?.custom_vars || []).map((cv, idx) => (
+                      props.sharedCustomVars.map((cv, idx) => (
                         <div key={idx} className="border rounded-lg p-3 bg-gray-50">
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                             <div>
@@ -480,10 +385,10 @@ export default function QpCqiEditorPopup(props: Props) {
                                 value={cv.code || ''}
                                 disabled={!props.isEditing}
                                 onChange={(e) =>
-                                  props.updateCqi((prev) => {
-                                    const next = [...(prev.custom_vars || [])];
-                                    next[idx] = { ...(next[idx] as any), code: String(e.target.value || '').toUpperCase() };
-                                    return { ...prev, custom_vars: next };
+                                  props.updateSharedCustomVars((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = { ...(next[idx] as any), code: String(e.target.value || '').toUpperCase().replace(/[^A-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') };
+                                    return next;
                                   })
                                 }
                                 className="w-full px-3 py-2 border rounded text-sm font-mono mt-1"
@@ -495,10 +400,10 @@ export default function QpCqiEditorPopup(props: Props) {
                                 value={cv.label || ''}
                                 disabled={!props.isEditing}
                                 onChange={(e) =>
-                                  props.updateCqi((prev) => {
-                                    const next = [...(prev.custom_vars || [])];
+                                  props.updateSharedCustomVars((prev) => {
+                                    const next = [...prev];
                                     next[idx] = { ...(next[idx] as any), label: e.target.value };
-                                    return { ...prev, custom_vars: next };
+                                    return next;
                                   })
                                 }
                                 className="w-full px-3 py-2 border rounded text-sm mt-1"
@@ -512,11 +417,11 @@ export default function QpCqiEditorPopup(props: Props) {
                                     type="button"
                                     onClick={() =>
                                       props.onRequestTokenPicker((token) => {
-                                        props.updateCqi((prev) => {
-                                          const next = [...(prev.custom_vars || [])];
+                                        props.updateSharedCustomVars((prev) => {
+                                          const next = [...prev];
                                           const prevExpr = String((next[idx] as any)?.expr || '');
                                           next[idx] = { ...(next[idx] as any), expr: props.appendToken(prevExpr, token) };
-                                          return { ...prev, custom_vars: next };
+                                          return next;
                                         });
                                       })
                                     }
@@ -530,10 +435,10 @@ export default function QpCqiEditorPopup(props: Props) {
                                 value={cv.expr || ''}
                                 disabled={!props.isEditing}
                                 onChange={(e) =>
-                                  props.updateCqi((prev) => {
-                                    const next = [...(prev.custom_vars || [])];
+                                  props.updateSharedCustomVars((prev) => {
+                                    const next = [...prev];
                                     next[idx] = { ...(next[idx] as any), expr: e.target.value };
-                                    return { ...prev, custom_vars: next };
+                                    return next;
                                   })
                                 }
                                 className="w-full px-3 py-2 border rounded text-sm font-mono mt-1 min-h-[56px] resize-y"
@@ -551,10 +456,7 @@ export default function QpCqiEditorPopup(props: Props) {
                       <button
                         type="button"
                         onClick={() =>
-                          props.updateCqi((prev) => ({
-                            ...prev,
-                            custom_vars: [...(prev.custom_vars || []), { code: '', label: '', expr: '' }],
-                          }))
+                          props.updateSharedCustomVars((prev) => [...prev, { code: '', label: '', expr: '' }])
                         }
                         className="text-[11px] px-3 py-2 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
                       >
@@ -563,54 +465,40 @@ export default function QpCqiEditorPopup(props: Props) {
                     </div>
                   )}
 
-                  {/* Variable Token List (click to insert via parent picker only) */}
-                  <div className="mt-4 border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-600 font-semibold mb-2">Variable Tokens</div>
-                    <div className="max-h-[160px] overflow-auto pr-2">
+                  {/* Variable Token List */}
+                  <div className="mt-4 space-y-3">
+                    <div className="text-xs text-gray-600 font-semibold">Variable Tokens</div>
+                    <div className="max-h-[280px] overflow-auto pr-2 space-y-3">
                       {props.cqiVariables.length === 0 ? (
                         <div className="text-xs text-gray-400">No variables available</div>
                       ) : (
-                        <div className="space-y-1">
-                          {props.cqiVariables.slice(0, 60).map((v) => (
-                            <div key={v.code} className="flex items-start justify-between gap-2 rounded px-2 py-1 bg-gray-50 border">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                                  <span
-                                    className={`text-[10px] px-2 py-0.5 rounded ${
-                                      v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : props.tokenMeta(v.code).badgeClass
-                                    }`}
-                                  >
-                                    {v.kind === 'custom' ? 'CUSTOM' : props.tokenMeta(v.code).badge}
-                                  </span>
-                                  <code
-                                    className={`text-sm font-mono ${
-                                      v.kind === 'custom' ? 'text-indigo-700 font-semibold' : props.tokenMeta(v.code).tokenClass
-                                    }`}
-                                  >
-                                    {v.token}
-                                  </code>
+                        <div className="space-y-3">
+                          {props.groupedCqiVariables.map((section) => (
+                            <div key={section.key} className={`rounded-xl border ${section.meta.panelClass}`}>
+                              <div className="px-3 py-2 border-b border-black/5 flex items-center justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-gray-900">{section.meta.title}</div>
+                                  <div className="text-[11px] text-gray-500">{section.meta.description}</div>
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate mt-1">{v.label}</div>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${section.meta.headerClass}`}>{section.items.length}</span>
                               </div>
-
-                              {props.isEditing && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    props.onRequestTokenPicker((token) => {
-                                      // For token list we request picker; actual insert will happen from picker
-                                      // so we keep this as "Open picker" only.
-                                      // Parent still has the +Token buttons as the real insertion path.
-                                      // (You can extend this later to insert directly.)
-                                      void token;
-                                    })
-                                  }
-                                  className="text-[11px] px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200"
-                                  title="Use + Token buttons to insert (token picker provides accurate insertion)"
-                                >
-                                  Use
-                                </button>
-                              )}
+                              <div className="divide-y divide-black/5">
+                                {section.items.map((v) => (
+                                  <div key={v.code} className="flex items-start justify-between gap-3 px-3 py-2">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                        <span className={`text-[10px] px-2 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : props.tokenMeta(v.code).badgeClass}`}>
+                                          {v.kind === 'custom' ? 'CUSTOM' : props.tokenMeta(v.code).badge}
+                                        </span>
+                                        <code className={`text-sm font-mono ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : props.tokenMeta(v.code).tokenClass}`}>
+                                          {v.token}
+                                        </code>
+                                      </div>
+                                      <div className="text-[11px] text-gray-500 mt-1">{v.label}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>

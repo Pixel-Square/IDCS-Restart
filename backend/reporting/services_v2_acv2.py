@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from django.db import connection
+import os
+from django.conf import settings
 
 
 V2_CLASS_TYPES: dict[str, list[str]] = {
@@ -59,6 +61,7 @@ def _filters(filters: dict[str, Any]) -> dict[str, str | None]:
 
     return {
         "year": norm(filters.get("year")),
+        "course_id": norm(filters.get("course_id")),
         "sem": norm(filters.get("sem")),
         "dept": norm(filters.get("dept")),
         "section": norm(filters.get("section") or filters.get("sec")),
@@ -80,6 +83,10 @@ def _build_where(*, class_types: list[str], filters: dict[str, Any]) -> tuple[st
     if f["sem"]:
         clauses.append("CAST(sem.number AS TEXT) = %s")
         params.append(f["sem"])
+
+    if f["course_id"]:
+        clauses.append("CAST(ac.id AS TEXT) = %s")
+        params.append(f["course_id"])
 
     if f["dept"]:
         # Match department by code (preferred), allow name match as fallback.
@@ -204,6 +211,27 @@ def query_v2_marks(
         rows_raw = cursor.fetchall()
 
     rows: list[dict[str, Any]] = [dict(zip(columns, row)) for row in rows_raw]
+    # Build full photo URLs so callers (Power Query / Power BI) get ready-to-use links.
+    # Prefer a configured environment var `VITE_API_BASE` or Django setting, fallback to idcs.zynix.us.
+    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.zynix.us').rstrip('/')
+    # Append URL columns to columns list if not already present
+    if 'student_photo_url' not in columns:
+        columns.append('student_photo_url')
+    if 'faculty_photo_url' not in columns:
+        columns.append('faculty_photo_url')
+
+    for r in rows:
+        spath = (r.get('student_profile_path') or '')
+        if spath and str(spath).strip():
+            r['student_photo_url'] = f"{site_root}/media/{str(spath).lstrip('/')}"
+        else:
+            r['student_photo_url'] = None
+
+        fpath = (r.get('faculty_profile_path') or '')
+        if fpath and str(fpath).strip():
+            r['faculty_photo_url'] = f"{site_root}/media/{str(fpath).lstrip('/')}"
+        else:
+            r['faculty_photo_url'] = None
     return V2QueryResult(columns=columns, rows=rows, total=total)
 
 
@@ -240,6 +268,10 @@ def query_v2_course_dashboard(
         clauses.append('CAST(sem.number AS TEXT) = %s')
         params.append(f['sem'])
 
+    if f.get('course_id'):
+        clauses.append('CAST(ac.id AS TEXT) = %s')
+        params.append(f['course_id'])
+
     if f['dept']:
         clauses.append('(d.code ILIKE %s OR d.name ILIKE %s)')
         params.extend([f['dept'], f['dept']])
@@ -253,7 +285,7 @@ def query_v2_course_dashboard(
         params.append(f['course_code'])
 
     if qp_type:
-        clauses.append('COALESCE(ea.qp_type, '''') ILIKE %s')
+        clauses.append("COALESCE(ea.qp_type, '') ILIKE %s")
         params.append(qp_type)
 
     if faculty_user_id:
@@ -261,7 +293,7 @@ def query_v2_course_dashboard(
         params.append(faculty_user_id)
 
     if course_type:
-        clauses.append('UPPER(COALESCE(ct.name, ac.class_type_name, '''')) = UPPER(%s)')
+        clauses.append("UPPER(COALESCE(ct.name, ac.class_type_name, '')) = UPPER(%s)")
         params.append(course_type)
 
     if exam:
@@ -276,14 +308,23 @@ def query_v2_course_dashboard(
         JOIN acv2_section sec ON ea.section_id = sec.id
         JOIN acv2_course ac ON sec.course_id = ac.id
         LEFT JOIN acv2_class_type ct ON ac.class_type_id = ct.id
-        LEFT JOIN academics_subject subj ON ac.subject_id = subj.id
-        LEFT JOIN academics_course crs ON subj.course_id = crs.id
-        LEFT JOIN academics_department d ON crs.department_id = d.id
         LEFT JOIN academics_semester sem ON ac.semester_id = sem.id
         LEFT JOIN accounts_user staff_u ON sec.faculty_user_id = staff_u.id
+        LEFT JOIN academics_staffprofile staff_p ON staff_p.user_id = sec.faculty_user_id
+        LEFT JOIN academics_department d ON staff_p.department_id = d.id
         LEFT JOIN acv2_internal_mark aim
             ON aim.section_id = sec.id
            AND aim.student_id = acvsm.student_id
+        LEFT JOIN LATERAL (
+            SELECT (elem->>'pass_mark')::int AS pass_mark
+            FROM jsonb_array_elements(COALESCE(ct.exam_assignments, '[]'::jsonb)) AS elem
+            WHERE UPPER(TRIM(elem->>'qp_type')) = UPPER(TRIM(COALESCE(ea.qp_type, '')))
+              AND LOWER(TRIM(COALESCE(elem->>'exam_display_name', elem->>'exam', '')))
+                   = LOWER(TRIM(COALESCE(ea.exam_display_name, ea.exam, '')))
+              AND elem->>'pass_mark' IS NOT NULL
+            LIMIT 1
+        ) ea_pm ON true
+        LEFT JOIN academics_studentprofile student_p ON acvsm.student_id = student_p.id
     """
 
     select_sql = """
@@ -309,12 +350,14 @@ def query_v2_course_dashboard(
             CAST(acvsm.student_id AS text) AS student_id,
             acvsm.reg_no AS reg_no,
             acvsm.student_name AS student_name,
+            COALESCE(student_p.profile_image::text, '') AS student_profile_path,
+            COALESCE(staff_p.profile_image::text, '') AS faculty_profile_path,
             acvsm.is_absent AS is_absent,
             acvsm.is_exempted AS is_exempted,
             COALESCE(acvsm.remarks, '')::text AS remarks,
             ea.max_marks AS exam_max_marks,
             ea.weight AS exam_weight,
-            acvsm.total_mark AS exam_total_mark,
+            ROUND(COALESCE(acvsm.co1_mark, 0) + COALESCE(acvsm.co2_mark, 0) + COALESCE(acvsm.co3_mark, 0) + COALESCE(acvsm.co4_mark, 0) + COALESCE(acvsm.co5_mark, 0), 2) AS exam_total_mark,
             acvsm.weighted_mark AS exam_weighted_mark,
             acvsm.co1_mark AS exam_co1_mark,
             acvsm.co2_mark AS exam_co2_mark,
@@ -328,10 +371,10 @@ def query_v2_course_dashboard(
             aim.co5_total AS internal_co5_total,
             aim.final_mark AS internal_final_mark,
             aim.max_mark AS internal_max_mark,
-            ROUND(COALESCE(aim.max_mark, 0) * %s / 100.0, 2) AS pass_mark,
+            ea_pm.pass_mark AS pass_mark,
             CASE
-                WHEN aim.final_mark IS NULL THEN NULL
-                WHEN aim.final_mark >= ROUND(COALESCE(aim.max_mark, 0) * %s / 100.0, 2) THEN TRUE
+                WHEN ea_pm.pass_mark IS NULL THEN NULL
+                WHEN (COALESCE(acvsm.co1_mark, 0) + COALESCE(acvsm.co2_mark, 0) + COALESCE(acvsm.co3_mark, 0) + COALESCE(acvsm.co4_mark, 0) + COALESCE(acvsm.co5_mark, 0)) >= ea_pm.pass_mark THEN TRUE
                 ELSE FALSE
             END AS is_pass
     """
@@ -352,10 +395,31 @@ def query_v2_course_dashboard(
         cursor.execute(count_sql, params)
         total = int((cursor.fetchone() or [0])[0] or 0)
 
-        cursor.execute(data_sql, [pct, pct, *params, psz, offset])
+        cursor.execute(data_sql, [*params, psz, offset])
         desc = cursor.description or []
         columns = [d.name for d in desc]
         rows_raw = cursor.fetchall()
 
     rows: list[dict[str, Any]] = [dict(zip(columns, row)) for row in rows_raw]
+    # Build full photo URLs using configured base (env `VITE_API_BASE` or Django setting),
+    # fallback to https://idcs.zynix.us so clients get ready-to-use HTTPS links.
+    site_root = str(getattr(settings, 'VITE_API_BASE', '') or os.getenv('VITE_API_BASE') or 'https://idcs.zynix.us').rstrip('/')
+    if 'student_photo_url' not in columns:
+        columns.append('student_photo_url')
+    if 'faculty_photo_url' not in columns:
+        columns.append('faculty_photo_url')
+
+    for r in rows:
+        spath = (r.get('student_profile_path') or '')
+        if spath and str(spath).strip():
+            r['student_photo_url'] = f"{site_root}/media/{str(spath).lstrip('/')}"
+        else:
+            r['student_photo_url'] = None
+
+        fpath = (r.get('faculty_profile_path') or '')
+        if fpath and str(fpath).strip():
+            r['faculty_photo_url'] = f"{site_root}/media/{str(fpath).lstrip('/')}"
+        else:
+            r['faculty_photo_url'] = None
+
     return V2QueryResult(columns=columns, rows=rows, total=total)

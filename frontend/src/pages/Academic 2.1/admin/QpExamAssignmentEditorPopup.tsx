@@ -66,6 +66,7 @@ interface ExamAssignment {
   default_cos: number[];
   customize_questions: boolean;
   enabled?: boolean;
+  pass_mark?: number | null;
 }
 
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
@@ -100,8 +101,18 @@ type Props = {
   // CQI embedding support
   cqiEditorOpen: boolean; // forwarded state (optional)
   cqiVariables: CqiVar[];
+  groupedCqiVariables: Array<{
+    key: string;
+    meta: { title: string; description: string; headerClass: string; panelClass: string };
+    items: CqiVar[];
+  }>;
   tokenMeta: (code: string) => { badge: string; badgeClass: string; rowClass: string; tokenClass: string };
   updateCqi: (updater: (prev: NonNullable<ExamAssignment['cqi']>) => NonNullable<ExamAssignment['cqi']>) => void;
+  availableExamAssignments: ExamAssignment[];
+  sharedCustomVars: Array<{ code: string; label?: string; expr: string }>;
+  updateSharedCustomVars: (updater: (prev: Array<{ code: string; label?: string; expr: string }>) => Array<{ code: string; label?: string; expr: string }>) => void;
+  onSaveSharedCustomVars: () => Promise<void> | void;
+  savingSharedCustomVars?: boolean;
   parseIfClauses: (raw: string) => CqiIfClause[];
   buildIfFromClauses: (clauses: CqiIfClause[]) => string;
   appendToken: (current: string, token: string) => string;
@@ -277,10 +288,17 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               onAddQuestion={props.onAddQuestion}
               onOpenQuestionSettings={props.onOpenQuestionSettings}
               cqiVariables={props.cqiVariables}
+              groupedCqiVariables={props.groupedCqiVariables}
               tokenMeta={props.tokenMeta as any}
               tokenInsertRequested={false}
               onRequestTokenPicker={(insert) => props.openTokenPicker(insert)}
               updateCqi={props.updateCqi}
+              availableExamAssignments={props.availableExamAssignments}
+              sharedCustomVars={props.sharedCustomVars}
+              updateSharedCustomVars={props.updateSharedCustomVars}
+              onSaveSharedCustomVars={props.onSaveSharedCustomVars}
+              savingSharedCustomVars={props.savingSharedCustomVars}
+              onEnableEditing={() => setLocalEditing(true)}
               parseIfClauses={props.parseIfClauses as any}
               buildIfFromClauses={props.buildIfFromClauses as any}
               appendToken={props.appendToken}

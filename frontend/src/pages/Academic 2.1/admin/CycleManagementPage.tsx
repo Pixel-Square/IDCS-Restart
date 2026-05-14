@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Save, Edit2, X, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, Trash2, Save, Edit2, X, RefreshCw, CheckCircle, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface Cycle {
@@ -13,6 +13,7 @@ interface Cycle {
   code: string;
   is_active: boolean;
   inactive_semester_ids: string[];
+  order: number;
   created_at: string;
   updated_at: string;
 }
@@ -301,6 +302,34 @@ export default function CycleManagementPage() {
     setIsDirty(false);
   };
 
+  const handleMoveOrder = async (cycleId: string, direction: 'up' | 'down') => {
+    const sorted = [...cycles].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    const idx = sorted.findIndex((c) => c.id === cycleId);
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+
+    // Swap orders
+    const newOrders = sorted.map((c, i) => ({ id: c.id, order: i }));
+    const tmp = newOrders[idx].order;
+    newOrders[idx].order = newOrders[swapIdx].order;
+    newOrders[swapIdx].order = tmp;
+
+    // Optimistic update
+    const updatedMap = Object.fromEntries(newOrders.map((o) => [o.id, o.order]));
+    setCycles(cycles.map((c) => ({ ...c, order: updatedMap[c.id] ?? c.order })));
+
+    try {
+      await fetchWithAuth('/api/academic-v2/cycles/reorder/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newOrders),
+      });
+    } catch {
+      // Reload to restore correct state
+      void loadCycles();
+    }
+  };
+
   const renderSemesterChip = (semester: Semester, isActiveBucket: boolean) => {
     const palette = isActiveBucket
       ? 'border-amber-300 bg-amber-50 text-amber-800'
@@ -352,24 +381,46 @@ export default function CycleManagementPage() {
           ) : cycles.length === 0 ? (
             <div className="p-4 text-center text-gray-500">No cycles yet</div>
           ) : (
-            cycles.map((cycle) => (
-              <button
-                key={cycle.id}
-                onClick={() => handleSelectCycle(cycle)}
-                className={`w-full p-4 text-left transition hover:bg-gray-50 ${selectedId === cycle.id ? 'border-l-4 border-blue-600 bg-blue-50' : ''}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
+            [...cycles]
+              .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+              .map((cycle, idx, arr) => (
+                <div
+                  key={cycle.id}
+                  className={`flex items-stretch transition ${selectedId === cycle.id ? 'border-l-4 border-blue-600 bg-blue-50' : ''}`}
+                >
+                  {/* Order arrows */}
+                  <div className="flex flex-col items-center justify-center gap-0.5 border-r border-gray-100 px-1.5 py-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void handleMoveOrder(cycle.id, 'up'); }}
+                      disabled={idx === 0}
+                      title="Move up"
+                      className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default"
+                    >
+                      <ChevronUp size={14} />
+                    </button>
+                    <span className="text-[10px] font-bold text-gray-300">{idx + 1}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void handleMoveOrder(cycle.id, 'down'); }}
+                      disabled={idx === arr.length - 1}
+                      title="Move down"
+                      className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-20 disabled:cursor-default"
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => handleSelectCycle(cycle)}
+                    className="min-w-0 flex-1 p-4 text-left hover:bg-gray-50"
+                  >
                     <h3 className="truncate font-medium text-gray-900">{cycle.name}</h3>
                     <p className="mt-1 text-xs text-gray-500">{cycle.code}</p>
                     <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${cycle.is_active ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                       <CheckCircle size={12} />
                       {cycle.is_active ? 'Overall Active' : 'Overall Locked'}
                     </div>
-                  </div>
+                  </button>
                 </div>
-              </button>
-            ))
+              ))
           )}
         </div>
       </div>

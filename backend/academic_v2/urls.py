@@ -34,6 +34,7 @@ from .views import (
     faculty_exam_export_template,
     faculty_exam_import_marks,
     admin_secure_delete,
+    admin_pass_mark_settings,
 )
 
 app_name = 'academic_v2'
@@ -72,4 +73,5 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/cqi-published/', faculty_course_cqi_published, name='faculty-course-cqi-published'),
     path('faculty/courses/<int:ta_id>/cqi-publish/', faculty_course_cqi_publish, name='faculty-course-cqi-publish'),
     path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
+    path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
 ]

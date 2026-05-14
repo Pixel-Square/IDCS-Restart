@@ -11,6 +11,7 @@ from .models import (
     AcV2ClassType,
     Weigthts,
     AcV2QpPattern,
+    AcV2QpAssignment,
     AcV2Course,
     AcV2Section,
     AcV2ExamAssignment,
@@ -20,6 +21,7 @@ from .models import (
     AcV2InternalMark,
     AcV2QpType,
     AcV2Cycle,
+    AcV2PassMarkSetting,
 )
 
 
@@ -128,7 +130,7 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'short_code', 'display_name',
             'total_internal_marks', 'allow_customize_questions',
-            'exam_assignments', 'default_co_count',
+            'exam_assignments', 'cqi_global_custom_vars', 'default_co_count',
             'enabled_exams', 'total_weight',
             'is_active', 'updated_at',
         ]
@@ -206,6 +208,30 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
 
                 if rows:
                     Weigthts.objects.bulk_create(rows)
+
+                # Sync pass_mark into AcV2QpAssignment rows
+                for ea in (instance.exam_assignments or []):
+                    if not isinstance(ea, dict):
+                        continue
+                    raw_pm = ea.get('pass_mark')
+                    if raw_pm is None:
+                        continue
+                    try:
+                        pm_val = int(raw_pm)
+                    except (TypeError, ValueError):
+                        continue
+                    qp_type_code = str(ea.get('qp_type') or '').strip()
+                    exam_display = str(ea.get('exam_display_name') or ea.get('exam') or '').strip().lower()
+                    if not qp_type_code or not exam_display:
+                        continue
+                    # Find matching AcV2QpAssignment rows for this class type + qp type code + exam name
+                    AcV2QpAssignment.objects.filter(
+                        class_type=instance,
+                        qp_type__code__iexact=qp_type_code,
+                    ).filter(
+                        exam_assignment__name__iexact=exam_display,
+                    ).update(pass_mark=pm_val)
+
             except Exception:
                 # Non-critical: do not block class type updates if mirror sync fails
                 pass
@@ -494,6 +520,14 @@ class AcV2CycleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'code', 'description',
             'college', 'is_active', 'inactive_semester_ids',
-            'created_at', 'updated_at',
+            'order', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AcV2PassMarkSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2PassMarkSetting
+        fields = ['id', 'out_of', 'pass_mark', 'label', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
