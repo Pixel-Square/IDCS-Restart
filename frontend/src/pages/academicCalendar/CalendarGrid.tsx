@@ -158,46 +158,45 @@ function DayCell({ day, inMonth, info, assignedEvents = [], selectMode, isSelect
   const allEvents = [...(info?.excelEvents || []), ...(assignedEvents || [])]
   const totalEvents = (info?.excelEvents.length || 0) + assignedEvents.length
 
-  let bg = 'bg-white'
-  if (!inMonth) bg = 'bg-gray-50'
-  else if (isSelected) bg = 'bg-blue-50'
-  else if (isOffDay) bg = 'bg-orange-50'
+  let bg = 'bg-white border-gray-200 hover:border-blue-300'
+  if (!inMonth) bg = 'bg-gray-50 border-gray-100 opacity-40'
+  else if (isSelected) bg = 'bg-blue-50 border-blue-400 ring-2 ring-inset ring-blue-400'
+  else if (isOffDay) bg = 'bg-orange-50 border-orange-300'
 
   return (
     <div
       onClick={() => selectMode && inMonth && onToggle?.()}
-      className={`min-h-[90px] border-b border-r border-gray-200 p-1 flex flex-col
-        ${bg} ${!inMonth ? 'opacity-40' : ''}
-        ${selectMode && inMonth ? 'cursor-pointer hover:bg-blue-50 transition-colors' : ''}
-        ${isSelected ? 'ring-2 ring-inset ring-blue-400' : ''}
+      className={`min-h-[92px] sm:aspect-square border-2 rounded-lg p-1.5 sm:p-2 flex flex-col transition-all hover:shadow-md overflow-hidden
+        ${bg}
+        ${selectMode && inMonth ? 'cursor-pointer hover:bg-blue-50' : ''}
       `}
     >
-      <div className="flex items-center justify-between mb-0.5">
-        <span className={`text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full
-          ${isToday ? 'bg-blue-600 text-white' : isSun ? 'text-red-500' : isSat ? 'text-orange-500' : 'text-gray-700'}`}>
+      <div className="flex items-start justify-between mb-1">
+        <span className={`font-bold text-xl sm:text-2xl
+          ${isToday ? 'text-blue-600' : isSun ? 'text-red-500' : isSat ? 'text-orange-500' : 'text-gray-900'}`}>
           {day.getDate()}
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex flex-col items-end gap-1">
           {info?.workingDayCount && (
-            <span className="text-[10px] text-gray-400 font-medium">{info.workingDayCount}</span>
+            <span className="text-[10px] text-gray-500 font-medium bg-gray-100 px-1 rounded">{info.workingDayCount}</span>
           )}
           {selectMode && inMonth && (
-            <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0
+            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0
               ${isSelected ? 'bg-blue-500 border-blue-500' : 'border-gray-400 bg-white'}`}>
-              {isSelected && <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 12 12">
+              {isSelected && <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
                 <path d="M10 3L5 8.5 2 5.5" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
               </svg>}
             </div>
           )}
         </div>
       </div>
-      <div className="flex flex-col gap-0.5 overflow-hidden">
+      <div className="flex flex-col gap-0.5 overflow-hidden flex-1 mt-1">
         {/* Assigned custom events first */}
         {assignedEvents.slice(0, 2).map((ev, i) => <AssignedPill key={`a-${i}`} ev={ev} />)}
         {/* Excel events */}
-        {info?.excelEvents.slice(0, assignedEvents.length > 0 ? 1 : 3).map((ev, i) => <ExcelPill key={`e-${i}`} ev={ev} />)}
-        {totalEvents > 3 && (
-          <div className="text-[10px] text-gray-400 pl-1">+{totalEvents - 3} more</div>
+        {info?.excelEvents.slice(0, assignedEvents.length > 0 ? 2 : 4).map((ev, i) => <ExcelPill key={`e-${i}`} ev={ev} />)}
+        {totalEvents > (assignedEvents.length > 0 ? 2 : 4) && (
+          <div className="text-[10px] text-gray-500 pl-1 font-medium">+{totalEvents - (assignedEvents.length > 0 ? 2 : 4)} more</div>
         )}
       </div>
     </div>
@@ -291,7 +290,7 @@ export function CalendarGrid({
       </div>
 
       {/* DOW header */}
-      <div className="grid grid-cols-7 border-b border-gray-200 bg-white">
+      <div className="hidden sm:grid grid-cols-7 gap-1 sm:gap-2 border-b border-gray-200 bg-white px-1 sm:px-2">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(dow => (
           <div key={dow} className={`py-1.5 text-center text-xs font-semibold uppercase tracking-wide
             ${dow === 'Sun' ? 'text-red-500' : dow === 'Sat' ? 'text-orange-500' : 'text-gray-500'}`}>
@@ -301,7 +300,7 @@ export function CalendarGrid({
       </div>
 
       {/* Day cells */}
-      <div className="grid grid-cols-7">
+      <div className="grid grid-cols-1 sm:grid-cols-7 gap-1 sm:gap-2 p-1 sm:p-2 bg-gray-50">
         {gridDays.map((day, idx) => {
           const k = keyFor(day)
           return (

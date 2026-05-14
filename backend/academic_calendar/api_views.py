@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
+from django.http import HttpResponse
 from django.db.models import Q
 
 from rest_framework import status
@@ -21,7 +22,13 @@ from rest_framework.response import Response
 from academics.models import Course, Department, DepartmentRole, StudentProfile
 from academics.utils import get_user_effective_departments
 
-from .models import AcademicCalendarEvent, HodColor
+from .models import (
+    AcademicCalendarEvent,
+    HodColor,
+    AcademicCalendar,
+    AcademicCalendarDay,
+    AcademicCalendarHoliday,
+)
 from .n8n_poster_service import fire_n8n_branding_async
 
 
@@ -38,6 +45,57 @@ def _normalize_department_name(s: Any) -> str:
     t = re.sub(r'[^a-z0-9 ]+', ' ', t)
     t = re.sub(r'\s+', ' ', t).strip()
     return t
+
+
+TEMPLATE_COLUMNS = ['Date', 'Day', 'Working Days', 'II Year', 'III Year', 'IV Year', 'I Year']
+TEMPLATE_DROPDOWN_VALUES = [
+    'Placement training',
+    'L1',
+    'CIA 1',
+    'L2',
+    'CIA 2',
+    'Model',
+    'CQI',
+    'ESE LAB',
+    'ESE Theory',
+]
+
+ACADEMIC_CALENDAR_HOLIDAY_NOTE_PREFIX = 'ACADEMIC_CALENDAR:'
+
+
+def _academic_year_from_dates(start: date, end: date) -> str:
+    return f"{start.year}-{str(end.year)[-2:]}"
+
+
+def _day_abbrev(d: date) -> str:
+    # English 3-letter abbreviation
+    return d.strftime('%a')
+
+
+def _week_of_month(d: date) -> int:
+    return ((d.day - 1) // 7) + 1
+
+
+def _is_even_saturday(d: date) -> bool:
+    return d.weekday() == 5 and (_week_of_month(d) % 2 == 0)
+
+
+def _is_odd_saturday(d: date) -> bool:
+    return d.weekday() == 5 and (_week_of_month(d) % 2 == 1)
+
+
+def _normalize_simple_token(val: Any) -> str:
+    return str(val or '').strip().lower()
+
+
+def _is_working_days_holiday(val: Any) -> bool:
+    token = _normalize_simple_token(val)
+    if not token:
+        return False
+    for opt in TEMPLATE_DROPDOWN_VALUES:
+        if token == opt.strip().lower():
+            return False
+    return True
 
 
 def _to_yyyy_mm_dd(d: Optional[date]) -> Optional[str]:
@@ -206,6 +264,419 @@ def _get_hod_owned_department_names(user) -> List[str]:
     return out
 
 
+def _is_excluded_department(dept: Department) -> bool:
+    code = _normalize_text(getattr(dept, 'code', None))
+    short = _normalize_text(getattr(dept, 'short_name', None))
+    return code in {'scv', 'swe'} or short in {'scv', 'swe'}
+
+
+def _get_departments_filtered(*, teaching_only: bool | None) -> List[Department]:
+    qs = Department.objects.all()
+    if teaching_only is True:
+        qs = qs.filter(is_teaching=True)
+    elif teaching_only is False:
+        qs = qs.filter(is_teaching=False)
+    return [d for d in qs if not _is_excluded_department(d)]
+
+
+def _staff_holiday_departments_for_date(d: date, label: str) -> List[Department]:
+    token = _normalize_simple_token(label)
+    if token in {'sun', 'sunday'}:
+        return _get_departments_filtered(teaching_only=None)
+
+    if token in {'sat', 'saturday'}:
+        teaching = _get_departments_filtered(teaching_only=True)
+        if d.weekday() == 5 and _week_of_month(d) == 3:
+            non_teaching = _get_departments_filtered(teaching_only=False)
+            return teaching + non_teaching
+        return teaching
+
+    return _get_departments_filtered(teaching_only=None)
+
+
+def _staff_holiday_note(calendar_id: str, name: str) -> str:
+    return f"{ACADEMIC_CALENDAR_HOLIDAY_NOTE_PREFIX}{calendar_id}::{name}"
+
+
+def _clear_staff_holidays_for_calendar(calendar_id: str) -> None:
+    from staff_attendance.models import Holiday
+
+    Holiday.objects.filter(notes__startswith=f"{ACADEMIC_CALENDAR_HOLIDAY_NOTE_PREFIX}{calendar_id}::").delete()
+
+
+def _sync_staff_holidays_for_calendar(
+    *,
+    calendar_id: str,
+    holiday_rows: List[tuple[date, str]],
+    actor,
+) -> None:
+    from staff_attendance.models import Holiday
+
+    _clear_staff_holidays_for_calendar(calendar_id)
+
+    for d, name in holiday_rows:
+        dept_list = _staff_holiday_departments_for_date(d, name)
+        dept_ids = [x.id for x in dept_list]
+        if not dept_ids:
+            continue
+
+        note = _staff_holiday_note(calendar_id, name)
+        is_sunday = _normalize_simple_token(name) in {'sun', 'sunday'}
+        holiday, _ = Holiday.objects.get_or_create(
+            date=d,
+            defaults={
+                'name': name,
+                'notes': note,
+                'is_sunday': is_sunday,
+                'is_removable': True,
+                'created_by': actor,
+            },
+        )
+        if holiday.notes != note or holiday.name != name or holiday.is_sunday != is_sunday:
+            holiday.name = name
+            holiday.notes = note
+            holiday.is_sunday = is_sunday
+            holiday.is_removable = True
+            if not holiday.created_by_id:
+                holiday.created_by = actor
+            holiday.save(update_fields=['name', 'notes', 'is_sunday', 'is_removable', 'created_by'])
+
+        holiday.departments.set(dept_ids)
+
+
+# ─────────────────────────────────────────────────────────────
+# Timetable sync helper
+# ─────────────────────────────────────────────────────────────
+
+# Values that should NOT create special timetable entries
+_TIMETABLE_EXCLUDED_VALUES = frozenset([
+    '', 'holiday', 'ese lab', 'ese theory', 'sat', 'saturday', 'sun', 'sunday',
+])
+
+
+def _is_timetable_event(val: Any) -> bool:
+    """Return True if this calendar cell value should create a special timetable entry."""
+    token = _normalize_simple_token(val)
+    if not token:
+        return False
+    # purely numeric values (e.g. working-day counters) are not events
+    if token.isdigit():
+        return False
+    return token not in _TIMETABLE_EXCLUDED_VALUES
+
+
+def _sync_calendar_to_timetable(calendar: 'AcademicCalendar', actor) -> Dict[str, Any]:
+    """
+    Read all AcademicCalendarDay rows for *calendar* and create SpecialTimetable /
+    SpecialTimetableEntry records for each day that carries a non-excluded event value
+    in any of the year columns (II Year, III Year, IV Year, I Year).
+
+    Year mapping (calendar → Batch.start_year):
+      I Year  → academic_start_year - 0 (most junior cohort)
+      II Year → academic_start_year - 1
+      III Year → academic_start_year - 2
+      IV Year → academic_start_year - 3
+
+    Returns a summary dict with created/skipped counts.
+    """
+    summary = {'sections_updated': set(), 'entries_created': 0, 'entries_skipped': 0, 'errors': []}
+    try:
+        from timetable.models import SpecialTimetable, SpecialTimetableEntry, TimetableSlot, TimetableTemplate
+        from academics.models import AcademicYear, Section, Batch, StaffProfile
+        from django.db.models import Q as _Q
+
+        # Determine the current academic start year
+        active_ay = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
+        if not active_ay:
+            active_ay = AcademicYear.objects.order_by('-id').first()
+        if not active_ay:
+            return summary
+
+        try:
+            acad_start_year = int(str(active_ay.name).split('-')[0])
+        except Exception:
+            return summary
+
+        # batch start_year that corresponds to each academic year level:
+        # I Year  = started (acad_start_year - 0)  → year_offset = 0
+        # II Year = started (acad_start_year - 1)  → year_offset = 1
+        # III Year= started (acad_start_year - 2)  → year_offset = 2
+        # IV Year = started (acad_start_year - 3)  → year_offset = 3
+        year_column_map = [
+            ('ii_year',  1, acad_start_year - 1),   # (field, year_label, batch_start_year)
+            ('iii_year', 2, acad_start_year - 2),
+            ('iv_year',  3, acad_start_year - 3),
+            ('i_year',   0, acad_start_year - 0),
+        ]
+
+        # Cache: batch_start_year -> list of Section PKs
+        section_cache: Dict[int, list] = {}
+
+        def _sections_for_year(batch_start: int) -> list:
+            if batch_start in section_cache:
+                return section_cache[batch_start]
+            secs = list(
+                Section.objects.select_related('batch', 'batch__course', 'semester')
+                .filter(batch__start_year=batch_start, batch__is_active=True)
+            )
+            section_cache[batch_start] = secs
+            return secs
+
+        # Active timetable template slots cache
+        active_template = TimetableTemplate.objects.filter(is_active=True).first()
+        if not active_template:
+            # Fallback: any template
+            active_template = TimetableTemplate.objects.order_by('-id').first()
+        if not active_template:
+            return summary
+
+        all_slots = list(TimetableSlot.objects.filter(
+            template=active_template, is_break=False, is_lunch=False
+        ).order_by('index'))
+        if not all_slots:
+            return summary
+
+        # Get or create SpecialTimetable for a (section, event_name) pair
+        st_cache: Dict[tuple, 'SpecialTimetable'] = {}
+
+        def _get_or_create_special_timetable(sec, event_name: str) -> 'SpecialTimetable':
+            key = (sec.pk, event_name)
+            if key in st_cache:
+                return st_cache[key]
+            sp = getattr(actor, 'staff_profile', None)
+            st, _ = SpecialTimetable.objects.get_or_create(
+                section=sec,
+                name=event_name,
+                defaults={'created_by': sp, 'is_active': True},
+            )
+            if not st.is_active:
+                st.is_active = True
+                st.save(update_fields=['is_active'])
+            st_cache[key] = st
+            return st
+
+        # Iterate all calendar days
+        days = list(calendar.days.order_by('date'))
+        for day in days:
+            for field_name, _year_idx, batch_start in year_column_map:
+                event_val = getattr(day, field_name, '') or ''
+                sections = _sections_for_year(batch_start)
+                if not sections:
+                    continue
+
+                if not _is_timetable_event(event_val):
+                    # Value cleared/excluded: remove auto-assigned entries (staff=None) for this date & sections
+                    for sec in sections:
+                        try:
+                            deleted_count, _ = SpecialTimetableEntry.objects.filter(
+                                timetable__section=sec,
+                                date=day.date,
+                                staff__isnull=True
+                            ).delete()
+                            if deleted_count > 0:
+                                summary['sections_updated'].add(sec.pk)
+                        except Exception as exc:
+                            summary['errors'].append(str(exc))
+                    continue
+
+                event_name = str(event_val).strip()
+                for sec in sections:
+                    try:
+                        # First, remove existing auto-assigned entries for this date/section if they belong to a DIFFERENT event name.
+                        SpecialTimetableEntry.objects.filter(
+                            timetable__section=sec,
+                            date=day.date,
+                            staff__isnull=True
+                        ).exclude(subject_text=event_name).delete()
+
+                        st = _get_or_create_special_timetable(sec, event_name)
+                        summary['sections_updated'].add(sec.pk)
+                        for slot in all_slots:
+                            _, created = SpecialTimetableEntry.objects.get_or_create(
+                                timetable=st,
+                                date=day.date,
+                                period=slot,
+                                defaults={
+                                    'subject_text': event_name,
+                                    'staff': None,   # no staff = advisor marks daily attendance
+                                    'is_active': True,
+                                },
+                            )
+                            if created:
+                                summary['entries_created'] += 1
+                            else:
+                                summary['entries_skipped'] += 1
+                    except Exception as exc:
+                        summary['errors'].append(str(exc))
+    except Exception as exc:
+        summary['errors'].append(str(exc))
+
+    summary['sections_updated'] = len(summary['sections_updated'])
+    return summary
+
+
+def _format_dmy(d: date) -> str:
+    return f"{d.day}/{d.month}/{d.year}"
+
+
+def _calendar_payload(cal: AcademicCalendar, days: Optional[List[AcademicCalendarDay]] = None) -> Dict[str, Any]:
+    if days is None:
+        days = list(cal.days.order_by('date'))
+    return {
+        'id': str(cal.id),
+        'name': cal.name,
+        'from_date': cal.from_date.isoformat(),
+        'to_date': cal.to_date.isoformat(),
+        'academic_year': cal.academic_year,
+        'created_at': cal.created_at.isoformat() if cal.created_at else None,
+        'updated_at': cal.updated_at.isoformat() if cal.updated_at else None,
+        'dates': [
+            {
+                'date': _format_dmy(d.date),
+                'day': d.day_name,
+                'workingDays': d.working_days or '',
+                'counter': '',
+                'iiYearEvent': d.ii_year or '',
+                'iiYearCount': '',
+                'iiiYearEvent': d.iii_year or '',
+                'iiiYearCount': '',
+                'ivYearEvent': d.iv_year or '',
+                'ivYearCount': '',
+                'iYearText': d.i_year or '',
+            }
+            for d in days
+        ],
+    }
+
+
+def _parse_calendar_date(value: Any) -> Optional[date]:
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            from openpyxl.utils.datetime import from_excel
+            return from_excel(value).date()
+        except Exception:
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                continue
+    return None
+
+
+def _parse_calendar_upload(file_bytes: bytes) -> List[Dict[str, Any]]:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = wb.worksheets[0]
+
+    header_row = 1
+    headers = {}
+    for col in range(1, ws.max_column + 1):
+        val = ws.cell(row=header_row, column=col).value
+        if val is None:
+            continue
+        key = _normalize_text(val)
+        if key:
+            headers[key] = col
+
+    def col_for(name: str) -> Optional[int]:
+        key = _normalize_text(name)
+        return headers.get(key)
+
+    date_col = col_for('date')
+    work_col = col_for('working days')
+    ii_col = col_for('ii year')
+    iii_col = col_for('iii year')
+    iv_col = col_for('iv year')
+    i_col = col_for('i year')
+
+    if not date_col:
+        raise ValueError('Date column not found')
+
+    rows: List[Dict[str, Any]] = []
+    empty_hits = 0
+    for r in range(2, ws.max_row + 1):
+        dval = ws.cell(row=r, column=date_col).value
+        d = _parse_calendar_date(dval)
+        if not d:
+            empty_hits += 1
+            if empty_hits > 20:
+                break
+            continue
+        empty_hits = 0
+
+        day_name = _day_abbrev(d)
+        work_val = ws.cell(row=r, column=work_col).value if work_col else ''
+        rows.append({
+            'date': d,
+            'day': day_name,
+            'working_days': str(work_val).strip() if work_val is not None else '',
+            'ii_year': str(ws.cell(row=r, column=ii_col).value).strip() if ii_col else '',
+            'iii_year': str(ws.cell(row=r, column=iii_col).value).strip() if iii_col else '',
+            'iv_year': str(ws.cell(row=r, column=iv_col).value).strip() if iv_col else '',
+            'i_year': str(ws.cell(row=r, column=i_col).value).strip() if i_col else '',
+        })
+
+    if not rows:
+        raise ValueError('No calendar rows detected')
+    return rows
+
+
+def _build_calendar_and_days(*, name: str, from_date: date, to_date: date, rows: List[Dict[str, Any]], user) -> AcademicCalendar:
+    cal = AcademicCalendar.objects.create(
+        name=name,
+        from_date=from_date,
+        to_date=to_date,
+        academic_year=_academic_year_from_dates(from_date, to_date),
+        created_by=user,
+    )
+
+    days = [
+        AcademicCalendarDay(
+            calendar=cal,
+            date=r['date'],
+            day_name=r['day'],
+            working_days=r.get('working_days') or '',
+            ii_year=r.get('ii_year') or '',
+            iii_year=r.get('iii_year') or '',
+            iv_year=r.get('iv_year') or '',
+            i_year=r.get('i_year') or '',
+        )
+        for r in rows
+    ]
+    AcademicCalendarDay.objects.bulk_create(days, batch_size=500)
+
+    holiday_rows = []
+    for r in rows:
+        wd = r.get('working_days') or ''
+        if _is_working_days_holiday(wd):
+            holiday_rows.append((r['date'], str(wd).strip()))
+
+    holiday_models = [
+        AcademicCalendarHoliday(calendar=cal, date=d, name=name, source='working_days')
+        for d, name in holiday_rows
+    ]
+    if holiday_models:
+        AcademicCalendarHoliday.objects.bulk_create(holiday_models, batch_size=500)
+
+    if holiday_rows:
+        _sync_staff_holidays_for_calendar(
+            calendar_id=str(cal.id),
+            holiday_rows=holiday_rows,
+            actor=user,
+        )
+    return cal
+
+
 def _event_can_edit_delete(user, event: AcademicCalendarEvent) -> Dict[str, bool]:
     if not user or not user.is_authenticated:
         return {'can_edit': False, 'can_delete': False}
@@ -269,6 +740,225 @@ def _serialize_events(user, events: List[AcademicCalendarEvent]) -> List[Dict[st
             }
         )
     return out
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def calendar_template_download(request):
+    if not _is_iqac_user(request.user):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    def parse_date_param(key: str) -> Optional[date]:
+        raw = request.query_params.get(key)
+        if not raw:
+            return None
+        for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y'):
+            try:
+                return datetime.strptime(str(raw).strip(), fmt).date()
+            except Exception:
+                continue
+        return None
+
+    start = parse_date_param('from_date')
+    end = parse_date_param('to_date')
+    if not start or not end:
+        return Response({'error': 'from_date and to_date are required'}, status=status.HTTP_400_BAD_REQUEST)
+    if end < start:
+        return Response({'error': 'to_date must be after from_date'}, status=status.HTTP_400_BAD_REQUEST)
+
+    odd_sat = str(request.query_params.get('odd_sat') or 'false').lower() in ('1', 'true', 'yes', 'on')
+    even_sat = str(request.query_params.get('even_sat') or 'false').lower() in ('1', 'true', 'yes', 'on')
+
+    import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Academic Calendar'
+    ws.append(TEMPLATE_COLUMNS)
+
+    row_index = 2
+    d = start
+    while d <= end:
+        ws.cell(row=row_index, column=1, value=d)
+        ws.cell(row=row_index, column=1).number_format = 'DD/MM/YYYY'
+        ws.cell(row=row_index, column=2, value=_day_abbrev(d))
+
+        default_val = ''
+        if d.weekday() == 6:
+            default_val = 'Sun'
+        elif d.weekday() == 5:
+            if (odd_sat and _is_odd_saturday(d)) or (even_sat and _is_even_saturday(d)):
+                default_val = 'Sat'
+
+        for c in range(3, 8):
+            ws.cell(row=row_index, column=c, value=default_val)
+
+        row_index += 1
+        d = d + timedelta(days=1)
+
+    dv = DataValidation(
+        type='list',
+        formula1='"' + ','.join(TEMPLATE_DROPDOWN_VALUES) + '"',
+        allow_blank=True,
+        showErrorMessage=False,
+    )
+    ws.add_data_validation(dv)
+    if row_index > 2:
+        dv.add(f'C2:G{row_index - 1}')
+
+    for idx, col in enumerate(TEMPLATE_COLUMNS, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = 18 if idx == 1 else 16
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"academic_calendar_template_{start.isoformat()}_{end.isoformat()}.xlsx"
+    resp = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    resp['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return resp
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def calendars(request):
+    user = request.user
+    if request.method == 'GET':
+        qs = AcademicCalendar.objects.order_by('-from_date')
+        if str(request.query_params.get('current') or '').lower() in ('1', 'true', 'yes', 'on'):
+            today = date.today()
+            cal = qs.filter(from_date__lte=today, to_date__gte=today).first() or qs.first()
+            if not cal:
+                return Response({'calendar': None})
+            return Response({'calendar': _calendar_payload(cal)})
+
+        return Response(
+            {
+                'calendars': [
+                    {
+                        'id': str(c.id),
+                        'name': c.name,
+                        'from_date': c.from_date.isoformat(),
+                        'to_date': c.to_date.isoformat(),
+                        'academic_year': c.academic_year,
+                        'created_at': c.created_at.isoformat() if c.created_at else None,
+                        'updated_at': c.updated_at.isoformat() if c.updated_at else None,
+                    }
+                    for c in qs
+                ]
+            }
+        )
+
+    if not _is_iqac_user(user):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    name = str(request.data.get('name') or '').strip() or None
+    if not name:
+        return Response({'error': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        from_date = date.fromisoformat(str(request.data.get('from_date')))
+        to_date = date.fromisoformat(str(request.data.get('to_date')))
+    except Exception:
+        return Response({'error': 'from_date and to_date are required (YYYY-MM-DD)'}, status=status.HTTP_400_BAD_REQUEST)
+    if to_date < from_date:
+        return Response({'error': 'to_date must be after from_date'}, status=status.HTTP_400_BAD_REQUEST)
+
+    uploaded = None
+    if hasattr(request, 'FILES') and request.FILES:
+        uploaded = request.FILES.get('file') or next(iter(request.FILES.values()))
+    raw = uploaded.read() if uploaded else request.data.get('file')
+    if not raw:
+        return Response({'error': 'file is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        rows = _parse_calendar_upload(raw)
+    except Exception as exc:
+        return Response({'error': f'Invalid file: {exc}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        cal = _build_calendar_and_days(name=name, from_date=from_date, to_date=to_date, rows=rows, user=user)
+
+    # Sync calendar events → timetable (fire-and-forget)
+    try:
+        _sync_calendar_to_timetable(cal, user)
+    except Exception:
+        pass
+
+    return Response({'calendar': _calendar_payload(cal)})
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def calendar_detail(request, calendar_id):
+    try:
+        cal = AcademicCalendar.objects.get(id=calendar_id)
+    except AcademicCalendar.DoesNotExist:
+        return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response({'calendar': _calendar_payload(cal)})
+
+    if not _is_iqac_user(request.user):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'DELETE':
+        _clear_staff_holidays_for_calendar(str(cal.id))
+        cal.delete()
+        return Response({'success': True})
+
+    payload = request.data or {}
+    days = payload.get('days') or []
+    if not isinstance(days, list):
+        return Response({'error': 'days must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        for row in days:
+            d = _parse_calendar_date(row.get('date'))
+            if not d:
+                continue
+            day = AcademicCalendarDay.objects.filter(calendar=cal, date=d).first()
+            if not day:
+                continue
+            day.day_name = row.get('day') or _day_abbrev(d)
+            day.working_days = str(row.get('workingDays') or row.get('working_days') or '').strip()
+            day.ii_year = str(row.get('iiYearEvent') or row.get('ii_year') or '').strip()
+            day.iii_year = str(row.get('iiiYearEvent') or row.get('iii_year') or '').strip()
+            day.iv_year = str(row.get('ivYearEvent') or row.get('iv_year') or '').strip()
+            day.i_year = str(row.get('iYearText') or row.get('i_year') or '').strip()
+            day.save()
+
+        AcademicCalendarHoliday.objects.filter(calendar=cal).delete()
+        all_days = list(AcademicCalendarDay.objects.filter(calendar=cal).order_by('date'))
+        holiday_rows = []
+        for d in all_days:
+            if _is_working_days_holiday(d.working_days):
+                holiday_rows.append((d.date, d.working_days))
+        if holiday_rows:
+            AcademicCalendarHoliday.objects.bulk_create(
+                [
+                    AcademicCalendarHoliday(calendar=cal, date=dt, name=name, source='working_days')
+                    for dt, name in holiday_rows
+                ],
+                batch_size=500,
+            )
+            _sync_staff_holidays_for_calendar(
+                calendar_id=str(cal.id),
+                holiday_rows=holiday_rows,
+                actor=request.user,
+            )
+        else:
+            _clear_staff_holidays_for_calendar(str(cal.id))
+
+    # Sync calendar events → timetable (fire-and-forget)
+    try:
+        _sync_calendar_to_timetable(cal, request.user)
+    except Exception:
+        pass
+
+    return Response({'calendar': _calendar_payload(cal)})
 
 
 @api_view(['GET'])

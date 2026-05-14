@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
 from django.utils import timezone
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import csv
 import io
 
@@ -149,6 +149,214 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             else:
                 return Response({'error': 'month required for report_type > 1'}, status=status.HTTP_400_BAD_REQUEST)
 
+        if report_type != '1':
+            from academics.models import StaffProfile
+            
+            # 1. Fetch holidays mapping
+            holidays_qs = Holiday.objects.filter(date__gte=start_date, date__lte=end_date)
+            global_holidays = set(h.date for h in holidays_qs if not h.departments.exists())
+            dept_holidays = {}
+            for h in holidays_qs:
+                for d in h.departments.all():
+                    dept_holidays.setdefault(d.id, set()).add(h.date)
+
+            def _is_hol(d_date, d_id):
+                return d_date in global_holidays or (d_id and d_id in dept_holidays and d_date in dept_holidays[d_id])
+
+            # 2. Fetch staff profiles
+            staff_qs = StaffProfile.objects.filter(status='ACTIVE', user__isnull=False).select_related('user', 'department')
+            if department_id:
+                staff_qs = staff_qs.filter(department_id=department_id)
+            staff_qs = staff_qs.order_by('department__name', 'user__first_name', 'user__username')
+
+            # 3. Group attendance records by user_id
+            records = AttendanceRecord.objects.filter(date__gte=start_date, date__lte=end_date)
+            if department_id:
+                records = records.filter(user__staff_profile__department_id=department_id)
+                
+            rec_map = {}
+            for r in records:
+                rec_map.setdefault(r.user_id, {})[r.date] = r
+
+            def _short_s(s_str):
+                if not s_str:
+                    return '-'
+                sl = s_str.lower()
+                if sl == 'present': return 'P'
+                if sl == 'absent': return 'A'
+                return s_str.upper()
+
+            def _cell(r_obj, hol_flag, r_type):
+                if not r_obj:
+                    return {'value': '-' if hol_flag else 'A', 'is_holiday': hol_flag}
+                
+                st_val = r_obj.status or 'absent'
+                leave_set = {'cl', 'od', 'ml', 'col', 'leave'}
+                is_lv = st_val.lower() in leave_set or st_val.lower() not in {'present', 'absent', 'partial', 'half_day', ''}
+
+                if r_type == '5':
+                    if is_lv or st_val.lower() == 'present':
+                        v = '0'
+                    elif st_val.lower() in ('half_day', 'partial'):
+                        v = '0.5'
+                    else:
+                        v = '1'
+                    return {'value': '-' if hol_flag and v == '1' else v, 'is_holiday': hol_flag}
+
+                if is_lv:
+                    return {'value': st_val.upper(), 'is_holiday': hol_flag}
+
+                if st_val.lower() == 'absent':
+                    return {'value': '-' if hol_flag else 'A', 'is_holiday': hol_flag}
+
+                fs = _short_s(r_obj.fn_status)
+                ans = _short_s(r_obj.an_status)
+                hdr = f"FN: {fs} | AN: {ans}"
+
+                min_str = r_obj.morning_in.strftime('%H:%M') if r_obj.morning_in else '-'
+                eout_str = r_obj.evening_out.strftime('%H:%M') if r_obj.evening_out else '-'
+
+                eff = ""
+                if r_obj.morning_in and r_obj.evening_out:
+                    dt1 = datetime.combine(start_date, r_obj.morning_in)
+                    dt2 = datetime.combine(start_date, r_obj.evening_out)
+                    if dt2 >= dt1:
+                        tmins = int((dt2 - dt1).total_seconds() / 60)
+                        eff = f"{tmins // 60}h {tmins % 60}m"
+                    else:
+                        eff = "-"
+                elif r_obj.morning_in:
+                    eff = f"In: {min_str}"
+                elif r_obj.evening_out:
+                    eff = f"Out: {eout_str}"
+
+                if r_type == '2':
+                    v = f"{hdr}\n{eff}" if eff else hdr
+                elif r_type == '3':
+                    v = f"{hdr}\nIn: {min_str}\nOut: {eout_str}"
+                else: # Type 4
+                    if eff and r_obj.morning_in and r_obj.evening_out:
+                        v = f"{hdr}\nIn: {min_str} | Out: {eout_str}\n{eff}"
+                    else:
+                        v = f"{hdr}\nIn: {min_str} | Out: {eout_str}"
+
+                return {'value': v.strip(), 'is_holiday': hol_flag}
+
+            working_days_count = (end_date - start_date).days + 1
+            day_columns = [str(d) for d in range(1, working_days_count + 1)]
+            columns = ['days']
+
+            staff_rows = []
+            for sp in staff_qs:
+                u_id = sp.user_id
+                d_id = sp.department_id if sp.department else None
+                user_recs = rec_map.get(u_id, {})
+                
+                d_count = 0.0
+                for r_obj in user_recs.values():
+                    sv = (r_obj.status or '').lower()
+                    if sv in ('present', 'cl', 'od', 'ml', 'col', 'leave') or sv not in ('absent', 'half_day', 'partial', ''):
+                        d_count += 1.0
+                    elif sv in ('half_day', 'partial'):
+                        d_count += 0.5
+
+                val_dict = {}
+                for d_num in range(1, working_days_count + 1):
+                    cur_d = date(start_date.year, start_date.month, d_num)
+                    hol = _is_hol(cur_d, d_id)
+                    r_obj = user_recs.get(cur_d)
+                    val_dict[str(d_num)] = _cell(r_obj, hol, report_type)
+
+                staff_rows.append({
+                    'staff_user_id': u_id,
+                    'staff_id': sp.staff_id,
+                    'staff_name': sp.user.get_full_name() or sp.user.username,
+                    'department': sp.department.name if sp.department else '',
+                    'days': d_count,
+                    'values': val_dict,
+                })
+
+            if export_format == 'excel':
+                from django.http import HttpResponse
+                from openpyxl import Workbook
+                from openpyxl.styles import Font, PatternFill, Alignment
+                from openpyxl.utils import get_column_letter
+
+                wb = Workbook()
+                ws = wb.active
+                ws.title = f"Matrix Type {report_type}"
+
+                headers = ["Staff ID", "Staff Name", "Days"] + day_columns
+                ws.append(headers)
+
+                header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+                header_font = Font(name="Calibri", size=11, bold=True)
+                center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                hol_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+
+                for col_idx in range(1, len(headers) + 1):
+                    c = ws.cell(row=1, column=col_idx)
+                    c.fill = header_fill
+                    c.font = header_font
+                    c.alignment = center_align
+
+                for r_idx, s_row in enumerate(staff_rows, start=2):
+                    row_vals = [s_row['staff_id'], s_row['staff_name'], round(s_row['days'], 1)]
+                    for d_str in day_columns:
+                        row_vals.append(s_row['values'][d_str]['value'])
+                    ws.append(row_vals)
+
+                    for c_idx in range(1, len(row_vals) + 1):
+                        c = ws.cell(row=r_idx, column=c_idx)
+                        if c_idx in (1, 2):
+                            c.alignment = left_align
+                        else:
+                            c.alignment = center_align
+                            
+                        if c_idx > 3:
+                            d_str = day_columns[c_idx - 4]
+                            if s_row['values'][d_str]['is_holiday']:
+                                c.fill = hol_fill
+
+                ws.row_dimensions[1].height = 25
+                for r_idx in range(2, len(staff_rows) + 2):
+                    ws.row_dimensions[r_idx].height = 45 if report_type in ('2', '3', '4') else 22
+
+                for col in ws.columns:
+                    col_letter = get_column_letter(col[0].column)
+                    if col[0].column in (1, 2):
+                        max_len = max(len(str(cell.value or '')) for cell in col)
+                        ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+                    elif col[0].column == 3:
+                        ws.column_dimensions[col_letter].width = 8
+                    else:
+                        ws.column_dimensions[col_letter].width = 16 if report_type in ('2', '3', '4') else 6
+
+                output = io.BytesIO()
+                wb.save(output)
+                output.seek(0)
+                
+                resp = HttpResponse(output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                filename = f"organization_matrix_type_{report_type}_{month}.xlsx"
+                resp['Content-Disposition'] = f'attachment; filename="{filename}"'
+                return resp
+
+            matrix_data = {
+                'report_type': report_type,
+                'month': month,
+                'date_range': {
+                    'from_date': str(start_date),
+                    'to_date': str(end_date),
+                    'working_days': working_days_count,
+                },
+                'columns': columns,
+                'day_columns': day_columns,
+                'total_staff': len(staff_rows),
+                'staff_rows': staff_rows,
+            }
+            return Response(matrix_data)
+
         records = AttendanceRecord.objects.filter(date__gte=start_date, date__lte=end_date)
         if department_id:
             records = records.filter(user__staff_profile__department_id=department_id)
@@ -193,6 +401,72 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
             else:
                 staff_data[user_id]['others_count'] += 1
 
+        if export_format == 'excel':
+            from django.http import HttpResponse
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Attendance Summary"
+
+            headers = [
+                "Staff ID", "Staff Name", "Department", "Present", "Absent",
+                "CL", "OD", "Late Entry", "COL", "Others", "Attendance %"
+            ]
+            ws.append(headers)
+
+            header_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+            header_font = Font(name="Calibri", size=11, bold=True)
+            center_align = Alignment(horizontal="center", vertical="center")
+            left_align = Alignment(horizontal="left", vertical="center")
+
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = center_align
+
+            for idx, staff in enumerate(staff_data.values(), start=2):
+                wd = working_days
+                pct = round((staff['present'] / wd) * 100, 2) if wd > 0 else 0.0
+                row_vals = [
+                    staff['staff_id'],
+                    staff['name'],
+                    staff['department'],
+                    staff['present'],
+                    staff['absent'],
+                    staff['cl_count'],
+                    staff['od_count'],
+                    staff['late_entry_count'],
+                    staff['col_count'],
+                    staff['others_count'],
+                    f"{pct}%"
+                ]
+                ws.append(row_vals)
+                
+                for col_idx in range(1, len(row_vals) + 1):
+                    c = ws.cell(row=idx, column=col_idx)
+                    if col_idx in (1, 2, 3):
+                        c.alignment = left_align
+                    else:
+                        c.alignment = center_align
+
+            for col in ws.columns:
+                max_len = max(len(str(cell.value or '')) for cell in col)
+                col_letter = get_column_letter(col[0].column)
+                ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
+
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            resp = HttpResponse(output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            filename = f"organization_attendance_{start_date}.xlsx"
+            resp['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return resp
+
         analytics = {
             'date_range': {
                 'from_date': str(start_date),
@@ -218,8 +492,8 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
         return Response(analytics)
 
     # Alias for compatibility
-    @action(detail=False, methods=['get'])
-    def organization_analytics(self, request):
+    @action(detail=False, methods=['get'], url_path='organization_analytics')
+    def organization_analytics_legacy(self, request):
         """Alias for organization-analytics endpoint"""
         return self.organization_analytics(request)
 

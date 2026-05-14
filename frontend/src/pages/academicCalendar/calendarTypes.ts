@@ -15,10 +15,11 @@ export interface CalendarDate {
 export interface CalendarData {
   id: string
   name: string
-  semesterType: 'ODD' | 'EVEN'
   academicYear: string  // e.g. "2025-26"
-  startYear: number     // e.g. 2025
-  uploadedAt: string
+  fromDate: string
+  toDate: string
+  createdAt?: string | null
+  updatedAt?: string | null
   dates: CalendarDate[]
 }
 
@@ -68,9 +69,3 @@ export function saveEventDefs(defs: CalendarEventDef[]) { localStorage.setItem(E
 export function loadDateAssignments(): DateAssignment[] { return tryParse(DATE_ASSIGNMENTS_KEY) }
 export function saveDateAssignments(a: DateAssignment[]) { localStorage.setItem(DATE_ASSIGNMENTS_KEY, JSON.stringify(a)) }
 
-/** Generate academic year options */
-const THIS_YEAR = new Date().getFullYear()
-export const ACADEMIC_YEAR_OPTIONS = Array.from({ length: 10 }, (_, i) => THIS_YEAR - 3 + i).map(y => ({
-  label: `${y}-${String(y + 1).slice(-2)}`,
-  value: y,
-}))

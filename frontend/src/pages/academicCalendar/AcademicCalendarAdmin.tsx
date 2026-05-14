@@ -1,43 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
-import { Calendar, Upload, Plus, Trash2, AlertCircle, Loader2, X, Eye, ChevronUp, MousePointer2, Tag } from 'lucide-react'
+import { Calendar, Upload, Plus, Trash2, AlertCircle, Loader2, X, Eye, ChevronUp, MousePointer2 } from 'lucide-react'
 import { ModalPortal } from '../../components/ModalPortal'
-import {
-  CalendarData, CalendarEventDef, DateAssignment,
-  loadCalendars, saveCalendars,
-  loadEventDefs, saveEventDefs,
-  loadDateAssignments, saveDateAssignments,
-  ACADEMIC_YEAR_OPTIONS,
-} from './calendarTypes'
+import { CalendarData } from './calendarTypes'
 import { CalendarGrid } from './CalendarGrid'
-import { parseCalDate } from './CalendarGrid'
-import CalendarEvents from './CalendarEvents'
 import fetchWithAuth from '../../services/fetchAuth'
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+const TEMPLATE_DROPDOWN_VALUES = [
+  'Placement training',
+  'L1',
+  'CIA 1',
+  'L2',
+  'CIA 2',
+  'Model',
+  'CQI',
+  'ESE LAB',
+  'ESE Theory',
+]
 
-function dateKeyToLabel(key: string): string {
-  if (!key) return ''
-  const [d, m, y] = key.split('/')
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return `${d} ${months[Number(m) - 1]} ${y}`
+function formatIsoDateLabel(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleDateString()
 }
-
-function sortedSelectionRange(selectedDates: Set<string>): { start: string; end: string } {
-  if (selectedDates.size === 0) return { start: '', end: '' }
-  const sorted = Array.from(selectedDates).map(k => {
-    const p = parseCalDate(k)
-    return { key: k, ts: p ? p.getTime() : 0 }
-  }).sort((a, b) => a.ts - b.ts)
-  return { start: sorted[0].key, end: sorted[sorted.length - 1].key }
-}
-
-// ── component ─────────────────────────────────────────────────────────────────
 
 export default function AcademicCalendarAdmin() {
   const [calendars, setCalendars] = useState<CalendarData[]>([])
-  const [eventDefs, setEventDefs] = useState<CalendarEventDef[]>([])
-  const [assignments, setAssignments] = useState<DateAssignment[]>([])
 
   // Viewing state
   const [viewingCalendar, setViewingCalendar] = useState<CalendarData | null>(null)
@@ -50,7 +38,10 @@ export default function AcademicCalendarAdmin() {
   // Create calendar form
   const [showCreatePopup, setShowCreatePopup] = useState(false)
   const [calendarName, setCalendarName] = useState('')
-  const [startYear, setStartYear] = useState(new Date().getFullYear())
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [oddSaturday, setOddSaturday] = useState(false)
+  const [evenSaturday, setEvenSaturday] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -58,438 +49,157 @@ export default function AcademicCalendarAdmin() {
   // Delete
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [selectedCalendar, setSelectedCalendar] = useState<CalendarData | null>(null)
-  const [deletePassword, setDeletePassword] = useState('')
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // Assign modal
-  const [showAssignModal, setShowAssignModal] = useState(false)
-  const [assignEventId, setAssignEventId] = useState('')
-  const [assignError, setAssignError] = useState('')
-
-  // Calendar Events sub-modal
-  const [showEventManager, setShowEventManager] = useState(false)
+  // Edit selected days
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editError, setEditError] = useState('')
+  const [isUpdatingDays, setIsUpdatingDays] = useState(false)
+  const [editDraft, setEditDraft] = useState({
+    workingDaysOption: '',
+    holidayName: '',
+    iiYearEvent: '',
+    iiiYearEvent: '',
+    ivYearEvent: '',
+    iYearText: '',
+    iiYearEventName: '',
+    iiiYearEventName: '',
+    ivYearEventName: '',
+    iYearEventName: '',
+  })
 
   useEffect(() => {
-    setCalendars(loadCalendars())
-    // Load event defs from backend, fall back to localStorage
-    const loadFromApi = async () => {
-      try {
-        const [labelsRes, assignRes] = await Promise.all([
-          fetchWithAuth('/api/academic-calendar/event-labels/'),
-          fetchWithAuth('/api/academic-calendar/event-assignments/'),
-        ])
-        if (labelsRes.ok) {
-          const data = await labelsRes.json()
-          const mapped: CalendarEventDef[] = data.map((d: any) => ({
-            id: d.id, title: d.title, color: d.color,
-            visibleToRoles: d.visible_roles || [],
-            semesters: d.semesters || [],
-            createdAt: d.created_at,
-          }))
-          setEventDefs(mapped); saveEventDefs(mapped)
-        } else {
-          setEventDefs(loadEventDefs())
-        }
-        if (assignRes.ok) {
-          const data = await assignRes.json()
-          const mapped: DateAssignment[] = data.map((a: any) => ({
-            id: a.id,
-            calendarId: a.calendar_ref,
-            startDate: a.start_date.split('-').reverse().join('/'),  // YYYY-MM-DD → d/m/yyyy
-            endDate:   a.end_date.split('-').reverse().join('/'),
-            eventId: a.event_id,
-            createdAt: a.created_at,
-          }))
-          setAssignments(mapped); saveDateAssignments(mapped)
-        } else {
-          setAssignments(loadDateAssignments())
-        }
-      } catch {
-        setEventDefs(loadEventDefs())
-        setAssignments(loadDateAssignments())
-      }
-    }
-    loadFromApi()
+    refreshCalendarList()
   }, [])
 
-  // ── excel parsing ──────────────────────────────────────────────────────────
-
-  const getCellValue = (cell?: XLSX.CellObject): string => {
-    if (!cell) return ''
-    const formatted = String((cell as any).w ?? '').trim()
-    const raw = cell.v
-    if (formatted) return formatted
-    if (raw === undefined || raw === null) return ''
-    return String(raw).trim()
+  async function refreshCalendarList() {
+    try {
+      const res = await fetchWithAuth('/api/academic-calendar/calendars/')
+      if (!res.ok) throw new Error('Failed to load calendars')
+      const data = await res.json()
+      const list = Array.isArray(data?.calendars) ? data.calendars : []
+      const mapped: CalendarData[] = list.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        academicYear: c.academic_year || '',
+        fromDate: c.from_date,
+        toDate: c.to_date,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at,
+        dates: [],
+      }))
+      setCalendars(mapped)
+    } catch {
+      setCalendars([])
+    }
   }
 
-  const getCellStr = (sheet: XLSX.WorkSheet, col: string, row: number): string => {
-    const cell = sheet[`${col}${row}`] as XLSX.CellObject | undefined
-    return getCellValue(cell)
-  }
-
-  const getCellStrByIndex = (sheet: XLSX.WorkSheet, colIndex: number, row: number): string => {
-    const addr = XLSX.utils.encode_cell({ c: colIndex, r: row - 1 })
-    const cell = sheet[addr] as XLSX.CellObject | undefined
-    return getCellValue(cell)
-  }
-
-  const normHeader = (value: string) =>
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .replace(/\s+/g, ' ')
-
-  const isDateHeader = (v: string) => {
-    const n = normHeader(v)
-    return n === 'date' || n === 'dates'
-  }
-
-  const isDayHeader = (v: string) => {
-    const n = normHeader(v)
-    return n === 'day' || n === 'days'
-  }
-
-  const isWorkingDaysHeader = (v: string) => {
-    const n = normHeader(v)
-    if (n === 'working days' || n === 'working day') return true
-    const squashed = n.replace(/\s+/g, '')
-    if (squashed === 'workingdays' || squashed === 'workingday') return true
-    return n.includes('working') && n.includes('day')
-  }
-
-  const findHeaderRow = (sheet: XLSX.WorkSheet, maxScanRows = 20): number | null => {
-    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
-    const maxCol = range.e.c
-    for (let row = 1; row <= Math.min(maxScanRows, range.e.r + 1); row++) {
-      let hasDate = false
-      let hasDay = false
-      let hasWorkingDays = false
-      for (let c = 0; c <= maxCol; c++) {
-        const v = getCellStrByIndex(sheet, c, row)
-        if (isDateHeader(v)) hasDate = true
-        if (isDayHeader(v)) hasDay = true
-        if (isWorkingDaysHeader(v)) hasWorkingDays = true
+  const downloadTemplate = async () => {
+    if (!fromDate || !toDate) { setCreateError('Please enter from/to dates to download template'); return }
+    setIsProcessing(true); setCreateError(null)
+    try {
+      const qs = new URLSearchParams({
+        from_date: fromDate,
+        to_date: toDate,
+        odd_sat: oddSaturday ? '1' : '0',
+        even_sat: evenSaturday ? '1' : '0',
+      })
+      const res = await fetchWithAuth(`/api/academic-calendar/calendar/template/?${qs.toString()}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Failed to download template')
       }
-      if (hasDate && hasDay && hasWorkingDays) return row
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `academic_calendar_template_${fromDate}_${toDate}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err: any) {
+      setCreateError(err?.message || 'Failed to download template')
+    } finally {
+      setIsProcessing(false)
     }
-
-    // Template fallbacks: common templates place headers on row 3 (or occasionally row 4).
-    for (const r of [3, 4]) {
-      const b = getCellStr(sheet, 'B', r)
-      const c = getCellStr(sheet, 'C', r)
-      const d = getCellStr(sheet, 'D', r)
-      if (isDateHeader(b) && isDayHeader(c) && isWorkingDaysHeader(d)) return r
-    }
-
-    return null
-  }
-
-  const detectSheetForCalendar = (workbook: XLSX.WorkBook): XLSX.WorkSheet => {
-    const sheetName3 = workbook.SheetNames[2]
-    const candidate3 = sheetName3 ? workbook.Sheets[sheetName3] : undefined
-    if (candidate3) return candidate3
-    // Fallback: return the first available sheet.
-    const first = workbook.SheetNames[0]
-    if (!first) throw new Error('Excel file must have at least 1 sheet')
-    return workbook.Sheets[first]
-  }
-
-  const pickBestCalendarSheet = (workbook: XLSX.WorkBook): XLSX.WorkSheet => {
-    // Prefer the 3rd sheet, but if it doesn't look like the calendar layout, scan all sheets.
-    const preferred = detectSheetForCalendar(workbook)
-    const preferredHeaderRow = findHeaderRow(preferred)
-    if (preferredHeaderRow) return preferred
-
-    for (const name of workbook.SheetNames) {
-      const sheet = workbook.Sheets[name]
-      const headerRow = findHeaderRow(sheet)
-      if (headerRow) return sheet
-    }
-
-    return preferred
-  }
-
-  const parsePossiblyAmbiguousDateString = (raw: string): Date | null => {
-    const trimmed = (raw || '').trim()
-    if (!trimmed) return null
-
-    // Try existing parser first (d/m/y or yyyy-mm-dd)
-    const asDMY = parseCalDate(trimmed)
-    if (asDMY) return asDMY
-
-    // Heuristic for dd/mm/yy (with 2-digit year) and mm/dd/yyyy or mm-dd-yyyy
-    const parts = trimmed.split(/[\/\-]/)
-    if (parts.length !== 3) return null
-    const [p1, p2, p3] = parts.map(p => Number(p))
-    if ([p1, p2, p3].some(n => isNaN(n))) return null
-    let y = p3
-    if (y < 100) y = 2000 + y
-
-    const tryMake = (d: number, m: number) => {
-      if (y < 1900 || m < 1 || m > 12 || d < 1 || d > 31) return null
-      return new Date(y, m - 1, d)
-    }
-
-    // Prefer dd/mm first (matches your template)
-    return tryMake(p1, p2) ?? tryMake(p2, p1)
-  }
-
-  const formatExcelSerialToDMY = (serial: number, date1904: boolean): string => {
-    // Excel serials are day counts; using UTC getters avoids local timezone shifting the date.
-    const epochDays = date1904 ? 24107 : 25569
-    const utcMs = Math.round((serial - epochDays) * 86400 * 1000)
-    const dt = new Date(utcMs)
-    return `${dt.getUTCDate()}/${dt.getUTCMonth() + 1}/${dt.getUTCFullYear()}`
-  }
-
-  const formatExcelDateFromCell = (cell: XLSX.CellObject | undefined, date1904: boolean): string => {
-    if (!cell) return ''
-    const raw = (cell as any).v
-    if (raw instanceof Date) {
-      return `${raw.getUTCDate()}/${raw.getUTCMonth() + 1}/${raw.getUTCFullYear()}`
-    }
-    if (typeof raw === 'number') {
-      try {
-        const parsed = (XLSX as any).SSF?.parse_date_code?.(raw, { date1904 })
-        if (parsed?.y && parsed?.m && parsed?.d) return `${parsed.d}/${parsed.m}/${parsed.y}`
-      } catch {}
-      return formatExcelSerialToDMY(raw, date1904)
-    }
-
-    const formattedOrRaw = getCellValue(cell)
-    const parsed = parsePossiblyAmbiguousDateString(formattedOrRaw)
-    return parsed ? `${parsed.getDate()}/${parsed.getMonth() + 1}/${parsed.getFullYear()}` : formatExcelDate(formattedOrRaw)
-  }
-
-  const findColExact = (sheet: XLSX.WorkSheet, row: number, text: string): number | null => {
-    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
-    const maxCol = range.e.c
-    const want = text.trim().toLowerCase()
-    for (let c = 0; c <= maxCol; c++) {
-      const v = getCellStrByIndex(sheet, c, row).trim().toLowerCase()
-      if (v === want) return c
-    }
-    return null
-  }
-
-  const findColContains = (sheet: XLSX.WorkSheet, row: number, text: string): number | null => {
-    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
-    const maxCol = range.e.c
-    const want = text.trim().toLowerCase()
-    for (let c = 0; c <= maxCol; c++) {
-      const v = getCellStrByIndex(sheet, c, row).trim().toLowerCase()
-      if (v && v.includes(want)) return c
-    }
-    return null
-  }
-
-  const detectSemesterType = (sheet: XLSX.WorkSheet): 'ODD' | 'EVEN' => {
-    // The template usually has "ODD SEMESTER" or "EVEN SEMESTER" in row 2.
-    const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
-    const maxCol = Math.min(range.e.c, 30)
-    for (let c = 0; c <= maxCol; c++) {
-      const v = getCellStrByIndex(sheet, c, 2).toUpperCase()
-      if (v.includes('ODD')) return 'ODD'
-      if (v.includes('EVEN')) return 'EVEN'
-    }
-    // Fallback to previous behavior
-    const b2 = getCellStr(sheet, 'B', 2).toUpperCase()
-    return b2.includes('ODD') ? 'ODD' : 'EVEN'
-  }
-
-  const detectCounterCol = (
-    sheet: XLSX.WorkSheet,
-    dataStartRow: number,
-    workingDaysCol: number,
-    nextBlockCol: number | null
-  ): number => {
-    const upper = nextBlockCol !== null ? nextBlockCol - 1 : workingDaysCol + 3
-    const end = Math.max(workingDaysCol + 1, upper)
-    // Choose the first mostly-numeric column after Working Days (template has 1..n counters)
-    for (let c = workingDaysCol + 1; c <= end; c++) {
-      let hits = 0
-      for (let r = dataStartRow; r < dataStartRow + 15; r++) {
-        const v = getCellStrByIndex(sheet, c, r).trim()
-        if (v !== '' && !isNaN(Number(v))) hits++
-      }
-      if (hits >= 3) return c
-    }
-    return workingDaysCol + 1
-  }
-
-  const formatExcelDate = (value: any): string => {
-    if (typeof value === 'number') {
-      // Convert Excel serial to local date (no UTC shift — use local time methods)
-      const utcMs = Math.round((value - 25569) * 86400 * 1000)
-      const jsDate = new Date(utcMs)
-      return `${jsDate.getDate()}/${jsDate.getMonth() + 1}/${jsDate.getFullYear()}`
-    }
-    if (value instanceof Date) return `${value.getDate()}/${value.getMonth() + 1}/${value.getFullYear()}`
-    // String fallback: normalize via parser to strip zero-padding and unify separators
-    if (value) {
-      const p = parseCalDate(String(value))
-      if (p) return `${p.getDate()}/${p.getMonth() + 1}/${p.getFullYear()}`
-      return String(value)
-    }
-    return ''
-  }
-
-  const parseExcelFile = (file: File): Promise<CalendarData> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        try {
-          const workbook = XLSX.read(e.target?.result, { type: 'binary', cellDates: true })
-          if (workbook.SheetNames.length < 1) throw new Error('Excel file has no sheets')
-          const date1904 = !!(workbook as any)?.Workbook?.WBProps?.date1904
-          const sheet = pickBestCalendarSheet(workbook)
-
-          // Map columns from the template headers (matches the screenshot)
-          const headerRow = findHeaderRow(sheet)
-
-          let dateCol: number | null = null
-          let dayCol: number | null = null
-          let workingDaysCol: number | null = null
-          let iiYearCol: number | null = null
-          let iiiYearCol: number | null = null
-          let ivYearCol: number | null = null
-          let iYearCol: number | null = null
-          let dataStartRow = 4
-
-          if (headerRow) {
-            dateCol = findColExact(sheet, headerRow, 'Date')
-            dayCol = findColExact(sheet, headerRow, 'Day')
-            workingDaysCol = findColExact(sheet, headerRow, 'Working Days')
-
-            // Year blocks can be on headerRow (merged) or one row above.
-            const yrRowA = headerRow
-            const yrRowB = Math.max(1, headerRow - 1)
-            iiYearCol = findColContains(sheet, yrRowA, 'II Year') ?? findColContains(sheet, yrRowB, 'II Year')
-            iiiYearCol = findColContains(sheet, yrRowA, 'III Year') ?? findColContains(sheet, yrRowB, 'III Year')
-            ivYearCol = findColContains(sheet, yrRowA, 'IV Year') ?? findColContains(sheet, yrRowB, 'IV Year')
-            iYearCol = findColContains(sheet, yrRowA, 'I Year') ?? findColContains(sheet, yrRowB, 'I Year')
-            dataStartRow = headerRow + 1
-          }
-
-          // Fixed-template fallback for the 3rd sheet mapping shown in the screenshot.
-          if (dateCol === null || dayCol === null || workingDaysCol === null) {
-            dateCol = 1   // B
-            dayCol = 2    // C
-            workingDaysCol = 3 // D
-            iiYearCol = 6  // G
-            iiiYearCol = 8 // I
-            ivYearCol = 10 // K
-            iYearCol = 12 // M
-            dataStartRow = 4
-          }
-
-          const counterCol = detectCounterCol(sheet, dataStartRow, workingDaysCol, iiYearCol)
-
-          const semesterType: 'ODD' | 'EVEN' = detectSemesterType(sheet)
-          const academicYear = `${startYear}-${String(startYear + 1).slice(-2)}`
-          const range = (XLSX.utils as any).decode_range(sheet['!ref'] || 'A1:M500')
-          const maxRow = range.e.r + 1
-          const dates: import('./calendarTypes').CalendarDate[] = []
-          let consecutiveEmpty = 0
-          for (let rowIndex = dataStartRow; rowIndex <= maxRow; rowIndex++) {
-            const dateAddr = XLSX.utils.encode_cell({ c: dateCol, r: rowIndex - 1 })
-            const dateCell = sheet[dateAddr] as XLSX.CellObject | undefined
-            const dateStr = formatExcelDateFromCell(dateCell, date1904)
-            if (dateStr === '') {
-              if (++consecutiveEmpty > 10) break
-              continue
-            }
-            consecutiveEmpty = 0
-            dates.push({
-              date: dateStr,
-              day: getCellStrByIndex(sheet, dayCol, rowIndex),
-              workingDays: getCellStrByIndex(sheet, workingDaysCol, rowIndex),
-              counter: getCellStrByIndex(sheet, counterCol, rowIndex),
-              iiYearEvent: iiYearCol !== null ? getCellStrByIndex(sheet, iiYearCol, rowIndex) : '',
-              iiYearCount: iiYearCol !== null ? getCellStrByIndex(sheet, iiYearCol + 1, rowIndex) : '',
-              iiiYearEvent: iiiYearCol !== null ? getCellStrByIndex(sheet, iiiYearCol, rowIndex) : '',
-              iiiYearCount: iiiYearCol !== null ? getCellStrByIndex(sheet, iiiYearCol + 1, rowIndex) : '',
-              ivYearEvent: ivYearCol !== null ? getCellStrByIndex(sheet, ivYearCol, rowIndex) : '',
-              ivYearCount: ivYearCol !== null ? getCellStrByIndex(sheet, ivYearCol + 1, rowIndex) : '',
-              iYearText: iYearCol !== null ? getCellStrByIndex(sheet, iYearCol, rowIndex) : '',
-            })
-          }
-          if (dates.length === 0) {
-            const headerRowDebug = findHeaderRow(sheet)
-            const debugRows = [1, 2, 3, 4, 5, 6]
-            const debugCols = ['A','B','C','D','E','F','G','H','I','J','K','L','M']
-            const dump = debugRows.map(r => ({
-              row: r,
-              values: debugCols.map(c => getCellStr(sheet, c, r)),
-            }))
-            // eslint-disable-next-line no-console
-            console.warn('[AcademicCalendarImport] No data rows found; sheet preview:', { headerRowDebug, dump })
-            throw new Error('No data rows found in the calendar sheet. Please confirm Date values start under the Date column (usually column B) and try again. (Check console for a sheet preview.)')
-          }
-          resolve({ id: Date.now().toString(), name: calendarName || file.name.replace(/\.[^.]+$/, ''), semesterType, academicYear, startYear, uploadedAt: new Date().toISOString(), dates })
-        } catch (err: any) { reject(err) }
-      }
-      reader.onerror = () => reject(new Error('Failed to read file'))
-      reader.readAsBinaryString(file)
-    })
-
-  const countImportedEvents = (dates: import('./calendarTypes').CalendarDate[]) => {
-    const isEventText = (v: string) => {
-      const s = (v || '').trim()
-      if (!s) return false
-      const low = s.toLowerCase()
-      if (low === 'sat' || low === 'sun') return false
-      return isNaN(Number(s))
-    }
-
-    let count = 0
-    for (const d of dates) {
-      if (isEventText(d.iiYearEvent)) count++
-      if (isEventText(d.iiiYearEvent)) count++
-      if (isEventText(d.ivYearEvent)) count++
-      if (isEventText(d.iYearText)) count++
-    }
-    return count
   }
 
   const handleCreateCalendar = async () => {
     if (!calendarName.trim()) { setCreateError('Please enter a calendar name'); return }
+    if (!fromDate || !toDate) { setCreateError('Please select from and to dates'); return }
     if (!uploadedFile) { setCreateError('Please upload an Excel file'); return }
     setIsProcessing(true); setCreateError(null)
     try {
-      const data = await parseExcelFile(uploadedFile)
-
-      const importedEvents = countImportedEvents(data.dates)
-      window.alert(`Imported ${data.dates.length} dates and ${importedEvents} events.`)
-
-      const updated = [...calendars, data]
-      saveCalendars(updated); setCalendars(updated)
-      setCalendarName(''); setUploadedFile(null); setShowCreatePopup(false)
-    } catch (err: any) { setCreateError(err.message || 'Failed to process Excel file') }
-    finally { setIsProcessing(false) }
+      const fd = new FormData()
+      fd.set('name', calendarName.trim())
+      fd.set('from_date', fromDate)
+      fd.set('to_date', toDate)
+      fd.set('file', uploadedFile)
+      const res = await fetchWithAuth('/api/academic-calendar/calendars/', { method: 'POST', body: fd })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Failed to create calendar')
+      }
+      await refreshCalendarList()
+      setCalendarName('')
+      setFromDate('')
+      setToDate('')
+      setOddSaturday(false)
+      setEvenSaturday(false)
+      setUploadedFile(null)
+      setShowCreatePopup(false)
+    } catch (err: any) {
+      setCreateError(err?.message || 'Failed to process Excel file')
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
-  const handleDeleteCalendar = () => {
+  const handleDeleteCalendar = async () => {
     if (!selectedCalendar) return
-    if (deletePassword !== 'admin') { setDeleteError('Incorrect password'); return }
-    const updated = calendars.filter(c => c.id !== selectedCalendar.id)
-    saveCalendars(updated); setCalendars(updated)
-    // also remove assignments for this calendar
-    const updatedA = assignments.filter(a => a.calendarId !== selectedCalendar.id)
-    saveDateAssignments(updatedA); setAssignments(updatedA)
-    setShowDeleteConfirm(false); setDeletePassword(''); setSelectedCalendar(null); setDeleteError(null)
-    if (viewingCalendar?.id === selectedCalendar.id) setViewingCalendar(null)
+    try {
+      const res = await fetchWithAuth(`/api/academic-calendar/calendars/${selectedCalendar.id}/`, { method: 'DELETE' })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Delete failed')
+      }
+      await refreshCalendarList()
+      setShowDeleteConfirm(false)
+      setSelectedCalendar(null)
+      setDeleteError(null)
+      if (viewingCalendar?.id === selectedCalendar.id) setViewingCalendar(null)
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Delete failed')
+    }
   }
 
-  // ── open calendar view ─────────────────────────────────────────────────────
-  const openCalendarView = (cal: CalendarData) => {
-    setViewingCalendar(cal); setSelectMode(false); setSelectedDates(new Set())
-    setTimeout(() => calendarGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  const openCalendarView = async (cal: CalendarData) => {
+    setSelectMode(false); setSelectedDates(new Set())
+    try {
+      const res = await fetchWithAuth(`/api/academic-calendar/calendars/${cal.id}/`)
+      if (!res.ok) throw new Error('Failed to load calendar')
+      const data = await res.json()
+      const c = data?.calendar
+      if (c) {
+        const mapped: CalendarData = {
+          id: c.id,
+          name: c.name,
+          academicYear: c.academic_year || '',
+          fromDate: c.from_date,
+          toDate: c.to_date,
+          createdAt: c.created_at,
+          updatedAt: c.updated_at,
+          dates: Array.isArray(c.dates) ? c.dates : [],
+        }
+        setViewingCalendar(mapped)
+      }
+      setTimeout(() => calendarGridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    } catch {
+      setViewingCalendar(null)
+    }
   }
 
-  // ── toggle date selection ──────────────────────────────────────────────────
   const toggleDate = (key: string) => {
     setSelectedDates(prev => {
       const n = new Set(prev)
@@ -498,57 +208,85 @@ export default function AcademicCalendarAdmin() {
     })
   }
 
-  // ── assign event ───────────────────────────────────────────────────────────
-  const handleAssign = async () => {
-    if (!assignEventId) { setAssignError('Please select an event'); return }
+  const applyDayEdits = async () => {
     if (!viewingCalendar) return
-    const { start, end } = sortedSelectionRange(selectedDates)
-    // Convert d/m/yyyy → YYYY-MM-DD for backend
-    const toIso = (key: string) => {
-      const [d, m, y] = key.split('/')
-      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+    if (selectedDates.size === 0) { setEditError('Select at least one date'); return }
+    if (editDraft.workingDaysOption === 'Holiday' && !editDraft.holidayName.trim()) {
+      setEditError('Enter a holiday name')
+      return
     }
-    // Optimistic local update
-    const tempId = `temp-${Date.now()}`
-    const newAssignment: DateAssignment = {
-      id: tempId,
-      calendarId: viewingCalendar.id,
-      startDate: start, endDate: end,
-      eventId: assignEventId,
-      createdAt: new Date().toISOString(),
+    // Validate event name fields
+    if (editDraft.iiYearEvent === 'Event' && !editDraft.iiYearEventName.trim()) {
+      setEditError('Enter event name for II Year'); return
     }
-    const updated = [...assignments, newAssignment]
-    saveDateAssignments(updated); setAssignments(updated)
-    setShowAssignModal(false); setAssignEventId(''); setAssignError('')
-    setSelectedDates(new Set()); setSelectMode(false)
-    // Post to backend
+    if (editDraft.iiiYearEvent === 'Event' && !editDraft.iiiYearEventName.trim()) {
+      setEditError('Enter event name for III Year'); return
+    }
+    if (editDraft.ivYearEvent === 'Event' && !editDraft.ivYearEventName.trim()) {
+      setEditError('Enter event name for IV Year'); return
+    }
+    if (editDraft.iYearText === 'Event' && !editDraft.iYearEventName.trim()) {
+      setEditError('Enter event name for I Year'); return
+    }
+    const workingDays = editDraft.workingDaysOption === 'Holiday'
+      ? editDraft.holidayName.trim()
+      : (editDraft.workingDaysOption || '')
+
+    // Resolve "Event" placeholders to the typed event name
+    const resolveYear = (val: string, name: string) => val === 'Event' ? name.trim() : val
+    const iiYearEvent = resolveYear(editDraft.iiYearEvent, editDraft.iiYearEventName)
+    const iiiYearEvent = resolveYear(editDraft.iiiYearEvent, editDraft.iiiYearEventName)
+    const ivYearEvent = resolveYear(editDraft.ivYearEvent, editDraft.ivYearEventName)
+    const iYearText = resolveYear(editDraft.iYearText, editDraft.iYearEventName)
+
+    setIsUpdatingDays(true); setEditError('')
     try {
-      const res = await fetchWithAuth('/api/academic-calendar/event-assignments/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event_id: assignEventId,
-          calendar_ref: viewingCalendar.id,
-          start_date: toIso(start),
-          end_date: toIso(end),
-          description: '',
-        }),
+      // Convert d/m/yyyy keys → YYYY-MM-DD for reliable backend parsing
+      const toIso = (key: string) => {
+        const [d, m, y] = key.split('/').map(Number)
+        return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      }
+      const days = Array.from(selectedDates).map((dateKey) => ({
+        date: toIso(dateKey),
+        workingDays,
+        iiYearEvent,
+        iiiYearEvent,
+        ivYearEvent,
+        iYearText,
+      }))
+      const res = await fetchWithAuth(`/api/academic-calendar/calendars/${viewingCalendar.id}/`, {
+        method: 'PUT',
+        body: JSON.stringify({ days }),
       })
-      if (res.ok) {
-        const created = await res.json()
-        // Replace temp id with real id
-        setAssignments(prev => {
-          const list = prev.map(a => a.id === tempId ? { ...a, id: created.id } : a)
-          saveDateAssignments(list)
-          return list
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'Failed to update calendar')
+      }
+      const data = await res.json()
+      const c = data?.calendar
+      if (c) {
+        setViewingCalendar({
+          id: c.id,
+          name: c.name,
+          academicYear: c.academic_year || '',
+          fromDate: c.from_date,
+          toDate: c.to_date,
+          createdAt: c.created_at,
+          updatedAt: c.updated_at,
+          dates: Array.isArray(c.dates) ? c.dates : [],
         })
       }
-    } catch {}
+      setShowEditModal(false)
+      setSelectedDates(new Set())
+      setSelectMode(false)
+      setEditDraft({ workingDaysOption: '', holidayName: '', iiYearEvent: '', iiiYearEvent: '', ivYearEvent: '', iYearText: '', iiYearEventName: '', iiiYearEventName: '', ivYearEventName: '', iYearEventName: '' })
+    } catch (err: any) {
+      setEditError(err?.message || 'Update failed')
+    } finally {
+      setIsUpdatingDays(false)
+    }
   }
 
-  const { start: selStart, end: selEnd } = sortedSelectionRange(selectedDates)
-
-  // ── render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
@@ -564,12 +302,6 @@ export default function AcademicCalendarAdmin() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowEventManager(true)}
-                className="flex items-center gap-2 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition-colors text-sm"
-              >
-                <Tag className="w-4 h-4" /> Manage Events
-              </button>
               <button
                 onClick={() => setShowCreatePopup(true)}
                 className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
@@ -598,22 +330,22 @@ export default function AcademicCalendarAdmin() {
                       <h3 className="font-semibold text-gray-900">{calendar.name}</h3>
                       <p className="text-sm text-gray-600">{calendar.academicYear}</p>
                     </div>
-                    <button onClick={() => { setSelectedCalendar(calendar); setShowDeleteConfirm(true); setDeletePassword(''); setDeleteError(null) }} className="text-red-500 hover:text-red-700 p-1">
+                    <button onClick={() => { setSelectedCalendar(calendar); setShowDeleteConfirm(true); setDeleteError(null) }} className="text-red-500 hover:text-red-700 p-1">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                   <div className="space-y-1 text-sm mb-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-gray-600">Semester:</span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${calendar.semesterType === 'ODD' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                        {calendar.semesterType}
+                      <span className="text-gray-600">Range:</span>
+                      <span className="text-xs font-medium text-gray-700">
+                        {formatIsoDateLabel(calendar.fromDate)} - {formatIsoDateLabel(calendar.toDate)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-gray-600">Entries:</span>
-                      <span className="font-medium">{calendar.dates.length}</span>
+                      <span className="font-medium">{calendar.dates.length ? calendar.dates.length : '—'}</span>
                     </div>
-                    <div className="text-xs text-gray-500 mt-2">Uploaded: {new Date(calendar.uploadedAt).toLocaleDateString()}</div>
+                    <div className="text-xs text-gray-500 mt-2">Updated: {formatIsoDateLabel(calendar.updatedAt) || '—'}</div>
                   </div>
                   <button
                     onClick={() => openCalendarView(calendar)}
@@ -637,15 +369,11 @@ export default function AcademicCalendarAdmin() {
               <div>
                 <h2 className="text-base font-semibold text-gray-900">{viewingCalendar.name}</h2>
                 <p className="text-xs text-gray-500">
-                  {viewingCalendar.academicYear} &bull;{' '}
-                  <span className={viewingCalendar.semesterType === 'ODD' ? 'text-blue-600 font-medium' : 'text-purple-600 font-medium'}>
-                    {viewingCalendar.semesterType} Semester
-                  </span>
+                  {viewingCalendar.academicYear} &bull; {formatIsoDateLabel(viewingCalendar.fromDate)} - {formatIsoDateLabel(viewingCalendar.toDate)}
                   &bull; {viewingCalendar.dates.length} days
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                {/* Select mode toggle */}
                 {!selectMode ? (
                   <button
                     onClick={() => { setSelectMode(true); setSelectedDates(new Set()) }}
@@ -660,10 +388,10 @@ export default function AcademicCalendarAdmin() {
                     </span>
                     {selectedDates.size > 0 && (
                       <button
-                        onClick={() => { setAssignError(''); setAssignEventId(''); setShowAssignModal(true) }}
-                        className="flex items-center gap-1.5 text-sm bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700 transition-colors"
+                        onClick={() => { setEditError(''); setShowEditModal(true) }}
+                        className="flex items-center gap-1.5 text-sm bg-amber-500 text-white px-3 py-1.5 rounded-lg hover:bg-amber-600 transition-colors"
                       >
-                        <Tag className="w-4 h-4" /> Assign Event
+                        Edit Days
                       </button>
                     )}
                     <button
@@ -688,8 +416,6 @@ export default function AcademicCalendarAdmin() {
               selectMode={selectMode}
               selectedDates={selectedDates}
               onToggleDate={toggleDate}
-              assignments={assignments}
-              eventDefs={eventDefs}
             />
           </div>
         </div>
@@ -702,7 +428,19 @@ export default function AcademicCalendarAdmin() {
             <div className="bg-white rounded-lg max-w-md w-full p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold">Create New Calendar</h3>
-                <button onClick={() => { setShowCreatePopup(false); setCalendarName(''); setUploadedFile(null); setCreateError(null) }} className="text-gray-400 hover:text-gray-600">
+                <button
+                  onClick={() => {
+                    setShowCreatePopup(false)
+                    setCalendarName('')
+                    setFromDate('')
+                    setToDate('')
+                    setOddSaturday(false)
+                    setEvenSaturday(false)
+                    setUploadedFile(null)
+                    setCreateError(null)
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -717,21 +455,49 @@ export default function AcademicCalendarAdmin() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Calendar Name</label>
                   <input type="text" value={calendarName} onChange={e => setCalendarName(e.target.value)} placeholder="e.g., 2025-26 Odd Semester" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">From Date</label>
+                    <input
+                      type="date"
+                      value={fromDate}
+                      onChange={e => setFromDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">To Date</label>
+                    <input
+                      type="date"
+                      value={toDate}
+                      onChange={e => setToDate(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                    <input type="checkbox" checked={oddSaturday} onChange={e => setOddSaturday(e.target.checked)} />
+                    Auto-fill odd Saturdays as holiday
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                    <input type="checkbox" checked={evenSaturday} onChange={e => setEvenSaturday(e.target.checked)} />
+                    Auto-fill even Saturdays as holiday
+                  </label>
+                </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Academic Year</label>
-                  <select
-                    value={startYear}
-                    onChange={e => setStartYear(Number(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  <button
+                    type="button"
+                    onClick={downloadTemplate}
+                    disabled={isProcessing}
+                    className="w-full px-4 py-2 border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50 disabled:opacity-50"
                   >
-                    {ACADEMIC_YEAR_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
+                    Download Template
+                  </button>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Upload Excel File <span className="text-gray-400 font-normal">(3rd sheet used)</span>
+                    Upload Excel File
                   </label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-5 text-center">
                     <input type="file" accept=".xlsx,.xls" onChange={e => { if (e.target.files?.[0]) { setUploadedFile(e.target.files[0]); setCreateError(null) } }} className="hidden" id="calendar-upload" />
@@ -742,7 +508,21 @@ export default function AcademicCalendarAdmin() {
                   </div>
                 </div>
                 <div className="flex gap-3 pt-1">
-                  <button onClick={() => { setShowCreatePopup(false); setCalendarName(''); setUploadedFile(null); setCreateError(null) }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                  <button
+                    onClick={() => {
+                      setShowCreatePopup(false)
+                      setCalendarName('')
+                      setFromDate('')
+                      setToDate('')
+                      setOddSaturday(false)
+                      setEvenSaturday(false)
+                      setUploadedFile(null)
+                      setCreateError(null)
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
                   <button onClick={handleCreateCalendar} disabled={isProcessing} className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
                     {isProcessing ? <><Loader2 className="w-4 h-4 animate-spin" />Processing...</> : 'Generate Calendar'}
                   </button>
@@ -766,12 +546,8 @@ export default function AcademicCalendarAdmin() {
                 </div>
               )}
               <p className="text-gray-600 mb-4">Are you sure you want to delete "{selectedCalendar.name}"?</p>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Enter password to confirm</label>
-                <input type="password" value={deletePassword} onChange={e => setDeletePassword(e.target.value)} placeholder="Password" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500" />
-              </div>
               <div className="flex gap-3">
-                <button onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); setSelectedCalendar(null); setDeleteError(null) }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                <button onClick={() => { setShowDeleteConfirm(false); setSelectedCalendar(null); setDeleteError(null) }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
                 <button onClick={handleDeleteCalendar} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
               </div>
             </div>
@@ -779,90 +555,155 @@ export default function AcademicCalendarAdmin() {
         </ModalPortal>
       )}
 
-      {/* ── Assign Event Modal ── */}
-      {showAssignModal && viewingCalendar && (
+      {/* ── Edit Days Modal ── */}
+      {showEditModal && viewingCalendar && (
         <ModalPortal>
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg max-w-md w-full p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">Assign Event to Dates</h3>
-                <button onClick={() => setShowAssignModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+                <h3 className="text-lg font-semibold">Edit Selected Days</h3>
+                <button onClick={() => setShowEditModal(false)} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
               </div>
-
-              {/* Date range display */}
-              <div className="bg-gray-50 rounded-lg p-3 mb-4 space-y-1">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-500 font-medium">Start Date</span>
-                  <span className="font-semibold text-gray-900">{dateKeyToLabel(selStart)}</span>
+              {editError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-red-700">{editError}</p>
                 </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-500 font-medium">End Date</span>
-                  <span className="font-semibold text-gray-900">{dateKeyToLabel(selEnd)}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-gray-400 pt-0.5">
-                  <span>Selected dates</span>
-                  <span>{selectedDates.size} individual date{selectedDates.size !== 1 ? 's' : ''}</span>
-                </div>
-              </div>
-
-              {/* Event select */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Select Event</label>
-                {assignError && <p className="text-xs text-red-600 mb-1">{assignError}</p>}
-                <div className="flex gap-2">
+              )}
+              <div className="text-xs text-gray-500 mb-3">Applies to {selectedDates.size} selected date{selectedDates.size !== 1 ? 's' : ''}.</div>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Working Days</label>
                   <select
-                    value={assignEventId}
-                    onChange={e => { setAssignEventId(e.target.value); setAssignError('') }}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                    value={editDraft.workingDaysOption}
+                    onChange={e => setEditDraft({ ...editDraft, workingDaysOption: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="">— Select an event —</option>
-                    {eventDefs.map(ev => (
-                      <option key={ev.id} value={ev.id}>{ev.title}</option>
+                    <option value="">— Select —</option>
+                    {TEMPLATE_DROPDOWN_VALUES.map(v => (
+                      <option key={v} value={v}>{v}</option>
                     ))}
+                    <option value="Holiday">Holiday</option>
                   </select>
-                  <button
-                    onClick={() => setShowEventManager(true)}
-                    className="px-3 py-2 text-sm border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50 whitespace-nowrap"
-                  >
-                    + New
-                  </button>
                 </div>
-                {/* Color preview of selected event */}
-                {assignEventId && (() => {
-                  const ev = eventDefs.find(e => e.id === assignEventId)
-                  return ev ? (
-                    <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: ev.color }} />
-                      <span>Will show as <strong style={{ color: ev.color }}>{ev.title}</strong> on calendar</span>
-                    </div>
-                  ) : null
-                })()}
+                {editDraft.workingDaysOption === 'Holiday' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Holiday Name</label>
+                    <input
+                      type="text"
+                      value={editDraft.holidayName}
+                      onChange={e => setEditDraft({ ...editDraft, holidayName: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                )}
+                {/* II Year */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">II Year</label>
+                  <select
+                    value={editDraft.iiYearEvent}
+                    onChange={e => setEditDraft({ ...editDraft, iiYearEvent: e.target.value, iiYearEventName: '' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Select —</option>
+                    {TEMPLATE_DROPDOWN_VALUES.map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                    <option value="Event">Event (Custom)</option>
+                  </select>
+                  {editDraft.iiYearEvent === 'Event' && (
+                    <input
+                      type="text"
+                      placeholder="Enter event name…"
+                      value={editDraft.iiYearEventName}
+                      onChange={e => setEditDraft({ ...editDraft, iiYearEventName: e.target.value })}
+                      className="mt-1.5 w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-amber-50 text-sm"
+                    />
+                  )}
+                </div>
+                {/* III Year */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">III Year</label>
+                  <select
+                    value={editDraft.iiiYearEvent}
+                    onChange={e => setEditDraft({ ...editDraft, iiiYearEvent: e.target.value, iiiYearEventName: '' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Select —</option>
+                    {TEMPLATE_DROPDOWN_VALUES.map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                    <option value="Event">Event (Custom)</option>
+                  </select>
+                  {editDraft.iiiYearEvent === 'Event' && (
+                    <input
+                      type="text"
+                      placeholder="Enter event name…"
+                      value={editDraft.iiiYearEventName}
+                      onChange={e => setEditDraft({ ...editDraft, iiiYearEventName: e.target.value })}
+                      className="mt-1.5 w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-amber-50 text-sm"
+                    />
+                  )}
+                </div>
+                {/* IV Year */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">IV Year</label>
+                  <select
+                    value={editDraft.ivYearEvent}
+                    onChange={e => setEditDraft({ ...editDraft, ivYearEvent: e.target.value, ivYearEventName: '' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Select —</option>
+                    {TEMPLATE_DROPDOWN_VALUES.map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                    <option value="Event">Event (Custom)</option>
+                  </select>
+                  {editDraft.ivYearEvent === 'Event' && (
+                    <input
+                      type="text"
+                      placeholder="Enter event name…"
+                      value={editDraft.ivYearEventName}
+                      onChange={e => setEditDraft({ ...editDraft, ivYearEventName: e.target.value })}
+                      className="mt-1.5 w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-amber-50 text-sm"
+                    />
+                  )}
+                </div>
+                {/* I Year */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">I Year</label>
+                  <select
+                    value={editDraft.iYearText}
+                    onChange={e => setEditDraft({ ...editDraft, iYearText: e.target.value, iYearEventName: '' })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— Select —</option>
+                    {TEMPLATE_DROPDOWN_VALUES.map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                    <option value="Event">Event (Custom)</option>
+                  </select>
+                  {editDraft.iYearText === 'Event' && (
+                    <input
+                      type="text"
+                      placeholder="Enter event name…"
+                      value={editDraft.iYearEventName}
+                      onChange={e => setEditDraft({ ...editDraft, iYearEventName: e.target.value })}
+                      className="mt-1.5 w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-amber-50 text-sm"
+                    />
+                  )}
+                </div>
               </div>
-
-              <div className="flex gap-3">
-                <button onClick={() => setShowAssignModal(false)} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-                <button onClick={handleAssign} className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Assign</button>
+              <div className="flex gap-3 mt-5">
+                <button onClick={() => setShowEditModal(false)} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                <button
+                  onClick={applyDayEdits}
+                  disabled={isUpdatingDays}
+                  className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isUpdatingDays ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : 'Apply Changes'}
+                </button>
               </div>
-            </div>
-          </div>
-        </ModalPortal>
-      )}
-
-      {/* ── Calendar Events Manager Modal ── */}
-      {showEventManager && (
-        <ModalPortal>
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
-            <div className="bg-white rounded-xl max-w-lg w-full max-h-[85vh] overflow-hidden flex flex-col shadow-xl">
-              <CalendarEvents
-                asModal
-                onClose={() => setShowEventManager(false)}
-                onEventCreated={showAssignModal ? (ev) => {
-                  const updated = [...eventDefs, ev]
-                  setEventDefs(updated)
-                  setAssignEventId(ev.id)
-                  setShowEventManager(false)
-                } : undefined}
-              />
             </div>
           </div>
         </ModalPortal>
