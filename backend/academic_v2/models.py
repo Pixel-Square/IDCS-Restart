@@ -1515,6 +1515,144 @@ class AcV2CqiAttained(models.Model):
 
 
 # ============================================================================
+# CQI TOKEN REGISTRY
+# ============================================================================
+
+class AcV2CqiToken(models.Model):
+    """
+    Master registry of CQI tokens available in the condition builder and formula editors.
+
+    System tokens (is_system=True) are seeded by migration and cannot be deleted.
+    Exam-specific tokens are generated dynamically at runtime from exam assignments;
+    only core/co_alias tokens are stored here.
+
+    is_dynamic_co:
+        When True, the token code contains 'COX' which is replaced at evaluation
+        time with the actual CO number (e.g. COX_PERCENT → CO2_PERCENT for CO2).
+        The UI displays it as [COx_PERCENT] to signal this substitution.
+
+    available_in_condition:
+        Can be shown in the token dropdown of IF clause rows.
+
+    available_in_formula:
+        Can be shown in the + Token picker for THEN / ELSE / custom variable fields.
+    """
+
+    CATEGORY_CHOICES = [
+        ('core',        'Core CQI'),       # BEFORE_CQI, AFTER_CQI, TOTAL_CQI, CQI, X
+        ('co_alias',    'CO Alias'),        # CO-RAW, CO-MAX, CO-WEIGHT, CO-TOTAL-RAW, CO-TOTAL-WEIGHT
+        ('co_dynamic',  'CO Dynamic'),      # COX_PERCENT, BEFORE_CQI_COX_TOTAL, AFTER_CQI_COX_TOTAL
+        ('exam',        'Exam Token'),      # EXAM-OBT, EXAM-WEIGHT, EXAM-TOTAL (per-exam, generated at runtime)
+        ('custom',      'Custom Variable'), # User-defined in the editor
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Token code used in expressions, e.g. BEFORE_CQI, COX_PERCENT
+    code = models.CharField(max_length=80)
+
+    # Human-readable label shown in the token picker
+    label = models.CharField(max_length=200)
+
+    # Extended description / tooltip text
+    description = models.TextField(blank=True)
+
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='custom')
+
+    # True if 'COX' in the code is a placeholder for the current CO number
+    is_dynamic_co = models.BooleanField(default=False)
+
+    # System tokens cannot be deleted via the API
+    is_system = models.BooleanField(default=False)
+
+    # Whether this token can appear in the IF clause token dropdown
+    available_in_condition = models.BooleanField(default=True)
+
+    # Whether this token can appear in the THEN / ELSE / custom-var formula picker
+    available_in_formula = models.BooleanField(default=True)
+
+    # Optional college scope (NULL = global)
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='cqi_tokens',
+    )
+
+    # Optional class-type scope (NULL = available for all class types)
+    class_type = models.ForeignKey(
+        AcV2ClassType,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='cqi_tokens',
+    )
+
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_token'
+        verbose_name = 'CQI Token'
+        verbose_name_plural = 'CQI Tokens'
+        ordering = ['order', 'category', 'code']
+        constraints = [
+            UniqueConstraint(
+                fields=['code', 'college', 'class_type'],
+                condition=Q(college__isnull=False, class_type__isnull=False),
+                name='unique_cqi_token_college_classtype',
+            ),
+            UniqueConstraint(
+                fields=['code', 'college'],
+                condition=Q(college__isnull=False, class_type__isnull=True),
+                name='unique_cqi_token_college_global',
+            ),
+            UniqueConstraint(
+                fields=['code'],
+                condition=Q(college__isnull=True, class_type__isnull=True),
+                name='unique_cqi_token_global',
+            ),
+        ]
+
+    def __str__(self):
+        scope = f" [{self.college}]" if self.college else ""
+        return f"[{self.code}]{scope} — {self.label}"
+
+
+class AcV2CqiOperator(models.Model):
+    """
+    Comparison operators available in the CQI condition builder (IF clause dropdown).
+
+    Examples: < (Less than), <= (Less than or equal), == (Equals), etc.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # The operator string stored in if_clauses[].operator and written into the if expression
+    code = models.CharField(max_length=10, unique=True)
+
+    # Short display symbol (same as code in most cases, e.g. '<')
+    symbol = models.CharField(max_length=10)
+
+    # Readable label, e.g. 'Less than'
+    label = models.CharField(max_length=80)
+
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_operator'
+        verbose_name = 'CQI Operator'
+        verbose_name_plural = 'CQI Operators'
+        ordering = ['order']
+
+    def __str__(self):
+        return f"{self.symbol}  ({self.label})"
+
+
+# ============================================================================
 # PASS MARK SETTINGS
 # ============================================================================
 

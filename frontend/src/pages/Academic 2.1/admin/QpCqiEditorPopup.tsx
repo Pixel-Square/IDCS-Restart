@@ -23,7 +23,32 @@ interface QuestionDef {
 
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
-type CqiIfClause = { token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string };
+// New format: operator is a separate field. Old format: operator embedded in rhs.
+// formula (optional): if present, evaluates as LHS instead of [token] lookup.
+type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+
+// Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
+type CqiDerivedVariable = { name: string; formula: string };
+
+interface DbCqiToken {
+  id: string;
+  code: string;
+  label: string;
+  category: 'core' | 'co_alias' | 'co_dynamic' | 'exam' | 'custom';
+  is_dynamic_co: boolean;
+  is_system: boolean;
+  available_in_condition: boolean;
+  available_in_formula: boolean;
+  order: number;
+}
+
+interface DbCqiOperator {
+  id: string;
+  code: string;
+  symbol: string;
+  label: string;
+  order: number;
+}
 
 interface ExamAssignment {
   exam: string;
@@ -43,9 +68,10 @@ interface ExamAssignment {
       if: string;
       then: string;
       color?: string;
-      if_clauses?: Array<{ token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string }>;
+      if_clauses?: CqiIfClause[];
     }>;
     else_formula: string;
+    derived_variables?: CqiDerivedVariable[];
   };
 }
 
@@ -190,6 +216,10 @@ type Props = {
   // misc
   selectedClassTypeDefaultCoCount: number;
   cycles: CycleOption[];
+
+  // DB-backed token and operator registries
+  dbCqiTokens?: DbCqiToken[];
+  dbCqiOperators?: DbCqiOperator[];
 };
 
 export default function QpCqiEditorPopup(props: Props) {
@@ -507,6 +537,119 @@ export default function QpCqiEditorPopup(props: Props) {
                   </div>
                 </div>
 
+                {/* CQI Derived Variables — admin-defined CO-wise formulas */}
+                <div className="mt-5 border-t pt-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">Derived Variables</div>
+                      <div className="text-xs text-gray-500">
+                        Define CO-wise computed tokens using <code className="font-mono">COx</code> as placeholder (e.g.{' '}
+                        <code className="font-mono">BEFORE_CQI_COx</code>). Resolved to{' '}
+                        <code className="font-mono">CO1</code>, <code className="font-mono">CO2</code>… at runtime.
+                      </div>
+                    </div>
+                    {props.isEditing && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          props.updateCqi((prev) => ({
+                            ...prev,
+                            derived_variables: [...(prev.derived_variables || []), { name: '', formula: '' }],
+                          }))
+                        }
+                        className="px-3 py-1.5 text-sm bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 flex items-center gap-2 whitespace-nowrap"
+                      >
+                        <Plus className="w-4 h-4" /> Add Variable
+                      </button>
+                    )}
+                  </div>
+
+                  {(cqi?.derived_variables || []).length === 0 ? (
+                    <div className="text-xs text-gray-400 italic py-2">
+                      No derived variables defined. Add one to create CO-wise computed tokens.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {(cqi?.derived_variables || []).map((dv, di) => (
+                        <div key={di} className="border rounded-lg p-3 bg-purple-50/40">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1">Variable Name</div>
+                              <input
+                                value={dv.name}
+                                disabled={!props.isEditing}
+                                onChange={(e) => {
+                                  const cleaned = e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_').replace(/^_+/, '');
+                                  props.updateCqi((prev) => {
+                                    const next = [...(prev.derived_variables || [])];
+                                    next[di] = { ...next[di], name: cleaned };
+                                    return { ...prev, derived_variables: next };
+                                  });
+                                }}
+                                placeholder="e.g. BEFORE_CQI_COx"
+                                className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
+                              />
+                              <div className="text-[10px] text-gray-400 mt-0.5">Use COx as CO-number placeholder</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-500 mb-1 flex items-center justify-between gap-2">
+                                <span>Formula</span>
+                                {props.isEditing && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      props.onRequestTokenPicker((token) =>
+                                        props.updateCqi((prev) => {
+                                          const next = [...(prev.derived_variables || [])];
+                                          next[di] = { ...next[di], formula: props.appendToken(next[di].formula, token) };
+                                          return { ...prev, derived_variables: next };
+                                        })
+                                      )
+                                    }
+                                    className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                  >
+                                    + Token
+                                  </button>
+                                )}
+                              </div>
+                              <textarea
+                                value={dv.formula}
+                                disabled={!props.isEditing}
+                                onChange={(e) =>
+                                  props.updateCqi((prev) => {
+                                    const next = [...(prev.derived_variables || [])];
+                                    next[di] = { ...next[di], formula: e.target.value };
+                                    return { ...prev, derived_variables: next };
+                                  })
+                                }
+                                placeholder="e.g. (([SSA1-OBT]+[CIA1-OBT])/50)*3"
+                                className="w-full px-3 py-2 border rounded-lg text-sm font-mono min-h-[60px] resize-y"
+                              />
+                            </div>
+                          </div>
+                          {props.isEditing && (
+                            <div className="flex justify-end mt-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  props.updateCqi((prev) => {
+                                    const next = [...(prev.derived_variables || [])];
+                                    next.splice(di, 1);
+                                    return { ...prev, derived_variables: next };
+                                  })
+                                }
+                                className="text-[11px] px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {/* CQI Operation + Conditions */}
                 <div className="mt-5 border-t pt-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
@@ -520,7 +663,7 @@ export default function QpCqiEditorPopup(props: Props) {
                         onClick={() => {
                           props.updateCqi((prev) => ({
                             ...prev,
-                            conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI', rhs: '' }] }],
+                            conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI', operator: '<', rhs: '' }] }],
                           }));
                         }}
                         className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-2"
@@ -564,7 +707,7 @@ export default function QpCqiEditorPopup(props: Props) {
                                         const next = [...(prev.conditions || [])];
                                         const cur: any = next[idx] || {};
                                         const curClauses: CqiIfClause[] = Array.isArray(cur.if_clauses) ? cur.if_clauses : props.parseIfClauses(cur.if || '');
-                                        curClauses.push({ token: 'TOTAL_CQI', rhs: '' });
+                                        curClauses.push({ token: 'TOTAL_CQI', operator: '<', rhs: '' });
                                         cur.if_clauses = curClauses;
                                         cur.if = props.buildIfFromClauses(curClauses);
                                         next[idx] = cur;
@@ -579,44 +722,150 @@ export default function QpCqiEditorPopup(props: Props) {
                               )}
 
                               <div className="space-y-2">
-                                {clauses.map((cl, ci) => (
-                                  <div key={ci} className="flex items-center gap-2">
-                                    {ci === 0 ? (
-                                      <div className="px-2 py-2 border rounded-lg text-sm font-mono bg-gray-100 text-gray-700 whitespace-nowrap">
-                                        Before_CQI =
+                                {clauses.map((cl, ci) => {
+                                  // Tokens available in conditions from DB (fallback to 3 core tokens)
+                                  const conditionTokens = (props.dbCqiTokens || []).filter((t) => t.available_in_condition);
+                                  // Also include derived variables as condition tokens
+                                  const derivedVarTokens = (cqi?.derived_variables || [])
+                                    .filter((dv) => dv.name)
+                                    .map((dv) => ({
+                                      id: `dv_${dv.name}`,
+                                      code: dv.name,
+                                      label: dv.name,
+                                      category: 'co_dynamic' as const,
+                                      is_dynamic_co: true,
+                                      is_system: false,
+                                      available_in_condition: true,
+                                      available_in_formula: true,
+                                      order: -1,
+                                    }));
+                                  const allConditionTokens = [...derivedVarTokens, ...conditionTokens];
+                                  const hasDbTokens = allConditionTokens.length > 0;
+                                  // Operators from DB (fallback to 6 core operators)
+                                  const operatorOptions = (props.dbCqiOperators || []).length > 0
+                                    ? props.dbCqiOperators!
+                                    : [
+                                        { id: '1', code: '<', symbol: '<', label: 'Less than', order: 1 },
+                                        { id: '2', code: '<=', symbol: '≤', label: 'Less than or equal', order: 2 },
+                                        { id: '3', code: '>', symbol: '>', label: 'Greater than', order: 3 },
+                                        { id: '4', code: '>=', symbol: '≥', label: 'Greater than or equal', order: 4 },
+                                        { id: '5', code: '==', symbol: '=', label: 'Equal', order: 5 },
+                                        { id: '6', code: '!=', symbol: '≠', label: 'Not equal', order: 6 },
+                                      ];
+                                  return (
+                                  <div key={ci} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2">
+                                    {/* Row 1: [Name] = [Formula] */}
+                                    <div className="flex items-start gap-1.5 flex-wrap">
+                                      {/* Variable name (token alias) — dropdown for existing tokens or free text */}
+                                      {hasDbTokens ? (
+                                        <select
+                                          disabled={!props.isEditing}
+                                          value={cl.token}
+                                          onChange={(e) => {
+                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value } : x);
+                                            writeClauses(nextClauses);
+                                          }}
+                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[130px]"
+                                          title="Select token or type a name for the formula result"
+                                        >
+                                          {allConditionTokens.map((t) => (
+                                            <option key={t.id} value={t.code}>{t.code}</option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <input
+                                          disabled={!props.isEditing}
+                                          value={cl.token}
+                                          onChange={(e) => {
+                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') } : x);
+                                            writeClauses(nextClauses);
+                                          }}
+                                          placeholder="TOKEN_NAME"
+                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[130px]"
+                                        />
+                                      )}
+
+                                      {/* = separator + formula input */}
+                                      <span className="text-gray-500 font-semibold text-sm self-center px-0.5">=</span>
+                                      <div className="flex-1 flex items-start gap-1 min-w-[180px]">
+                                        <textarea
+                                          value={cl.formula || ''}
+                                          disabled={!props.isEditing}
+                                          onChange={(e) => {
+                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, formula: e.target.value } : x);
+                                            writeClauses(nextClauses);
+                                          }}
+                                          placeholder="formula e.g. (([SSA1]+[CIA1])/50)*3  — or leave blank to compare [token] directly"
+                                          className="flex-1 px-2 py-1.5 border rounded-lg text-xs font-mono min-h-[38px] resize-none"
+                                          rows={1}
+                                          onInput={(e) => {
+                                            const el = e.currentTarget;
+                                            el.style.height = 'auto';
+                                            el.style.height = Math.min(el.scrollHeight, 80) + 'px';
+                                          }}
+                                        />
+                                        {props.isEditing && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              props.onRequestTokenPicker((token) => {
+                                                const nextClauses = clauses.map((x, j) =>
+                                                  j === ci ? { ...x, formula: props.appendToken(x.formula || '', token) } : x
+                                                );
+                                                writeClauses(nextClauses);
+                                              })
+                                            }
+                                            className="px-2 py-1.5 rounded border text-[11px] bg-white hover:bg-blue-50 text-blue-600 whitespace-nowrap"
+                                          >
+                                            + Token
+                                          </button>
+                                        )}
                                       </div>
-                                    ) : (
+                                    </div>
+
+                                    {/* Row 2: [operator] [rhs value] [remove] */}
+                                    <div className="flex items-center gap-1.5 pl-1">
+                                      <span className="text-[10px] text-gray-400 font-medium mr-0.5">compare</span>
+                                      {/* Operator selector */}
                                       <select
                                         disabled={!props.isEditing}
-                                        value={cl.token}
+                                        value={cl.operator || '<'}
                                         onChange={(e) => {
-                                          const nextToken = e.target.value as CqiIfClause['token'];
-                                          const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, token: nextToken } : x));
+                                          const nextClauses = clauses.map((x, j) => j === ci ? { ...x, operator: e.target.value } : x);
                                           writeClauses(nextClauses);
                                         }}
-                                        className="px-2 py-2 border rounded-lg text-sm font-mono bg-white text-gray-700"
+                                        className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 w-16"
                                       >
-                                        <option value="BEFORE_CQI">BEFORE_CQI</option>
-                                        <option value="AFTER_CQI">AFTER_CQI</option>
-                                        <option value="TOTAL_CQI">TOTAL_CQI</option>
+                                        {operatorOptions.map((op) => (
+                                          <option key={op.id} value={op.code} title={op.label}>{op.symbol}</option>
+                                        ))}
                                       </select>
-                                    )}
 
-<div className="space-y-2">
-  <input
-    value={cl.rhs}
-    disabled={!props.isEditing}
-    onChange={(e) => {
-      const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, rhs: e.target.value } : x));
-      writeClauses(nextClauses);
-    }}
-    placeholder={ci === 0 ? 'Example: < 58' : 'Example: >= 58'}
-    className="w-full px-4 py-3 border rounded-lg text-sm font-mono"
-  />
-  <ColoredExpressionPreview expr={cl.rhs} tokenMeta={props.tokenMeta} />
-</div>
+                                      {/* RHS value */}
+                                      <input
+                                        value={cl.rhs}
+                                        disabled={!props.isEditing}
+                                        onChange={(e) => {
+                                          const nextClauses = clauses.map((x, j) => j === ci ? { ...x, rhs: e.target.value } : x);
+                                          writeClauses(nextClauses);
+                                        }}
+                                        placeholder="threshold e.g. 1.74"
+                                        className="flex-1 min-w-[60px] px-2 py-1.5 border rounded-lg text-xs font-mono"
+                                      />
+
+                                      {/* Remove clause button */}
+                                      {ci > 0 && props.isEditing && (
+                                        <button
+                                          type="button"
+                                          onClick={() => writeClauses(clauses.filter((_, j) => j !== ci))}
+                                          className="text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50"
+                                          title="Remove clause"
+                                        >×</button>
+                                      )}
+                                    </div>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </div>
 

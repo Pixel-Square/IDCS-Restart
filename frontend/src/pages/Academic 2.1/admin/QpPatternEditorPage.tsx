@@ -109,9 +109,12 @@ interface ExamAssignment {
       then: string;
       color?: string;
       // UI-only helper to edit AND clauses. Saved alongside without breaking older readers.
-      if_clauses?: Array<{ token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string }>;
+      // New format: { token, operator, rhs } — operator is a separate field e.g. '<'
+      // Old format: { token, rhs } — operator embedded at start of rhs e.g. '< 58'
+      if_clauses?: CqiIfClause[];
     }>;
     else_formula: string;
+    derived_variables?: CqiDerivedVariable[];
   };
   mark_manager_enabled?: boolean;
   mm_exam_weight?: number; // Used only when Mark Manager "Exam" is checked by faculty
@@ -311,6 +314,37 @@ function isCqiAssignment(exam: ExamAssignment | null | undefined): boolean {
 
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
+// New format: operator is a separate field. Old format: operator embedded in rhs.
+// formula (optional): if present, this expression is evaluated as the LHS of the comparison
+//   instead of looking up [token] from context. token becomes an optional display alias.
+type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+
+// Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
+type CqiDerivedVariable = { name: string; formula: string };
+
+// DB-backed token shape returned by /api/academic-v2/cqi-tokens/
+interface DbCqiToken {
+  id: string;
+  code: string;
+  label: string;
+  description: string;
+  category: 'core' | 'co_alias' | 'co_dynamic' | 'exam' | 'custom';
+  is_dynamic_co: boolean;
+  is_system: boolean;
+  available_in_condition: boolean;
+  available_in_formula: boolean;
+  order: number;
+}
+
+// DB-backed operator shape returned by /api/academic-v2/cqi-operators/
+interface DbCqiOperator {
+  id: string;
+  code: string;   // '<', '<=', '>', '>=', '==', '!='
+  symbol: string; // display symbol (may use ≤ ≥ = ≠ glyphs)
+  label: string;  // 'Less than'
+  order: number;
+}
+
 const CQI_TOKEN_SECTION_ORDER = ['custom', 'cqi', 'co_raw', 'co_weight', 'mm_avg', 'exam'] as const;
 type CqiTokenSectionKey = typeof CQI_TOKEN_SECTION_ORDER[number];
 
@@ -499,6 +533,10 @@ export default function QpPatternEditorPage() {
   const [globalCqiCustomVars, setGlobalCqiCustomVars] = useState<Array<{ code: string; label?: string; expr: string }>>([]);
   const [savingGlobalCqiCustomVars, setSavingGlobalCqiCustomVars] = useState(false);
 
+  // DB-backed CQI token registry and operators
+  const [dbCqiTokens, setDbCqiTokens] = useState<DbCqiToken[]>([]);
+  const [dbCqiOperators, setDbCqiOperators] = useState<DbCqiOperator[]>([]);
+
   const cqiConfigRef = React.useRef<HTMLDivElement | null>(null);
 
   const markDirty = () => setIsDirty(true);
@@ -513,11 +551,13 @@ export default function QpPatternEditorPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [classTypeRes, qpTypeRes, patternRes, cycleRes] = await Promise.all([
+      const [classTypeRes, qpTypeRes, patternRes, cycleRes, tokenRes, operatorRes] = await Promise.all([
         fetchWithAuth('/api/academic-v2/class-types/'),
         fetchWithAuth('/api/academic-v2/qp-types/'),
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
         fetchWithAuth('/api/academic-v2/cycles/'),
+        fetchWithAuth('/api/academic-v2/cqi-tokens/?condition_only=0'),
+        fetchWithAuth('/api/academic-v2/cqi-operators/'),
       ]);
 
       if (!classTypeRes.ok || !patternRes.ok) throw new Error('Failed to load');
@@ -526,11 +566,15 @@ export default function QpPatternEditorPage() {
       const qpTypeData = qpTypeRes.ok ? await qpTypeRes.json() : { results: [] };
       const patternData = await patternRes.json();
       const cycleData = cycleRes.ok ? await cycleRes.json() : { results: [] };
+      const tokenData = tokenRes.ok ? await tokenRes.json() : { results: [] };
+      const operatorData = operatorRes.ok ? await operatorRes.json() : { results: [] };
       
       const classTypeList = Array.isArray(classTypeData) ? classTypeData : (classTypeData.results || []);
       const qpTypeList = Array.isArray(qpTypeData) ? qpTypeData : (qpTypeData.results || []);
       const patternList = Array.isArray(patternData) ? patternData : (patternData.results || []);
       const cycleList = Array.isArray(cycleData) ? cycleData : (cycleData.results || []);
+      const tokenList: DbCqiToken[] = Array.isArray(tokenData) ? tokenData : (tokenData.results || []);
+      const operatorList: DbCqiOperator[] = Array.isArray(operatorData) ? operatorData : (operatorData.results || []);
 
       // Exam templates are patterns with class_type = null (created in Exam Assignment Admin)
       const examTemplates = patternList.filter((p: any) => p.class_type === null || p.class_type === undefined);
@@ -540,6 +584,8 @@ export default function QpPatternEditorPage() {
       setPatterns(patternList);
       setAllExamAssignments(examTemplates);
       setCycles(cycleList);
+      setDbCqiTokens(tokenList);
+      setDbCqiOperators(operatorList);
 
       if (!selectedClassTypeId && classTypeList.length > 0) {
         setSelectedClassTypeId(classTypeList[0].id);
@@ -551,6 +597,8 @@ export default function QpPatternEditorPage() {
         patterns: patternList.length,
         exams: examTemplates.length,
         cycles: cycleList.length,
+        cqiTokens: tokenList.length,
+        cqiOperators: operatorList.length,
       });
     } catch (error) {
       console.error('Failed to load:', error);
@@ -988,8 +1036,23 @@ export default function QpPatternEditorPage() {
         return { code, token: `[${code}]`, label: `Legacy custom variable — ${label}`, kind: 'custom' as const };
       })
       .filter((v) => !!v && !sharedCustom.some((s) => s.code === v.code)) as CqiVar[];
-    return [...sharedCustom, ...legacyCustom, ...baseVars];
-  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars]);
+
+    // Merge DB tokens that are not exam-specific (category != 'exam').
+    // These supplement the base vars already generated from exam list.
+    // DB tokens are deduplicated against baseVars by code.
+    const baseVarCodes = new Set(baseVars.map((v) => v.code));
+    const dbTokenVars: CqiVar[] = dbCqiTokens
+      .filter((t) => t.category !== 'exam' && !baseVarCodes.has(t.code))
+      .sort((a, b) => a.order - b.order)
+      .map((t) => ({
+        code: t.code,
+        token: `[${t.code}]`,
+        label: t.label || t.code,
+        kind: 'base' as const,
+      }));
+
+    return [...sharedCustom, ...legacyCustom, ...baseVars, ...dbTokenVars];
+  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars, dbCqiTokens]);
 
   const groupedCqiVariables = React.useMemo(() => {
     return CQI_TOKEN_SECTION_ORDER.map((sectionKey) => ({
@@ -1225,42 +1288,53 @@ export default function QpPatternEditorPage() {
     return `${base} && `;
   };
 
-  type CqiIfClause = { token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string };
-  const CQI_CLAUSE_TOKENS: Array<CqiIfClause['token']> = ['BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'];
+  // CqiIfClause type is defined at the top of the file (module scope)
+  const CQI_CLAUSE_TOKENS = ['BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'] as const;
 
   const parseIfClauses = (raw: string): CqiIfClause[] => {
     const s = String(raw || '').trim();
-    if (!s) return [{ token: 'BEFORE_CQI', rhs: '' }];
+    // Default first clause uses BEFORE_CQI
+    if (!s) return [{ token: 'BEFORE_CQI', operator: '<', rhs: '' }];
     const parts = s.split(/\s*(?:&&|\bAND\b)\s*/i).map((p) => String(p || '').trim()).filter(Boolean);
     const clauses: CqiIfClause[] = [];
     for (const p of parts) {
-      const m = p.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*)\)?$/);
+      const m = p.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*?)\)?\s*$/);
       if (m) {
         const tok = String(m[1] || '').toUpperCase();
-        const rhs = String(m[2] || '').trim();
-        if (tok === 'BEFORE_CQI' || tok === 'AFTER_CQI' || tok === 'TOTAL_CQI') {
-          clauses.push({ token: tok as CqiIfClause['token'], rhs });
-          continue;
+        const rest = String(m[2] || '').trim();
+        // Extract leading operator from rhs for backward compat
+        const opMatch = rest.match(/^(<=|>=|==|!=|<|>)\s*(.*)/);
+        if (opMatch) {
+          clauses.push({ token: tok, operator: opMatch[1], rhs: opMatch[2].trim() });
+        } else {
+          clauses.push({ token: tok, rhs: rest });
         }
+        continue;
       }
+      // Fallback — wrap as BEFORE_CQI clause
       clauses.push({ token: 'BEFORE_CQI', rhs: p });
     }
-    if (!clauses.length || clauses[0].token !== 'BEFORE_CQI') clauses.unshift({ token: 'BEFORE_CQI', rhs: '' });
+    if (!clauses.length) clauses.unshift({ token: 'BEFORE_CQI', operator: '<', rhs: '' });
     return clauses;
   };
 
   const buildIfFromClauses = (clauses: CqiIfClause[]): string => {
-    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && c.token);
+    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && (c.token || c.formula));
     if (!list.length) return '';
     return list
-      .map((c, idx) => {
+      .map((c) => {
         const rhs = normalizeImplicitTokenSums(String(c.rhs || '').trim());
         if (!rhs) return '';
-        if (idx === 0 && c.token === 'BEFORE_CQI') {
-          const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
-          return isComparatorOnly ? `([${c.token}] ${rhs})` : `(${rhs})`;
+        // Use inline formula as LHS when present; otherwise use [token] lookup
+        const formula = String(c.formula || '').trim();
+        const lhs = formula ? formula : `[${c.token}]`;
+        // Use explicit operator field when present, otherwise fall back to reading from rhs
+        if (c.operator) {
+          return `(${lhs} ${c.operator} ${rhs})`;
         }
-        return `([${c.token}] ${rhs})`;
+        // Legacy: rhs already contains the operator (e.g. '< 58')
+        const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
+        return isComparatorOnly ? `(${lhs} ${rhs})` : `(${rhs})`;
       })
       .filter(Boolean)
       .join(' && ');
@@ -3494,6 +3568,8 @@ export default function QpPatternEditorPage() {
           appendToken={appendToken}
           selectedClassTypeDefaultCoCount={Number(selectedClassType?.default_co_count ?? 5) || 5}
           cycles={cycles}
+          dbCqiTokens={dbCqiTokens}
+          dbCqiOperators={dbCqiOperators}
         />
       )}
 

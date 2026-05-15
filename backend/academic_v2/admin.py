@@ -19,6 +19,8 @@ from .models import (
     AcV2EditRequest,
     AcV2InternalMark,
     AcV2Cycle,
+    AcV2CqiToken,
+    AcV2CqiOperator,
 )
 
 
@@ -180,3 +182,33 @@ class AcV2CycleAdmin(admin.ModelAdmin):
     list_filter = ['is_active', 'college']
     search_fields = ['name', 'code', 'description']
     readonly_fields = ['id', 'created_at', 'updated_at']
+
+
+@admin.register(AcV2CqiToken)
+class AcV2CqiTokenAdmin(admin.ModelAdmin):
+    list_display = ['code', 'label', 'category', 'is_dynamic_co', 'is_system',
+                    'available_in_condition', 'available_in_formula', 'college', 'class_type', 'order', 'is_active']
+    list_filter = ['category', 'is_system', 'is_dynamic_co', 'available_in_condition', 'is_active', 'college']
+    search_fields = ['code', 'label', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    ordering = ['order', 'category', 'code']
+
+    def get_readonly_fields(self, request, obj=None):
+        base = list(super().get_readonly_fields(request, obj))
+        if obj and obj.is_system:
+            base += ['code', 'is_system', 'category', 'is_dynamic_co']
+        return base
+
+    def has_delete_permission(self, request, obj=None):
+        if obj and obj.is_system:
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+@admin.register(AcV2CqiOperator)
+class AcV2CqiOperatorAdmin(admin.ModelAdmin):
+    list_display = ['code', 'symbol', 'label', 'order', 'is_active']
+    list_filter = ['is_active']
+    search_fields = ['code', 'label']
+    readonly_fields = ['id']
+    ordering = ['order']

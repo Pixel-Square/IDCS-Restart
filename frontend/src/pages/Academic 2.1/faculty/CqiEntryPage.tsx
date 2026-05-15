@@ -13,9 +13,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Save, Send, CheckCircle, AlertTriangle, Info } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
-type CqiIfClauseToken = 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI';
-
-type CqiIfClause = { token: CqiIfClauseToken; rhs: string };
+// token is now any string (not restricted to 3 values) to support DB-backed token registry
+type CqiIfClauseToken = string;
+// formula (optional): if present, evaluates as LHS instead of [token] lookup.
+type CqiIfClause = { token: CqiIfClauseToken; operator?: string; rhs: string; formula?: string };
 
 type CqiAdminCondition = {
   if: string;
@@ -34,6 +35,8 @@ type CqiAdminConfig = {
   formula: string;
   conditions: CqiAdminCondition[];
   else_formula: string;
+  // Admin-defined CO-wise derived variables (COx in name is a runtime CO placeholder)
+  derived_variables?: Array<{ name: string; formula: string }>;
 };
 
 type COSummary = {
@@ -330,6 +333,15 @@ function buildContext(
   // Aliases for the "current" CO
   ctx['CO-TOTAL-RAW'] = ctx['CO-RAW'];
   ctx['CO-TOTAL-WEIGHT'] = ctx['CO-WEIGHT'];
+
+  // New dynamic CO tokens — percent and before/after totals for condition builder
+  ctx['COX_PERCENT'] = ctx['CO-WEIGHT'];
+  ctx[`CO${coNum}_PERCENT`] = ctx['CO-WEIGHT'];
+  ctx['BEFORE_CQI_COX_TOTAL'] = ctx['CO-RAW'];
+  ctx[`BEFORE_CQI_CO${coNum}_TOTAL`] = ctx['CO-RAW'];
+  ctx['AFTER_CQI_COX_TOTAL'] = ctx['CO-RAW'];    // Updated after CQI mapping, same origin
+  ctx[`AFTER_CQI_CO${coNum}_TOTAL`] = ctx['CO-RAW'];
+
   // Faculty-entered CQI value (0-10)
   ctx['CQI'] = cqiInput != null && Number.isFinite(cqiInput) ? cqiInput : 0;
   ctx['X'] = ctx['CQI'];
@@ -382,6 +394,8 @@ function buildContext(
     ctx[`${shortCode}-OBT`] = round2(Number(ctx[`${shortCode}-CO${coNum}-OBT`] ?? 0) || 0);
     // Legacy alias
     ctx[`${shortCode}-DIFF`] = ctx[`${shortCode}-OBT`];
+    // Plain shortcode alias: [SSA1] = raw obtained marks for current CO (convenient in derived var formulas)
+    ctx[shortCode] = ctx[`${shortCode}-OBT`];
 
     // COx placeholder tokens (explicitly requested)
     ctx[`${shortCode}-COX-OBT`] = ctx[`${shortCode}-OBT`];
@@ -476,6 +490,36 @@ function executeTaskScript(script: string, ctx: Record<string, number>, coNum: n
   }
 }
 
+/**
+ * Evaluates admin-defined derived variables against the current CO context and injects
+ * them into the context object IN PLACE.
+ *
+ * For a variable named  BEFORE_CQI_COx  evaluated at CO=2:
+ *   - ctx['BEFORE_CQI_COX']  = computed value  (placeholder form — COx → uppercase COX)
+ *   - ctx['BEFORE_CQI_CO2']  = same value       (resolved form for this CO)
+ *
+ * Variables are evaluated sequentially so later ones can reference earlier results.
+ */
+function applyDerivedVariables(
+  ctx: Record<string, number>,
+  derivedVars: Array<{ name: string; formula: string }> | undefined,
+  coNum: number,
+): void {
+  if (!Array.isArray(derivedVars) || derivedVars.length === 0) return;
+  for (const dv of derivedVars) {
+    const rawName = String(dv.name || '').trim().toUpperCase();
+    const formula = String(dv.formula || '').trim();
+    if (!rawName || !formula) continue;
+    const val = round2(evalFormula(formula, ctx, coNum));
+    // Placeholder form: COX (uppercase) stored as-is
+    const placeholderKey = rawName.replace(/COX/g, 'COX');
+    ctx[placeholderKey] = val;
+    // Resolved form: replace COX → CO{n} for this specific CO
+    const resolvedKey = rawName.replace(/COX/g, `CO${coNum}`);
+    if (resolvedKey !== placeholderKey) ctx[resolvedKey] = val;
+  }
+}
+
 function evalIfClauses(cond: CqiAdminCondition, ctxBase: Record<string, number>, coNum: number): boolean {
   const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : null;
   if (!clauses || clauses.length === 0) {
@@ -484,15 +528,19 @@ function evalIfClauses(cond: CqiAdminCondition, ctxBase: Record<string, number>,
     return evalCondition(ifRaw, ctxBase, coNum);
   }
 
-  // Pinned Before_CQI is clause[0]. Additional clauses are AND'ed.
+  // Each clause: if formula is present, evaluate it as the LHS; otherwise look up token.
+  // All clauses AND'ed together.
   const clauseVals = clauses
-    .filter((c) => c && c.token && String(c.rhs || '').trim().length > 0)
+    .filter((c) => c && String(c.rhs || '').trim().length > 0)
     .map((c) => {
-      const tok = c.token;
-      // evaluator expects token variables like [BEFORE_CQI], [AFTER_CQI], [TOTAL_CQI]
-      const tokenExpr = `[${tok}]`;
-      // Clause rhs is expression like "< 58" or "< 1.74" etc.
-      const expr = `${tokenExpr} ${String(c.rhs || '').trim()}`;
+      const rhs = String(c.rhs || '').trim();
+      const formula = String(c.formula || '').trim();
+      // Build LHS expression
+      const lhsExpr = formula ? formula : `[${c.token}]`;
+      // Support explicit operator field (new format) or operator embedded in rhs (legacy)
+      const expr = c.operator
+        ? `${lhsExpr} ${c.operator} ${rhs}`
+        : `${lhsExpr} ${rhs}`;
       return evalCondition(expr, ctxBase, coNum);
     });
 
@@ -506,12 +554,16 @@ function parseConditionClauses(raw: string): CqiIfClause[] {
   const parts = s.split(/\s*(?:&&|\bAND\b)\s*/i).map((part) => String(part || '').trim()).filter(Boolean);
   const clauses: CqiIfClause[] = [];
   for (const part of parts) {
-    const match = part.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*)\)?$/);
+    const match = part.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*?)\)?\s*$/);
     if (!match) continue;
     const token = String(match[1] || '').toUpperCase();
-    const rhs = String(match[2] || '').trim().replace(/\)+$/g, '').trim();
-    if (token === 'BEFORE_CQI' || token === 'AFTER_CQI' || token === 'TOTAL_CQI') {
-      clauses.push({ token: token as CqiIfClauseToken, rhs });
+    const rest = String(match[2] || '').trim().replace(/\)+$/g, '').trim();
+    // Extract leading operator into separate field for new format
+    const opMatch = rest.match(/^(<=|>=|==|!=|<|>)\s*(.*)/);
+    if (opMatch) {
+      clauses.push({ token, operator: opMatch[1], rhs: opMatch[2].trim() });
+    } else {
+      clauses.push({ token, rhs: rest });
     }
   }
   return clauses;
@@ -531,14 +583,16 @@ function hasConditionMatcher(cond: CqiAdminCondition | null | undefined): boolea
 
 function buildConditionExpressionFromClauses(clauses: CqiIfClause[]): string {
   return (Array.isArray(clauses) ? clauses : [])
-    .map((clause, idx) => {
+    .map((clause) => {
       const rhs = String(clause?.rhs || '').trim();
       if (!clause?.token || !rhs) return '';
-      if (idx === 0 && clause.token === 'BEFORE_CQI') {
-        const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
-        return isComparatorOnly ? `([${clause.token}] ${rhs})` : `(${rhs})`;
+      // Use explicit operator field when present
+      if (clause.operator) {
+        return `([${clause.token}] ${clause.operator} ${rhs})`;
       }
-      return `([${clause.token}] ${rhs})`;
+      // Legacy: rhs already contains the operator (e.g. '< 58')
+      const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
+      return isComparatorOnly ? `([${clause.token}] ${rhs})` : `(${rhs})`;
     })
     .filter(Boolean)
     .join(' && ');
@@ -864,6 +918,8 @@ export default function CqiEntryPage() {
           cqiConfig?.custom_vars,
           { ...baseTotals, beforeMax },
         );
+        // Apply derived variables to context (adds BEFORE_CQI_COX, BEFORE_CQI_CO1, etc.)
+        applyDerivedVariables(ctxBase, cqiConfig?.derived_variables, c.coNum);
         const notAttainedBefore = hasCqiConfig && cqiConfig
           ? evaluateCqiImpact(cqiConfig, ctxBase, null, c.coNum).notAttainedBefore
           : false;
@@ -1031,7 +1087,6 @@ export default function CqiEntryPage() {
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase min-w-[150px]">Reg No</th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase min-w-[220px]">Name</th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[110px]">BEFORE CQI</th>
-                <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[110px]">AFTER CQI</th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[120px]">TOTAL</th>
                 {displayCoNumbers.map((coNum) => (
                   <th key={coNum} className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[170px]">CO{coNum}</th>
@@ -1049,13 +1104,36 @@ export default function CqiEntryPage() {
                       <div className="inline-flex min-w-[92px] flex-col rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 shadow-sm">
                         <div className="text-gray-900">{round2(r.beforeValue)}</div>
                         <div className="text-xs text-gray-500">({round2(r.beforePct)}%)</div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-center font-semibold">
-                      <div className={`inline-flex min-w-[92px] flex-col rounded-2xl border px-3 py-2 shadow-sm ${r.afterValue > r.beforeValue ? 'border-green-200 bg-green-50' : 'border-slate-200 bg-white'}`}>
-                        <div className="text-gray-900">{round2(r.afterValue)}</div>
-                        <div className="text-xs text-gray-500">({round2(r.afterPct)}%)</div>
-                        {r.delta > 0 && <div className="mt-0.5 text-xs text-green-600">+{round2(r.delta)}</div>}
+                        {/* Per-CO derived variable values — shown only when derived vars with COX are defined */}
+                        {(() => {
+                          const derivedVars = cqiConfig?.derived_variables;
+                          if (!derivedVars?.length) return null;
+                          const coxVars = derivedVars.filter((dv) => String(dv.name || '').toUpperCase().includes('COX'));
+                          if (!coxVars.length) return null;
+                          return (
+                            <div className="mt-1.5 border-t border-slate-200 pt-1.5 space-y-1">
+                              {coxVars.map((dv) => {
+                                const dvName = String(dv.name || '').toUpperCase();
+                                return (
+                                  <div key={dvName} className="text-[10px] text-gray-500">
+                                    <div className="font-medium text-gray-600 mb-0.5">{dvName.replace(/COX/g, 'CO#')}</div>
+                                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 justify-center">
+                                      {(r.perCoMeta || []).map((cm: any) => {
+                                        const resolvedKey = dvName.replace(/COX/g, `CO${cm.coNum}`);
+                                        const val = cm.ctxBase?.[resolvedKey] ?? cm.ctxBase?.[dvName];
+                                        return (
+                                          <span key={cm.coNum} className="bg-purple-50 text-purple-700 rounded px-1">
+                                            CO{cm.coNum}:{' '}{val != null ? round2(val) : '—'}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-center font-bold">
@@ -1097,6 +1175,8 @@ export default function CqiEntryPage() {
                         cqiConfig?.custom_vars,
                         { beforeValue: r.beforeValue, beforePct: r.beforePct, afterValue: r.afterValue, afterPct: r.afterPct, beforeMax: r.beforeMax },
                       );
+                      // Apply derived variables so conditions using them work correctly
+                      applyDerivedVariables(ctxBase, cqiConfig?.derived_variables, c.coNum);
 
                       let addRaw = 0;
                       let notAttainedAfter = notAttainedBefore;

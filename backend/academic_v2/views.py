@@ -27,6 +27,8 @@ from .models import (
     AcV2QpType,
     AcV2QpAssignment,
     AcV2Cycle,
+    AcV2CqiToken,
+    AcV2CqiOperator,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -43,6 +45,8 @@ from .serializers import (
     AcV2QpTypeSerializer,
     AcV2CycleSerializer,
     AcV2PassMarkSettingSerializer,
+    AcV2CqiTokenSerializer,
+    AcV2CqiOperatorSerializer,
 )
 from .models import AcV2PassMarkSetting
 
@@ -463,6 +467,85 @@ class AcV2CycleViewSet(viewsets.ModelViewSet):
             for item in items:
                 AcV2Cycle.objects.filter(pk=item.get('id')).update(order=item.get('order', 0))
         return Response({'detail': 'Reordered successfully.'})
+
+
+# ============================================================================
+# QP TYPE (Admin)
+# ============================================================================
+
+# ============================================================================
+# CQI TOKEN REGISTRY (Admin CRUD + Faculty read)
+# ============================================================================
+
+class AcV2CqiTokenViewSet(viewsets.ModelViewSet):
+    """
+    CQI Token registry.
+
+    GET  (list)  — returns active tokens scoped to the requesting college,
+                   plus all global (college=None) tokens.  Supports filters:
+                     ?class_type=<uuid>   — include tokens for a specific class type
+                     ?condition_only=1    — only tokens with available_in_condition=True
+                     ?formula_only=1      — only tokens with available_in_formula=True
+
+    POST / PATCH / DELETE — admin only.  System tokens (is_system=True) cannot
+                             be deleted via the API.
+    """
+    serializer_class = AcV2CqiTokenSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        params = self.request.query_params
+
+        # Base: active tokens
+        qs = AcV2CqiToken.objects.filter(is_active=True)
+
+        # Scope to college (global + this college)
+        college_id = params.get('college')
+        if college_id:
+            qs = qs.filter(
+                models.Q(college__isnull=True) | models.Q(college_id=college_id)
+            )
+        else:
+            # Default: return global + any college the user belongs to
+            qs = qs.filter(college__isnull=True)
+
+        # Optional class-type scope
+        class_type_id = params.get('class_type')
+        if class_type_id:
+            qs = qs.filter(
+                models.Q(class_type__isnull=True) | models.Q(class_type_id=class_type_id)
+            )
+        else:
+            qs = qs.filter(class_type__isnull=True)
+
+        # Optional filter: available_in_condition
+        if params.get('condition_only') in ('1', 'true', 'yes'):
+            qs = qs.filter(available_in_condition=True)
+
+        # Optional filter: available_in_formula
+        if params.get('formula_only') in ('1', 'true', 'yes'):
+            qs = qs.filter(available_in_formula=True)
+
+        return qs.order_by('order', 'category', 'code')
+
+    def perform_destroy(self, instance):
+        if instance.is_system:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('System tokens cannot be deleted.')
+        # Soft-delete
+        instance.is_active = False
+        instance.save()
+
+
+class AcV2CqiOperatorViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    CQI Operator list.  Read-only for all authenticated users.
+    Operators are seeded by migration and managed in Django admin.
+    """
+    queryset = AcV2CqiOperator.objects.filter(is_active=True).order_by('order')
+    serializer_class = AcV2CqiOperatorSerializer
+    permission_classes = [IsAuthenticated]
 
 
 # ============================================================================
@@ -2921,20 +3004,46 @@ def faculty_course_co_summary(request, ta_id):
         return re.sub(r'\[([A-Za-z0-9_-]+)\]', repl, s)
 
     def _build_cqi_if_from_clauses(clauses) -> str:
+        """
+        Build a boolean expression string from if_clauses list.
+
+        Each clause supports two formats:
+          NEW: { token, operator, rhs }  — operator is a separate field (e.g. '<', '<=')
+          OLD: { token, rhs }            — operator is embedded at start of rhs (e.g. '< 58')
+
+        Backward-compatible: old format is detected automatically.
+        Supports any token registered in the system (not limited to 3 core tokens).
+        """
         parts = []
         for idx, clause in enumerate(clauses or []):
             if not isinstance(clause, dict):
                 continue
             token = str(clause.get('token') or '').strip().upper()
-            rhs = str(clause.get('rhs') or '').strip()
-            if token not in {'BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'} or not rhs:
+            if not token:
                 continue
-            rhs = re.sub(r'\]\s+\[', '] + [', rhs)
-            if idx == 0 and token == 'BEFORE_CQI':
-                is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', rhs))
-                parts.append(f'([{token}] {rhs})' if is_comparator_only else f'({rhs})')
+
+            # Determine rhs and operator (new format has explicit 'operator' field)
+            operator = str(clause.get('operator') or '').strip()
+            rhs = str(clause.get('rhs') or '').strip()
+
+            if operator:
+                # NEW format: operator and rhs are separate
+                combined_rhs = f'{operator} {rhs}'.strip() if rhs else operator
             else:
-                parts.append(f'([{token}] {rhs})')
+                # OLD format: operator is embedded in rhs (e.g. '< 58')
+                combined_rhs = rhs
+
+            if not combined_rhs:
+                continue
+
+            combined_rhs = re.sub(r'\]\s+\[', '] + [', combined_rhs)
+
+            if idx == 0 and token == 'BEFORE_CQI':
+                # First clause legacy behaviour: if rhs starts with a comparator, wrap token+rhs
+                is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', combined_rhs))
+                parts.append(f'([{token}] {combined_rhs})' if is_comparator_only else f'({combined_rhs})')
+            else:
+                parts.append(f'([{token}] {combined_rhs})')
         return ' && '.join(p for p in parts if p)
 
     def _resolve_cqi_if_expr(cond: dict) -> str:
@@ -3976,6 +4085,33 @@ def faculty_course_co_summary(request, ta_id):
                         'TOTAL_CQI': float((before_total_all or 0.0) + (sum_raw_cqi or 0.0)),
                     }
 
+                    # --- CO-level aliases (current CO context) ---
+                    co_max_for_co = 0.0
+                    for _src_exam in exams_data:
+                        if _src_exam.get('kind') == 'cqi':
+                            continue
+                        _co_max_map = _src_exam.get('co_max_map') or {}
+                        _max_per_co = float(_src_exam.get('max_per_co') or 0)
+                        co_max_for_co += float(_co_max_map.get(co_n, _max_per_co) or 0)
+
+                    vars_map['CO-RAW'] = float(before_co or 0.0)
+                    vars_map['CO-TOTAL-RAW'] = vars_map['CO-RAW']
+                    vars_map['CO-MAX'] = round(co_max_for_co, 4)
+                    if co_max_for_co > 0:
+                        _pct = round((float(before_co or 0.0) / co_max_for_co) * 100, 4)
+                    else:
+                        _pct = 0.0
+                    vars_map['CO-WEIGHT'] = _pct
+                    vars_map['CO-TOTAL-WEIGHT'] = _pct
+
+                    # --- Dynamic COx tokens (COX = current CO number) ---
+                    vars_map['COX_PERCENT'] = _pct
+                    vars_map[f'CO{co_n}_PERCENT'] = _pct
+                    vars_map['BEFORE_CQI_COX_TOTAL'] = float(before_co or 0.0)
+                    vars_map[f'BEFORE_CQI_CO{co_n}_TOTAL'] = float(before_co or 0.0)
+                    vars_map['AFTER_CQI_COX_TOTAL'] = float((before_co or 0.0) + (cqi_in or 0.0))
+                    vars_map[f'AFTER_CQI_CO{co_n}_TOTAL'] = vars_map['AFTER_CQI_COX_TOTAL']
+
                     exam_marks_map = student_entry.get('exam_marks') or {}
                     weighted_marks_map = student_entry.get('weighted_marks') or {}
                     for source_exam in exams_data:
@@ -4003,6 +4139,8 @@ def faculty_course_co_summary(request, ta_id):
                         vars_map[f'{exam_code}-WEIGHT'] = co_weight
                         vars_map[f'COX-{exam_code}-OBT'] = co_raw
                         vars_map[f'COX-{exam_code}-WEIGHT'] = co_weight
+                        # Plain exam code alias: [SSA1] = raw obtained marks for current CO
+                        vars_map[exam_code] = co_raw
 
                         if source_exam.get('mark_manager_enabled') or source_exam.get('cia_enabled'):
                             item_count = _count_mark_manager_items_for_co(source_exam, co_n)
@@ -4019,6 +4157,33 @@ def faculty_course_co_summary(request, ta_id):
                             vars_map[code] = _safe_eval_cqi_num(expr, vars_map)
                         except Exception:
                             vars_map[code] = 0.0
+
+                    # Evaluate admin-defined derived variables (COX in name is a placeholder for current CO)
+                    # Each derived variable is evaluated and stored as BOTH the COX form and the CO{n} form.
+                    # e.g. BEFORE_CQI_COX → vars_map['BEFORE_CQI_COX'] = val
+                    #      BEFORE_CQI_CO2 → vars_map['BEFORE_CQI_CO2'] = val  (when co_n=2)
+                    cqi_derived_vars = []
+                    if isinstance(cqi_sub, dict):
+                        cqi_derived_vars = cqi_sub.get('derived_variables') or []
+                    if not isinstance(cqi_derived_vars, list):
+                        cqi_derived_vars = []
+                    for dv in cqi_derived_vars:
+                        if not isinstance(dv, dict):
+                            continue
+                        dv_name = str(dv.get('name') or '').strip().upper()
+                        dv_formula = str(dv.get('formula') or '').strip()
+                        if not dv_name or not dv_formula:
+                            continue
+                        try:
+                            dv_val = round(_safe_eval_cqi_num(dv_formula, vars_map), 4)
+                        except Exception:
+                            dv_val = 0.0
+                        # Placeholder form (COX literal kept as-is)
+                        vars_map[dv_name] = dv_val
+                        # Resolved form: replace COX → CO{n}
+                        resolved_name = dv_name.replace('COX', f'CO{co_n}')
+                        if resolved_name != dv_name:
+                            vars_map[resolved_name] = dv_val
 
                     mapped = None
                     # Condition ladder: first match wins.

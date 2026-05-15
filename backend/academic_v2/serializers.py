@@ -22,6 +22,8 @@ from .models import (
     AcV2QpType,
     AcV2Cycle,
     AcV2PassMarkSetting,
+    AcV2CqiToken,
+    AcV2CqiOperator,
 )
 
 
@@ -530,4 +532,51 @@ class AcV2PassMarkSettingSerializer(serializers.ModelSerializer):
         model = AcV2PassMarkSetting
         fields = ['id', 'out_of', 'pass_mark', 'label', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AcV2CqiTokenSerializer(serializers.ModelSerializer):
+    """Serializer for CQI Token registry entries."""
+    # Human-friendly scope info for read
+    college_name = serializers.CharField(source='college.name', read_only=True, default=None)
+    class_type_name = serializers.CharField(source='class_type.name', read_only=True, default=None)
+
+    class Meta:
+        model = AcV2CqiToken
+        fields = [
+            'id', 'code', 'label', 'description', 'category',
+            'is_dynamic_co', 'is_system',
+            'available_in_condition', 'available_in_formula',
+            'college', 'college_name',
+            'class_type', 'class_type_name',
+            'order', 'is_active',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'is_system', 'created_at', 'updated_at']
+
+    def validate_code(self, value):
+        import re
+        normalized = re.sub(r'[^A-Z0-9_-]', '_', str(value or '').strip().upper())
+        if not normalized:
+            raise serializers.ValidationError('Token code must not be empty.')
+        return normalized
+
+    def validate(self, attrs):
+        # Prevent deleting/modifying is_system via API
+        if self.instance and self.instance.is_system:
+            protected = {'code', 'is_system', 'category', 'is_dynamic_co'}
+            for field in protected:
+                if field in attrs and attrs[field] != getattr(self.instance, field):
+                    raise serializers.ValidationError(
+                        {field: f'Cannot modify {field} of a system token.'}
+                    )
+        return attrs
+
+
+class AcV2CqiOperatorSerializer(serializers.ModelSerializer):
+    """Serializer for CQI condition comparison operators."""
+
+    class Meta:
+        model = AcV2CqiOperator
+        fields = ['id', 'code', 'symbol', 'label', 'order', 'is_active']
+        read_only_fields = ['id']
 

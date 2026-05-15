@@ -39,7 +39,12 @@ interface QuestionDef {
   special_split_sources?: number[];
 }
 
-type CqiIfClause = { token: 'BEFORE_CQI' | 'AFTER_CQI' | 'TOTAL_CQI'; rhs: string };
+// token is now any string to support DB-backed token registry
+// formula (optional): if present, evaluates as LHS instead of [token] lookup.
+type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+
+// Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
+type CqiDerivedVariable = { name: string; formula: string };
 
 interface ExamAssignment {
   exam: string;
@@ -58,6 +63,7 @@ interface ExamAssignment {
     formula: string;
     conditions: Array<{ if: string; then: string; color?: string; if_clauses?: CqiIfClause[] }>;
     else_formula: string;
+    derived_variables?: CqiDerivedVariable[];
   };
   mark_manager_enabled?: boolean;
   mm_exam_weight?: number;

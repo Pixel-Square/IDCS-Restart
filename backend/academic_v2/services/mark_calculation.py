@@ -178,14 +178,21 @@ def _build_cqi_if_from_clauses(clauses) -> str:
         if not isinstance(clause, dict):
             continue
         token = str(clause.get('token') or '').strip().upper()
+        formula = str(clause.get('formula') or '').strip()
+        operator = str(clause.get('operator') or '').strip()
         rhs = re.sub(r'\]\s+\[', '] + [', str(clause.get('rhs') or '').strip())
-        if token not in {'BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'} or not rhs:
+        if not rhs:
             continue
-        if idx == 0 and token == 'BEFORE_CQI':
-            is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', rhs))
-            parts.append(f'([{token}] {rhs})' if is_comparator_only else f'({rhs})')
+        # Use inline formula as LHS when present; otherwise use [token] lookup.
+        lhs = formula if formula else (f'[{token}]' if token else None)
+        if not lhs:
+            continue
+        # New format: explicit operator field. Legacy: operator embedded at start of rhs.
+        if operator:
+            parts.append(f'({lhs} {operator} {rhs})')
         else:
-            parts.append(f'([{token}] {rhs})')
+            is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', rhs))
+            parts.append(f'({lhs} {rhs})' if is_comparator_only else f'({rhs})')
     return ' && '.join(part for part in parts if part)
 
 

@@ -18,6 +18,8 @@ from .views import (
     AcV2EditRequestViewSet,
     AcV2InternalMarkViewSet,
     AcV2UserPatternOverrideViewSet,
+    AcV2CqiTokenViewSet,
+    AcV2CqiOperatorViewSet,
     course_internal_summary,
     get_pattern_for_exam,
     faculty_course_info,
@@ -66,6 +68,8 @@ router.register(r'student-marks', AcV2StudentMarkViewSet, basename='student-mark
 router.register(r'edit-requests', AcV2EditRequestViewSet, basename='edit-request')
 router.register(r'internal-marks', AcV2InternalMarkViewSet, basename='internal-mark')
 router.register(r'pattern-overrides', AcV2UserPatternOverrideViewSet, basename='pattern-override')
+router.register(r'cqi-tokens', AcV2CqiTokenViewSet, basename='cqi-token')
+router.register(r'cqi-operators', AcV2CqiOperatorViewSet, basename='cqi-operator')
 
 urlpatterns = [
     path('', include(router.urls)),
