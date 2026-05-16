@@ -33,10 +33,13 @@ from .views import (
     faculty_course_cqi_draft,
     faculty_course_cqi_published,
     faculty_course_cqi_publish,
+    faculty_course_cqi_announce,
+    faculty_academic_notification_flags,
     faculty_exam_export_template,
     faculty_exam_import_marks,
     admin_secure_delete,
     admin_pass_mark_settings,
+    admin_academic_notification_settings,
     # Bypass API
     bypass_start,
     bypass_end,
@@ -90,9 +93,12 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/cqi-draft/', faculty_course_cqi_draft, name='faculty-course-cqi-draft'),
     path('faculty/courses/<int:ta_id>/cqi-published/', faculty_course_cqi_published, name='faculty-course-cqi-published'),
     path('faculty/courses/<int:ta_id>/cqi-publish/', faculty_course_cqi_publish, name='faculty-course-cqi-publish'),
+    path('faculty/courses/<int:ta_id>/cqi-announce/', faculty_course_cqi_announce, name='faculty-course-cqi-announce'),
+    path('faculty/notification-flags/', faculty_academic_notification_flags, name='faculty-notification-flags'),
     path('faculty/courses/<int:ta_id>/reset-notices/', faculty_reset_notices, name='faculty-reset-notices'),
     path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
     path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
+    path('admin/academic-notification-settings/', admin_academic_notification_settings, name='admin-academic-notification-settings'),
 
     # Admin CourseManager
     path('admin/courses/', admin_courses_list, name='admin-courses-list'),

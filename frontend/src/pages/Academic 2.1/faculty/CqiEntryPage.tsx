@@ -15,10 +15,11 @@ import fetchWithAuth from '../../../services/fetchAuth';
 
 // token is now any string (not restricted to 3 values) to support DB-backed token registry
 type CqiIfClauseToken = string;
-// formula (optional): if present, evaluates as LHS instead of [token] lookup.
-type CqiIfClause = { token: CqiIfClauseToken; operator?: string; rhs: string; formula?: string };
+
+type CqiIfClause = { token: CqiIfClauseToken; operator?: string; rhs: string };
 
 type CqiAdminCondition = {
+  title?: string;
   if: string;
   then: string;
   color?: string;
@@ -337,6 +338,10 @@ function buildContext(
   // New dynamic CO tokens — percent and before/after totals for condition builder
   ctx['COX_PERCENT'] = ctx['CO-WEIGHT'];
   ctx[`CO${coNum}_PERCENT`] = ctx['CO-WEIGHT'];
+  // New token: BEFORE_CQI_COX refers to the current CO's pre-CQI raw value.
+  // (Also stored as CO{n} form for convenience.)
+  ctx['BEFORE_CQI_COX'] = ctx['CO-RAW'];
+  ctx[`BEFORE_CQI_CO${coNum}`] = ctx['CO-RAW'];
   ctx['BEFORE_CQI_COX_TOTAL'] = ctx['CO-RAW'];
   ctx[`BEFORE_CQI_CO${coNum}_TOTAL`] = ctx['CO-RAW'];
   ctx['AFTER_CQI_COX_TOTAL'] = ctx['CO-RAW'];    // Updated after CQI mapping, same origin
@@ -528,19 +533,16 @@ function evalIfClauses(cond: CqiAdminCondition, ctxBase: Record<string, number>,
     return evalCondition(ifRaw, ctxBase, coNum);
   }
 
-  // Each clause: if formula is present, evaluate it as the LHS; otherwise look up token.
-  // All clauses AND'ed together.
+  // Pinned Before_CQI is clause[0]. Additional clauses are AND'ed.
   const clauseVals = clauses
-    .filter((c) => c && String(c.rhs || '').trim().length > 0)
+    .filter((c) => c && c.token && String(c.rhs || '').trim().length > 0)
     .map((c) => {
-      const rhs = String(c.rhs || '').trim();
-      const formula = String(c.formula || '').trim();
-      // Build LHS expression
-      const lhsExpr = formula ? formula : `[${c.token}]`;
+      const tok = c.token;
+      const tokenExpr = `[${tok}]`;
       // Support explicit operator field (new format) or operator embedded in rhs (legacy)
       const expr = c.operator
-        ? `${lhsExpr} ${c.operator} ${rhs}`
-        : `${lhsExpr} ${rhs}`;
+        ? `${tokenExpr} ${c.operator} ${String(c.rhs || '').trim()}`
+        : `${tokenExpr} ${String(c.rhs || '').trim()}`;
       return evalCondition(expr, ctxBase, coNum);
     });
 
@@ -656,7 +658,8 @@ function evaluateCqiOutcome(
     syncCurrentCoAliases(ctx, coNum);
   }
 
-  const beforeTotal = Number(ctxBase['BEFORE_CQI'] ?? 0) || 0;
+  // CQI applies per-CO: treat BEFORE_CQI_COX (or CO-RAW) as the base for this CO.
+  const beforeTotal = Number(ctxBase['BEFORE_CQI_COX'] ?? ctxBase['CO-RAW'] ?? 0) || 0;
   const totalMax = Number(ctxBase['CQI-TOTAL-MAX'] ?? 0) || 0;
   const afterTotal = round2(beforeTotal + addRaw);
   ctx['AFTER_CQI'] = afterTotal;
@@ -696,8 +699,10 @@ export default function CqiEntryPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [announcing, setAnnouncing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
+  const [notifFlags, setNotifFlags] = useState<{ student_publish_enabled: boolean; cqi_announce_enabled: boolean } | null>(null);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: number | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [entries, setEntries] = useState<CqiEntries>({});
@@ -785,10 +790,11 @@ export default function CqiEntryPage() {
     if (!courseId) return;
     try {
       setLoading(true); setMessage(null);
-      const [coRes, draftRes, pubRes] = await Promise.all([
+      const [coRes, draftRes, pubRes, flagsRes] = await Promise.all([
         fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`),
         fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-draft/`),
         fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-published/`),
+        fetchWithAuth(`/api/academic-v2/faculty/notification-flags/`).catch(() => null as any),
       ]);
       if (!coRes.ok) throw new Error('Failed to load CO summary');
       setCoSummary((await coRes.json()) as COSummary);
@@ -796,6 +802,15 @@ export default function CqiEntryPage() {
       setDraftLog({ updated_at: draftJson?.updated_at ?? null, updated_by: draftJson?.updated_by ?? null });
       const pubJson = (await pubRes.json().catch(() => ({ published: null }))) as CqiPublishedResponse;
       setPublishedLog({ published_at: pubJson?.published?.published_at ?? null });
+      try {
+        if (flagsRes && (flagsRes as any).ok) {
+          const f = await (flagsRes as any).json();
+          setNotifFlags({
+            student_publish_enabled: Boolean((f as any)?.student_publish_enabled),
+            cqi_announce_enabled: Boolean((f as any)?.cqi_announce_enabled),
+          });
+        }
+      } catch { /* ignore */ }
       if (pubJson?.published) { setEntries((pubJson.published.entries as any) || {}); setDirty(false); }
       else if (draftJson?.draft?.entries) { setEntries(draftJson.draft.entries); setDirty(false); }
       else { setEntries({}); setDirty(false); }
@@ -836,6 +851,31 @@ export default function CqiEntryPage() {
       setMessage({ type: 'success', text: 'CQI published' });
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to publish' }); }
     finally { setPublishing(false); }
+  };
+
+  const announce = async () => {
+    if (!courseId) return;
+    try {
+      setAnnouncing(true);
+      setMessage(null);
+      const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-announce/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any)?.detail || 'Announce failed');
+      }
+      const data = await res.json().catch(() => ({}));
+      const sent = Number((data as any)?.sent ?? 0);
+      setMessage({ type: 'success', text: sent > 0 ? `Announced to ${sent} students` : 'No students matched any condition' });
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: e?.message || 'Failed to announce' });
+    } finally {
+      setAnnouncing(false);
+    }
   };
 
   const setEntry = (studentId: string, coKey: string, raw: string) => {
@@ -1018,6 +1058,17 @@ export default function CqiEntryPage() {
             className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${tableBlocked || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
             <Send className="w-4 h-4" /> Publish
           </button>
+
+          {Boolean(notifFlags?.cqi_announce_enabled) && Boolean(isPublished) && (
+            <button
+              onClick={announce}
+              disabled={announcing || publishing}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${announcing || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+              title="Send CQI announcement to students who match any condition"
+            >
+              <Send className="w-4 h-4" /> {announcing ? 'Announcing…' : 'Announce'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1049,8 +1100,9 @@ export default function CqiEntryPage() {
                 .map((cl, idx) => {
                   const tok = cl.token;
                   const rhs = normalizeImplicitTokenSums(String(cl.rhs || '').trim());
-                  // Editor stores token types as BEFORE_CQI / AFTER_CQI / TOTAL_CQI
+                  // Editor stores token types as BEFORE_CQI_COX / AFTER_CQI / TOTAL_CQI
                   const label =
+                    tok === 'BEFORE_CQI_COX' ? 'Before CQI (COx)' :
                     tok === 'BEFORE_CQI' ? 'Before CQI' :
                     tok === 'AFTER_CQI' ? 'After CQI' :
                     tok === 'TOTAL_CQI' ? 'Total CQI' : tok;
@@ -1102,8 +1154,18 @@ export default function CqiEntryPage() {
                     <td className="px-3 py-2 text-gray-900">{r.name}</td>
                     <td className="px-3 py-2 text-center font-semibold">
                       <div className="inline-flex min-w-[92px] flex-col rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 shadow-sm">
-                        <div className="text-gray-900">{round2(r.beforeValue)}</div>
-                        <div className="text-xs text-gray-500">({round2(r.beforePct)}%)</div>
+                        {/* Split BEFORE_CQI by selected COs in this page */}
+                        <div className="flex flex-wrap gap-x-2 gap-y-1 justify-center">
+                          {(r.perCoMeta || []).map((cm: any) => {
+                            const v = Number(cm?.ctxBase?.['BEFORE_CQI_COX'] ?? cm?.ctxBase?.[`BEFORE_CQI_CO${cm.coNum}`] ?? cm?.ctxBase?.['CO-RAW'] ?? 0) || 0;
+                            return (
+                              <span key={cm.coNum} className="bg-slate-100 text-slate-700 rounded px-1 text-xs font-mono">
+                                CO{cm.coNum}:{' '}{round2(v)}
+                              </span>
+                            );
+                          })}
+                        </div>
+
                         {/* Per-CO derived variable values — shown only when derived vars with COX are defined */}
                         {(() => {
                           const derivedVars = cqiConfig?.derived_variables;

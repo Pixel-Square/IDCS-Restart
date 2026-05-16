@@ -92,6 +92,7 @@ interface ExamAssignment {
   exam: string;
   exam_display_name?: string;
   qp_type: string;
+  order?: number;
   weight: number;  // Legacy - sum of co_weights
   co_weights: Record<string, number>;  // Per-CO weights: { "1": 2.5, "2": 2.5 }
   kind?: 'exam' | 'cqi';
@@ -315,9 +316,7 @@ function isCqiAssignment(exam: ExamAssignment | null | undefined): boolean {
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
 // New format: operator is a separate field. Old format: operator embedded in rhs.
-// formula (optional): if present, this expression is evaluated as the LHS of the comparison
-//   instead of looking up [token] from context. token becomes an optional display alias.
-type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+type CqiIfClause = { token: string; operator?: string; rhs: string };
 
 // Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
 type CqiDerivedVariable = { name: string; formula: string };
@@ -403,7 +402,7 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   push('X', 'Alias for CQI (entered value)');
 
   // CQI Entry columns
-  push('BEFORE_CQI', 'Before CQI (CQI Entry column, raw total)');
+  push('BEFORE_CQI_COX', 'Before CQI (current CO, raw value)');
   push('AFTER_CQI', 'After CQI (CQI Entry column, raw total)');
   push('TOTAL_CQI', 'Total (CQI Entry column, %)');
 
@@ -467,7 +466,7 @@ function normalizeCustomVarList(values: any): Array<{ code: string; label?: stri
 function getCqiTokenSection(variable: CqiVar): CqiTokenSectionKey {
   const code = String(variable.code || '').toUpperCase();
   if (variable.kind === 'custom') return 'custom';
-  if (code === 'CQI' || code === 'X' || code === 'BEFORE_CQI' || code === 'AFTER_CQI' || code === 'TOTAL_CQI') return 'cqi';
+  if (code === 'CQI' || code === 'X' || code === 'BEFORE_CQI_COX' || code === 'AFTER_CQI' || code === 'TOTAL_CQI') return 'cqi';
   if (/-EXAM-(OBT|WEIGHT)$/.test(code)) return 'exam';
   if (/-AVG$/.test(code)) return 'mm_avg';
   if (/(^|-)WEIGHT$/.test(code) || /-WEIGHT$/.test(code)) return 'co_weight';
@@ -530,6 +529,7 @@ export default function QpPatternEditorPage() {
   // Exam assignments (weights) live on ClassType config
   const [localExamAssignments, setLocalExamAssignments] = useState<ExamAssignment[]>([]);
   const [examAssignmentsDirty, setExamAssignmentsDirty] = useState(false);
+  const [editExamOrderMode, setEditExamOrderMode] = useState(false);
   const [globalCqiCustomVars, setGlobalCqiCustomVars] = useState<Array<{ code: string; label?: string; expr: string }>>([]);
   const [savingGlobalCqiCustomVars, setSavingGlobalCqiCustomVars] = useState(false);
 
@@ -541,6 +541,10 @@ export default function QpPatternEditorPage() {
 
   const markDirty = () => setIsDirty(true);
   const markExamDirty = () => setExamAssignmentsDirty(true);
+
+  const renumberExamAssignments = React.useCallback((items: ExamAssignment[]) => {
+    return (Array.isArray(items) ? items : []).map((item, index) => ({ ...item, order: index + 1 }));
+  }, []);
 
   const selectedClassType = classTypes.find((ct) => ct.id === selectedClassTypeId) || null;
 
@@ -862,6 +866,7 @@ export default function QpPatternEditorPage() {
         exam,
         exam_display_name: examDisplayName,
         qp_type: qpType,
+        order: ex.order != null && Number.isFinite(Number(ex.order)) ? Number(ex.order) : undefined,
         kind,
         cqi,
         weight: kind === 'cqi' ? 0 : (isMm ? (withTotal || defaultWeight) : (coSum || defaultWeight)),
@@ -878,12 +883,15 @@ export default function QpPatternEditorPage() {
     });
     // Deduplicate: keep only the first occurrence of each qp_type + exam_display_name pair
     const seen = new Set<string>();
-    return normalized.filter(e => {
+    const deduped = normalized.filter(e => {
       const key = `${String(e.qp_type || '').trim()}:${normalizeExamDisplayKey(e.exam_display_name || e.exam || '')}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+    return deduped
+      .map((e, idx) => ({ ...e, order: e.order ?? (idx + 1) }))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, []);
 
   // Load + normalise selected class type exam assignments
@@ -908,7 +916,8 @@ export default function QpPatternEditorPage() {
     if (!target) return [] as Array<{ idx: number; exam: ExamAssignment }>;
     return (localExamAssignments || [])
       .map((exam, idx) => ({ exam, idx }))
-      .filter(({ exam }) => String(exam.qp_type || '').trim() === target);
+      .filter(({ exam }) => String(exam.qp_type || '').trim() === target)
+      .sort((a, b) => (Number(a.exam.order ?? a.idx + 1) - Number(b.exam.order ?? b.idx + 1)) || (a.idx - b.idx));
   }, [localExamAssignments, selectedQpType]);
 
   const selectedExamAssignmentItem = React.useMemo(() => {
@@ -1042,14 +1051,22 @@ export default function QpPatternEditorPage() {
     // DB tokens are deduplicated against baseVars by code.
     const baseVarCodes = new Set(baseVars.map((v) => v.code));
     const dbTokenVars: CqiVar[] = dbCqiTokens
-      .filter((t) => t.category !== 'exam' && !baseVarCodes.has(t.code))
+      .filter((t) => {
+        if (t.category === 'exam') return false;
+        const normalizedCode = t.code === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : t.code;
+        return !baseVarCodes.has(normalizedCode);
+      })
       .sort((a, b) => a.order - b.order)
-      .map((t) => ({
-        code: t.code,
-        token: `[${t.code}]`,
-        label: t.label || t.code,
+      .map((t) => {
+        const code = t.code === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : t.code;
+        const label = (t.code === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : (t.label || t.code)) || code;
+        return {
+          code,
+          token: `[${code}]`,
+          label,
         kind: 'base' as const,
-      }));
+        };
+      });
 
     return [...sharedCustom, ...legacyCustom, ...baseVars, ...dbTokenVars];
   }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars, dbCqiTokens]);
@@ -1119,7 +1136,7 @@ export default function QpPatternEditorPage() {
     const c = String(code || '').toUpperCase();
 
     // CQI / X
-    if (c === 'CQI' || c === 'X' || c === 'BEFORE_CQI' || c === 'AFTER_CQI' || c === 'TOTAL_CQI') {
+    if (c === 'CQI' || c === 'X' || c === 'BEFORE_CQI_COX' || c === 'AFTER_CQI' || c === 'TOTAL_CQI') {
       return {
         group: 'CQI',
         badge: c,
@@ -1289,18 +1306,19 @@ export default function QpPatternEditorPage() {
   };
 
   // CqiIfClause type is defined at the top of the file (module scope)
-  const CQI_CLAUSE_TOKENS = ['BEFORE_CQI', 'AFTER_CQI', 'TOTAL_CQI'] as const;
+  const CQI_CLAUSE_TOKENS = ['BEFORE_CQI_COX', 'AFTER_CQI', 'TOTAL_CQI'] as const;
 
   const parseIfClauses = (raw: string): CqiIfClause[] => {
     const s = String(raw || '').trim();
-    // Default first clause uses BEFORE_CQI
-    if (!s) return [{ token: 'BEFORE_CQI', operator: '<', rhs: '' }];
+    // Default first clause uses BEFORE_CQI_COX
+    if (!s) return [{ token: 'BEFORE_CQI_COX', operator: '<', rhs: '' }];
     const parts = s.split(/\s*(?:&&|\bAND\b)\s*/i).map((p) => String(p || '').trim()).filter(Boolean);
     const clauses: CqiIfClause[] = [];
     for (const p of parts) {
       const m = p.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*?)\)?\s*$/);
       if (m) {
-        const tok = String(m[1] || '').toUpperCase();
+        const tokRaw = String(m[1] || '').toUpperCase();
+        const tok = tokRaw === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : tokRaw;
         const rest = String(m[2] || '').trim();
         // Extract leading operator from rhs for backward compat
         const opMatch = rest.match(/^(<=|>=|==|!=|<|>)\s*(.*)/);
@@ -1311,30 +1329,27 @@ export default function QpPatternEditorPage() {
         }
         continue;
       }
-      // Fallback — wrap as BEFORE_CQI clause
-      clauses.push({ token: 'BEFORE_CQI', rhs: p });
+      // Fallback — wrap as BEFORE_CQI_COX clause
+      clauses.push({ token: 'BEFORE_CQI_COX', rhs: p });
     }
-    if (!clauses.length) clauses.unshift({ token: 'BEFORE_CQI', operator: '<', rhs: '' });
+    if (!clauses.length) clauses.unshift({ token: 'BEFORE_CQI_COX', operator: '<', rhs: '' });
     return clauses;
   };
 
   const buildIfFromClauses = (clauses: CqiIfClause[]): string => {
-    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && (c.token || c.formula));
+    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && c.token);
     if (!list.length) return '';
     return list
       .map((c) => {
         const rhs = normalizeImplicitTokenSums(String(c.rhs || '').trim());
         if (!rhs) return '';
-        // Use inline formula as LHS when present; otherwise use [token] lookup
-        const formula = String(c.formula || '').trim();
-        const lhs = formula ? formula : `[${c.token}]`;
         // Use explicit operator field when present, otherwise fall back to reading from rhs
         if (c.operator) {
-          return `(${lhs} ${c.operator} ${rhs})`;
+          return `([${c.token}] ${c.operator} ${rhs})`;
         }
         // Legacy: rhs already contains the operator (e.g. '< 58')
         const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
-        return isComparatorOnly ? `(${lhs} ${rhs})` : `(${rhs})`;
+        return isComparatorOnly ? `([${c.token}] ${rhs})` : `(${rhs})`;
       })
       .filter(Boolean)
       .join(' && ');
@@ -1468,6 +1483,7 @@ export default function QpPatternEditorPage() {
         exam: examCode || normalizeTypeCode(examDisplayName),
         exam_display_name: examDisplayName,
         qp_type: targetQpType,
+        order: (prev || []).filter((e) => String(e.qp_type || '').trim() === targetQpType).length + 1,
         kind: 'exam',
         weight: 0,
         co_weights: baseCoWeights,
@@ -1494,7 +1510,8 @@ export default function QpPatternEditorPage() {
 
   const handleExamAssignmentsSave = async () => {
     if (!selectedClassTypeId) return;
-    const examAssignmentsPayload = (localExamAssignments || []).map((exam) => {
+    const orderedAssignments = renumberExamAssignments(localExamAssignments || []);
+    const examAssignmentsPayload = orderedAssignments.map((exam) => {
       if (!isCqiAssignment(exam) || !exam.cqi) return exam;
       const nextConditions = Array.isArray(exam.cqi.conditions)
         ? exam.cqi.conditions.map((cond) => {
@@ -1527,6 +1544,7 @@ export default function QpPatternEditorPage() {
     setLocalExamAssignments(normalizeExamAssignmentsForEditing((updated as any)?.exam_assignments || examAssignmentsPayload, patterns.filter(p => p.class_type == null)));
     setGlobalCqiCustomVars(normalizeCustomVarList((updated as any)?.cqi_global_custom_vars || globalCqiCustomVars));
     setExamAssignmentsDirty(false);
+    setEditExamOrderMode(false);
   };
 
   const moveExamAssignmentWithinSelectedType = (fromVisible: number, toVisible: number) => {
@@ -1541,7 +1559,7 @@ export default function QpPatternEditorPage() {
       const [item] = next.splice(from, 1);
       const adjustedTo = from < to ? to - 1 : to;
       next.splice(adjustedTo, 0, item);
-      return next;
+      return renumberExamAssignments(next);
     });
     markExamDirty();
   };
@@ -2075,19 +2093,58 @@ export default function QpPatternEditorPage() {
                 <span className="font-medium block">Exam Assignments</span>
                 <span className="text-xs text-gray-500">added for this class + QP type</span>
               </div>
-              {selectedClassTypeId && !!selectedQpType && (
-                <button
-                  onClick={() => {
-                    setAddExamSearch('');
-                    setShowAddExamModal(true);
-                  }}
-                  disabled={!selectedClassTypeId || !selectedQpType}
-                  className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 flex items-center gap-1"
-                  title="Add exam assignment"
-                >
-                  <Plus className="w-3 h-3" /> Add
-                </button>
-              )}
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                {selectedClassTypeId && !!selectedQpType && (
+                  <button
+                    onClick={() => {
+                      setAddExamSearch('');
+                      setShowAddExamModal(true);
+                    }}
+                    disabled={!selectedClassTypeId || !selectedQpType}
+                    className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 flex items-center gap-1"
+                    title="Add exam assignment"
+                  >
+                    <Plus className="w-3 h-3" /> Add
+                  </button>
+                )}
+                {selectedClassTypeId && !!selectedQpType && !editExamOrderMode && (
+                  <button
+                    onClick={() => setEditExamOrderMode(true)}
+                    className="px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded hover:bg-slate-200 flex items-center gap-1"
+                    title="Edit exam assignment order"
+                  >
+                    <GripVertical className="w-3 h-3" /> Edit Order
+                  </button>
+                )}
+                {selectedClassTypeId && !!selectedQpType && editExamOrderMode && (
+                  <>
+                    <button
+                      onClick={() => {
+                        handleExamAssignmentsSave().catch((err) => setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to save exam assignments' }));
+                      }}
+                      className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex items-center gap-1"
+                      title="Save exam assignment order"
+                    >
+                      <Save className="w-3 h-3" /> Save Order
+                    </button>
+                    <button
+                      onClick={() => {
+                        const normalized = normalizeExamAssignmentsForEditing(
+                          (selectedClassType?.exam_assignments as any[]) || [],
+                          patterns.filter((p) => p.class_type == null),
+                        );
+                        setLocalExamAssignments(normalized);
+                        setExamAssignmentsDirty(false);
+                        setEditExamOrderMode(false);
+                      }}
+                      className="px-2 py-1 bg-white text-slate-700 border border-slate-300 text-xs rounded hover:bg-slate-50 flex items-center gap-1"
+                      title="Cancel order editing"
+                    >
+                      <X className="w-3 h-3" /> Cancel
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             {!selectedClassTypeId ? (
               <div className="p-4 text-sm text-gray-500">Select a class type first</div>
@@ -2154,32 +2211,32 @@ export default function QpPatternEditorPage() {
                         />
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsEditing(true);
-                          moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex - 1);
-                        }}
-                        disabled={visibleIndex === 0}
-                        className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
-                        title="Move up"
-                      >
-                        ▲
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setIsEditing(true);
-                          moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex + 1);
-                        }}
-                        disabled={visibleIndex === orderedExamSidebarItems.length - 1}
-                        className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
-                        title="Move down"
-                      >
-                        ▼
-                      </button>
-                    </div>
+                    {editExamOrderMode && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex - 1);
+                          }}
+                          disabled={visibleIndex === 0}
+                          className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
+                          title="Move up"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            moveExamAssignmentWithinSelectedType(visibleIndex, visibleIndex + 1);
+                          }}
+                          disabled={visibleIndex === orderedExamSidebarItems.length - 1}
+                          className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded"
+                          title="Move down"
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))
@@ -3082,7 +3139,7 @@ export default function QpPatternEditorPage() {
                           </div>
                           {isEditing && (
                             <button
-                              onClick={() => updateCqi((prev) => ({ ...prev, conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI', rhs: '' }] }] }))}
+                              onClick={() => updateCqi((prev) => ({ ...prev, conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI_COX', rhs: '' }] }] }))}
                               className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-1"
                             >
                               <Plus className="w-3.5 h-3.5" /> Add Condition
@@ -3161,7 +3218,7 @@ export default function QpPatternEditorPage() {
                                           <div key={ci} className="flex items-center gap-2">
                                             {ci === 0 ? (
                                               <div className="px-2 py-2 border rounded-lg text-sm font-mono bg-gray-100 text-gray-600 whitespace-nowrap">
-                                                Before_CQI =
+                                                BEFORE_CQI_COX =
                                               </div>
                                             ) : (
                                               <select

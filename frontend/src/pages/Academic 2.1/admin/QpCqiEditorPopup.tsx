@@ -24,8 +24,7 @@ interface QuestionDef {
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
 // New format: operator is a separate field. Old format: operator embedded in rhs.
-// formula (optional): if present, evaluates as LHS instead of [token] lookup.
-type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+type CqiIfClause = { token: string; operator?: string; rhs: string };
 
 // Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
 type CqiDerivedVariable = { name: string; formula: string };
@@ -65,6 +64,7 @@ interface ExamAssignment {
     co_value_expr?: string;
     formula: string;
     conditions: Array<{
+      title?: string;
       if: string;
       then: string;
       color?: string;
@@ -247,6 +247,16 @@ export default function QpCqiEditorPopup(props: Props) {
                 title="Enable editing for CQI"
               >
                 <Edit3 className="w-3.5 h-3.5" /> Enable Edit
+              </button>
+            )}
+            {props.isEditing && (
+              <button
+                type="button"
+                onClick={props.onClose}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100"
+                title="Save CQI configuration"
+              >
+                <Save className="w-3.5 h-3.5" /> Save & Close
               </button>
             )}
             <button onClick={props.onClose} className="p-2 rounded hover:bg-gray-100" title="Close">
@@ -663,7 +673,7 @@ export default function QpCqiEditorPopup(props: Props) {
                         onClick={() => {
                           props.updateCqi((prev) => ({
                             ...prev,
-                            conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI', operator: '<', rhs: '' }] }],
+                            conditions: [...(prev.conditions || []), { title: '', if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI_COX', operator: '<', rhs: '' }] }],
                           }));
                         }}
                         className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-2"
@@ -676,9 +686,13 @@ export default function QpCqiEditorPopup(props: Props) {
                   <div className="space-y-3">
                     {(cqi?.conditions || []).map((cond, idx) => {
                       const rawIf = (cond as any)?.if || '';
-                      const clauses = Array.isArray((cond as any)?.if_clauses)
+                      const rawClauses = Array.isArray((cond as any)?.if_clauses)
                         ? ((cond as any).if_clauses as CqiIfClause[])
                         : props.parseIfClauses(rawIf);
+                      const clauses = (rawClauses || []).map((cl) => ({
+                        ...cl,
+                        token: String((cl as any)?.token || '').toUpperCase() === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : String((cl as any)?.token || '').toUpperCase(),
+                      }));
 
                       const writeClauses = (nextClauses: CqiIfClause[]) => {
                         props.updateCqi((prev) => {
@@ -694,6 +708,26 @@ export default function QpCqiEditorPopup(props: Props) {
                       return (
                         <div key={idx} className="border rounded-lg p-3 bg-gray-50">
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+                            {/* TITLE */}
+                            <div className="md:col-span-3">
+                              <div className="text-xs text-gray-500 mb-2">Condition Title (used in announce messages)</div>
+                              <input
+                                value={String((cond as any)?.title || '')}
+                                disabled={!props.isEditing}
+                                onChange={(e) =>
+                                  props.updateCqi((prev) => {
+                                    const next = [...(prev.conditions || [])];
+                                    const cur: any = next[idx] || {};
+                                    cur.title = e.target.value;
+                                    next[idx] = cur;
+                                    return { ...prev, conditions: next };
+                                  })
+                                }
+                                placeholder="e.g., CO1 below threshold"
+                                className="w-full px-3 py-2 border rounded-lg text-sm bg-white"
+                              />
+                            </div>
+
                             {/* IF */}
                             <div className="md:col-span-1">
                               <div className="text-xs text-gray-500 mb-2">Condition (IF)</div>
@@ -724,7 +758,13 @@ export default function QpCqiEditorPopup(props: Props) {
                               <div className="space-y-2">
                                 {clauses.map((cl, ci) => {
                                   // Tokens available in conditions from DB (fallback to 3 core tokens)
-                                  const conditionTokens = (props.dbCqiTokens || []).filter((t) => t.available_in_condition);
+                                  const conditionTokens = (props.dbCqiTokens || [])
+                                    .filter((t) => t.available_in_condition)
+                                    .map((t) => (t.code === 'BEFORE_CQI'
+                                      ? { ...t, code: 'BEFORE_CQI_COX', label: 'BEFORE_CQI_COX' }
+                                      : t))
+                                    // de-dupe by code after normalization
+                                    .filter((t, idx, arr) => arr.findIndex((x) => x.code === t.code) === idx);
                                   // Also include derived variables as condition tokens
                                   const derivedVarTokens = (cqi?.derived_variables || [])
                                     .filter((dv) => dv.name)
@@ -753,10 +793,9 @@ export default function QpCqiEditorPopup(props: Props) {
                                         { id: '6', code: '!=', symbol: '≠', label: 'Not equal', order: 6 },
                                       ];
                                   return (
-                                  <div key={ci} className="flex flex-col gap-1 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2">
-                                    {/* Row 1: [Name] = [Formula] */}
-                                    <div className="flex items-start gap-1.5 flex-wrap">
-                                      {/* Variable name (token alias) — dropdown for existing tokens or free text */}
+                                  <div key={ci} className="flex flex-col gap-1.5">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {/* Token selector — dynamic from DB + derived variables */}
                                       {hasDbTokens ? (
                                         <select
                                           disabled={!props.isEditing}
@@ -765,67 +804,28 @@ export default function QpCqiEditorPopup(props: Props) {
                                             const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value } : x);
                                             writeClauses(nextClauses);
                                           }}
-                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[130px]"
-                                          title="Select token or type a name for the formula result"
+                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[120px]"
                                         >
                                           {allConditionTokens.map((t) => (
                                             <option key={t.id} value={t.code}>{t.code}</option>
                                           ))}
                                         </select>
                                       ) : (
-                                        <input
+                                        <select
                                           disabled={!props.isEditing}
                                           value={cl.token}
                                           onChange={(e) => {
-                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') } : x);
+                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value } : x);
                                             writeClauses(nextClauses);
                                           }}
-                                          placeholder="TOKEN_NAME"
-                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[130px]"
-                                        />
+                                          className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700"
+                                        >
+                                            <option value="BEFORE_CQI_COX">BEFORE_CQI_COX</option>
+                                          <option value="AFTER_CQI">AFTER_CQI</option>
+                                          <option value="TOTAL_CQI">TOTAL_CQI</option>
+                                        </select>
                                       )}
 
-                                      {/* = separator + formula input */}
-                                      <span className="text-gray-500 font-semibold text-sm self-center px-0.5">=</span>
-                                      <div className="flex-1 flex items-start gap-1 min-w-[180px]">
-                                        <textarea
-                                          value={cl.formula || ''}
-                                          disabled={!props.isEditing}
-                                          onChange={(e) => {
-                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, formula: e.target.value } : x);
-                                            writeClauses(nextClauses);
-                                          }}
-                                          placeholder="formula e.g. (([SSA1]+[CIA1])/50)*3  — or leave blank to compare [token] directly"
-                                          className="flex-1 px-2 py-1.5 border rounded-lg text-xs font-mono min-h-[38px] resize-none"
-                                          rows={1}
-                                          onInput={(e) => {
-                                            const el = e.currentTarget;
-                                            el.style.height = 'auto';
-                                            el.style.height = Math.min(el.scrollHeight, 80) + 'px';
-                                          }}
-                                        />
-                                        {props.isEditing && (
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              props.onRequestTokenPicker((token) => {
-                                                const nextClauses = clauses.map((x, j) =>
-                                                  j === ci ? { ...x, formula: props.appendToken(x.formula || '', token) } : x
-                                                );
-                                                writeClauses(nextClauses);
-                                              })
-                                            }
-                                            className="px-2 py-1.5 rounded border text-[11px] bg-white hover:bg-blue-50 text-blue-600 whitespace-nowrap"
-                                          >
-                                            + Token
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-
-                                    {/* Row 2: [operator] [rhs value] [remove] */}
-                                    <div className="flex items-center gap-1.5 pl-1">
-                                      <span className="text-[10px] text-gray-400 font-medium mr-0.5">compare</span>
                                       {/* Operator selector */}
                                       <select
                                         disabled={!props.isEditing}
@@ -849,16 +849,16 @@ export default function QpCqiEditorPopup(props: Props) {
                                           const nextClauses = clauses.map((x, j) => j === ci ? { ...x, rhs: e.target.value } : x);
                                           writeClauses(nextClauses);
                                         }}
-                                        placeholder="threshold e.g. 1.74"
+                                        placeholder="value e.g. 58"
                                         className="flex-1 min-w-[60px] px-2 py-1.5 border rounded-lg text-xs font-mono"
                                       />
 
-                                      {/* Remove clause button */}
+                                      {/* Remove clause button (not first clause) */}
                                       {ci > 0 && props.isEditing && (
                                         <button
                                           type="button"
                                           onClick={() => writeClauses(clauses.filter((_, j) => j !== ci))}
-                                          className="text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50"
+                                          className="text-red-400 hover:text-red-600 px-1"
                                           title="Remove clause"
                                         >×</button>
                                       )}

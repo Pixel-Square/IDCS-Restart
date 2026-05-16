@@ -22,6 +22,7 @@ from .models import (
     AcV2QpType,
     AcV2Cycle,
     AcV2PassMarkSetting,
+    AcV2AcademicNotificationSetting,
     AcV2CqiToken,
     AcV2CqiOperator,
 )
@@ -532,6 +533,25 @@ class AcV2PassMarkSettingSerializer(serializers.ModelSerializer):
         model = AcV2PassMarkSetting
         fields = ['id', 'out_of', 'pass_mark', 'label', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2AcademicNotificationSetting
+        fields = [
+            'id', 'key',
+            'student_publish_enabled',
+            'notify_on_first_publish',
+            'notify_on_row_edits_only',
+            'notify_on_every_publish_click',
+            'first_publish_template',
+            'edited_rows_template',
+            'every_publish_template',
+            'cqi_announce_enabled',
+            'cqi_announce_template',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'key', 'created_at', 'updated_at']
 
 
 class AcV2CqiTokenSerializer(serializers.ModelSerializer):

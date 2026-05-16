@@ -15,6 +15,13 @@ import { getApiBase } from '../../../services/apiBase';
 import krlogo from '../../../assets/krlogo.png';
 import { BYPASS_SESSION_KEY } from '../admin/bypass/BypassContext';
 
+type MarkEntryCachePayload = {
+  ts: number;
+  examInfo: ExamInfo;
+  students: Student[];
+  questionBtls: Record<string, number | null>;
+};
+
 /** Read the active bypass session (if any) from sessionStorage */
 function readBypassSession(): { session_id: string; course_code: string; course_name: string; faculty_name: string } | null {
   try {
@@ -258,6 +265,35 @@ export default function MarkEntryPage() {
   const [publishCountdown, setPublishCountdown] = useState<number | null>(null);
   const sealHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
+
+  const examInfoRef = useRef<ExamInfo | null>(null);
+  useEffect(() => {
+    examInfoRef.current = examInfo;
+  }, [examInfo]);
+
+  const markEntryCacheKey = examId ? `acv2:mark_entry_cache:${examId}` : null;
+
+  const readMarkEntryCache = (): MarkEntryCachePayload | null => {
+    if (!markEntryCacheKey) return null;
+    try {
+      const raw = sessionStorage.getItem(markEntryCacheKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as MarkEntryCachePayload;
+      if (!parsed || !parsed.examInfo || !Array.isArray(parsed.students)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeMarkEntryCache = (payload: MarkEntryCachePayload) => {
+    if (!markEntryCacheKey) return;
+    try {
+      sessionStorage.setItem(markEntryCacheKey, JSON.stringify(payload));
+    } catch {
+      // ignore quota / serialization issues
+    }
+  };
 
   const resolveMediaUrl = (value: string | null | undefined): string | null => {
     if (!value) return null;
@@ -542,11 +578,49 @@ export default function MarkEntryPage() {
 
   const loadData = async () => {
     try {
-      setLoading(true);
-      const [examRes, marksRes] = await Promise.all([
-        fetchWithAuth(`/api/academic-v2/exams/${examId}/`),
-        fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`),
-      ]);
+      if (!examId) return;
+
+      // If route changed to a different exam, avoid briefly showing previous exam data.
+      if (examInfoRef.current?.id && examInfoRef.current.id !== examId) {
+        examInfoRef.current = null;
+        setExamInfo(null);
+        setStudents([]);
+        setQuestionBtls({});
+      }
+
+      // Fast path: show last loaded data instantly (then refresh in background)
+      // so the page renders quickly even if the marks API is slow.
+      let cacheApplied = false;
+      if (!hasChanges) {
+        const cached = readMarkEntryCache();
+        if (cached?.examInfo?.id === examId) {
+          setExamInfo(cached.examInfo);
+          examInfoRef.current = cached.examInfo;
+          setStudents(cached.students || []);
+          setQuestionBtls(cached.questionBtls || {});
+
+          const pc = (cached.examInfo as any)?.publish_control || {};
+          setSealImageUrl(resolveMediaUrl(pc?.seal_image));
+          setSealAnimationEnabled(Boolean(pc?.seal_animation_enabled));
+          setSealWatermarkEnabled(Boolean(pc?.seal_watermark_enabled));
+
+          setLoading(false);
+          cacheApplied = true;
+        }
+      }
+
+      // Only block the whole screen if we don't have any exam info yet.
+      if (!examInfoRef.current && !cacheApplied) setLoading(true);
+
+      // Start both requests immediately, but unblock the UI as soon as exam info is ready.
+      const examPromise = fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
+      const marksPromise = fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`);
+
+      // Force loading to stop after 2 seconds max
+      const loadingTimeout = setTimeout(() => setLoading(false), 2000);
+
+      const examRes = await examPromise;
+      clearTimeout(loadingTimeout);
       if (!examRes.ok) throw new Error('Failed to load exam');
       const examData = await examRes.json();
       // Normalise qp_pattern: if empty object or missing questions, set null
@@ -554,6 +628,7 @@ export default function MarkEntryPage() {
         examData.qp_pattern = null;
       }
       setExamInfo(examData);
+      examInfoRef.current = examData;
       setQuestionBtls(examData.question_btls || {});
 
       // Seal settings come from publish_control (server already resolves semester config)
@@ -571,15 +646,35 @@ export default function MarkEntryPage() {
         setMmSetup({ cos, cia_enabled: false, cia_max_marks: 30, cia_weight: 0 });
       }
 
+      // Unblock after exam details (students can load just after)
+      setLoading(false);
+
+      const marksRes = await marksPromise;
       if (marksRes.ok) {
         const marksData = await marksRes.json();
-        setStudents(marksData.students || []);
+        const nextStudents = marksData.students || [];
+        setStudents(nextStudents);
+        writeMarkEntryCache({
+          ts: Date.now(),
+          examInfo: examData,
+          students: nextStudents,
+          questionBtls: examData.question_btls || {},
+        });
+      } else {
+        // Still cache exam info so subsequent loads can render quickly.
+        writeMarkEntryCache({
+          ts: Date.now(),
+          examInfo: examData,
+          students: [],
+          questionBtls: examData.question_btls || {},
+        });
       }
     } catch (error) {
       console.error('Failed to load:', error);
       setMessage({ type: 'error', text: 'Failed to load exam data' });
     } finally {
-      setLoading(false);
+      // Keep the UI unblocked once exam info has been shown.
+      if (examInfoRef.current) setLoading(false);
     }
   };
 
@@ -901,32 +996,18 @@ export default function MarkEntryPage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || err.error || 'Publish failed');
       }
-      
-      // Add minimum 2 seconds of loading animation as requested before success
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      setPublishStatus('success');
-      
-      // Wait 1 second, then show seal stamp and start screen shake
-      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Refresh the page data immediately so the newly published marks stay visible.
+      await loadData();
+
+      // Show success immediately (no forced delays / countdown).
+      setPublishCountdown(null);
+      if (countdownIntervalRef.current) {
+        window.clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
       setShowSealStamp(Boolean(sealAnimationEnabled));
-      
-      // Start 10-second countdown
-      setPublishCountdown(10);
-      if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = window.setInterval(() => {
-        setPublishCountdown(prev => {
-          if (prev === null || prev <= 1) {
-            if (countdownIntervalRef.current) window.clearInterval(countdownIntervalRef.current);
-            return null;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      
-      // Auto-close after 10 seconds
-      await new Promise(resolve => setTimeout(resolve, 10000));
-      await closePublishModal(true);
+      setPublishStatus('success');
     } catch (e) {
       setPublishStatus('idle');
       setShowPublishConfirm(false);
@@ -1345,8 +1426,17 @@ export default function MarkEntryPage() {
   /* ────── Render ────── */
   if (loading) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-lg p-8 text-center">
+          <div className="mx-auto mb-4 h-14 w-14 rounded-2xl bg-blue-50 flex items-center justify-center">
+            <RefreshCw className="h-7 w-7 animate-spin text-blue-600" />
+          </div>
+          <h2 className="text-xl font-semibold text-slate-900">Loading mark entry</h2>
+          <p className="mt-2 text-sm text-slate-500">Fetching exam details and student marks...</p>
+          <div className="mt-5 h-2 rounded-full bg-slate-200 overflow-hidden">
+            <div className="h-full w-1/2 rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 animate-pulse" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -1699,333 +1789,27 @@ export default function MarkEntryPage() {
             )}
             
             {publishStatus === 'success' && (
-              <div className="relative p-8 md:p-10 flex flex-col md:flex-row items-stretch justify-between bg-gradient-to-br from-slate-50 to-white gap-7 md:gap-10">
-                <style>{`
-                  @keyframes checkmarkDraw {
-                    0% { 
-                      stroke-dasharray: 52;
-                      stroke-dashoffset: 52;
-                    }
-                    100% { 
-                      stroke-dasharray: 52;
-                      stroke-dashoffset: 0;
-                    }
-                  }
-                  @keyframes circleFill {
-                    0% { 
-                      r: 0;
-                      opacity: 0;
-                    }
-                    30% { opacity: 1; }
-                    100% { 
-                      r: 48;
-                      opacity: 1;
-                    }
-                  }
-                  @keyframes titleSlideIn {
-                    0% {
-                      opacity: 0;
-                      transform: translateX(12px);
-                    }
-                    100% {
-                      opacity: 1;
-                      transform: translateX(0);
-                    }
-                  }
-                  @keyframes subtitleFadeIn {
-                    0% { opacity: 0; }
-                    100% { opacity: 1; }
-                  }
-                  /* SEAL ANIMATIONS */
-                  @keyframes sealSpinDropStick {
-                    0% {
-                      opacity: 0;
-                      transform: translate(-50%, -50%) rotate(0deg) scale(0.3);
-                    }
-                    50% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) rotate(720deg) scale(1.2);
-                    }
-                    85% {
-                      transform: translate(-50%, -50%) rotate(780deg) scale(1.15);
-                    }
-                    100% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) rotate(810deg) scale(1);
-                    }
-                  }
-                  @keyframes sealSwingStamp {
-                    0% {
-                      opacity: 0;
-                      transform: translate(-50%, -50%) rotate(-35deg) translateY(-25px) scale(0.4);
-                      filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0));
-                    }
-                    25% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) rotate(-20deg) translateY(-15px) scale(0.7);
-                      filter: drop-shadow(0 2px 8px rgba(239, 68, 68, 0.3));
-                    }
-                    50% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) rotate(0deg) translateY(8px) scale(1.08);
-                      filter: drop-shadow(0 8px 16px rgba(239, 68, 68, 0.5));
-                    }
-                    65% {
-                      transform: translate(-50%, -50%) rotate(2deg) translateY(0px) scale(1.01);
-                      filter: drop-shadow(0 4px 12px rgba(239, 68, 68, 0.4));
-                    }
-                    80% {
-                      transform: translate(-50%, -50%) rotate(-1deg) translateY(1px) scale(0.99);
-                      filter: drop-shadow(0 3px 10px rgba(239, 68, 68, 0.35));
-                    }
-                    100% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) rotate(0deg) translateY(0px) scale(1);
-                      filter: drop-shadow(0 4px 12px rgba(239, 68, 68, 0.3));
-                    }
-                  }
-                  @keyframes sealGlowPulse {
-                    0% {
-                      opacity: 0;
-                      transform: translate(-50%, -50%) scale(0.8);
-                      filter: drop-shadow(0 0 0px rgba(239, 68, 68, 0.6));
-                    }
-                    30% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) scale(1);
-                      filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.8));
-                    }
-                    60% {
-                      filter: drop-shadow(0 0 25px rgba(239, 68, 68, 0.6));
-                    }
-                    100% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) scale(1);
-                      filter: drop-shadow(0 8px 20px rgba(239, 68, 68, 0.3));
-                    }
-                  }
-                  @keyframes sealBouncePress {
-                    0% {
-                      opacity: 0;
-                      transform: translate(-50%, -50%) translateY(-30px) scale(0.4);
-                    }
-                    50% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) translateY(5px) scale(1.05);
-                    }
-                    70% {
-                      transform: translate(-50%, -50%) translateY(-2px) scale(0.98);
-                    }
-                    100% {
-                      opacity: 1;
-                      transform: translate(-50%, -50%) translateY(0px) scale(1);
-                    }
-                  }
-                  @keyframes screenShake {
-                    0%, 100% {
-                      transform: translate(0, 0) rotate(0deg);
-                    }
-                    5% {
-                      transform: translate(-5px, -4px) rotate(-0.5deg);
-                    }
-                    10% {
-                      transform: translate(4px, 5px) rotate(0.4deg);
-                    }
-                    15% {
-                      transform: translate(-4px, -5px) rotate(-0.4deg);
-                    }
-                    20% {
-                      transform: translate(5px, 3px) rotate(0.5deg);
-                    }
-                    25% {
-                      transform: translate(-5px, 4px) rotate(-0.45deg);
-                    }
-                    30% {
-                      transform: translate(3px, -5px) rotate(0.45deg);
-                    }
-                    35% {
-                      transform: translate(-3px, 4px) rotate(-0.35deg);
-                    }
-                    40% {
-                      transform: translate(4px, -3px) rotate(0.35deg);
-                    }
-                    45% {
-                      transform: translate(-4px, 3px) rotate(-0.3deg);
-                    }
-                    50% {
-                      transform: translate(3px, -4px) rotate(0.3deg);
-                    }
-                    55% {
-                      transform: translate(-3px, 3px) rotate(-0.25deg);
-                    }
-                    60% {
-                      transform: translate(2px, -3px) rotate(0.25deg);
-                    }
-                    65% {
-                      transform: translate(-2px, 3px) rotate(-0.2deg);
-                    }
-                    70% {
-                      transform: translate(3px, -2px) rotate(0.2deg);
-                    }
-                    75% {
-                      transform: translate(-2px, 2px) rotate(-0.15deg);
-                    }
-                    80% {
-                      transform: translate(2px, -2px) rotate(0.15deg);
-                    }
-                    85% {
-                      transform: translate(-1px, 1px) rotate(-0.1deg);
-                    }
-                    90% {
-                      transform: translate(1px, -1px) rotate(0.1deg);
-                    }
-                    95% {
-                      transform: translate(-0.5px, 0.5px) rotate(-0.05deg);
-                    }
-                  }
-                  .modal-screen-shake {
-                    animation: screenShake 0.6s ease-in-out;
-                  }
-                  .seal-animation-spin {
-                    animation: sealSpinDropStick 1s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards;
-                  }
-                  .seal-animation-swing {
-                    animation: sealSwingStamp 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0s forwards;
-                  }
-                  .seal-animation-glow {
-                    animation: sealGlowPulse 1.5s ease-out 0.2s forwards;
-                  }
-                  .seal-animation-bounce {
-                    animation: sealBouncePress 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s forwards;
-                  }
-                  .success-checkmark {
-                    animation: checkmarkDraw 0.7s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.4s forwards;
-                    stroke-dasharray: 52;
-                    stroke-dashoffset: 52;
-                  }
-                  .success-circle {
-                    animation: circleFill 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-                  }
-                  .success-title {
-                    animation: titleSlideIn 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) 0.3s forwards;
-                    opacity: 0;
-                  }
-                  .success-subtitle {
-                    animation: subtitleFadeIn 0.5s ease-out 0.5s forwards;
-                    opacity: 0;
-                  }
-                `}</style>
-
-                {/* LEFT COLUMN - Instructions */}
-                <div className="flex-1 flex flex-col justify-between min-w-0">
-                  <div>
-                    <h2 className="success-title text-2xl md:text-3xl font-bold text-slate-900 tracking-tight mb-4">
-                      Marks Published
-                    </h2>
-                    <p className="success-subtitle text-sm text-slate-600 leading-relaxed mb-6">
-                      Your marks have been successfully submitted and official records are now locked.
-                    </p>
-                  </div>
-
-                  {/* Info cards - left column */}
-                  <div className="space-y-3">
-                    <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-100/50">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-2.5 flex-shrink-0"></div>
-                      <p className="text-sm text-slate-600">Records submitted to official database</p>
+              <div className="p-6 md:p-8 bg-slate-50">
+                <div className="mx-auto max-w-lg rounded-2xl border border-emerald-200 bg-white shadow-xl p-5 md:p-6">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                      <CheckCircle className="h-6 w-6" />
                     </div>
-                    <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50/50 border border-emerald-100/50">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-600 mt-2.5 flex-shrink-0"></div>
-                      <p className="text-sm text-slate-600">Editing locked — request edit if changes needed</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Published</div>
+                      <h3 className="mt-1 text-xl font-bold text-slate-900">Marks published successfully</h3>
+                      <p className="mt-1 text-sm text-slate-600">Records are synced and the latest status is visible on this page.</p>
                     </div>
                   </div>
 
-                  {/* Action Section - Button and Timer */}
-                  <div className="mt-6 pt-6 border-t border-slate-200 flex flex-col gap-4">
-                    <button 
-                      onClick={() => closePublishModal(true)}
-                      className="w-full px-6 py-2.5 text-sm font-semibold text-blue-700 bg-white border-2 border-blue-300 rounded-xl hover:bg-blue-50 transition-colors"
+                  <div className="mt-5 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => closePublishModal(false)}
+                      className="px-4 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100"
                     >
-                      Back to Mark Entry
+                      Done
                     </button>
-                    
-                    {/* Countdown Timer - below button */}
-                    {publishCountdown !== null && publishCountdown > 0 && (
-                      <div className="text-center">
-                        <p className="text-xs text-slate-500 mb-1">Auto-closing in</p>
-                        <div className="text-2xl font-bold text-emerald-600">
-                          {publishCountdown}s
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* RIGHT COLUMN - Checkmark + Seal */}
-                <div className="flex-1 flex flex-col items-center justify-center relative min-w-0">
-                  {/* SEAL STAMP - positioned in top-right, extends beyond popup */}
-                  {showSealStamp && (
-                    <div className="absolute top-4 right-4 seal-animation-swing w-28 h-28 md:w-32 md:h-32 pointer-events-none" style={{ filter: 'drop-shadow(0 12px 24px rgba(0, 0, 0, 0.22))' }}>
-                      {sealImageUrl ? (
-                        <img 
-                          src={sealImageUrl} 
-                          alt="Official Seal" 
-                          className="w-full h-full object-contain drop-shadow-lg"
-                        />
-                      ) : (
-                        <svg viewBox="0 0 200 200" className="w-full h-full">
-                          {/* Outer circle ring */}
-                          <circle cx="100" cy="100" r="95" fill="none" stroke="#ef4444" strokeWidth="3" opacity="0.8" />
-                          
-                          {/* Inner decorative circle */}
-                          <circle cx="100" cy="100" r="85" fill="none" stroke="#ef4444" strokeWidth="1.5" opacity="0.5" />
-                          
-                          {/* Center seal badge */}
-                          <circle cx="100" cy="100" r="60" fill="#ef4444" opacity="0.95" />
-                          
-                          {/* Checkmark inside badge */}
-                          <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-                          
-                          {/* Decorative text around circle - OFFICIAL SEAL */}
-                          <defs>
-                            <path id="sealCircle" d="M 100, 100 m -70, 0 a 70,70 0 1,1 140,0 a 70,70 0 1,1 -140,0" fill="none" />
-                          </defs>
-                          <text fontSize="16" fontWeight="bold" fill="#ef4444" opacity="0.7" letterSpacing="2">
-                            <textPath href="#sealCircle" startOffset="0%" textAnchor="start">
-                              OFFICIAL SEAL • PUBLISHED • LOCKED
-                            </textPath>
-                          </text>
-                        </svg>
-                      )}
-                    </div>
-                  )}
-
-                  {/* SVG Checkmark Icon - Green Circle + White Checkmark */}
-                  <div className="relative w-28 h-28">
-                    <svg
-                      viewBox="0 0 100 100"
-                      className="w-full h-full"
-                      style={{ filter: 'drop-shadow(0 4px 12px rgba(16, 185, 129, 0.25))' }}
-                    >
-                      {/* Filled green circle background - animates in first */}
-                      <circle
-                        cx="50"
-                        cy="50"
-                        r="0"
-                        fill="#10b981"
-                        className="success-circle"
-                      />
-                      
-                      {/* White checkmark - draws on top after circle fills */}
-                      <polyline
-                        points="32,50 46,62 68,38"
-                        fill="none"
-                        stroke="white"
-                        strokeWidth="4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="success-checkmark"
-                      />
-                    </svg>
                   </div>
                 </div>
               </div>

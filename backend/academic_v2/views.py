@@ -29,6 +29,7 @@ from .models import (
     AcV2Cycle,
     AcV2CqiToken,
     AcV2CqiOperator,
+    AcV2AcademicNotificationSetting,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -45,10 +46,203 @@ from .serializers import (
     AcV2QpTypeSerializer,
     AcV2CycleSerializer,
     AcV2PassMarkSettingSerializer,
+    AcV2AcademicNotificationSettingSerializer,
     AcV2CqiTokenSerializer,
     AcV2CqiOperatorSerializer,
 )
 from .models import AcV2PassMarkSetting
+
+
+def _render_notification_template(template: str, context: dict) -> str:
+    """Simple token replacement for templates like 'Hello {student_name}'."""
+    out = str(template or '')
+    for k, v in (context or {}).items():
+        try:
+            out = out.replace('{' + str(k) + '}', str(v if v is not None else ''))
+        except Exception:
+            continue
+    return out
+
+
+def _resolve_mobile_for_student_profile(sp) -> str:
+    """Best-effort mobile resolver for a StudentProfile-like object."""
+    mobile = ''
+    try:
+        mobile = str(getattr(sp, 'mobile_number', '') or '').strip()
+    except Exception:
+        mobile = ''
+    if not mobile:
+        try:
+            u = getattr(sp, 'user', None)
+            mobile = str(getattr(u, 'mobile_number', '') or getattr(u, 'mobile', '') or '').strip() if u else ''
+        except Exception:
+            mobile = ''
+    return str(mobile or '').strip()
+
+
+def _send_student_publish_notifications(
+    *,
+    exam_assignment,
+    actor_user,
+    prev_published_marks: dict,
+    new_published_marks: dict,
+    was_published_before: bool,
+):
+    """Send WhatsApp notifications to students when marks are published."""
+    import logging
+    logger = logging.getLogger('academic_v2.notifications')
+
+    try:
+        cfg, _ = AcV2AcademicNotificationSetting.objects.get_or_create(key='DEFAULT')
+    except Exception as e:
+        logger.error(f'Failed to load notification settings: {e}')
+        return
+
+    if not bool(getattr(cfg, 'student_publish_enabled', False)):
+        logger.debug('Student publish notifications disabled')
+        return
+
+    try:
+        from academics.models import StudentSectionAssignment
+        from accounts.services.sms import send_whatsapp
+    except Exception:
+        return
+
+    # Determine changed students (for edited-only notifications)
+    changed_ids: set[str] = set()
+    if isinstance(prev_published_marks, dict) and isinstance(new_published_marks, dict):
+        all_ids = set(str(k) for k in new_published_marks.keys()) | set(str(k) for k in prev_published_marks.keys())
+        for sid in all_ids:
+            a = prev_published_marks.get(sid)
+            b = new_published_marks.get(sid)
+            if a != b:
+                changed_ids.add(str(sid))
+
+    # Choose the base template for this publish (one message per student per click)
+    base_template = ''
+    base_recipients: set[str] = set()
+    if not was_published_before and bool(getattr(cfg, 'notify_on_first_publish', True)):
+        base_template = str(getattr(cfg, 'first_publish_template', '') or '')
+        base_recipients = set(str(k) for k in (new_published_marks or {}).keys())
+    elif bool(getattr(cfg, 'notify_on_every_publish_click', False)):
+        base_template = str(getattr(cfg, 'every_publish_template', '') or '')
+        base_recipients = set(str(k) for k in (new_published_marks or {}).keys())
+
+    edited_template = ''
+    edited_recipients: set[str] = set()
+    if was_published_before and bool(getattr(cfg, 'notify_on_row_edits_only', True)):
+        edited_template = str(getattr(cfg, 'edited_rows_template', '') or '')
+        edited_recipients = set(changed_ids)
+
+    # If edited-only is enabled and a base (every publish) is also enabled,
+    # we replace the base message for edited students to avoid duplicates.
+    recipients = set(base_recipients) | set(edited_recipients)
+    if not recipients:
+        logger.debug(f'No recipients selected for notifications (base={len(base_recipients)}, edited={len(edited_recipients)})')
+        return
+    
+    logger.info(f'Sending notifications to {len(recipients)} students: first_publish={bool(base_recipients)}, edited_only={bool(edited_recipients)}')
+
+    # Course/exam context
+    course = getattr(getattr(exam_assignment, 'section', None), 'course', None)
+    course_code = str(
+        getattr(course, 'subject_code', '')
+        or getattr(course, 'course_code', '')
+        or ''
+    )
+    course_name = str(
+        getattr(course, 'subject_name', '')
+        or getattr(course, 'course_name', '')
+        or ''
+    )
+    class_name = str(getattr(course, 'class_type_name', '') or getattr(course, 'class_name', '') or '')
+    section_obj = getattr(exam_assignment, 'section', None)
+    course = getattr(section_obj, 'course', None)
+    section_name = str(getattr(section_obj, 'name', '') or '')
+
+    try:
+        faculty_name = str(actor_user) if actor_user else ''
+    except Exception:
+        faculty_name = ''
+
+    exam_name = str(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or getattr(exam_assignment, 'name', '') or 'Exam')
+    max_mark = str(getattr(exam_assignment, 'max_marks', '') or '')
+
+    # Load all active students in the academic section.
+    try:
+        ta = exam_assignment.section.teaching_assignment
+        acad_sec = ta.section
+        assignments = (
+            StudentSectionAssignment.objects
+            .filter(section=acad_sec, end_date__isnull=True)
+            .select_related('student__user')
+        )
+        logger.info(f'Found {assignments.count()} students in section for notifications')
+    except Exception as e:
+        logger.error(f'Failed to load student section assignments: {e}')
+        return
+
+    sent_count = 0
+    for sa in assignments:
+        sp = getattr(sa, 'student', None)
+        if not sp:
+            continue
+        sid = str(getattr(sp, 'id', '') or '')
+        if sid not in recipients:
+            continue
+
+        mobile = _resolve_mobile_for_student_profile(sp)
+        if not mobile:
+            logger.warning(f'No mobile for student {sid}')
+            continue
+
+        # Pick message template (edited overrides base)
+        tpl = edited_template if sid in edited_recipients and edited_template else base_template
+        if not tpl:
+            logger.warning(f'No template selected for student {sid}')
+            continue
+
+        # Student context
+        reg_no = str(getattr(sp, 'reg_no', '') or '')
+        student_name = ''
+        try:
+            u = getattr(sp, 'user', None)
+            student_name = str(u) if u else reg_no
+        except Exception:
+            student_name = reg_no
+
+        row = (new_published_marks or {}).get(sid) if isinstance(new_published_marks, dict) else None
+        mark = ''
+        if isinstance(row, dict):
+            mark = row.get('mark')
+        msg = _render_notification_template(
+            tpl,
+            {
+                'course_code': course_code,
+                'course_name': course_name,
+                'class_name': class_name,
+                'section': section_name,
+                'exam_name': exam_name,
+                'max_mark': max_mark,
+                'faculty_name': faculty_name,
+                'student_name': student_name,
+                'register_number': reg_no,
+                'mark': mark if mark is not None else '',
+            },
+        )
+
+        try:
+            result = send_whatsapp(mobile, msg)
+            if bool(getattr(result, 'ok', False)):
+                sent_count += 1
+                logger.info(f'Sent notification to {reg_no} ({mobile})')
+            else:
+                logger.error(f'Failed to send notification to {reg_no} ({mobile}): {getattr(result, "message", "unknown error")}')
+        except Exception as e:
+            logger.error(f'Failed to send notification to {reg_no} ({mobile}): {e}')
+            continue
+    
+    logger.info(f'Publish notifications: sent {sent_count}/{len(recipients)} messages')
 
 
 def _has_admin_bypass_access(user):
@@ -70,6 +264,34 @@ def admin_pass_mark_settings(request):
     if request.method == 'GET':
         return Response(AcV2PassMarkSettingSerializer(obj).data)
     serializer = AcV2PassMarkSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_academic_notification_settings(request):
+    """Get or update Academic 2.1 notification settings (singleton)."""
+
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Permission denied'}, status=403)
+
+    obj, _ = AcV2AcademicNotificationSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={
+            'student_publish_enabled': False,
+            'notify_on_first_publish': True,
+            'notify_on_row_edits_only': True,
+            'notify_on_every_publish_click': False,
+            'cqi_announce_enabled': False,
+        },
+    )
+
+    if request.method == 'GET':
+        return Response(AcV2AcademicNotificationSettingSerializer(obj).data)
+
+    serializer = AcV2AcademicNotificationSettingSerializer(obj, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
@@ -2458,6 +2680,11 @@ def faculty_exam_publish(request, exam_id):
         return Response({'detail': 'This exam is locked and cannot be published.'}, status=403)
 
     semester_config = ea.get_semester_config()
+
+    prev_published_data = ea.published_data if isinstance(ea.published_data, dict) else {}
+    prev_published_marks = prev_published_data.get('marks', {}) if isinstance(prev_published_data.get('marks', {}), dict) else {}
+    was_published_before = bool(ea.published_at) or ea.status in ('PUBLISHED', 'LOCKED') or bool(prev_published_marks)
+
     with transaction.atomic():
         ea.published_data = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         ea.published_at = timezone.now()
@@ -2480,6 +2707,21 @@ def faculty_exam_publish(request, exam_id):
             compute_section_internal_marks(ea.section)
         except Exception:
             pass
+
+    # Send publish notifications after DB commit.
+    try:
+        new_published_data = ea.published_data if isinstance(ea.published_data, dict) else {}
+        new_published_marks = new_published_data.get('marks', {}) if isinstance(new_published_data.get('marks', {}), dict) else {}
+        _send_student_publish_notifications(
+            exam_assignment=ea,
+            actor_user=request.user,
+            prev_published_marks=prev_published_marks,
+            new_published_marks=new_published_marks,
+            was_published_before=was_published_before,
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger('academic_v2.notifications').error(f'Publish notification hook failed: {e}')
 
     return Response({'success': True, 'status': ea.status, 'published_at': ea.published_at.isoformat()})
 
@@ -3038,7 +3280,7 @@ def faculty_course_co_summary(request, ta_id):
 
             combined_rhs = re.sub(r'\]\s+\[', '] + [', combined_rhs)
 
-            if idx == 0 and token == 'BEFORE_CQI':
+            if idx == 0 and token in ('BEFORE_CQI', 'BEFORE_CQI_COX'):
                 # First clause legacy behaviour: if rhs starts with a comparator, wrap token+rhs
                 is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', combined_rhs))
                 parts.append(f'([{token}] {combined_rhs})' if is_comparator_only else f'({combined_rhs})')
@@ -4085,6 +4327,11 @@ def faculty_course_co_summary(request, ta_id):
                         'TOTAL_CQI': float((before_total_all or 0.0) + (sum_raw_cqi or 0.0)),
                     }
 
+                    # New token: BEFORE_CQI_COX is the current CO's pre-CQI raw value.
+                    # (Also store a resolved CO{n} alias.)
+                    vars_map['BEFORE_CQI_COX'] = float(before_co or 0.0)
+                    vars_map[f'BEFORE_CQI_CO{co_n}'] = float(before_co or 0.0)
+
                     # --- CO-level aliases (current CO context) ---
                     co_max_for_co = 0.0
                     for _src_exam in exams_data:
@@ -4107,6 +4354,8 @@ def faculty_course_co_summary(request, ta_id):
                     # --- Dynamic COx tokens (COX = current CO number) ---
                     vars_map['COX_PERCENT'] = _pct
                     vars_map[f'CO{co_n}_PERCENT'] = _pct
+                    vars_map['BEFORE_CQI_COX'] = float(before_co or 0.0)
+                    vars_map[f'BEFORE_CQI_CO{co_n}'] = float(before_co or 0.0)
                     vars_map['BEFORE_CQI_COX_TOTAL'] = float(before_co or 0.0)
                     vars_map[f'BEFORE_CQI_CO{co_n}_TOTAL'] = float(before_co or 0.0)
                     vars_map['AFTER_CQI_COX_TOTAL'] = float((before_co or 0.0) + (cqi_in or 0.0))
@@ -4186,6 +4435,7 @@ def faculty_course_co_summary(request, ta_id):
                             vars_map[resolved_name] = dv_val
 
                     mapped = None
+                    matched_condition_title = ''
                     # Condition ladder: first match wins.
                     if isinstance(conds, list) and conds:
                         for cond in conds:
@@ -4194,9 +4444,24 @@ def faculty_course_co_summary(request, ta_id):
                             if_expr = _resolve_cqi_if_expr(cond)
                             then_expr = str(cond.get('then', '') or '').strip()
                             if if_expr and _safe_eval_cqi_bool(if_expr, vars_map):
+                                try:
+                                    matched_condition_title = str(cond.get('title') or cond.get('name') or '').strip()
+                                except Exception:
+                                    matched_condition_title = ''
                                 if then_expr:
                                     mapped = _safe_eval_cqi_num(then_expr, vars_map)
                                 break
+
+                    if matched_condition_title:
+                        try:
+                            titles = student_entry.get('cqi_satisfied_conditions')
+                            if not isinstance(titles, list):
+                                titles = []
+                            if matched_condition_title not in titles:
+                                titles.append(matched_condition_title)
+                            student_entry['cqi_satisfied_conditions'] = titles
+                        except Exception:
+                            pass
 
                     if mapped is None:
                         if else_expr.strip():
@@ -4621,6 +4886,163 @@ def faculty_course_cqi_publish(request, ta_id: int):
         'status': 'ok',
         'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def faculty_academic_notification_flags(request):
+    """Read-only notification toggles for faculty UI (no templates)."""
+
+    obj, _ = AcV2AcademicNotificationSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={
+            'student_publish_enabled': False,
+            'notify_on_first_publish': True,
+            'notify_on_row_edits_only': True,
+            'notify_on_every_publish_click': False,
+            'cqi_announce_enabled': False,
+        },
+    )
+
+    return Response({
+        'student_publish_enabled': bool(getattr(obj, 'student_publish_enabled', False)),
+        'cqi_announce_enabled': bool(getattr(obj, 'cqi_announce_enabled', False)),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_course_cqi_announce(request, ta_id: int):
+    """Send CQI announce WhatsApp messages to students who matched any CQI condition."""
+
+    from academics.models import TeachingAssignment, StudentSectionAssignment
+    from accounts.services.sms import send_whatsapp
+    import logging
+
+    logger = logging.getLogger('academic_v2.notifications')
+
+    # Access check
+    _ta_qs = TeachingAssignment.objects.select_related('curriculum_row', 'elective_subject', 'section', 'staff')
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(_ta_qs, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(_ta_qs, id=ta_id, staff__user=request.user, is_active=True)
+
+    cfg, _ = AcV2AcademicNotificationSetting.objects.get_or_create(key='DEFAULT')
+    if not bool(getattr(cfg, 'cqi_announce_enabled', False)):
+        return Response({'detail': 'CQI announce is disabled.'}, status=403)
+
+    # Reuse the authoritative CQI condition evaluation from the CO summary endpoint.
+    summary_res = faculty_course_co_summary(request, ta_id)
+    summary = getattr(summary_res, 'data', None) if summary_res is not None else None
+    if not isinstance(summary, dict):
+        return Response({'detail': 'Failed to compute CQI summary.'}, status=500)
+
+    students = summary.get('students') if isinstance(summary.get('students'), list) else []
+    if not students:
+        return Response({'status': 'ok', 'sent': 0})
+
+    # Build student_id -> condition titles from summary
+    cond_titles_by_sid: dict[str, list[str]] = {}
+    for row in students:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get('student_id') or '').strip()
+        if not sid:
+            continue
+        titles = row.get('cqi_satisfied_conditions')
+        if isinstance(titles, list):
+            clean = []
+            seen = set()
+            for t in titles:
+                s = str(t or '').strip()
+                if not s or s in seen:
+                    continue
+                seen.add(s)
+                clean.append(s)
+            if clean:
+                cond_titles_by_sid[sid] = clean
+
+    if not cond_titles_by_sid:
+        return Response({'status': 'ok', 'sent': 0})
+
+    # Course/faculty context
+    course_code = str(summary.get('course_code') or '')
+    course_name = str(summary.get('course_name') or '')
+    try:
+        faculty_name = str(request.user)
+    except Exception:
+        faculty_name = ''
+
+    # Student roster + mobiles
+    sec = ta.section
+    assignments = (
+        StudentSectionAssignment.objects
+        .filter(section=sec, end_date__isnull=True)
+        .select_related('student__user')
+        .order_by('student__reg_no')
+    )
+    roster_by_sid = {str(sa.student_id): sa.student for sa in assignments if getattr(sa, 'student_id', None)}
+
+    tpl = str(getattr(cfg, 'cqi_announce_template', '') or '')
+    if not tpl.strip():
+        return Response({'detail': 'CQI announce template is empty.'}, status=400)
+
+    sent = 0
+    for row in students:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get('student_id') or '').strip()
+        if not sid or sid not in cond_titles_by_sid:
+            continue
+        sp = roster_by_sid.get(sid)
+        if not sp:
+            continue
+        mobile = _resolve_mobile_for_student_profile(sp)
+        if not mobile:
+            continue
+
+        co_totals = row.get('co_totals') if isinstance(row.get('co_totals'), list) else []
+        co_att = []
+        for i, v in enumerate(co_totals):
+            try:
+                num = float(v)
+            except Exception:
+                num = 0.0
+            co_att.append(f"CO{i+1}:{round(num, 2)}")
+        co_attainments = ' '.join(co_att).strip()
+        satisfied_conditions = ', '.join(cond_titles_by_sid.get(sid, []))
+
+        reg_no = str(getattr(sp, 'reg_no', '') or '')
+        try:
+            student_name = str(sp.user) if getattr(sp, 'user', None) else reg_no
+        except Exception:
+            student_name = reg_no
+
+        msg = _render_notification_template(
+            tpl,
+            {
+                'course_code': course_code,
+                'course_name': course_name,
+                'faculty_name': faculty_name,
+                'student_name': student_name,
+                'register_number': reg_no,
+                'co_attainments': co_attainments,
+                'satisfied_conditions': satisfied_conditions,
+            },
+        )
+
+        try:
+            result = send_whatsapp(mobile, msg)
+            if bool(getattr(result, 'ok', False)):
+                sent += 1
+            else:
+                logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {getattr(result, "message", "unknown error")}')
+        except Exception as e:
+            logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {e}')
+            continue
+
+    return Response({'status': 'ok', 'sent': sent})
 
 
 # ============================================================================

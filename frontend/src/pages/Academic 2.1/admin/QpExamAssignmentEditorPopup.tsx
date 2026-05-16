@@ -40,8 +40,7 @@ interface QuestionDef {
 }
 
 // token is now any string to support DB-backed token registry
-// formula (optional): if present, evaluates as LHS instead of [token] lookup.
-type CqiIfClause = { token: string; operator?: string; rhs: string; formula?: string };
+type CqiIfClause = { token: string; operator?: string; rhs: string };
 
 // Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
 type CqiDerivedVariable = { name: string; formula: string };

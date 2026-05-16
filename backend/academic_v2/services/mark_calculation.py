@@ -178,21 +178,16 @@ def _build_cqi_if_from_clauses(clauses) -> str:
         if not isinstance(clause, dict):
             continue
         token = str(clause.get('token') or '').strip().upper()
-        formula = str(clause.get('formula') or '').strip()
         operator = str(clause.get('operator') or '').strip()
         rhs = re.sub(r'\]\s+\[', '] + [', str(clause.get('rhs') or '').strip())
-        if not rhs:
-            continue
-        # Use inline formula as LHS when present; otherwise use [token] lookup.
-        lhs = formula if formula else (f'[{token}]' if token else None)
-        if not lhs:
+        if not token or not rhs:
             continue
         # New format: explicit operator field. Legacy: operator embedded at start of rhs.
         if operator:
-            parts.append(f'({lhs} {operator} {rhs})')
+            parts.append(f'([{token}] {operator} {rhs})')
         else:
             is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', rhs))
-            parts.append(f'({lhs} {rhs})' if is_comparator_only else f'({rhs})')
+            parts.append(f'([{token}] {rhs})' if is_comparator_only else f'({rhs})')
     return ' && '.join(part for part in parts if part)
 
 
