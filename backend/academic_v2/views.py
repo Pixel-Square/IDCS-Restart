@@ -3266,6 +3266,8 @@ def faculty_course_co_summary(request, ta_id):
 
             # Determine rhs and operator (new format has explicit 'operator' field)
             operator = str(clause.get('operator') or '').strip()
+            if operator == '=':
+                operator = '=='
             rhs = str(clause.get('rhs') or '').strip()
 
             if operator:
@@ -3281,11 +3283,21 @@ def faculty_course_co_summary(request, ta_id):
             combined_rhs = re.sub(r'\]\s+\[', '] + [', combined_rhs)
 
             if idx == 0 and token in ('BEFORE_CQI', 'BEFORE_CQI_COX'):
+                # Legacy support: some configs keep a full boolean expression in rhs
+                # and use '=' as a connector. In that case evaluate rhs directly.
+                if operator in ('', '==') and re.search(r'(<=|>=|==|!=|=|<|>)', rhs):
+                    parts.append(f'({rhs})')
+                    continue
                 # First clause legacy behaviour: if rhs starts with a comparator, wrap token+rhs
                 is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', combined_rhs))
-                parts.append(f'([{token}] {combined_rhs})' if is_comparator_only else f'({combined_rhs})')
+                if is_comparator_only:
+                    parts.append(f'([{token}] {combined_rhs})')
+                else:
+                    # Backward-compat for malformed saved clauses with missing operator.
+                    parts.append(f'([{token}] < {combined_rhs})')
             else:
-                parts.append(f'([{token}] {combined_rhs})')
+                is_comparator_only = bool(re.match(r'^(<=|>=|==|!=|=|<|>)', combined_rhs))
+                parts.append(f'([{token}] {combined_rhs})' if is_comparator_only else f'([{token}] < {combined_rhs})')
         return ' && '.join(p for p in parts if p)
 
     def _resolve_cqi_if_expr(cond: dict) -> str:
@@ -3427,6 +3439,8 @@ def faculty_course_co_summary(request, ta_id):
         expr_n = expr_n.replace('||', ' or ')
         expr_n = re.sub(r'\bAND\b', 'and', expr_n, flags=re.IGNORECASE)
         expr_n = re.sub(r'\bOR\b', 'or', expr_n, flags=re.IGNORECASE)
+        # Accept single '=' from stored configs as equality.
+        expr_n = re.sub(r'(?<![<>!=])=(?!=)', '==', expr_n)
         try:
             tree = ast.parse(expr_n, mode='eval')
         except Exception:
@@ -3915,6 +3929,8 @@ def faculty_course_co_summary(request, ta_id):
             'weighted_marks': {},
             'co_totals': [0.0] * co_count,
             'final_mark': 0.0,
+            'cqi_announce_target': False,
+            'cqi_announce_target_cos': [],
         }
 
         student_marks = mark_lookup.get(sid, {})
@@ -4438,7 +4454,7 @@ def faculty_course_co_summary(request, ta_id):
                     matched_condition_title = ''
                     # Condition ladder: first match wins.
                     if isinstance(conds, list) and conds:
-                        for cond in conds:
+                        for cond_idx, cond in enumerate(conds, start=1):
                             if not isinstance(cond, dict):
                                 continue
                             if_expr = _resolve_cqi_if_expr(cond)
@@ -4448,6 +4464,8 @@ def faculty_course_co_summary(request, ta_id):
                                     matched_condition_title = str(cond.get('title') or cond.get('name') or '').strip()
                                 except Exception:
                                     matched_condition_title = ''
+                                if not matched_condition_title:
+                                    matched_condition_title = f'CQI Condition {cond_idx}'
                                 if then_expr:
                                     mapped = _safe_eval_cqi_num(then_expr, vars_map)
                                 break
@@ -4460,6 +4478,13 @@ def faculty_course_co_summary(request, ta_id):
                             if matched_condition_title not in titles:
                                 titles.append(matched_condition_title)
                             student_entry['cqi_satisfied_conditions'] = titles
+                            student_entry['cqi_announce_target'] = True
+                            target_cos = student_entry.get('cqi_announce_target_cos')
+                            if not isinstance(target_cos, list):
+                                target_cos = []
+                            if co_n not in target_cos:
+                                target_cos.append(co_n)
+                            student_entry['cqi_announce_target_cos'] = target_cos
                         except Exception:
                             pass
 
@@ -4921,128 +4946,213 @@ def faculty_course_cqi_announce(request, ta_id: int):
 
     logger = logging.getLogger('academic_v2.notifications')
 
-    # Access check
-    _ta_qs = TeachingAssignment.objects.select_related('curriculum_row', 'elective_subject', 'section', 'staff')
-    if _has_admin_bypass_access(request.user):
-        ta = get_object_or_404(_ta_qs, id=ta_id, is_active=True)
-    else:
-        ta = get_object_or_404(_ta_qs, id=ta_id, staff__user=request.user, is_active=True)
-
-    cfg, _ = AcV2AcademicNotificationSetting.objects.get_or_create(key='DEFAULT')
-    if not bool(getattr(cfg, 'cqi_announce_enabled', False)):
-        return Response({'detail': 'CQI announce is disabled.'}, status=403)
-
-    # Reuse the authoritative CQI condition evaluation from the CO summary endpoint.
-    summary_res = faculty_course_co_summary(request, ta_id)
-    summary = getattr(summary_res, 'data', None) if summary_res is not None else None
-    if not isinstance(summary, dict):
-        return Response({'detail': 'Failed to compute CQI summary.'}, status=500)
-
-    students = summary.get('students') if isinstance(summary.get('students'), list) else []
-    if not students:
-        return Response({'status': 'ok', 'sent': 0})
-
-    # Build student_id -> condition titles from summary
-    cond_titles_by_sid: dict[str, list[str]] = {}
-    for row in students:
-        if not isinstance(row, dict):
-            continue
-        sid = str(row.get('student_id') or '').strip()
-        if not sid:
-            continue
-        titles = row.get('cqi_satisfied_conditions')
-        if isinstance(titles, list):
-            clean = []
-            seen = set()
-            for t in titles:
-                s = str(t or '').strip()
-                if not s or s in seen:
-                    continue
-                seen.add(s)
-                clean.append(s)
-            if clean:
-                cond_titles_by_sid[sid] = clean
-
-    if not cond_titles_by_sid:
-        return Response({'status': 'ok', 'sent': 0})
-
-    # Course/faculty context
-    course_code = str(summary.get('course_code') or '')
-    course_name = str(summary.get('course_name') or '')
     try:
-        faculty_name = str(request.user)
-    except Exception:
-        faculty_name = ''
+        # Access check
+        _ta_qs = TeachingAssignment.objects.select_related('curriculum_row', 'elective_subject', 'section', 'staff')
+        if _has_admin_bypass_access(request.user):
+            ta = get_object_or_404(_ta_qs, id=ta_id, is_active=True)
+        else:
+            ta = get_object_or_404(_ta_qs, id=ta_id, staff__user=request.user, is_active=True)
 
-    # Student roster + mobiles
-    sec = ta.section
-    assignments = (
-        StudentSectionAssignment.objects
-        .filter(section=sec, end_date__isnull=True)
-        .select_related('student__user')
-        .order_by('student__reg_no')
-    )
-    roster_by_sid = {str(sa.student_id): sa.student for sa in assignments if getattr(sa, 'student_id', None)}
+        cfg, _ = AcV2AcademicNotificationSetting.objects.get_or_create(key='DEFAULT')
+        if not bool(getattr(cfg, 'cqi_announce_enabled', False)):
+            return Response({'detail': 'CQI announce is disabled.'}, status=403)
 
-    tpl = str(getattr(cfg, 'cqi_announce_template', '') or '')
-    if not tpl.strip():
-        return Response({'detail': 'CQI announce template is empty.'}, status=400)
+        # Reuse the authoritative CQI condition evaluation from the CO summary logic.
+        # Bypass the GET-only DRF wrapper so POST announce requests can still
+        # access the same evaluated CQI rows.
+        django_request = request._request if hasattr(request, '_request') else request
+        summary_func = getattr(faculty_course_co_summary, '__wrapped__', faculty_course_co_summary)
+        summary_res = summary_func(django_request, ta_id)
+        if isinstance(summary_res, Response):
+            summary = summary_res.data if hasattr(summary_res, 'data') else {}
+        else:
+            summary = {}
+        
+        if not isinstance(summary, dict):
+            logger.error(f'Invalid summary response: {type(summary)}')
+            return Response({'detail': 'Failed to compute CQI summary.'}, status=500)
 
-    sent = 0
-    for row in students:
-        if not isinstance(row, dict):
-            continue
-        sid = str(row.get('student_id') or '').strip()
-        if not sid or sid not in cond_titles_by_sid:
-            continue
-        sp = roster_by_sid.get(sid)
-        if not sp:
-            continue
-        mobile = _resolve_mobile_for_student_profile(sp)
-        if not mobile:
-            continue
-
-        co_totals = row.get('co_totals') if isinstance(row.get('co_totals'), list) else []
-        co_att = []
-        for i, v in enumerate(co_totals):
+        # Course/faculty context
+        course_code = str(summary.get('course_code') or '')
+        course_name = str(summary.get('course_name') or '')
+        if not course_code or not course_name:
             try:
-                num = float(v)
+                cr = getattr(ta, 'curriculum_row', None)
+                es = getattr(ta, 'elective_subject', None)
+                if not course_code:
+                    course_code = str(getattr(cr, 'course_code', None) or getattr(es, 'course_code', None) or '')
+                if not course_name:
+                    course_name = str(getattr(cr, 'course_name', None) or getattr(es, 'course_name', None) or '')
             except Exception:
-                num = 0.0
-            co_att.append(f"CO{i+1}:{round(num, 2)}")
-        co_attainments = ' '.join(co_att).strip()
-        satisfied_conditions = ', '.join(cond_titles_by_sid.get(sid, []))
+                pass
+        course_code = course_code or '-'
+        course_name = course_name or '-'
 
-        reg_no = str(getattr(sp, 'reg_no', '') or '')
+        announce_co_numbers: list[int] = []
         try:
-            student_name = str(sp.user) if getattr(sp, 'user', None) else reg_no
+            raw_cos = ((summary.get('cqi_config') or {}) if isinstance(summary.get('cqi_config'), dict) else {}).get('cos', [])
+            if isinstance(raw_cos, list):
+                announce_co_numbers = sorted({int(x) for x in raw_cos if str(x).strip().isdigit() and int(x) > 0})
         except Exception:
-            student_name = reg_no
-
-        msg = _render_notification_template(
-            tpl,
-            {
-                'course_code': course_code,
-                'course_name': course_name,
-                'faculty_name': faculty_name,
-                'student_name': student_name,
-                'register_number': reg_no,
-                'co_attainments': co_attainments,
-                'satisfied_conditions': satisfied_conditions,
-            },
-        )
-
+            announce_co_numbers = []
         try:
-            result = send_whatsapp(mobile, msg)
-            if bool(getattr(result, 'ok', False)):
-                sent += 1
-            else:
-                logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {getattr(result, "message", "unknown error")}')
-        except Exception as e:
-            logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {e}')
-            continue
+            faculty_name = str(request.user)
+        except Exception:
+            faculty_name = ''
 
-    return Response({'status': 'ok', 'sent': sent})
+        # Student roster + mobiles
+        sec = ta.section
+        assignments = (
+            StudentSectionAssignment.objects
+            .filter(section=sec, end_date__isnull=True)
+            .select_related('student__user')
+            .order_by('student__reg_no')
+        )
+        roster_by_sid = {str(sa.student_id): sa.student for sa in assignments if getattr(sa, 'student_id', None)}
+
+        students = summary.get('students') if isinstance(summary.get('students'), list) else []
+
+        # Build student_id -> condition titles from summary.
+        # For announcement we target every student that appears in the CQI table;
+        # if the summary comes back empty, fall back to the active roster so the
+        # announcement still reaches the students visible in the CQI entry page.
+        cond_titles_by_sid: dict[str, list[str]] = {}
+        target_sids: set[str] = set()
+        for row in students:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get('student_id') or '').strip()
+            if not sid:
+                continue
+            target_sids.add(sid)
+            titles = row.get('cqi_satisfied_conditions')
+            if isinstance(titles, list):
+                clean = []
+                seen = set()
+                for t in titles:
+                    s = str(t or '').strip()
+                    if not s or s in seen:
+                        continue
+                    seen.add(s)
+                    clean.append(s)
+                if clean:
+                    cond_titles_by_sid[sid] = clean
+
+        if not target_sids:
+            target_sids = set(roster_by_sid.keys())
+
+        matched_sids = set(target_sids)
+        matched_count = len(matched_sids)
+        if not matched_sids:
+            return Response({'status': 'ok', 'sent': 0, 'matched': 0})
+
+        tpl = str(getattr(cfg, 'cqi_announce_template', '') or '')
+        if not tpl.strip():
+            return Response({'detail': 'CQI announce template is empty.'}, status=400)
+
+        sent = 0
+        rows_to_send = students if students else [
+            {
+                'student_id': sid,
+                'co_totals': [],
+                'cqi_satisfied_conditions': [],
+            }
+            for sid in matched_sids
+        ]
+        preview_rows = []
+        for row in rows_to_send:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get('student_id') or '').strip()
+            if not sid or sid not in matched_sids:
+                continue
+            sp = roster_by_sid.get(sid)
+            if not sp:
+                continue
+            mobile = _resolve_mobile_for_student_profile(sp)
+            if not mobile:
+                continue
+
+            co_totals = row.get('co_totals') if isinstance(row.get('co_totals'), list) else []
+            # Prefer per-student announce target COs (those that matched CQI conditions)
+            per_row_cos = row.get('cqi_announce_target_cos') if isinstance(row.get('cqi_announce_target_cos'), list) else []
+            if per_row_cos:
+                co_list_for_msg = sorted({int(x) for x in per_row_cos if isinstance(x, int) or (isinstance(x, str) and str(x).strip().isdigit())})
+            else:
+                if announce_co_numbers:
+                    co_list_for_msg = list(announce_co_numbers)
+                else:
+                    co_list_for_msg = [i + 1 for i in range(len(co_totals)) if i >= 0]
+
+            co_att = []
+            for co_num in co_list_for_msg:
+                value = None
+                try:
+                    idx = int(co_num) - 1
+                    if 0 <= idx < len(co_totals):
+                        value = co_totals[idx]
+                except Exception:
+                    value = None
+                try:
+                    num = float(value) if value is not None else None
+                except Exception:
+                    num = None
+                if num is None:
+                    co_att.append(f'CO{co_num}')
+                else:
+                    co_att.append(f'CO{co_num}: {round(num, 2)}')
+            co_attainments = ', '.join(co_att).strip()
+            satisfied_conditions = ', '.join(cond_titles_by_sid.get(sid, []))
+
+            reg_no = str(getattr(sp, 'reg_no', '') or '')
+            try:
+                student_name = str(sp.user) if getattr(sp, 'user', None) else reg_no
+            except Exception:
+                student_name = reg_no
+
+            msg = _render_notification_template(
+                tpl,
+                {
+                    'course_code': course_code,
+                    'course_name': course_name,
+                    'faculty_name': faculty_name,
+                    'student_name': student_name,
+                    'register_number': reg_no,
+                    'co_attainments': co_attainments,
+                    'conditions': satisfied_conditions,
+                    'satisfied_conditions': satisfied_conditions,
+                },
+            )
+
+            try:
+                result = send_whatsapp(mobile, msg)
+                if bool(getattr(result, 'ok', False)):
+                    sent += 1
+                else:
+                    logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {getattr(result, "message", "unknown error")}')
+            except Exception as e:
+                logger.error(f'Failed to send CQI announce to {reg_no} ({mobile}): {e}')
+                # continue sending to other students
+
+            # Collect a small preview for debugging/verification (non-sensitive fields)
+            try:
+                preview_rows.append({
+                    'student_id': sid,
+                    'reg_no': reg_no,
+                    'co_totals_len': len(co_totals) if isinstance(co_totals, list) else 0,
+                    'co_list_for_msg': co_list_for_msg if isinstance(co_list_for_msg, list) else [],
+                    'co_attainments_preview': co_attainments,
+                    'satisfied_conditions': satisfied_conditions,
+                })
+            except Exception:
+                pass
+
+        return Response({'status': 'ok', 'sent': sent, 'matched': matched_count, 'preview': preview_rows[:20]})
+    
+    except Exception as e:
+        logger.exception('CQI announce endpoint error')
+        return Response({'detail': f'Announcement failed: {str(e)}'}, status=500)
 
 
 # ============================================================================

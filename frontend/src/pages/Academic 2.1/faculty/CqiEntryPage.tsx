@@ -12,6 +12,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Save, Send, CheckCircle, AlertTriangle, Info } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
+import { fetchTeachingAssignmentEnabledAssessmentsInfo, requestTeachingAssignmentEnabledAssessmentsEdit } from '../../../services/obe';
 
 // token is now any string (not restricted to 3 values) to support DB-backed token registry
 type CqiIfClauseToken = string;
@@ -253,9 +254,9 @@ function resolveTokenValue(key: string, ctx: Record<string, number>, coNum?: num
     return Number.isFinite(v) ? v : 0;
   }
 
-  // Exam-scoped shortcuts: SSA_1-TOTAL / SSA_1-OBT should bind to CURRENT CO
+  // Exam-scoped shortcuts: SSA_1-TOTAL / SSA_1-OBT / SSA_1-WEIGHT bind to CURRENT CO
   // Also allow DIFF as legacy alias for obtained.
-  m = k.match(/^([A-Z0-9_]+)-(TOTAL|OBT|DIFF)$/);
+  m = k.match(/^([A-Z0-9_]+)-(TOTAL|OBT|DIFF|WEIGHT)$/);
   if (m) {
     const suffix = m[2] === 'DIFF' ? 'OBT' : m[2];
     const mapped1 = `${m[1]}-CO${coNum}-${suffix}`;
@@ -397,6 +398,7 @@ function buildContext(
     // Shortcuts bind to the CURRENT CO column
     ctx[`${shortCode}-TOTAL`] = round2(Number(ctx[`${shortCode}-CO${coNum}-TOTAL`] ?? 0) || 0);
     ctx[`${shortCode}-OBT`] = round2(Number(ctx[`${shortCode}-CO${coNum}-OBT`] ?? 0) || 0);
+    ctx[`${shortCode}-WEIGHT`] = round2(Number(ctx[`${shortCode}-CO${coNum}-WEIGHT`] ?? 0) || 0);
     // Legacy alias
     ctx[`${shortCode}-DIFF`] = ctx[`${shortCode}-OBT`];
     // Plain shortcode alias: [SSA1] = raw obtained marks for current CO (convenient in derived var formulas)
@@ -405,6 +407,8 @@ function buildContext(
     // COx placeholder tokens (explicitly requested)
     ctx[`${shortCode}-COX-OBT`] = ctx[`${shortCode}-OBT`];
     ctx[`COX-${shortCode}-OBT`] = ctx[`${shortCode}-OBT`];
+    ctx[`${shortCode}-COX-WEIGHT`] = ctx[`${shortCode}-WEIGHT`];
+    ctx[`COX-${shortCode}-WEIGHT`] = ctx[`${shortCode}-WEIGHT`];
     // Legacy placeholders
     ctx[`${shortCode}-COX-DIFF`] = ctx[`${shortCode}-OBT`];
     ctx[`COX-${shortCode}-DIFF`] = ctx[`${shortCode}-OBT`];
@@ -561,7 +565,7 @@ function parseConditionClauses(raw: string): CqiIfClause[] {
     const token = String(match[1] || '').toUpperCase();
     const rest = String(match[2] || '').trim().replace(/\)+$/g, '').trim();
     // Extract leading operator into separate field for new format
-    const opMatch = rest.match(/^(<=|>=|==|!=|<|>)\s*(.*)/);
+    const opMatch = rest.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
     if (opMatch) {
       clauses.push({ token, operator: opMatch[1], rhs: opMatch[2].trim() });
     } else {
@@ -585,12 +589,24 @@ function hasConditionMatcher(cond: CqiAdminCondition | null | undefined): boolea
 
 function buildConditionExpressionFromClauses(clauses: CqiIfClause[]): string {
   return (Array.isArray(clauses) ? clauses : [])
-    .map((clause) => {
+    .map((clause, idx) => {
       const rhs = String(clause?.rhs || '').trim();
       if (!clause?.token || !rhs) return '';
+      const token = String(clause.token || '').trim().toUpperCase();
+      const opRaw = String(clause.operator || '').trim();
+      const op = opRaw === '=' ? '==' : opRaw;
       // Use explicit operator field when present
-      if (clause.operator) {
-        return `([${clause.token}] ${clause.operator} ${rhs})`;
+      if (op) {
+        // Legacy support: first BEFORE_CQI clause may hold a full boolean RHS expression.
+        if (idx === 0 && (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') && (op === '==' || op === '=') && /(<=|>=|==|!=|=|<|>)/.test(rhs)) {
+          return `(${rhs})`;
+        }
+        return `([${clause.token}] ${op} ${rhs})`;
+      }
+      // Backward-compat for malformed saved clauses: missing operator means
+      // threshold comparison for this token.
+      if (!/^(<=|>=|==|!=|=|<|>)/.test(rhs)) {
+        return `([${clause.token}] < ${rhs})`;
       }
       // Legacy: rhs already contains the operator (e.g. '< 58')
       const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
@@ -681,7 +697,7 @@ function evaluateCqiImpact(
     return { addRaw: 0, notAttainedBefore: false, notAttainedAfter: false };
   }
 
-  const outcomeExpr = String(matchedBefore.then || '').trim() || String(cfg.else_formula || '').trim();
+  const outcomeExpr = String(matchedBefore.then || '').trim() || String(cfg.else_formula || '').trim() || '[CQI]';
   if (!outcomeExpr) {
     return { addRaw: 0, notAttainedBefore: true, notAttainedAfter: true };
   }
@@ -703,20 +719,27 @@ export default function CqiEntryPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
   const [notifFlags, setNotifFlags] = useState<{ student_publish_enabled: boolean; cqi_announce_enabled: boolean } | null>(null);
+  const [publishControlInfo, setPublishControlInfo] = useState<any | null>(null);
+  const [requestEditBusy, setRequestEditBusy] = useState(false);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: number | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [entries, setEntries] = useState<CqiEntries>({});
   const [dirty, setDirty] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [announcementNotif, setAnnouncementNotif] = useState<{ studentCount: number; timestamp: number } | null>(null);
+  const announcementTimerRef = useRef<any>(null);
+  const [announcementTimeLeft, setAnnouncementTimeLeft] = useState(0);
   const saveTimer = useRef<number | null>(null);
 
   const isPublished = Boolean(publishedLog?.published_at);
   const tableBlocked = isPublished || publishing;
   const cqiConfig = coSummary?.cqi_config ?? null;
-  // A config is active if it has at least one condition with a THEN expression/task, or an ELSE expression/task.
+  // A config is active if it has at least one condition matcher or an ELSE expression/task.
+  // Some existing DB rows have matcher clauses but empty THEN; in that case we still
+  // allow CQI entry and treat mapped value as [CQI].
   const hasCqiConfig = Boolean(
     cqiConfig && (
-      (cqiConfig.conditions || []).some((c) => hasConditionMatcher(c) && String(c.then || '').trim())
+      (cqiConfig.conditions || []).some((c) => hasConditionMatcher(c))
       || Boolean(String(cqiConfig.else_formula || '').trim())
     )
   );
@@ -814,6 +837,13 @@ export default function CqiEntryPage() {
       if (pubJson?.published) { setEntries((pubJson.published.entries as any) || {}); setDirty(false); }
       else if (draftJson?.draft?.entries) { setEntries(draftJson.draft.entries); setDirty(false); }
       else { setEntries({}); setDirty(false); }
+      // Fetch publish control / enabled assessments meta for this teaching assignment
+      try {
+        const info = await fetchTeachingAssignmentEnabledAssessmentsInfo(Number(courseId));
+        setPublishControlInfo(info || null);
+      } catch (e) {
+        setPublishControlInfo(null);
+      }
     } catch (e) { console.error(e); setMessage({ type: 'error', text: 'Failed to load CQI page' }); }
     finally { setLoading(false); }
   };
@@ -858,21 +888,60 @@ export default function CqiEntryPage() {
     try {
       setAnnouncing(true);
       setMessage(null);
+      
       const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-announce/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as any)?.detail || 'Announce failed');
+      
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        console.error('Failed to parse response:', parseErr);
+        data = {};
       }
-      const data = await res.json().catch(() => ({}));
-      const sent = Number((data as any)?.sent ?? 0);
-      setMessage({ type: 'success', text: sent > 0 ? `Announced to ${sent} students` : 'No students matched any condition' });
+      
+      if (!res.ok) {
+        const errorMsg = data?.detail || data?.error || `HTTP ${res.status}`;
+        throw new Error(String(errorMsg));
+      }
+      
+      const sent = Number(data?.sent ?? 0);
+      const matched = Number(data?.matched ?? 0);
+      const successMsg = sent > 0
+        ? `Announced to ${sent} student${sent !== 1 ? 's' : ''}`
+        : matched > 0
+        ? `Found ${matched} student${matched !== 1 ? 's' : ''} in CQI table, but no notifications were sent`
+        : 'No CQI students found';
+      setMessage({ type: sent > 0 || matched > 0 ? 'success' : 'error', text: successMsg });
+      
+      // Show floating announcement notification only if students were reached
+      if (sent > 0) {
+        setAnnouncementNotif({ studentCount: sent, timestamp: Date.now() });
+        setAnnouncementTimeLeft(6000); // 6 seconds
+        
+        // Clear any existing timer
+        if (announcementTimerRef.current) clearInterval(announcementTimerRef.current);
+        
+        // Start countdown timer
+        announcementTimerRef.current = setInterval(() => {
+          setAnnouncementTimeLeft((prev) => {
+            const next = prev - 100;
+            if (next <= 0) {
+              if (announcementTimerRef.current) clearInterval(announcementTimerRef.current);
+              setAnnouncementNotif(null);
+              return 0;
+            }
+            return next;
+          });
+        }, 100);
+      }
     } catch (e: any) {
-      console.error(e);
-      setMessage({ type: 'error', text: e?.message || 'Failed to announce' });
+      const errorMsg = e?.message || String(e) || 'Failed to announce';
+      console.error('Announce error:', errorMsg);
+      setMessage({ type: 'error', text: errorMsg });
     } finally {
       setAnnouncing(false);
     }
@@ -1015,6 +1084,34 @@ export default function CqiEntryPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-[1500px] mx-auto space-y-4">
+      {/* Floating Announcement Notification */}
+      {announcementNotif && (
+        <div className="fixed top-4 left-4 right-4 z-50 bg-green-50 border-l-4 border-green-500 rounded-lg shadow-lg p-4 md:left-auto md:right-4 md:w-96">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex-1">
+              <div className="font-semibold text-green-900">CQI Announcement Sent</div>
+              <div className="text-sm text-green-800 mt-1">Notification sent to {announcementNotif.studentCount} student{announcementNotif.studentCount !== 1 ? 's' : ''} via WhatsApp</div>
+            </div>
+            <button
+              onClick={() => {
+                if (announcementTimerRef.current) clearInterval(announcementTimerRef.current);
+                setAnnouncementNotif(null);
+              }}
+              className="text-green-500 hover:text-green-700 font-bold text-lg leading-none"
+            >
+              ×
+            </button>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-3 h-1 bg-green-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-green-500 transition-all linear"
+              style={{ width: `${Math.max(0, (announcementTimeLeft / 6000) * 100)}%`, transitionDuration: '100ms' }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-4">
@@ -1037,6 +1134,11 @@ export default function CqiEntryPage() {
               Draft: {draftLog?.updated_at ? new Date(draftLog.updated_at).toLocaleString() : 'never'}
               {' • '}Published: {publishedLog?.published_at ? new Date(publishedLog.published_at).toLocaleString() : 'never'}
             </p>
+            {publishControlInfo?.meta && (
+              <p className="text-xs text-gray-400 mt-1">
+                Publish window: {String(publishControlInfo.meta.window_state || 'UNKNOWN')} {publishControlInfo.meta.due_at ? `• Due: ${new Date(publishControlInfo.meta.due_at).toLocaleString()}` : ''}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1054,16 +1156,48 @@ export default function CqiEntryPage() {
             className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${tableBlocked || saving ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}>
             <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Sync Draft'}
           </button>
-          <button onClick={publish} disabled={tableBlocked || publishing}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${tableBlocked || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
-            <Send className="w-4 h-4" /> Publish
-          </button>
+          {!isPublished ? (
+            <button onClick={publish} disabled={tableBlocked || publishing}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${tableBlocked || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+              <Send className="w-4 h-4" /> Publish
+            </button>
+          ) : (
+            <button
+              onClick={async () => {
+                if (!courseId) return;
+                // Guard: request-edit is supported only for SPECIAL_GLOBAL mode
+                const mode = publishControlInfo?.meta?.mode;
+                if (String(mode || '').toUpperCase() !== 'SPECIAL_GLOBAL') {
+                  setMessage({ type: 'error', text: 'Edit approval requests are only supported for SPECIAL courses.' });
+                  return;
+                }
+                try {
+                  setRequestEditBusy(true);
+                  setMessage(null);
+                  const res = await requestTeachingAssignmentEnabledAssessmentsEdit(Number(courseId));
+                  // update meta if returned
+                  if (res && res.meta) setPublishControlInfo((p: any) => ({ ...(p || {}), meta: res.meta }));
+                  setMessage({ type: 'success', text: 'Request edit approval sent' });
+                } catch (err: any) {
+                  console.error(err);
+                  setMessage({ type: 'error', text: err?.message || 'Failed to request edit approval' });
+                } finally { setRequestEditBusy(false); }
+              }}
+              disabled={requestEditBusy}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${requestEditBusy ? 'bg-gray-300 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-700'}`}>
+              <Send className="w-4 h-4" /> {requestEditBusy ? 'Requesting…' : 'Request Edit'}
+            </button>
+          )}
 
-          {Boolean(notifFlags?.cqi_announce_enabled) && Boolean(isPublished) && (
+          {Boolean(notifFlags?.cqi_announce_enabled) && (
             <button
               onClick={announce}
               disabled={announcing || publishing}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${announcing || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${
+                announcing || publishing
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-700'
+              }`}
               title="Send CQI announcement to students who match any condition"
             >
               <Send className="w-4 h-4" /> {announcing ? 'Announcing…' : 'Announce'}
@@ -1331,7 +1465,6 @@ export default function CqiEntryPage() {
                         <td
                           key={c.coNum}
                           className="px-3 py-2 text-center"
-                          style={matchedColor ? { backgroundColor: matchedColor } : undefined}
                         >
                           <div
                             className={`rounded-2xl border px-3 py-3 shadow-sm ${cellTone}`}
@@ -1375,9 +1508,9 @@ export default function CqiEntryPage() {
                                 ) : (
                                   <div className="text-[11px] text-gray-400">—</div>
                                 )}
-                                {debugBlock}
                               </div>
                             )}
+                            {debugBlock}
                           </div>
                         </td>
                       );

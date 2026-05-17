@@ -8,6 +8,35 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Bell, Save, Settings, ShieldCheck, Tag } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
+// ─── Android-style Toggle Switch Component ──────────────────────────────────
+function AndroidSwitch({
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => !disabled && onChange(!checked)}
+      disabled={disabled}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-300 ${
+        checked ? 'bg-blue-500' : 'bg-gray-300'
+      } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+      aria-pressed={checked}
+    >
+      <span
+        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
+          checked ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
 // ─── Pass Mark Section ───────────────────────────────────────────────────────
 
 interface PassMarkSetting {
@@ -201,6 +230,7 @@ function AcademicNotificationsSection() {
 
   const tokensCqi: TokenDef[] = useMemo(() => ([
     { key: '{co_attainments}', label: 'co_attainments' },
+    { key: '{conditions}', label: 'conditions' },
     { key: '{satisfied_conditions}', label: 'satisfied_conditions' },
   ]), []);
 
@@ -291,25 +321,24 @@ function AcademicNotificationsSection() {
             <div className="text-sm font-semibold text-gray-900">Student Academic Notifications</div>
             <div className="text-xs text-gray-500 mt-0.5">Send WhatsApp messages when faculty publishes marks for exams inside a course.</div>
           </div>
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={studentEnabled} onChange={e => setStudentEnabled(e.target.checked)} />
-            Enable
-          </label>
+          <div className="flex items-center gap-2">
+            <AndroidSwitch checked={studentEnabled} onChange={setStudentEnabled} />
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input type="checkbox" disabled={!studentEnabled} checked={firstEnabled} onChange={e => setFirstEnabled(e.target.checked)} />
-            First time published
-          </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input type="checkbox" disabled={!studentEnabled} checked={editedEnabled} onChange={e => setEditedEnabled(e.target.checked)} />
-            Edited rows only
-          </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input type="checkbox" disabled={!studentEnabled} checked={everyEnabled} onChange={e => setEveryEnabled(e.target.checked)} />
-            Every publish click
-          </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm text-gray-700">First time published</span>
+            <AndroidSwitch disabled={!studentEnabled} checked={firstEnabled} onChange={setFirstEnabled} />
+          </div>
+          <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm text-gray-700">Edited rows only</span>
+            <AndroidSwitch disabled={!studentEnabled} checked={editedEnabled} onChange={setEditedEnabled} />
+          </div>
+          <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm text-gray-700">Every publish click</span>
+            <AndroidSwitch disabled={!studentEnabled} checked={everyEnabled} onChange={setEveryEnabled} />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4">
@@ -370,10 +399,9 @@ function AcademicNotificationsSection() {
             <div className="text-sm font-semibold text-gray-900">CQI Announcement to Students</div>
             <div className="text-xs text-gray-500 mt-0.5">If enabled, faculty can announce CQI from the CQI Entry page header.</div>
           </div>
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={cqiAnnounceEnabled} onChange={e => setCqiAnnounceEnabled(e.target.checked)} />
-            Enable
-          </label>
+          <div className="flex items-center gap-2">
+            <AndroidSwitch checked={cqiAnnounceEnabled} onChange={setCqiAnnounceEnabled} />
+          </div>
         </div>
 
         <div>

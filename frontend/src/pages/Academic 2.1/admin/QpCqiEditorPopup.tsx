@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { Edit3, Plus, Save, X } from 'lucide-react';
+import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
 
 interface QuestionDef {
   title: string;
@@ -707,6 +707,24 @@ export default function QpCqiEditorPopup(props: Props) {
 
                       return (
                         <div key={idx} className="border rounded-lg p-3 bg-gray-50">
+                          {props.isEditing && (
+                            <div className="flex justify-end mb-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  props.updateCqi((prev) => {
+                                    const next = [...(prev.conditions || [])];
+                                    next.splice(idx, 1);
+                                    return { ...prev, conditions: next };
+                                  });
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 text-xs"
+                                title="Delete this condition"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete Condition
+                              </button>
+                            </div>
+                          )}
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
                             {/* TITLE */}
                             <div className="md:col-span-3">
@@ -829,15 +847,17 @@ export default function QpCqiEditorPopup(props: Props) {
                                       {/* Operator selector */}
                                       <select
                                         disabled={!props.isEditing}
-                                        value={cl.operator || '<'}
+                                        value={(String(cl.operator || '<').trim() === '=') ? '==' : String(cl.operator || '<').trim()}
                                         onChange={(e) => {
-                                          const nextClauses = clauses.map((x, j) => j === ci ? { ...x, operator: e.target.value } : x);
+                                          const nextOpRaw = String(e.target.value || '<').trim();
+                                          const nextOp = nextOpRaw === '=' ? '==' : nextOpRaw;
+                                          const nextClauses = clauses.map((x, j) => j === ci ? { ...x, operator: nextOp } : x);
                                           writeClauses(nextClauses);
                                         }}
                                         className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 w-16"
                                       >
                                         {operatorOptions.map((op) => (
-                                          <option key={op.id} value={op.code} title={op.label}>{op.symbol}</option>
+                                          <option key={op.id} value={(String(op.code || '').trim() === '=') ? '==' : String(op.code || '').trim()} title={op.label}>{op.symbol}</option>
                                         ))}
                                       </select>
 
@@ -950,12 +970,6 @@ export default function QpCqiEditorPopup(props: Props) {
                                   className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
                                 />
                               </div>
-
-                              {props.isEditing && (
-                                <div className="mt-2 text-xs text-red-600 underline cursor-pointer">
-                                  Remove handled by parent (or extend here)
-                                </div>
-                              )}
                             </div>
                           </div>
                         </div>

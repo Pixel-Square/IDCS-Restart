@@ -1023,6 +1023,26 @@ export default function QpPatternEditorPage() {
     setSelectedExamRef({ exam: examCode, exam_display_name: examDisplayName, qp_type: targetQpType, id: null });
   };
 
+  const removeExamAssignmentByIndex = (globalIndex: number) => {
+    if (globalIndex < 0) return;
+    setLocalExamAssignments((prev) => {
+      if (globalIndex >= prev.length) return prev;
+      const target = prev[globalIndex];
+      const next = prev.filter((_, i) => i !== globalIndex);
+
+      const selectedKey = normalizeExamDisplayKey(String(selectedExamRef?.exam_display_name || selectedExamRef?.exam || ''));
+      const targetKey = normalizeExamDisplayKey(String(target?.exam_display_name || target?.exam || ''));
+      if (selectedKey && targetKey && selectedKey === targetKey) {
+        setSelectedPatternId(null);
+        setSelectedExamRef(null);
+        setExamEditorModalOpen(false);
+        setCqiEditorModalOpen(false);
+      }
+      return next;
+    });
+    markExamDirty();
+  };
+
   const cqiVariables = React.useMemo(() => {
     const maxCo = Number(selectedClassType?.default_co_count ?? 5) || 5;
     const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
@@ -1321,7 +1341,7 @@ export default function QpPatternEditorPage() {
         const tok = tokRaw === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : tokRaw;
         const rest = String(m[2] || '').trim();
         // Extract leading operator from rhs for backward compat
-        const opMatch = rest.match(/^(<=|>=|==|!=|<|>)\s*(.*)/);
+        const opMatch = rest.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
         if (opMatch) {
           clauses.push({ token: tok, operator: opMatch[1], rhs: opMatch[2].trim() });
         } else {
@@ -1340,12 +1360,23 @@ export default function QpPatternEditorPage() {
     const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && c.token);
     if (!list.length) return '';
     return list
-      .map((c) => {
+      .map((c, idx) => {
         const rhs = normalizeImplicitTokenSums(String(c.rhs || '').trim());
         if (!rhs) return '';
+        const token = String(c.token || '').trim().toUpperCase();
+        const opRaw = String(c.operator || '').trim();
+        const op = opRaw === '=' ? '==' : opRaw;
         // Use explicit operator field when present, otherwise fall back to reading from rhs
-        if (c.operator) {
-          return `([${c.token}] ${c.operator} ${rhs})`;
+        if (op) {
+          // Legacy support: first BEFORE_CQI clause may carry a full boolean RHS expression.
+          if (idx === 0 && (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') && (op === '==' || op === '=') && /(<=|>=|==|!=|=|<|>)/.test(rhs)) {
+            return `(${rhs})`;
+          }
+          return `([${c.token}] ${op} ${rhs})`;
+        }
+        // Backward-compat for malformed saved clauses with missing operator.
+        if (!/^(<=|>=|==|!=|=|<|>)/.test(rhs)) {
+          return `([${c.token}] < ${rhs})`;
         }
         // Legacy: rhs already contains the operator (e.g. '< 58')
         const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
@@ -2211,8 +2242,23 @@ export default function QpPatternEditorPage() {
                         />
                       </div>
                     </div>
-                    {editExamOrderMode && (
-                      <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const globalIdx = visibleExamAssignmentItems[visibleIndex]?.idx;
+                          if (globalIdx == null) return;
+                          const label = String(exam.exam_display_name || exam.exam || 'this exam');
+                          if (!window.confirm(`Delete exam assignment "${label}"?`)) return;
+                          removeExamAssignmentByIndex(globalIdx);
+                        }}
+                        className="p-1 text-red-400 hover:text-red-600 rounded"
+                        title="Delete exam assignment"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      {editExamOrderMode && (
+                        <>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -2235,8 +2281,9 @@ export default function QpPatternEditorPage() {
                         >
                           ▼
                         </button>
-                      </div>
-                    )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -3539,7 +3586,7 @@ export default function QpPatternEditorPage() {
                       ) : (
                         (visibleExamAssignmentItems || [])
                           .filter((x) => isCqiAssignment(x.exam))
-                          .map(({ exam }) => {
+                          .map(({ exam, idx }) => {
                             const title = exam.cqi?.name || exam.exam_display_name || exam.exam || 'CQI';
                             const subtitle = exam.exam_display_name || exam.exam || 'CQI';
                             const cosLabel = (exam.cqi?.cos || []).length ? (exam.cqi?.cos || []).map((c) => `CO${c}`).join(', ') : '—';
@@ -3561,7 +3608,22 @@ export default function QpPatternEditorPage() {
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="font-medium text-sm text-gray-900">{title}</div>
-                                  <span className="text-[10px] px-2 py-0.5 rounded bg-purple-100 text-purple-700">CQI</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-purple-100 text-purple-700">CQI</span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const label = String(exam.exam_display_name || exam.exam || 'this CQI');
+                                        if (!window.confirm(`Delete exam assignment "${label}"?`)) return;
+                                        removeExamAssignmentByIndex(idx);
+                                      }}
+                                      className="text-red-400 hover:text-red-600 p-1 rounded"
+                                      title="Delete CQI assignment"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 </div>
                                 <div className="text-xs text-gray-500 mt-1">{subtitle}</div>
                                 <div className="text-xs text-gray-400 mt-1">COs: {cosLabel}</div>
