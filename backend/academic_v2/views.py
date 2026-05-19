@@ -4794,10 +4794,13 @@ def faculty_course_co_summary(request, ta_id):
     ct_mm_co_weights_with_exam_map = {}  # exam -> {co_num: weight}
     ct_mm_co_weights_without_exam_map = {}  # exam -> {co_num: weight}
     ct_mm_exam_weight_map = {}  # exam -> exam_weight
+    ct_mm_exam_weight_per_co_map = {}  # exam -> bool
+
     if effective_ea_configs:
         for i, ea_conf in enumerate(effective_ea_configs):
             exam_code = ea_conf.get('exam', '')
             exam_display = ea_conf.get('exam_display_name', exam_code)
+
             for key in [exam_code, exam_display]:
                 k = norm_exam_key(key)
                 if not k:
@@ -4805,37 +4808,56 @@ def faculty_course_co_summary(request, ta_id):
                 if k not in ct_index:
                     ct_index[k] = i
                 ct_weight_map[k] = ea_conf.get('weight', 0)
+
             co_weights = ea_conf.get('co_weights', {})
-            if co_weights:
-                w = {int(k): v for k, v in co_weights.items()}
-                for key in [exam_code, exam_display]:
-                    k = norm_exam_key(key)
-                    if k:
-                        ct_co_weights_map[k] = w
+            if isinstance(co_weights, dict) and co_weights:
+                try:
+                    w = {int(k): float(v or 0) for k, v in co_weights.items()}
+                except Exception:
+                    w = {}
+                if w:
+                    for key in [exam_code, exam_display]:
+                        k = norm_exam_key(key)
+                        if k:
+                            ct_co_weights_map[k] = w
 
             # Mark Manager conditional config (optional)
             mm_on = ea_conf.get('mm_co_weights_with_exam')
             mm_off = ea_conf.get('mm_co_weights_without_exam')
             mm_exam_weight = ea_conf.get('mm_exam_weight')
+            mm_exam_weight_per_co = ea_conf.get('mm_exam_weight_per_co')
+
             # Backward compatibility: allow nested keys
             if not mm_on and isinstance(ea_conf.get('mm_with_exam'), dict):
                 mm_on = ea_conf.get('mm_with_exam', {}).get('co_weights')
                 mm_exam_weight = ea_conf.get('mm_with_exam', {}).get('exam_weight', mm_exam_weight)
+                if mm_exam_weight_per_co is None:
+                    mm_exam_weight_per_co = ea_conf.get('mm_with_exam', {}).get('exam_weight_per_co', mm_exam_weight_per_co)
             if not mm_off and isinstance(ea_conf.get('mm_without_exam'), dict):
                 mm_off = ea_conf.get('mm_without_exam', {}).get('co_weights')
 
             if isinstance(mm_on, dict) and mm_on:
-                w_on = {int(k): v for k, v in mm_on.items()}
-                for key in [exam_code, exam_display]:
-                    k = norm_exam_key(key)
-                    if k:
-                        ct_mm_co_weights_with_exam_map[k] = w_on
+                try:
+                    w_on = {int(k): float(v or 0) for k, v in mm_on.items()}
+                except Exception:
+                    w_on = {}
+                if w_on:
+                    for key in [exam_code, exam_display]:
+                        k = norm_exam_key(key)
+                        if k:
+                            ct_mm_co_weights_with_exam_map[k] = w_on
+
             if isinstance(mm_off, dict) and mm_off:
-                w_off = {int(k): v for k, v in mm_off.items()}
-                for key in [exam_code, exam_display]:
-                    k = norm_exam_key(key)
-                    if k:
-                        ct_mm_co_weights_without_exam_map[k] = w_off
+                try:
+                    w_off = {int(k): float(v or 0) for k, v in mm_off.items()}
+                except Exception:
+                    w_off = {}
+                if w_off:
+                    for key in [exam_code, exam_display]:
+                        k = norm_exam_key(key)
+                        if k:
+                            ct_mm_co_weights_without_exam_map[k] = w_off
+
             if mm_exam_weight is not None:
                 try:
                     mm_w = float(mm_exam_weight) or 0
@@ -4845,6 +4867,16 @@ def faculty_course_co_summary(request, ta_id):
                     k = norm_exam_key(key)
                     if k:
                         ct_mm_exam_weight_map[k] = mm_w
+
+            if mm_exam_weight_per_co is not None:
+                try:
+                    mm_flag = bool(mm_exam_weight_per_co)
+                except Exception:
+                    mm_flag = False
+                for key in [exam_code, exam_display]:
+                    k = norm_exam_key(key)
+                    if k:
+                        ct_mm_exam_weight_per_co_map[k] = mm_flag
 
     # Order exams using effective config order when available
     if ct_index:
@@ -5256,6 +5288,7 @@ def faculty_course_co_summary(request, ta_id):
         co_weights = {}  # Effective per-CO weights
         cia_enabled = False  # Whether Mark Manager has Exam enabled
         cia_weight = 0  # Exam component weight (admin-defined)
+        cia_weight_per_co = False  # If true: apply exam weight to each enabled CO (no split)
         exam_max_marks = 0  # Exam component max marks (only when Mark Manager Exam is enabled)
         exam_q_index = None  # Internal: index of Exam question in question_marks (q{index})
         qp_marks = []
@@ -5349,6 +5382,7 @@ def faculty_course_co_summary(request, ta_id):
                 # CONDITION A: WITH Exam -> use admin-defined Mark Manager "with exam" weights
                 base = ct_mm_co_weights_with_exam_map.get(ea_key) or ct_co_weights_map.get(ea_key, {})
                 cia_weight = float(ct_mm_exam_weight_map.get(ea_key, 0) or 0)
+                cia_weight_per_co = bool(ct_mm_exam_weight_per_co_map.get(ea_key, False))
 
                 # Base CO weights
                 for co_num in covered_cos:
@@ -5358,7 +5392,9 @@ def faculty_course_co_summary(request, ta_id):
                 # In CO Summary tables, "Direct CO" columns should NOT include the Exam split.
                 # Exam is displayed as a separate column, and its split affects only the right-side
                 # CO totals (and DB co1..co5 persistence), not the left-table CO cells.
-                weight = sum(float(v or 0) for v in co_weights.values()) + float(cia_weight or 0)
+                co_count_local = len(covered_cos) if isinstance(covered_cos, list) else 0
+                exam_weight_total = float(cia_weight or 0) * (co_count_local if cia_weight_per_co else 1)
+                weight = sum(float(v or 0) for v in co_weights.values()) + exam_weight_total
             else:
                 # CONDITION B: WITHOUT Exam -> use admin-defined Mark Manager "without exam" weights
                 base = ct_mm_co_weights_without_exam_map.get(ea_key) or ct_co_weights_map.get(ea_key, {})
@@ -5520,6 +5556,7 @@ def faculty_course_co_summary(request, ta_id):
             'co_weights': {} if ea_kind == 'cqi' else co_weights,  # Per-CO weights (from Mark Manager or admin config)
             'cia_enabled': cia_enabled,  # Whether Mark Manager Exam checkbox is enabled
             'cia_weight': cia_weight,  # Weight for Exam component from Mark Manager
+            'cia_weight_per_co': cia_weight_per_co,
             'exam_max_marks': exam_max_marks,
             'covered_cos': covered_cos,
             'weight_per_co': weight_per_co,
@@ -5923,10 +5960,11 @@ def faculty_course_co_summary(request, ta_id):
                     ]
                     exam_max_marks_local = float(einfo.get('exam_max_marks') or 0)
                     exam_weight_local = float(einfo.get('cia_weight') or 0)
+                    exam_weight_per_co_local = bool(einfo.get('cia_weight_per_co') or False)
                     if enabled_cos and exam_max_marks_local > 0 and exam_weight_local > 0:
                         share_raw = float(exam_raw_for_split) / len(enabled_cos)
                         share_max = float(exam_max_marks_local) / len(enabled_cos)
-                        share_wt = float(exam_weight_local) / len(enabled_cos)
+                        share_wt = float(exam_weight_local) if exam_weight_per_co_local else (float(exam_weight_local) / len(enabled_cos))
                         if share_max > 0:
                             for c in enabled_cos:
                                 add_w = round((share_raw / share_max) * share_wt, 2)

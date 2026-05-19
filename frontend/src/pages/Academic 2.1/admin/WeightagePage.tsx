@@ -24,12 +24,30 @@ interface ExamAssignment {
   co_weights: Record<string, number>;
   mark_manager_enabled?: boolean;
   mm_exam_weight?: number;
+  /** If true: apply mm_exam_weight to each enabled CO (no split). Default: split equally. */
+  mm_exam_weight_per_co?: boolean;
   mm_co_weights_with_exam?: Record<string, number>;
   mm_co_weights_without_exam?: Record<string, number>;
   default_cos: number[];
   customize_questions: boolean;
   /** Average marks per item for each CO derived from MM pattern config (not persisted) */
   co_averages?: Record<string, number>;
+}
+
+function mmEnabledCoCount(ea: ExamAssignment, mode: 'with' | 'without'): number {
+  const w = mode === 'with' ? (ea.mm_co_weights_with_exam || {}) : (ea.mm_co_weights_without_exam || {});
+  const keys = Object.keys(w || {});
+  if (keys.length > 0) return keys.length;
+  return Array.isArray(ea.default_cos) ? ea.default_cos.length : 0;
+}
+
+function mmTotalWithExam(ea: ExamAssignment): number {
+  const wc = ea.mm_co_weights_with_exam || {};
+  const sumCo = Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0);
+  const examW = Number(ea.mm_exam_weight) || 0;
+  const perCo = !!ea.mm_exam_weight_per_co;
+  const coCount = mmEnabledCoCount(ea, 'with');
+  return sumCo + (perCo ? examW * coCount : examW);
 }
 
 interface ClassType {
@@ -142,6 +160,7 @@ function buildDefaultEntry(pattern: QpPattern): ExamAssignment {
     co_weights: { ...coWeights },
     mark_manager_enabled: isMm,
     mm_exam_weight: 0,
+    mm_exam_weight_per_co: false,
     mm_co_weights_with_exam: { ...coWeights },
     mm_co_weights_without_exam: { ...coWeights },
     default_cos: cos,
@@ -162,6 +181,7 @@ function hydrate(ea: ExamAssignment, pattern: QpPattern): ExamAssignment {
     exam_display_name: ea.exam_display_name || pattern.name,
     default_cos: cos.length > 0 ? cos : (ea.default_cos || []),
     mark_manager_enabled: ea.mark_manager_enabled ?? isMm,
+    mm_exam_weight_per_co: !!ea.mm_exam_weight_per_co,
     mm_co_weights_with_exam: ea.mm_co_weights_with_exam || { ...mmBase },
     mm_co_weights_without_exam: ea.mm_co_weights_without_exam || { ...mmBase },
     mm_exam_weight: Number(ea.mm_exam_weight) || 0,
@@ -243,8 +263,7 @@ export default function WeightagePage() {
       const ea = findWeightEntry(selectedCt?.exam_assignments || [], p);
       if (!ea) return sum;
       if (ea.mark_manager_enabled) {
-        const wc = ea.mm_co_weights_with_exam || {};
-        return sum + Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0) + (Number(ea.mm_exam_weight) || 0);
+        return sum + mmTotalWithExam(ea);
       }
       return sum + Object.values(ea.co_weights || {}).reduce((s, w) => s + (Number(w) || 0), 0);
     }, 0);
@@ -438,8 +457,7 @@ export default function WeightagePage() {
                                         const v = parseFloat(e.target.value) || 0;
                                         updateExam(examIdx, ex => {
                                           const wo = { ...(ex.mm_co_weights_without_exam || {}), [coKey]: v };
-                                          const wc = ex.mm_co_weights_with_exam || {};
-                                          const wTotal = Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0) + (Number(ex.mm_exam_weight) || 0);
+                                          const wTotal = mmTotalWithExam(ex);
                                           return { ...ex, mm_co_weights_without_exam: wo, weight: wTotal };
                                         });
                                       }}
@@ -462,13 +480,27 @@ export default function WeightagePage() {
                                   onChange={(e) => {
                                     const v = parseFloat(e.target.value) || 0;
                                     updateExam(examIdx, ex => {
-                                      const wc = ex.mm_co_weights_with_exam || {};
-                                      const wTotal = Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0) + v;
-                                      return { ...ex, mm_exam_weight: v, weight: wTotal };
+                                      const next = { ...ex, mm_exam_weight: v };
+                                      return { ...next, weight: mmTotalWithExam(next) };
                                     });
                                   }}
                                   className="w-14 px-1 py-0.5 border rounded text-center text-xs focus:ring-1 focus:ring-amber-400" />
                               </div>
+                              <label className="flex items-center gap-1.5 text-[11px] text-gray-600 bg-gray-100 rounded px-2 py-1">
+                                <input
+                                  type="checkbox"
+                                  checked={!!exam.mm_exam_weight_per_co}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    updateExam(examIdx, ex => {
+                                      const next = { ...ex, mm_exam_weight_per_co: checked };
+                                      return { ...next, weight: mmTotalWithExam(next) };
+                                    });
+                                  }}
+                                  className="h-3.5 w-3.5"
+                                />
+                                Same for each CO
+                              </label>
                               {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
@@ -484,8 +516,8 @@ export default function WeightagePage() {
                                         const v = parseFloat(e.target.value) || 0;
                                         updateExam(examIdx, ex => {
                                           const wc = { ...(ex.mm_co_weights_with_exam || {}), [coKey]: v };
-                                          const wTotal = Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0) + (Number(ex.mm_exam_weight) || 0);
-                                          return { ...ex, mm_co_weights_with_exam: wc, weight: wTotal };
+                                          const next = { ...ex, mm_co_weights_with_exam: wc };
+                                          return { ...next, weight: mmTotalWithExam(next) };
                                         });
                                       }}
                                       className="w-14 px-1 py-0.5 border rounded text-center text-xs focus:ring-1 focus:ring-blue-400" />
@@ -494,7 +526,7 @@ export default function WeightagePage() {
                               })}
                               <div className="flex items-center gap-0.5 bg-gray-100 rounded px-1.5 py-1 ml-1">
                                 <span className="text-[10px] text-gray-500">Σ</span>
-                                <span className="text-xs font-bold text-gray-700">{(Object.values(exam.mm_co_weights_with_exam || {}).reduce((s, w) => s + (Number(w) || 0), 0) + (Number(exam.mm_exam_weight) || 0))}</span>
+                                <span className="text-xs font-bold text-gray-700">{mmTotalWithExam(exam)}</span>
                               </div>
                             </div>
                           </div>
@@ -536,8 +568,7 @@ export default function WeightagePage() {
                 Total weight: <span className="font-bold text-gray-800">
                   {localExams.reduce((sum, e) => {
                     if (e.mark_manager_enabled) {
-                      const wc = e.mm_co_weights_with_exam || {};
-                      return sum + Object.values(wc).reduce((s, w) => s + (Number(w) || 0), 0) + (Number(e.mm_exam_weight) || 0);
+                      return sum + mmTotalWithExam(e);
                     }
                     return sum + Object.values(e.co_weights || {}).reduce((s, w) => s + (Number(w) || 0), 0);
                   }, 0)}

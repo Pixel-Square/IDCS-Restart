@@ -663,11 +663,12 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
           const p1 = crPoints[i + 1];
           const p2 = crPoints[i + 2];
           const p3 = crPoints[i + 3];
-          // Catmull-Rom control points
+          // Catmull-Rom control points (clamp y to stay within plot bounds)
+          const _clampY = (y: number) => Math.max(plotTop, Math.min(plotTop + plotH, y));
           const cp1x = p1.x + (p2.x - p0.x) / 6;
-          const cp1y = p1.y + (p2.y - p0.y) / 6;
+          const cp1y = _clampY(p1.y + (p2.y - p0.y) / 6);
           const cp2x = p2.x - (p3.x - p1.x) / 6;
-          const cp2y = p2.y - (p3.y - p1.y) / 6;
+          const cp2y = _clampY(p2.y - (p3.y - p1.y) / 6);
           (doc as any).lines([[cp1x - p1.x, cp1y - p1.y, cp2x - p1.x, cp2y - p1.y, p2.x - p1.x, p2.y - p1.y]], p1.x, p1.y, [1, 1], 'S', false);
         }
 
@@ -717,29 +718,56 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
       }).filter(({ ex }) => ex.kind !== 'cqi');
 
       if (examEntries.length > 0) {
-        doc.addPage();
-        let epY = 10;
+        /* ── Decide whether to continue on page 1 or open a new page ── */
+        // Overhead before the graph row: 5 (gap) + 4 (after separator) + 6 (title) = 15mm
+        const EXAM_OVERHEAD = 15;
+        const EXAM_MIN_CELL_H = 30; // minimum readable graph height
+        const EXAM_MAX_CELL_H = 48; // preferred graph height
+        const contentEndY = BOT_Y + chartH + 6;
+        // Use the same bottom threshold as the overflow check (PH-15) so fitCellH never exceeds it
+        const availH = (PH - 15) - contentEndY - EXAM_OVERHEAD;
+        const fitCellH = Math.min(EXAM_MAX_CELL_H, Math.floor(availH));
+        const needNewPage = fitCellH < EXAM_MIN_CELL_H;
 
-        /* Banner on new page */
-        if (b64Banner) {
-          const { w: bw2, h: bh2 } = await imgSize(b64Banner);
-          const bW2 = Math.min(UW * 0.82, (bw2 / bh2) * HEADER_H);
-          doc.addImage(b64Banner, 'PNG', ML, epY, bW2, HEADER_H);
+        let epY: number;
+        let examPageNum: number;
+        let cellH: number;
+
+        if (needNewPage) {
+          doc.addPage();
+          epY = 10;
+          examPageNum = 2;
+
+          /* Banner on new page */
+          if (b64Banner) {
+            const { w: bw2, h: bh2 } = await imgSize(b64Banner);
+            const bW2 = Math.min(UW * 0.82, (bw2 / bh2) * HEADER_H);
+            doc.addImage(b64Banner, 'PNG', ML, epY, bW2, HEADER_H);
+          }
+          if (b64Kr) {
+            const { w: kw2, h: kh2 } = await imgSize(b64Kr);
+            const kH2 = Math.min(logoH, (kh2 / kw2) * logoW);
+            doc.addImage(b64Kr, 'PNG', logosX, epY + (HEADER_H - kH2) / 2, logoW, kH2);
+          }
+          if (b64Idcs) {
+            const { w: iw2, h: ih2 } = await imgSize(b64Idcs);
+            const iH2 = Math.min(logoH, (ih2 / iw2) * logoW);
+            doc.addImage(b64Idcs, 'PNG', logosX + logoW + logoGap, epY + (HEADER_H - iH2) / 2, logoW, iH2);
+          }
+          epY += HEADER_H + 2;
+          doc.setDrawColor(30, 58, 95); doc.setLineWidth(0.6);
+          doc.line(ML, epY, PW - MR, epY);
+          epY += 4;
+          cellH = EXAM_MAX_CELL_H;
+        } else {
+          /* Continue on page 1 — add a small separator and a title */
+          epY = contentEndY + 5;
+          examPageNum = 1;
+          doc.setDrawColor(180, 190, 210); doc.setLineWidth(0.3);
+          doc.line(ML, epY, PW - MR, epY);
+          epY += 4;
+          cellH = fitCellH; // scaled to fit remaining page 1 space
         }
-        if (b64Kr) {
-          const { w: kw2, h: kh2 } = await imgSize(b64Kr);
-          const kH2 = Math.min(logoH, (kh2 / kw2) * logoW);
-          doc.addImage(b64Kr, 'PNG', logosX, epY + (HEADER_H - kH2) / 2, logoW, kH2);
-        }
-        if (b64Idcs) {
-          const { w: iw2, h: ih2 } = await imgSize(b64Idcs);
-          const iH2 = Math.min(logoH, (ih2 / iw2) * logoW);
-          doc.addImage(b64Idcs, 'PNG', logosX + logoW + logoGap, epY + (HEADER_H - iH2) / 2, logoW, iH2);
-        }
-        epY += HEADER_H + 2;
-        doc.setDrawColor(30, 58, 95); doc.setLineWidth(0.6);
-        doc.line(ML, epY, PW - MR, epY);
-        epY += 4;
 
         /* Page title */
         doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(30, 58, 95);
@@ -750,7 +778,6 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
         const COLS = 3;
         const cellGap = 4;
         const cellW = (UW - cellGap * (COLS - 1)) / COLS;
-        const cellH = 48;
 
         for (let gi = 0; gi < examEntries.length; gi++) {
           const col = gi % COLS;
@@ -821,8 +848,9 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
             doc.setDrawColor(30, 58, 95); doc.setLineWidth(0.5);
             for (let ci = 0; ci < eCurvePoints.length - 1; ci++) {
               const p0 = eCrPts[ci], p1 = eCrPts[ci + 1], p2 = eCrPts[ci + 2], p3 = eCrPts[ci + 3];
-              const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = p1.y + (p2.y - p0.y) / 6;
-              const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = p2.y - (p3.y - p1.y) / 6;
+              const _eClampY = (y: number) => Math.max(ePlotTop, Math.min(ePlotTop + ePlotH, y));
+              const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = _eClampY(p1.y + (p2.y - p0.y) / 6);
+              const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = _eClampY(p2.y - (p3.y - p1.y) / 6);
               (doc as any).lines([[cp1x - p1.x, cp1y - p1.y, cp2x - p1.x, cp2y - p1.y, p2.x - p1.x, p2.y - p1.y]], p1.x, p1.y, [1, 1], 'S', false);
             }
           }
@@ -835,14 +863,14 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
           doc.text(`n=${eAttended} · avg ${eAvg}/100`, cellX + cellW / 2, cellY + cellH - 0.5, { align: 'center' });
         }
 
-        /* Footer on new page */
+        /* Footer for individual exam graphs page */
         const fp2Y = PH - 6;
         doc.setDrawColor(180, 190, 210); doc.setLineWidth(0.3);
         doc.line(ML, fp2Y - 3, PW - MR, fp2Y - 3);
         doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(130, 140, 160);
         const now2 = new Date();
         const dateStr2 = `${now2.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${now2.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
-        doc.text(`Generated: ${dateStr2}  |  ${courseName}  |  Individual Exam Graphs  |  Page 2`, PW / 2, fp2Y, { align: 'center' });
+        doc.text(`Generated: ${dateStr2}  |  ${courseName}  |  Individual Exam Graphs  |  Page ${examPageNum}`, PW / 2, fp2Y, { align: 'center' });
       }
 
       doc.save(`Result_Analysis_${courseName}_${cycleName}.pdf`);

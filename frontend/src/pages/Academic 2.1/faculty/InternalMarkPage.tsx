@@ -59,6 +59,7 @@ interface COExam {
   co_weights: Record<string, number>;  // Per-CO weights from ClassType config
   cia_enabled?: boolean;
   cia_weight?: number;
+  cia_weight_per_co?: boolean;  // true = each covered CO gets the full cia_weight (no split)
   exam_max_marks?: number;
   covered_cos: number[];
   weight_per_co: number;
@@ -66,6 +67,7 @@ interface COExam {
   co_max_map: Record<string, number>;
   combo_questions?: Array<{ key: string; co_list: number[]; max_marks: number }>;
   status: string;
+  kind?: string;
 }
 
 interface COStudent {
@@ -228,10 +230,14 @@ export default function InternalMarkPage() {
         }
         if (ex.cia_enabled) {
           const n = allCos.length || 1;
+          const perCo = !!ex.cia_weight_per_co;
           for (const co of allCos) {
-            const wSplit = ex.cia_weight ? Math.round((ex.cia_weight / n) * 100) / 100 : 0;
+            const effectiveW = ex.cia_weight
+              ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100)
+              : 0;
             const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
-            headers.push(`${ex.short_name} Exam-CO${co} (wt:${wSplit > 0 ? wSplit : 'NOT_SET'} /${maxSplit})`);
+            const tag = perCo ? 'Exam×' : 'Exam';
+            headers.push(`${ex.short_name} ${tag}-CO${co} (wt:${effectiveW > 0 ? effectiveW : 'NOT_SET'} /${maxSplit})`);
           }
         }
       } else {
@@ -771,12 +777,18 @@ function COSummaryTab({
         ? ex.covered_cos
         : Array.from({ length: co_count }, (_, i) => i + 1);
       const n = ciaCos.length || 1;
+      const perCo = !!ex.cia_weight_per_co; // "Same for each CO" checkbox in admin
       for (const co of ciaCos) {
         const ciaNotSet = view === 'weighted' && !((ex.cia_weight || 0) > 0 && (ex.exam_max_marks || 0) > 0);
-        const wSplit = ex.cia_weight ? Math.round((ex.cia_weight / n) * 100) / 100 : 0;
+        // When perCo is true, each CO gets the full exam weight (no division)
+        const effectiveW = ex.cia_weight
+          ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100)
+          : 0;
         const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
         const sub = view === 'weighted'
-          ? (wSplit > 0 ? `E wt:${wSplit}` : 'E wt:NOT SET')
+          ? (effectiveW > 0
+              ? (perCo ? `E× wt:${effectiveW}` : `E wt:${effectiveW}`)
+              : 'E wt:NOT SET')
           : `E /${maxSplit || '?'}`;
         cols.push({ key: `${ex.id}_exam_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, isExamSplit: true, weightNotSet: ciaNotSet });
       }
