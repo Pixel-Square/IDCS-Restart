@@ -484,3 +484,237 @@ def get_approval_inbox(user, role: str) -> list:
     ).order_by('-requested_at')
     
     return list(requests)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CQI publish-control helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cqi_latest_pending_request(cqi_attained):
+    try:
+        return (
+            cqi_attained.edit_requests
+            .filter(status__in=PENDING_STATUSES)
+            .order_by('-requested_at')
+            .first()
+        )
+    except Exception:
+        return None
+
+
+def _cqi_resolve_approver(cqi_attained, role: str):
+    """Resolve approver user for a CQI context (HOD look-up by TA department)."""
+    role_u = str(role or '').strip().upper()
+    User = get_user_model()
+    qs = User.objects.filter(roles__name__iexact=role_u)
+    if role_u == 'HOD':
+        try:
+            ta = cqi_attained.teaching_assignment
+            sec = ta.section  # AcademicSection
+            dept = (
+                getattr(sec, 'managing_department', None)
+                or getattr(getattr(sec, 'batch', None), 'effective_department', None)
+                or getattr(getattr(sec, 'batch', None), 'department', None)
+            )
+            if dept is not None:
+                qs = qs.filter(staff_profile__department=dept)
+        except Exception:
+            pass
+    return qs.distinct().order_by('first_name', 'username', 'email').first()
+
+
+def _build_cqi_pending_request_payload(pending, workflow_roles, cqi_attained):
+    """Return serialisable dict describing a CQI pending request."""
+    now = timezone.now()
+    expires_remaining_seconds = None
+    try:
+        if pending.expires_at:
+            expires_remaining_seconds = max(0, int((pending.expires_at - now).total_seconds()))
+    except Exception:
+        pass
+
+    # Requester display info
+    requester = pending.requested_by
+    try:
+        req_name = requester.get_full_name() or requester.username or ''
+    except Exception:
+        req_name = str(requester)
+    try:
+        req_username = requester.username or ''
+    except Exception:
+        req_username = ''
+    try:
+        req_staff_id = requester.staff_profile.employee_id or '' if hasattr(requester, 'staff_profile') else ''
+    except Exception:
+        req_staff_id = ''
+
+    payload = {
+        'id': str(pending.id),
+        'status': pending.status,
+        'current_stage': int(getattr(pending, 'current_stage', 1) or 1),
+        'requested_at': pending.requested_at.isoformat() if pending.requested_at else None,
+        'expires_at': pending.expires_at.isoformat() if pending.expires_at else None,
+        'expires_remaining_seconds': expires_remaining_seconds,
+        'reason': pending.reason,
+        'approval_history': pending.approval_history or [],
+        'requested_by_name': req_name,
+        'requested_by_username': req_username,
+        'requested_by_staff_id': req_staff_id,
+    }
+
+    # Required role + next approver
+    required_role = None
+    try:
+        stage_index = max(0, int(getattr(pending, 'current_stage', 1) or 1) - 1)
+        if workflow_roles and stage_index < len(workflow_roles):
+            required_role = workflow_roles[stage_index]
+    except Exception:
+        pass
+    if not required_role:
+        st = str(pending.status or '').upper()
+        if st == 'HOD_PENDING':
+            required_role = 'HOD'
+        elif st == 'IQAC_PENDING':
+            required_role = 'IQAC'
+
+    next_user = _cqi_resolve_approver(cqi_attained, required_role) if required_role else None
+    payload['required_role'] = required_role
+    payload['next_approver'] = {
+        'role': required_role,
+        'user_id': str(next_user.id) if next_user else None,
+        'user_name': _user_display_name(next_user),
+    } if required_role else None
+
+    return payload
+
+
+def check_cqi_publish_control(cqi_attained) -> dict:
+    """Return publish-control info for a published CQI record.
+
+    Shape mirrors the relevant parts of check_publish_control() for exams so
+    the frontend can reuse the same modal/timer components.
+    """
+    semester_config = cqi_attained.get_semester_config()
+    workflow_roles = _normalize_workflow(
+        getattr(semester_config, 'approval_workflow', None) if semester_config else None
+    )
+
+    now = timezone.now()
+
+    publish_control_enabled = bool(getattr(semester_config, 'publish_control_enabled', False)) if semester_config else False
+
+    # Edit window: if approved window is active the faculty can freely re-publish.
+    # When publish control is disabled, CQI should remain editable even after publish.
+    edit_window_until = cqi_attained.edit_window_until
+    has_edit_window = bool(edit_window_until and edit_window_until > now)
+    is_editable = (True if not publish_control_enabled else has_edit_window)
+    is_locked = (False if not publish_control_enabled else not has_edit_window)
+
+    result = {
+        'is_editable': is_editable,
+        'is_locked': is_locked,
+        'publish_control_enabled': publish_control_enabled,
+        'due_at': None,
+        'open_from': None,
+        'is_past_due': False,
+        'has_pending_request': bool(cqi_attained.has_pending_edit_request) if publish_control_enabled else False,
+        'edit_window_until': edit_window_until.isoformat() if edit_window_until else None,
+        'approval_workflow_roles': workflow_roles,
+        'approval_workflow_assignees': [
+            {
+                'role': r,
+                'user_id': str(u.id) if u else None,
+                'user_name': _user_display_name(u),
+            }
+            for r in workflow_roles
+            for u in [_cqi_resolve_approver(cqi_attained, r)]
+        ],
+        'pending_request': None,
+    }
+
+    if semester_config:
+        result['due_at'] = semester_config.due_at.isoformat() if semester_config.due_at else None
+        result['open_from'] = semester_config.open_from.isoformat() if semester_config.open_from else None
+        if semester_config.due_at and now > semester_config.due_at:
+            result['is_past_due'] = True
+
+    # If publish control is disabled, edit requests are irrelevant.
+    if not publish_control_enabled:
+        result['has_pending_request'] = False
+        result['pending_request'] = None
+        return result
+
+    # Handle pending request (check expiry, etc.)
+    pending = _cqi_latest_pending_request(cqi_attained)
+    if pending is not None:
+        validity_hours = None
+        try:
+            validity_hours = int(getattr(semester_config, 'edit_request_validity_hours', None)) if semester_config else None
+        except Exception:
+            pass
+        if validity_hours and validity_hours > 0 and pending.expires_at is None:
+            try:
+                pending.expires_at = pending.requested_at + timedelta(hours=validity_hours)
+                pending.save(update_fields=['expires_at'])
+            except Exception:
+                pass
+        # Expire stale pending requests
+        try:
+            if pending.expires_at and pending.expires_at <= now and pending.status in PENDING_STATUSES:
+                pending.status = 'EXPIRED'
+                pending.save(update_fields=['status'])
+                if cqi_attained.has_pending_edit_request:
+                    cqi_attained.has_pending_edit_request = False
+                    cqi_attained.save(update_fields=['has_pending_edit_request'])
+                result['has_pending_request'] = False
+                pending = None
+        except Exception:
+            pass
+
+    if pending is not None:
+        result['pending_request'] = _build_cqi_pending_request_payload(
+            pending, workflow_roles, cqi_attained
+        )
+
+    return result
+
+
+def create_cqi_edit_request(cqi_attained, user, reason: str) -> dict:
+    """Create an edit request for a published CQI snapshot."""
+    from ..models import AcV2CqiEditRequest
+
+    semester_config = cqi_attained.get_semester_config()
+    if not semester_config or not getattr(semester_config, 'publish_control_enabled', False):
+        return {'success': False, 'request_id': None, 'error': 'Publish control is disabled. Direct editing is allowed.'}
+
+    now_ts = timezone.now()
+    try:
+        if cqi_attained.edit_window_until and cqi_attained.edit_window_until > now_ts:
+            return {'success': False, 'request_id': None, 'error': 'An edit window is already open. Direct editing is allowed.'}
+    except Exception:
+        pass
+
+    if cqi_attained.has_pending_edit_request:
+        return {'success': False, 'request_id': None, 'error': 'An edit request is already pending.'}
+    workflow_roles = _normalize_workflow(
+        getattr(semester_config, 'approval_workflow', None) if semester_config else None
+    )
+    validity_hours = None
+    try:
+        validity_hours = int(getattr(semester_config, 'edit_request_validity_hours', None)) if semester_config else None
+    except Exception:
+        pass
+
+    with transaction.atomic():
+        req = AcV2CqiEditRequest.objects.create(
+            cqi_attained=cqi_attained,
+            requested_by=user,
+            reason=reason,
+            status=_first_pending_status(workflow_roles),
+            current_stage=1,
+            expires_at=(now_ts + timedelta(hours=validity_hours)) if (validity_hours and validity_hours > 0) else None,
+        )
+        cqi_attained.has_pending_edit_request = True
+        cqi_attained.save(update_fields=['has_pending_edit_request'])
+
+    return {'success': True, 'request_id': str(req.id), 'error': None}

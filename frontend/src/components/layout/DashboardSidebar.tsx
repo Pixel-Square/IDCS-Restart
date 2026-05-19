@@ -452,7 +452,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Student: show My Attendance link for students
   if (flags.is_student) {
-    items.push({ key: 'student_academics', label: 'My Marks', to: '/student/academics' });
+    items.push({ key: 'student_academics', label: 'My Marks', to: '/academic-v2/student/dashboard' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
   }
 

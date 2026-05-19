@@ -23,6 +23,7 @@ from .models import (
     AcV2DraftMark,
     AcV2UserPatternOverride,
     AcV2EditRequest,
+    AcV2CqiEditRequest,
     AcV2InternalMark,
     AcV2QpType,
     AcV2QpAssignment,
@@ -30,6 +31,7 @@ from .models import (
     AcV2CqiToken,
     AcV2CqiOperator,
     AcV2AcademicNotificationSetting,
+    AcV2MyMarksSetting,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -41,6 +43,7 @@ from .serializers import (
     AcV2StudentMarkSerializer,
     AcV2StudentMarkBulkSerializer,
     AcV2EditRequestSerializer,
+    AcV2CqiEditRequestSerializer,
     AcV2InternalMarkSerializer,
     AcV2UserPatternOverrideSerializer,
     AcV2QpTypeSerializer,
@@ -49,6 +52,7 @@ from .serializers import (
     AcV2AcademicNotificationSettingSerializer,
     AcV2CqiTokenSerializer,
     AcV2CqiOperatorSerializer,
+    AcV2MyMarksSettingSerializer,
 )
 from .models import AcV2PassMarkSetting
 
@@ -339,7 +343,7 @@ def admin_secure_delete(request):
         return Response({'success': True}, status=200)
 
     return Response({'detail': 'Unsupported object_type'}, status=400)
-from .services.publish_control import check_publish_control, create_edit_request, process_auto_publish
+from .services.publish_control import check_publish_control, create_edit_request, process_auto_publish, check_cqi_publish_control, create_cqi_edit_request
 from .services.mark_calculation import compute_section_internal_marks
 
 
@@ -642,7 +646,105 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
     
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        instance = serializer.save(updated_by=self.request.user)
+
+        # Keep CQI DB config in sync with the JSON-based admin editor.
+        # Faculty views prefer AcV2CqiExam (DB) for stable CQI CO/condition symbols.
+        try:
+            from .models import AcV2CqiExam, AcV2QpType
+
+            def _as_int_list(values):
+                out = []
+                if not isinstance(values, list):
+                    return out
+                for v in values:
+                    try:
+                        n = int(v)
+                    except Exception:
+                        continue
+                    if n not in out:
+                        out.append(n)
+                return out
+
+            exam_assignments = instance.exam_assignments if isinstance(instance.exam_assignments, list) else []
+            global_custom_vars = instance.cqi_global_custom_vars if isinstance(instance.cqi_global_custom_vars, list) else []
+
+            # Track current active CQI codes per qp_type
+            active_codes_by_qp: dict[str, set[str]] = {}
+
+            for idx, ea in enumerate(exam_assignments, start=1):
+                if not isinstance(ea, dict):
+                    continue
+                if str(ea.get('kind') or '').strip().lower() != 'cqi':
+                    continue
+
+                qp_type_code = str(ea.get('qp_type') or '').strip()
+                exam_code = str(ea.get('exam') or '').strip()
+                exam_display_name = str(ea.get('exam_display_name') or exam_code or '').strip()
+                enabled = bool(ea.get('enabled', True))
+                if not qp_type_code or not exam_code:
+                    continue
+
+                active_codes_by_qp.setdefault(qp_type_code.lower(), set())
+                if enabled:
+                    active_codes_by_qp[qp_type_code.lower()].add(exam_code)
+
+                cqi_sub = ea.get('cqi', {}) if isinstance(ea.get('cqi'), dict) else {}
+
+                # Try to resolve qp_type FK (optional)
+                qp_obj = (
+                    AcV2QpType.objects.filter(code__iexact=qp_type_code).first()
+                    if qp_type_code else None
+                )
+
+                defaults = {
+                    'qp_type_code': qp_type_code,
+                    'qp_type': qp_obj,
+                    'exam_display_name': exam_display_name,
+                    'order': int(ea.get('order') or idx or 0),
+                    'is_active': enabled,
+                    'cqi_name': str(cqi_sub.get('name') or ''),
+                    'cqi_code': str(cqi_sub.get('code') or ''),
+                    'cycle_id': str(cqi_sub.get('cycle_id') or ''),
+                    'cos': _as_int_list(cqi_sub.get('cos') or []),
+                    'considered_exams': cqi_sub.get('exams') if isinstance(cqi_sub.get('exams'), list) else [],
+                    'custom_vars': cqi_sub.get('custom_vars') if isinstance(cqi_sub.get('custom_vars'), list) else [],
+                    'global_custom_vars': global_custom_vars,
+                    'derived_variables': cqi_sub.get('derived_variables') if isinstance(cqi_sub.get('derived_variables'), list) else [],
+                    'co_value_expr': str(cqi_sub.get('co_value_expr') or ''),
+                    'formula': str(cqi_sub.get('formula') or ''),
+                    'conditions': cqi_sub.get('conditions') if isinstance(cqi_sub.get('conditions'), list) else [],
+                    'else_formula': str(cqi_sub.get('else_formula') or ''),
+                    'updated_by': self.request.user,
+                }
+
+                AcV2CqiExam.objects.update_or_create(
+                    class_type=instance,
+                    qp_type_code=qp_type_code,
+                    exam_code=exam_code,
+                    defaults=defaults,
+                )
+
+            # Deactivate CQI exams that were removed or disabled in the JSON config
+            existing = AcV2CqiExam.objects.filter(class_type=instance)
+            for row in existing:
+                qp_key = str(getattr(row, 'qp_type_code', '') or '').strip().lower()
+                code = str(getattr(row, 'exam_code', '') or '').strip()
+                allowed = active_codes_by_qp.get(qp_key)
+                if allowed is None:
+                    # No CQI configured for this qp_type anymore
+                    if row.is_active:
+                        row.is_active = False
+                        row.updated_by = self.request.user
+                        row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+                    continue
+                if code and code not in allowed and row.is_active:
+                    row.is_active = False
+                    row.updated_by = self.request.user
+                    row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+        except Exception:
+            # Never block saving class types due to CQI sync problems.
+            pass
     
     def perform_destroy(self, instance):
         # Soft delete
@@ -1468,6 +1570,320 @@ class AcV2EditRequestViewSet(viewsets.ModelViewSet):
 
 
 # ============================================================================
+# CQI EDIT REQUESTS
+# ============================================================================
+
+class AcV2CqiEditRequestViewSet(viewsets.ModelViewSet):
+    """ViewSet for CQI edit requests."""
+    queryset = AcV2CqiEditRequest.objects.all()
+    serializer_class = AcV2CqiEditRequestSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status_filter = self.request.query_params.get('status')
+        requested_by = self.request.query_params.get('requested_by')
+        
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        user = getattr(self.request, 'user', None)
+
+        qs = qs.select_related(
+            'cqi_attained__teaching_assignment__staff',
+            'cqi_attained__teaching_assignment__course',
+            'requested_by',
+        )
+
+        if requested_by:
+            # Non-admin users can only query their own requests
+            if not (_has_admin_bypass_access(user) or getattr(user, 'is_superuser', False)):
+                if str(requested_by) != str(getattr(user, 'id', '')):
+                    return qs.none()
+            qs = qs.filter(requested_by_id=requested_by)
+            return qs
+
+        # Inbox gating: only show items for the *current* approver stage
+        if self.action == 'list':
+            if not user:
+                return qs.none()
+
+            # Only pending-ish items belong in approval inboxes
+            qs = qs.filter(status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING'])
+
+            # Admin inbox should be able to see all pending CQI requests.
+            # (Approval is still permission-checked in approve/reject actions.)
+            if _has_admin_bypass_access(user) or getattr(user, 'is_superuser', False):
+                return qs
+
+            allowed_ids: list = []
+            for er in qs:
+                required_role = self._current_required_role(er)
+                if not required_role:
+                    continue
+                # Enforce exact role membership (do NOT treat superuser as all roles)
+                if self._has_role_exact(user, required_role):
+                    allowed_ids.append(er.id)
+
+            if not allowed_ids:
+                return qs.none()
+            return qs.filter(id__in=allowed_ids)
+
+        return qs
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve CQI edit request."""
+        edit_request = self.get_object()
+        notes = request.data.get('notes', '')
+
+        wf_roles = self._workflow_roles(edit_request)
+        if wf_roles:
+            required_role = self._current_required_role(edit_request)
+            if not required_role:
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+            if not (
+                getattr(request.user, 'is_superuser', False)
+                or _has_admin_bypass_access(request.user)
+                or self._has_role_exact(request.user, required_role)
+            ):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            # Fallback legacy behavior when no workflow is configured
+            if not (_has_admin_bypass_access(request.user) or self._has_any_role(request.user, ['HOD', 'IQAC', 'ADMIN'])):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
+            return Response({'error': 'This request cannot be approved.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        history = edit_request.approval_history or []
+
+        # If workflow is configured, enforce stage order strictly (no skipping).
+        if wf_roles:
+            stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+            required_role = wf_roles[stage_index] if stage_index < len(wf_roles) else wf_roles[-1]
+
+            acting_role = None
+            if (
+                getattr(request.user, 'is_superuser', False)
+                or _has_admin_bypass_access(request.user)
+                or self._has_role_exact(request.user, required_role)
+            ):
+                acting_role = required_role
+
+            if acting_role != required_role:
+                return Response({'detail': f'Awaiting {required_role} approval.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            history.append({
+                'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+                'role': required_role,
+                'user_id': getattr(request.user, 'id', None),
+                'user_name': str(request.user),
+                'action': 'APPROVED',
+                'at': now.isoformat(),
+                'notes': notes,
+            })
+
+            # If there is a next stage, move to it
+            if stage_index + 1 < len(wf_roles):
+                next_role = wf_roles[stage_index + 1]
+                edit_request.current_stage = stage_index + 2
+                if next_role == 'HOD':
+                    edit_request.status = 'HOD_PENDING'
+                elif next_role == 'IQAC':
+                    edit_request.status = 'IQAC_PENDING'
+                else:
+                    edit_request.status = 'PENDING'
+                edit_request.approval_history = history
+                edit_request.save(update_fields=['current_stage', 'status', 'approval_history'])
+                return Response({'success': True, 'status': edit_request.status, 'current_stage': edit_request.current_stage})
+
+        # Final approve
+        try:
+            window_minutes = int(request.data.get('window_minutes') or 120)
+        except Exception:
+            window_minutes = 120
+
+        # Persist any history we collected (including final-stage role entry above)
+        edit_request.approval_history = history
+        edit_request.save(update_fields=['approval_history'])
+
+        edit_request.approve(request.user, window_minutes, notes)
+        return Response({'success': True, 'status': edit_request.status, 'approved_until': edit_request.approved_until.isoformat() if edit_request.approved_until else None})
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject CQI edit request."""
+        edit_request = self.get_object()
+        reason = request.data.get('reason', '')
+
+        wf_roles = self._workflow_roles(edit_request)
+        if wf_roles:
+            required_role = self._current_required_role(edit_request)
+            if not required_role:
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+            if not (
+                getattr(request.user, 'is_superuser', False)
+                or _has_admin_bypass_access(request.user)
+                or self._has_role_exact(request.user, required_role)
+            ):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            if not (_has_admin_bypass_access(request.user) or self._has_any_role(request.user, ['HOD', 'IQAC', 'ADMIN'])):
+                return Response({'detail': 'Not allowed.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
+            return Response({'error': 'This request cannot be rejected.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # If workflow is configured, enforce stage order strictly (no skipping).
+        if wf_roles:
+            stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+            required_role = wf_roles[stage_index] if stage_index < len(wf_roles) else wf_roles[-1]
+
+            acting_role = None
+            if (
+                getattr(request.user, 'is_superuser', False)
+                or _has_admin_bypass_access(request.user)
+                or self._has_role_exact(request.user, required_role)
+            ):
+                acting_role = required_role
+            if acting_role != required_role:
+                return Response({'detail': f'Awaiting {required_role} action.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        stage_index = max(0, int(getattr(edit_request, 'current_stage', 1) or 1) - 1)
+        required_role = wf_roles[stage_index] if (wf_roles and stage_index < len(wf_roles)) else None
+        history = edit_request.approval_history or []
+        history.append({
+            'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+            'role': required_role,
+            'user_id': getattr(request.user, 'id', None),
+            'user_name': str(request.user),
+            'action': 'REJECTED',
+            'at': now.isoformat(),
+            'reason': reason,
+        })
+        edit_request.approval_history = history
+        edit_request.save(update_fields=['approval_history'])
+
+        edit_request.reject(request.user, reason)
+        return Response({'success': True, 'status': edit_request.status})
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel a CQI edit request (requester only)."""
+        edit_request = self.get_object()
+
+        if not getattr(request.user, 'is_superuser', False) and not _has_admin_bypass_access(request.user):
+            if getattr(edit_request, 'requested_by_id', None) != getattr(request.user, 'id', None):
+                return Response({'detail': 'Only the requester can cancel this request.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if edit_request.status not in ['PENDING', 'HOD_PENDING', 'IQAC_PENDING']:
+            return Response({'error': 'This request cannot be cancelled.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        history = edit_request.approval_history or []
+        history.append({
+            'stage': int(getattr(edit_request, 'current_stage', 1) or 1),
+            'role': None,
+            'user_id': getattr(request.user, 'id', None),
+            'user_name': str(request.user),
+            'action': 'CANCELLED',
+            'at': now.isoformat(),
+        })
+
+        with transaction.atomic():
+            edit_request.status = 'CANCELLED'
+            edit_request.approval_history = history
+            edit_request.save(update_fields=['status', 'approval_history'])
+
+            try:
+                attained = edit_request.cqi_attained
+                attained.has_pending_edit_request = False
+                attained.save(update_fields=['has_pending_edit_request'])
+            except Exception:
+                pass
+
+        return Response({'success': True, 'status': edit_request.status})
+
+    def _has_any_role(self, user, role_names: list[str]) -> bool:
+        if not user:
+            return False
+        if getattr(user, 'is_superuser', False):
+            return True
+        wanted = [str(r).strip() for r in (role_names or []) if str(r).strip()]
+        if not wanted:
+            return False
+        try:
+            if hasattr(user, 'roles'):
+                q = Q()
+                for r in wanted:
+                    q |= Q(name__iexact=str(r))
+                return user.roles.filter(q).exists()
+        except Exception:
+            pass
+        try:
+            if hasattr(user, 'user_roles'):
+                q = Q()
+                for r in wanted:
+                    q |= Q(role__name__iexact=str(r))
+                return user.user_roles.filter(q).exists()
+        except Exception:
+            pass
+        return False
+
+    def _has_role_exact(self, user, role_name: str) -> bool:
+        """Check role membership without superuser override (used for inbox gating)."""
+        if not user:
+            return False
+        role_u = str(role_name or '').strip()
+        if not role_u:
+            return False
+        try:
+            if hasattr(user, 'roles'):
+                return user.roles.filter(name__iexact=role_u).exists()
+        except Exception:
+            pass
+        try:
+            if hasattr(user, 'user_roles'):
+                return user.user_roles.filter(role__name__iexact=role_u).exists()
+        except Exception:
+            pass
+        return False
+
+    def _current_required_role(self, cqi_edit_request) -> str | None:
+        wf_roles = self._workflow_roles(cqi_edit_request)
+        if not wf_roles:
+            return None
+        stage_index = max(0, int(getattr(cqi_edit_request, 'current_stage', 1) or 1) - 1)
+        if stage_index < len(wf_roles):
+            return wf_roles[stage_index]
+        return wf_roles[-1] if wf_roles else None
+
+    def _workflow_roles(self, cqi_edit_request) -> list[str]:
+        cfg = None
+        try:
+            cfg = cqi_edit_request.cqi_attained.get_semester_config()
+        except Exception:
+            cfg = None
+        wf = getattr(cfg, 'approval_workflow', None) if cfg else None
+        roles: list[str] = []
+        raw = wf or []
+        for item in raw:
+            if isinstance(item, str):
+                role = item
+            elif isinstance(item, dict):
+                role = item.get('role')
+            else:
+                role = None
+            role_u = str(role or '').strip().upper()
+            if role_u and role_u not in roles:
+                roles.append(role_u)
+        return roles
+
+
+# ============================================================================
 # INTERNAL MARKS (Read-Only)
 # ============================================================================
 
@@ -1787,6 +2203,10 @@ def faculty_course_info(request, ta_id):
             exam_name = (p.name or '').strip()
             if not exam_name:
                 continue
+            # CQI exams must be configured via the CQI editor (ClassType exam_assignments)
+            # and should never be auto-derived from QP patterns.
+            if exam_name.strip().lower().startswith('cqi'):
+                continue
             w_conf = weight_by_name.get(exam_name.lower())
             derived_ea_configs.append({
                 'exam': exam_name,
@@ -1815,6 +2235,40 @@ def faculty_course_info(request, ta_id):
 
     # Build weight + order lookup from ClassType config (single source of truth)
     norm_exam_key = lambda s: (str(s or '').strip().lower())
+
+    # Filter out stale AcV2ExamAssignment records that are no longer part of the
+    # effective qp_type exam configuration (i.e. deleted/removed in QP pattern).
+    # Keep legacy behaviour when we have no effective configs to compare against.
+    if effective_ea_configs:
+        allowed_keys = set()
+        for ea_conf in effective_ea_configs:
+            if not isinstance(ea_conf, dict):
+                continue
+            for key in [ea_conf.get('exam_display_name'), ea_conf.get('exam')]:
+                k = norm_exam_key(key)
+                if k:
+                    allowed_keys.add(k)
+        exam_assignments = [
+            ea for ea in exam_assignments
+            if norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or '') in allowed_keys
+        ]
+
+    # DB-backed CQI config lookup (authoritative for CQI CO selections)
+    cqi_db_by_key = {}
+    try:
+        from .models import AcV2CqiExam
+        if acv2_ct and qp_type_code:
+            for row in AcV2CqiExam.objects.filter(
+                class_type=acv2_ct,
+                qp_type_code__iexact=qp_type_code,
+                is_active=True,
+            ).order_by('order', 'created_at'):
+                for key in [row.exam_code, row.exam_display_name]:
+                    k = norm_exam_key(key)
+                    if k:
+                        cqi_db_by_key[k] = row
+    except Exception:
+        cqi_db_by_key = {}
     ct_weight_lookup = {}
     ct_co_weights_lookup = {}  # exam -> {co: weight}
     ct_order = []
@@ -1860,7 +2314,22 @@ def faculty_course_info(request, ta_id):
 
         draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
         marks = draft.get('marks', {})
-        entered_count = sum(1 for v in marks.values() if v is not None and v != '')
+        # Count only rows where all question marks are filled (None/empty = unfilled; 0 = filled)
+        entered_count = 0
+        for _sv in marks.values():
+            if not isinstance(_sv, dict):
+                if _sv is not None and _sv != '':
+                    entered_count += 1
+                continue
+            if _sv.get('is_absent'):
+                entered_count += 1
+                continue
+            _co = _sv.get('co_marks', {})
+            if isinstance(_co, dict) and _co:
+                if all(val is not None and val != '' for val in _co.values()):
+                    entered_count += 1
+            elif _sv.get('mark') is not None and _sv.get('mark') != '':
+                entered_count += 1
         is_strictly_locked = ea.status in PUBLISHED_EXAM_STATUSES  # PUBLISHED, APPROVED, LOCKED
         has_been_published = bool(is_strictly_locked or ea.published_at)
         cycle_state = _get_exam_cycle_state(
@@ -1871,7 +2340,7 @@ def faculty_course_info(request, ta_id):
         is_locked = bool(is_strictly_locked or cycle_state['cycle_locked'])
 
         if has_been_published:
-            sm_status = 'COMPLETED'
+            sm_status = 'PUBLISHED'
         elif marks:
             sm_status = 'IN_PROGRESS'
         else:
@@ -1885,9 +2354,15 @@ def faculty_course_info(request, ta_id):
             _k = norm_exam_key(_ea_conf.get('exam_display_name', '') or _ea_conf.get('exam', ''))
             if _k == ea_key and str(_ea_conf.get('kind', '')).lower() == 'cqi':
                 ea_kind = 'cqi'
-                _cqi_sub = _ea_conf.get('cqi', {})
-                _cqi_cos = _cqi_sub.get('cos', [])
-                _cqi_name = _cqi_sub.get('name', '')
+                # Prefer DB-backed CQI config when available
+                db_cfg = cqi_db_by_key.get(ea_key)
+                if db_cfg is not None:
+                    _cqi_cos = db_cfg.cos or []
+                    _cqi_name = db_cfg.cqi_name or ''
+                else:
+                    _cqi_sub = _ea_conf.get('cqi', {})
+                    _cqi_cos = _cqi_sub.get('cos', [])
+                    _cqi_name = _cqi_sub.get('name', '')
                 break
 
         exams.append({
@@ -1996,6 +2471,11 @@ def faculty_course_info(request, ta_id):
                 weight = ea_conf.get('weight', 0)
                 qp_type_val = (ea_conf.get('qp_type') or qp_type_code or exam_code_raw or '').strip()
 
+                _new_kind = 'cqi' if str(ea_conf.get('kind', '')).lower() == 'cqi' else 'exam'
+                _new_cqi_sub = ea_conf.get('cqi', {}) if isinstance(ea_conf.get('cqi'), dict) else {}
+                _new_cqi_cos = _new_cqi_sub.get('cos', []) if isinstance(_new_cqi_sub.get('cos', []), list) else []
+                _new_cqi_name = str(_new_cqi_sub.get('name', '') or '')
+
                 # If exam code equals the qp_type (legacy bad data from WeightagePage),
                 # use display_name as the unique exam identifier instead.
                 exam_code_val = (
@@ -2006,42 +2486,58 @@ def faculty_course_info(request, ta_id):
                 if not exam_code_val:
                     continue
 
-                # Always derive covered_cos and max_marks from QP pattern.
-                # Prefer class-specific pattern, then match by display_name, then any match.
-                covered_cos = []
-                qp_match = (
-                    AcV2QpPattern.objects.filter(
-                        name__iexact=display_name, qp_type__iexact=qp_type_val,
-                        class_type=acv2_ct, is_active=True,
-                    ).first()
-                    or AcV2QpPattern.objects.filter(
-                        name__iexact=display_name, qp_type__iexact=qp_type_val, is_active=True,
-                    ).first()
-                    or AcV2QpPattern.objects.filter(
-                        qp_type__iexact=qp_type_val, class_type=acv2_ct, is_active=True,
-                    ).first()
-                    or AcV2QpPattern.objects.filter(
-                        qp_type__iexact=qp_type_val, is_active=True,
-                    ).first()
-                )
+                # covered_cos/max_marks: for CQI, always take COs from the CQI editor config.
+                # For regular exams, derive from QP pattern.
                 derived_max = 0
-                if qp_match and isinstance(qp_match.pattern, dict):
-                    qp_marks = qp_match.pattern.get('marks', [])
-                    qp_cos = qp_match.pattern.get('cos', [])
-                    qp_enabled = qp_match.pattern.get('enabled', [True] * len(qp_marks))
-                    derived_max = sum(
-                        m for i, m in enumerate(qp_marks)
-                        if i < len(qp_enabled) and qp_enabled[i]
+                covered_cos = []
+                if _new_kind == 'cqi':
+                    # Prefer DB-backed config for CQI to ensure stability.
+                    try:
+                        db_cfg = (
+                            cqi_db_by_key.get(norm_exam_key(exam_code_val))
+                            or cqi_db_by_key.get(norm_exam_key(display_name))
+                            or cqi_db_by_key.get(norm_exam_key(exam_code_raw))
+                        )
+                        if db_cfg is not None:
+                            _new_cqi_cos = getattr(db_cfg, 'cos', []) or []
+                            _new_cqi_name = getattr(db_cfg, 'cqi_name', '') or _new_cqi_name
+                    except Exception:
+                        pass
+                    covered_cos = [int(x) for x in (_new_cqi_cos or []) if str(x).isdigit()]
+                else:
+                    # Prefer class-specific pattern, then match by display_name, then any match.
+                    qp_match = (
+                        AcV2QpPattern.objects.filter(
+                            name__iexact=display_name, qp_type__iexact=qp_type_val,
+                            class_type=acv2_ct, is_active=True,
+                        ).first()
+                        or AcV2QpPattern.objects.filter(
+                            name__iexact=display_name, qp_type__iexact=qp_type_val, is_active=True,
+                        ).first()
+                        or AcV2QpPattern.objects.filter(
+                            qp_type__iexact=qp_type_val, class_type=acv2_ct, is_active=True,
+                        ).first()
+                        or AcV2QpPattern.objects.filter(
+                            qp_type__iexact=qp_type_val, is_active=True,
+                        ).first()
                     )
-                    covered_cos = sorted(set(
-                        co
-                        for i, c in enumerate(qp_cos)
-                        if c is not None and i < len(qp_enabled) and qp_enabled[i]
-                        for co in (c if isinstance(c, list) else [c])
-                        if isinstance(co, int)
-                    ))
-                if not covered_cos:
-                    covered_cos = ea_conf.get('default_cos', [])
+                    if qp_match and isinstance(qp_match.pattern, dict):
+                        qp_marks = qp_match.pattern.get('marks', [])
+                        qp_cos = qp_match.pattern.get('cos', [])
+                        qp_enabled = qp_match.pattern.get('enabled', [True] * len(qp_marks))
+                        derived_max = sum(
+                            m for i, m in enumerate(qp_marks)
+                            if i < len(qp_enabled) and qp_enabled[i]
+                        )
+                        covered_cos = sorted(set(
+                            co
+                            for i, c in enumerate(qp_cos)
+                            if c is not None and i < len(qp_enabled) and qp_enabled[i]
+                            for co in (c if isinstance(c, list) else [c])
+                            if isinstance(co, int)
+                        ))
+                    if not covered_cos:
+                        covered_cos = ea_conf.get('default_cos', [])
 
                 final_max = derived_max or weight or 50
 
@@ -2067,14 +2563,16 @@ def faculty_course_info(request, ta_id):
                 if display_name and (ea_obj.exam_display_name or '').strip() != display_name:
                     ea_obj.exam_display_name = display_name
                     ea_update_fields.append('exam_display_name')
+                # For CQI, covered_cos must always match CQI editor COs.
+                if _new_kind == 'cqi' and covered_cos and (ea_obj.covered_cos or []) != covered_cos:
+                    ea_obj.covered_cos = covered_cos
+                    ea_update_fields.append('covered_cos')
                 if ea_update_fields:
                     ea_obj.save(update_fields=ea_update_fields)
                 # Get per-CO weights from class type config
                 co_weights_for_new = ea_conf.get('co_weights', {})
                 if co_weights_for_new:
                     co_weights_for_new = {int(k): v for k, v in co_weights_for_new.items()}
-                _new_kind = 'cqi' if str(ea_conf.get('kind', '')).lower() == 'cqi' else 'exam'
-                _new_cqi_sub = ea_conf.get('cqi', {})
                 cycle_state = _get_exam_cycle_state(
                     ea_obj,
                     semester_id=getattr(sec, 'semester_id', None),
@@ -2099,8 +2597,8 @@ def faculty_course_info(request, ta_id):
                     'due_date': None,
                     'status': 'NOT_STARTED',
                     'kind': _new_kind,
-                    'cqi_cos': _new_cqi_sub.get('cos', []),
-                    'cqi_name': _new_cqi_sub.get('name', ''),
+                    'cqi_cos': _new_cqi_cos if isinstance(_new_cqi_cos, list) else [],
+                    'cqi_name': _new_cqi_name,
                 })
 
     # Final ordering for response: respect ClassType config order (when available)
@@ -2408,6 +2906,7 @@ def faculty_exam_info(request, exam_id):
         'id': str(ea.id),
         'name': ea.exam_display_name or ea.exam or ea.qp_type or '',
         'max_marks': float(ea.max_marks) if ea.max_marks else 0,
+        'course_id': getattr(ta, 'id', None),
         'course_code': course_code,
         'course_name': course_name,
         'class_name': str(acad_sec) if acad_sec else '',
@@ -2433,6 +2932,158 @@ def faculty_exam_info(request, exam_id):
         'qp_pattern': qp_pattern_response,
         'question_btls': question_btls,
         'mark_manager': mark_manager,
+        'kind': 'cqi' if _is_cqi_exam_assignment(ea) else 'exam',
+        'cqi_config': _build_cqi_config_for_exam_assignment(ea) if _is_cqi_exam_assignment(ea) else None,
+    })
+
+
+# ==========================================================================
+# FACULTY CQI (QP Type) - Exam-scoped draft/published
+# ==========================================================================
+
+
+@api_view(['GET', 'PUT'])
+@permission_classes([IsAuthenticated])
+def faculty_exam_cqi_draft(request, exam_id):
+    """CQI draft keyed by AcV2ExamAssignment (kind=cqi)."""
+    ea_qs = AcV2ExamAssignment.objects.select_related('section__course__class_type')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+
+    if not _is_cqi_exam_assignment(ea):
+        return Response({'detail': 'Not a CQI exam assignment.'}, status=400)
+
+    if request.method == 'GET':
+        draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+        entries = draft.get('cqi_entries') if isinstance(draft.get('cqi_entries'), dict) else None
+        if not entries:
+            return Response({
+                'draft': None,
+                'updated_at': ea.last_saved_at.isoformat() if ea.last_saved_at else None,
+                'updated_by': getattr(ea.last_saved_by, 'id', None),
+            })
+
+        co_numbers = draft.get('cqi_co_numbers') if isinstance(draft.get('cqi_co_numbers'), list) else (ea.covered_cos or [])
+        threshold_percent = draft.get('cqi_threshold_percent')
+        try:
+            threshold_percent = float(threshold_percent) if threshold_percent is not None else 58.0
+        except Exception:
+            threshold_percent = 58.0
+
+        return Response({
+            'draft': {
+                'co_numbers': co_numbers or [],
+                'threshold_percent': threshold_percent,
+                'entries': entries,
+            },
+            'updated_at': ea.last_saved_at.isoformat() if ea.last_saved_at else None,
+            'updated_by': getattr(ea.last_saved_by, 'id', None),
+        })
+
+    body = request.data if isinstance(request.data, dict) else {}
+    entries = body.get('entries')
+    if entries is None or not isinstance(entries, dict):
+        return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    co_numbers = body.get('co_numbers')
+    if not isinstance(co_numbers, list):
+        co_numbers = ea.covered_cos or []
+
+    threshold = body.get('threshold_percent')
+    try:
+        threshold_f = float(threshold) if threshold is not None else 58.0
+    except Exception:
+        threshold_f = 58.0
+
+    marks_map: dict = {}
+    for student_id, row in entries.items():
+        sid = str(student_id or '').strip()
+        if not sid or not isinstance(row, dict):
+            continue
+        co_marks = {}
+        has_any = False
+        total = 0.0
+        for co in co_numbers or []:
+            try:
+                co_n = int(co)
+            except Exception:
+                continue
+            key = f'co{co_n}'
+            val = row.get(key)
+            num = _normalize_mark_number(val)
+            co_marks[key] = num
+            if num is not None:
+                has_any = True
+                try:
+                    total += float(num)
+                except Exception:
+                    pass
+        if not has_any:
+            continue
+        marks_map[sid] = {
+            'mark': round(float(total), 2),
+            'co_marks': co_marks,
+            'is_absent': False,
+        }
+
+    draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+    draft['cqi_entries'] = entries
+    draft['cqi_co_numbers'] = co_numbers or []
+    draft['cqi_threshold_percent'] = threshold_f
+    draft['marks'] = marks_map
+
+    ea.draft_data = draft
+    ea.last_saved_at = timezone.now()
+    ea.last_saved_by = request.user
+    ea.save(update_fields=['draft_data', 'last_saved_at', 'last_saved_by', 'updated_at'])
+
+    return Response({
+        'status': 'ok',
+        'updated_at': ea.last_saved_at.isoformat() if ea.last_saved_at else None,
+        'updated_by': getattr(ea.last_saved_by, 'id', None),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def faculty_exam_cqi_published(request, exam_id):
+    """Fetch published CQI snapshot for a CQI exam assignment."""
+    ea_qs = AcV2ExamAssignment.objects.select_related('section__course__semester')
+    if _has_admin_bypass_access(request.user):
+        ea = get_object_or_404(ea_qs, id=exam_id)
+    else:
+        ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
+
+    if not _is_cqi_exam_assignment(ea):
+        return Response({'detail': 'Not a CQI exam assignment.'}, status=400)
+
+    ctrl = check_publish_control(ea)
+    if ctrl.get('time_remaining') is not None:
+        try:
+            ctrl['time_remaining_seconds'] = int(ctrl['time_remaining'].total_seconds())
+        except Exception:
+            ctrl['time_remaining_seconds'] = None
+        try:
+            del ctrl['time_remaining']
+        except Exception:
+            pass
+
+    published = ea.published_data if isinstance(ea.published_data, dict) else {}
+    entries = published.get('cqi_entries') if isinstance(published.get('cqi_entries'), dict) else None
+    if not entries:
+        return Response({'published': None, 'publish_control': ctrl})
+
+    co_numbers = published.get('cqi_co_numbers') if isinstance(published.get('cqi_co_numbers'), list) else (ea.covered_cos or [])
+    return Response({
+        'published': {
+            'co_numbers': co_numbers or [],
+            'entries': entries or {},
+            'published_at': ea.published_at.isoformat() if getattr(ea, 'published_at', None) else None,
+            'published_by': getattr(getattr(ea, 'published_by', None), 'id', None),
+        },
+        'publish_control': ctrl,
     })
 
 
@@ -2527,6 +3178,262 @@ def _normalize_marks_payload(marks_payload):
         for row in rows
     }
     return rows, marks_map
+
+
+def _normalize_exam_key(value: str) -> str:
+    return str(value or '').strip().lower()
+
+
+def _is_cqi_exam_assignment(exam_assignment) -> bool:
+    """Best-effort detection whether an AcV2ExamAssignment is configured as kind=cqi."""
+    try:
+        course = getattr(getattr(exam_assignment, 'section', None), 'course', None)
+        ct = getattr(course, 'class_type', None)
+        if ct is None:
+            return False
+        ea_key = _normalize_exam_key(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or '')
+        configs = getattr(ct, 'exam_assignments', None)
+        if not isinstance(configs, list) or not ea_key:
+            return False
+        for conf in configs:
+            if not isinstance(conf, dict):
+                continue
+            if str(conf.get('kind') or '').strip().lower() != 'cqi':
+                continue
+            conf_key = _normalize_exam_key(conf.get('exam_display_name') or conf.get('exam') or '')
+            if conf_key and conf_key == ea_key:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _build_cqi_config_for_exam_assignment(exam_assignment) -> dict | None:
+    """Return CQI config payload for a CQI exam assignment.
+
+    Prefers DB-backed AcV2CqiExam rows (synced from ClassType editor).
+    """
+    if not exam_assignment:
+        return None
+    try:
+        course = getattr(getattr(exam_assignment, 'section', None), 'course', None)
+        ct = getattr(course, 'class_type', None)
+        qp_type_code = str(getattr(course, 'question_paper_type', '') or '').strip()
+        if not qp_type_code:
+            qp_type_code = str(getattr(exam_assignment, 'qp_type', '') or '').strip()
+
+        if ct is None:
+            return None
+
+        from .models import AcV2CqiExam
+
+        ea_key = _normalize_exam_key(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or '')
+        row = None
+        if ea_key:
+            qs = AcV2CqiExam.objects.filter(class_type=ct, qp_type_code__iexact=qp_type_code, is_active=True)
+            for candidate in qs.order_by('order', 'created_at'):
+                for k in [getattr(candidate, 'exam_code', None), getattr(candidate, 'exam_display_name', None)]:
+                    if _normalize_exam_key(k) == ea_key:
+                        row = candidate
+                        break
+                if row is not None:
+                    break
+
+        if row is None:
+            configs = getattr(ct, 'exam_assignments', None)
+            if not isinstance(configs, list) or not ea_key:
+                return None
+            for conf in configs:
+                if not isinstance(conf, dict):
+                    continue
+                if str(conf.get('kind') or '').strip().lower() != 'cqi':
+                    continue
+                conf_key = _normalize_exam_key(conf.get('exam_display_name') or conf.get('exam') or '')
+                if conf_key != ea_key:
+                    continue
+                cqi_sub = conf.get('cqi', {}) if isinstance(conf.get('cqi'), dict) else {}
+                return {
+                    'name': str(cqi_sub.get('name') or ''),
+                    'code': str(cqi_sub.get('code') or ''),
+                    'cos': cqi_sub.get('cos') if isinstance(cqi_sub.get('cos'), list) else [],
+                    'exams': cqi_sub.get('exams') if isinstance(cqi_sub.get('exams'), list) else [],
+                    'custom_vars': cqi_sub.get('custom_vars') if isinstance(cqi_sub.get('custom_vars'), list) else [],
+                    'derived_variables': cqi_sub.get('derived_variables') if isinstance(cqi_sub.get('derived_variables'), list) else [],
+                    'formula': str(cqi_sub.get('formula') or ''),
+                    'conditions': cqi_sub.get('conditions') if isinstance(cqi_sub.get('conditions'), list) else [],
+                    'else_formula': str(cqi_sub.get('else_formula') or ''),
+                }
+
+        return {
+            'name': str(getattr(row, 'cqi_name', '') or ''),
+            'code': str(getattr(row, 'cqi_code', '') or ''),
+            'cos': getattr(row, 'cos', []) or [],
+            'exams': getattr(row, 'considered_exams', []) or [],
+            'custom_vars': getattr(row, 'custom_vars', []) or [],
+            'derived_variables': getattr(row, 'derived_variables', []) or [],
+            'formula': str(getattr(row, 'formula', '') or ''),
+            'conditions': getattr(row, 'conditions', []) or [],
+            'else_formula': str(getattr(row, 'else_formula', '') or ''),
+        }
+    except Exception:
+        return None
+
+
+def _resolve_cqi_exam_row(exam_assignment):
+    """Resolve the DB-backed AcV2CqiExam row for a CQI exam assignment, if possible."""
+    try:
+        course = getattr(getattr(exam_assignment, 'section', None), 'course', None)
+        ct = getattr(course, 'class_type', None)
+        qp_type_code = str(getattr(course, 'question_paper_type', '') or '').strip()
+        if not qp_type_code:
+            qp_type_code = str(getattr(exam_assignment, 'qp_type', '') or '').strip()
+        if ct is None or not qp_type_code:
+            return None
+
+        from .models import AcV2CqiExam
+
+        ea_key = _normalize_exam_key(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or '')
+        if not ea_key:
+            return None
+        qs = AcV2CqiExam.objects.filter(class_type=ct, qp_type_code__iexact=qp_type_code, is_active=True)
+        for candidate in qs.order_by('order', 'created_at'):
+            for k in [getattr(candidate, 'exam_code', None), getattr(candidate, 'exam_display_name', None)]:
+                if _normalize_exam_key(k) == ea_key:
+                    return candidate
+        return None
+    except Exception:
+        return None
+
+
+def _materialize_cqi_marks(exam_assignment):
+    """Upsert CQI marks into AcV2CqiMark for published CQI exams."""
+    if not _is_cqi_exam_assignment(exam_assignment):
+        return
+
+    cqi_exam_row = _resolve_cqi_exam_row(exam_assignment)
+    if cqi_exam_row is None:
+        return
+
+    published = exam_assignment.published_data if isinstance(exam_assignment.published_data, dict) else {}
+    entries = published.get('cqi_entries') if isinstance(published.get('cqi_entries'), dict) else None
+    if not entries:
+        return
+
+    co_numbers = published.get('cqi_co_numbers') if isinstance(published.get('cqi_co_numbers'), list) else (exam_assignment.covered_cos or [])
+    if not co_numbers:
+        return
+
+    from academics.models import StudentProfile
+    from decimal import Decimal
+    from .models import AcV2CqiMark
+
+    student_ids = [str(k) for k in entries.keys() if str(k or '').strip()]
+    student_map = {
+        str(sp.id): sp
+        for sp in StudentProfile.objects.filter(id__in=student_ids)
+    }
+
+    to_upsert = []
+    for student_id, row in entries.items():
+        sid = str(student_id or '').strip()
+        sp = student_map.get(sid)
+        if not sp or not isinstance(row, dict):
+            continue
+        for co in co_numbers:
+            try:
+                co_n = int(co)
+            except Exception:
+                continue
+            val = row.get(f'co{co_n}')
+            num = _normalize_mark_number(val)
+            mark = Decimal(str(num)).quantize(Decimal('0.01')) if num is not None else None
+            to_upsert.append(AcV2CqiMark(
+                cqi_exam=cqi_exam_row,
+                section=exam_assignment.section,
+                student=sp,
+                co_number=co_n,
+                mark=mark,
+            ))
+
+    if not to_upsert:
+        return
+
+    # Best-effort bulk upsert (Django 4.1+). Fallback to per-row update_or_create.
+    try:
+        AcV2CqiMark.objects.bulk_create(
+            to_upsert,
+            update_conflicts=True,
+            unique_fields=['cqi_exam', 'section', 'student', 'co_number'],
+            update_fields=['mark'],
+        )
+    except Exception:
+        for obj in to_upsert:
+            AcV2CqiMark.objects.update_or_create(
+                cqi_exam=obj.cqi_exam,
+                section=obj.section,
+                student=obj.student,
+                co_number=obj.co_number,
+                defaults={'mark': obj.mark},
+            )
+
+
+def _apply_cqi_co_columns(exam_assignment, marks_map: dict):
+    """Populate co1_mark..co5_mark for CQI exams from the published marks map."""
+    if not _is_cqi_exam_assignment(exam_assignment):
+        return
+    if not isinstance(marks_map, dict) or not marks_map:
+        return
+
+    from academics.models import StudentProfile
+
+    student_map = {
+        str(sp.id): sp
+        for sp in StudentProfile.objects.filter(id__in=list(marks_map.keys())).select_related('user')
+    }
+
+    def _co_num_from_key(key: str) -> int | None:
+        k = str(key or '').strip().lower().replace(' ', '')
+        m = re.match(r'^co([1-5])(?:_mark)?$', k)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    for student_id, payload in marks_map.items():
+        sp = student_map.get(str(student_id))
+        if not sp:
+            continue
+        co_marks = payload.get('co_marks') if isinstance(payload, dict) else {}
+        if not isinstance(co_marks, dict):
+            co_marks = {}
+
+        co_vals = {1: None, 2: None, 3: None, 4: None, 5: None}
+        for k, v in co_marks.items():
+            co_n = _co_num_from_key(k)
+            if not co_n:
+                continue
+            co_vals[co_n] = _normalize_mark_number(v)
+
+        if not any(v is not None for v in co_vals.values()):
+            continue
+
+        defaults = {
+            'co1_mark': co_vals.get(1),
+            'co2_mark': co_vals.get(2),
+            'co3_mark': co_vals.get(3),
+            'co4_mark': co_vals.get(4),
+            'co5_mark': co_vals.get(5),
+        }
+
+        if isinstance(payload, dict) and payload.get('mark') in (None, ''):
+            try:
+                defaults['total_mark'] = sum(float(v or 0) for v in co_vals.values() if v is not None)
+            except Exception:
+                pass
+
+        AcV2StudentMark.objects.filter(exam_assignment=exam_assignment, student=sp).update(**defaults)
 
 
 def _save_draft_marks_for_exam(exam_assignment, marks_payload):
@@ -2701,6 +3608,14 @@ def faculty_exam_publish(request, exam_id):
         published_marks = ea.published_data.get('marks', {}) if isinstance(ea.published_data, dict) else {}
         if isinstance(published_marks, dict) and published_marks:
             _materialize_student_marks_from_map(ea, published_marks)
+            try:
+                _apply_cqi_co_columns(ea, published_marks)
+            except Exception:
+                pass
+        try:
+            _materialize_cqi_marks(ea)
+        except Exception:
+            pass
 
         # Recompute internal marks for this section
         try:
@@ -3109,6 +4024,10 @@ def faculty_course_co_summary(request, ta_id):
             exam_name = (p.name or '').strip()
             if not exam_name:
                 continue
+            # CQI exams must be configured via the CQI editor (ClassType exam_assignments)
+            # and should never be auto-derived from QP patterns.
+            if exam_name.strip().lower().startswith('cqi'):
+                continue
             w_conf = weight_by_name.get(exam_name.lower())
             derived_ea_configs.append({
                 'exam': exam_name,
@@ -3141,6 +4060,40 @@ def faculty_course_co_summary(request, ta_id):
     # Normalization helper for matching exams between DB and ClassType config
     norm_exam_key = lambda s: (str(s or '').strip().lower())
 
+    # Filter out stale AcV2ExamAssignment records that are no longer part of the
+    # effective qp_type exam configuration (i.e. deleted/removed in QP pattern).
+    # Keep legacy behaviour when we have no effective configs to compare against.
+    if effective_ea_configs:
+        allowed_keys = set()
+        for ea_conf in effective_ea_configs:
+            if not isinstance(ea_conf, dict):
+                continue
+            for key in [ea_conf.get('exam_display_name'), ea_conf.get('exam')]:
+                k = norm_exam_key(key)
+                if k:
+                    allowed_keys.add(k)
+        exam_assignments = [
+            ea for ea in exam_assignments
+            if norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or '') in allowed_keys
+        ]
+
+    # DB-backed CQI config lookup (authoritative for CQI CO selections/conditions)
+    cqi_db_by_key = {}
+    try:
+        from .models import AcV2CqiExam
+        if class_type and qp_type_code:
+            for row in AcV2CqiExam.objects.filter(
+                class_type=class_type,
+                qp_type_code__iexact=qp_type_code,
+                is_active=True,
+            ).order_by('order', 'created_at'):
+                for key in [row.exam_code, row.exam_display_name]:
+                    k = norm_exam_key(key)
+                    if k:
+                        cqi_db_by_key[k] = row
+    except Exception:
+        cqi_db_by_key = {}
+
     # Helper: determine kind + CQI subconfig from class-type exam_assignments
     ct_kind_by_key = {}
     if effective_ea_configs:
@@ -3154,6 +4107,24 @@ def faculty_course_co_summary(request, ta_id):
                 k = norm_exam_key(key)
                 if not k:
                     continue
+                # Prefer DB-backed CQI config (when present) to avoid drift in CO/condition symbols.
+                if kind == 'cqi' and k in cqi_db_by_key:
+                    row = cqi_db_by_key.get(k)
+                    if row is not None:
+                        cqi_sub = {
+                            'name': getattr(row, 'cqi_name', '') or '',
+                            'code': getattr(row, 'cqi_code', '') or '',
+                            'cycle_id': getattr(row, 'cycle_id', '') or '',
+                            'cos': getattr(row, 'cos', []) or [],
+                            'exams': getattr(row, 'considered_exams', []) or [],
+                            'custom_vars': getattr(row, 'custom_vars', []) or [],
+                            'global_custom_vars': getattr(row, 'global_custom_vars', []) or [],
+                            'derived_variables': getattr(row, 'derived_variables', []) or [],
+                            'co_value_expr': getattr(row, 'co_value_expr', '') or '',
+                            'formula': getattr(row, 'formula', '') or '',
+                            'conditions': getattr(row, 'conditions', []) or [],
+                            'else_formula': getattr(row, 'else_formula', '') or '',
+                        }
                 if k not in ct_kind_by_key:
                     ct_kind_by_key[k] = { 'kind': kind, 'cqi': cqi_sub }
 
@@ -3226,6 +4197,9 @@ def faculty_course_co_summary(request, ta_id):
 
     exams_data = []
     exam_map = {}  # exam_id -> exam info
+
+    first_cqi_sub = None
+    first_cqi_exam_id = None
 
     # Published CQI snapshot for this TA (if any)
     cqi_attained = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
@@ -3303,12 +4277,15 @@ def faculty_course_co_summary(request, ta_id):
     def _resolve_cqi_if_expr(cond: dict) -> str:
         if not isinstance(cond, dict):
             return ''
+        direct_if = str(cond.get('if', '') or '').strip()
+        if direct_if:
+            return direct_if
         clauses = cond.get('if_clauses') if isinstance(cond.get('if_clauses'), list) else []
         if clauses:
             built = _build_cqi_if_from_clauses(clauses)
             if built:
                 return built
-        return str(cond.get('if', '') or '').strip()
+        return direct_if
 
     _ALLOWED_FUNCS = {
         'min': min,
@@ -3593,6 +4570,19 @@ def faculty_course_co_summary(request, ta_id):
             if isinstance(_cqi_cos, list) and _cqi_cos:
                 covered_cos = [int(x) for x in _cqi_cos if str(x).isdigit() and 1 <= int(x) <= co_count]
 
+            # Ensure CQI COs are stable and do not depend on stale covered_cos/user patterns.
+            # Persist the corrected covered_cos back to the exam assignment to prevent drift.
+            try:
+                if covered_cos and (ea.covered_cos or []) != covered_cos:
+                    ea.covered_cos = covered_cos
+                    ea.save(update_fields=['covered_cos'])
+            except Exception:
+                pass
+
+            if first_cqi_sub is None and isinstance(cqi_sub, dict):
+                first_cqi_sub = cqi_sub
+                first_cqi_exam_id = str(getattr(ea, 'id', '') or '')
+
         # Resolve weight from ClassType config if ea.weight is 0
         if weight == 0 and ea_key in ct_weight_map and ct_weight_map[ea_key]:
             weight = float(ct_weight_map[ea_key])
@@ -3616,7 +4606,11 @@ def faculty_course_co_summary(request, ta_id):
         qp_special_split = []
         qp_special_split_sources = []
         
-        if user_pattern and isinstance(user_pattern, dict):
+        if ea_kind == 'cqi':
+            # CQI is not pattern-driven. COs come only from the CQI editor config (DB-backed),
+            # and weights are computed from CQI evaluation, not from QP pattern CO mapping.
+            pass
+        elif user_pattern and isinstance(user_pattern, dict):
             # Use course-specific pattern from Mark Manager
             p = user_pattern
             qp_marks = p.get('marks', [])
@@ -3894,6 +4888,19 @@ def faculty_course_co_summary(request, ta_id):
             internal['_qp_special_split'] = qp_special_split if isinstance(qp_special_split, list) else []
             internal['_qp_special_split_sources'] = qp_special_split_sources if isinstance(qp_special_split_sources, list) else []
         exam_map[str(ea.id)] = {**exam_info, **internal}
+
+    # If the CQI configuration CO-set changed after marks were saved, do not
+    # reuse the old CQI snapshot entries for the new CQI setup.
+    if cqi_attained and first_cqi_sub is not None and isinstance(first_cqi_sub, dict):
+        try:
+            cfg_cos = first_cqi_sub.get('cos', [])
+            cfg_cos_norm = sorted(int(x) for x in (cfg_cos or []) if str(x).isdigit())
+            saved_cos = getattr(cqi_attained, 'co_numbers', None)
+            saved_cos_norm = sorted(int(x) for x in (saved_cos or []) if str(x).isdigit())
+            if cfg_cos_norm != saved_cos_norm:
+                cqi_entries = {}
+        except Exception:
+            pass
 
     # Get all active students in the academic section
     student_assignments = (
@@ -4452,6 +5459,7 @@ def faculty_course_co_summary(request, ta_id):
 
                     mapped = None
                     matched_condition_title = ''
+                    matched_cond_obj = None  # store for per-condition cap
                     # Condition ladder: first match wins.
                     if isinstance(conds, list) and conds:
                         for cond_idx, cond in enumerate(conds, start=1):
@@ -4460,6 +5468,7 @@ def faculty_course_co_summary(request, ta_id):
                             if_expr = _resolve_cqi_if_expr(cond)
                             then_expr = str(cond.get('then', '') or '').strip()
                             if if_expr and _safe_eval_cqi_bool(if_expr, vars_map):
+                                matched_cond_obj = cond
                                 try:
                                     matched_condition_title = str(cond.get('title') or cond.get('name') or '').strip()
                                 except Exception:
@@ -4497,6 +5506,20 @@ def faculty_course_co_summary(request, ta_id):
                             mapped = float(cqi_in or 0.0)
 
                     mapped = round(float(mapped or 0.0), 2)
+
+                    # Per-condition cap: if admin set cap_enabled on the matched condition,
+                    # limit CQI addition so the weighted CO total does not exceed cap_percent% of CO-MAX.
+                    if matched_cond_obj is not None and bool(matched_cond_obj.get('cap_enabled')):
+                        try:
+                            cond_cap_pct = float(matched_cond_obj.get('cap_percent') or 58.0)
+                            co_max_for_cap = float(vars_map.get('CO-MAX') or 0.0)
+                            if cond_cap_pct > 0 and co_max_for_cap > 0:
+                                cap_ceiling = round((cond_cap_pct / 100.0) * co_max_for_cap, 4)
+                                max_add = max(0.0, cap_ceiling - float(before_co or 0.0))
+                                mapped = round(min(mapped, max_add), 2)
+                        except Exception:
+                            pass
+
                     exam_entry[f'co{co_n}'] = mapped
                     total_val += mapped
 
@@ -4523,30 +5546,28 @@ def faculty_course_co_summary(request, ta_id):
 
         students_data.append(student_entry)
 
-    # Extract CQI config from class type exam_assignments
+    # Extract CQI config based on the first CQI exam present for this TA.
+    # This keeps CQI entry + InternalMarkPage aligned even if multiple CQI configs exist.
     cqi_config = None
-    if class_type and class_type.exam_assignments:
-        for _ea_conf in class_type.exam_assignments:
-            if str(_ea_conf.get('kind', '')).lower() != 'cqi':
-                continue
-            _ea_qp = (_ea_conf.get('qp_type', '') or '').strip().lower()
-            if qp_type_code and _ea_qp and _ea_qp != qp_type_code.strip().lower():
-                continue
-            _raw = _ea_conf.get('cqi') or {}
-            cqi_config = {
-                'name': str(_raw.get('name', '') or ''),
-                'code': str(_raw.get('code', '') or ''),
-                'cycle_id': str(_raw.get('cycle_id', '') or ''),
-                'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
-                'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
-                'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
-                'global_custom_vars': getattr(class_type, 'cqi_global_custom_vars', []) if isinstance(getattr(class_type, 'cqi_global_custom_vars', []), list) else [],
-                'co_value_expr': str(_raw.get('co_value_expr', '') or ''),
-                'formula': str(_raw.get('formula', '') or ''),
-                'conditions': _raw.get('conditions', []) if isinstance(_raw.get('conditions'), list) else [],
-                'else_formula': str(_raw.get('else_formula', '') or ''),
-            }
-            break
+    if isinstance(first_cqi_sub, dict) and first_cqi_sub is not None:
+        _raw = first_cqi_sub
+        global_vars = getattr(class_type, 'cqi_global_custom_vars', [])
+        if not isinstance(global_vars, list):
+            global_vars = _raw.get('global_custom_vars', []) if isinstance(_raw.get('global_custom_vars'), list) else []
+        cqi_config = {
+            'name': str(_raw.get('name', '') or ''),
+            'code': str(_raw.get('code', '') or ''),
+            'cycle_id': str(_raw.get('cycle_id', '') or ''),
+            'cos': _raw.get('cos', []) if isinstance(_raw.get('cos'), list) else [],
+            'exams': _raw.get('exams', []) if isinstance(_raw.get('exams'), list) else [],
+            'custom_vars': _raw.get('custom_vars', []) if isinstance(_raw.get('custom_vars'), list) else [],
+            'global_custom_vars': global_vars,
+            'derived_variables': _raw.get('derived_variables', []) if isinstance(_raw.get('derived_variables'), list) else [],
+            'co_value_expr': str(_raw.get('co_value_expr', '') or ''),
+            'formula': str(_raw.get('formula', '') or ''),
+            'conditions': _raw.get('conditions', []) if isinstance(_raw.get('conditions'), list) else [],
+            'else_formula': str(_raw.get('else_formula', '') or ''),
+        }
 
     return Response({
         'course_code': course_code,
@@ -4790,6 +5811,18 @@ def faculty_course_cqi_draft(request, ta_id: int):
             'updated_by': obj.draft_updated_by,
         })
 
+    # If CQI is already published and publish control locks it, block draft edits.
+    try:
+        from .models import AcV2CqiAttained
+        attained = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
+        if attained is not None:
+            pc = check_cqi_publish_control(attained)
+            if pc.get('publish_control_enabled') and pc.get('is_locked') and not pc.get('is_editable'):
+                return Response({'detail': 'CQI is locked. Request Edit to modify.'}, status=403)
+    except Exception:
+        # Fail open for backward compatibility.
+        pass
+
     body = request.data if isinstance(request.data, dict) else {}
     entries = body.get('entries')
     if entries is None or not isinstance(entries, dict):
@@ -4849,13 +5882,16 @@ def faculty_course_cqi_published(request, ta_id: int):
     if obj is None:
         return Response({'published': None})
 
+    pc = check_cqi_publish_control(obj)
+
     return Response({
         'published': {
             'co_numbers': obj.co_numbers or [],
             'entries': obj.entries or {},
             'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
             'published_by': obj.published_by,
-        }
+        },
+        'publish_control': pc,
     })
 
 
@@ -4875,6 +5911,17 @@ def faculty_course_cqi_publish(request, ta_id: int):
         ta = get_object_or_404(_ta_qs_cqi_publish, id=ta_id, is_active=True)
     else:
         ta = get_object_or_404(_ta_qs_cqi_publish, id=ta_id, staff__user=request.user, is_active=True)
+
+    # If there is an existing published CQI and publish control locks it, block re-publish.
+    try:
+        existing = AcV2CqiAttained.objects.filter(teaching_assignment=ta).first()
+        if existing is not None:
+            pc_existing = check_cqi_publish_control(existing)
+            if pc_existing.get('publish_control_enabled') and pc_existing.get('is_locked') and not pc_existing.get('is_editable'):
+                return Response({'detail': 'CQI is locked. Request Edit to re-publish.'}, status=403)
+    except Exception:
+        # Fail open for backward compatibility.
+        pass
 
     body = request.data if isinstance(request.data, dict) else {}
     entries = body.get('entries')
@@ -4898,6 +5945,9 @@ def faculty_course_cqi_publish(request, ta_id: int):
             'entries': entries,
             'co_numbers': co_numbers or [],
             'published_by': user_id,
+            # On (re-)publish, clear the edit window so the record is relocked
+            'edit_window_until': None,
+            'has_pending_edit_request': False,
         },
     )
 
@@ -4907,9 +5957,11 @@ def faculty_course_cqi_publish(request, ta_id: int):
     except Exception:
         pass
 
+    pc = check_cqi_publish_control(obj)
     return Response({
         'status': 'ok',
         'published_at': obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None,
+        'publish_control': pc,
     })
 
 
@@ -5153,6 +6205,72 @@ def faculty_course_cqi_announce(request, ta_id: int):
     except Exception as e:
         logger.exception('CQI announce endpoint error')
         return Response({'detail': f'Announcement failed: {str(e)}'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_course_cqi_request_edit(request, ta_id: int):
+    """Faculty submits a Request Edit for a published CQI snapshot."""
+    from academics.models import TeachingAssignment
+    from .models import AcV2CqiAttained
+
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(TeachingAssignment, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(TeachingAssignment, id=ta_id, staff__user=request.user, is_active=True)
+
+    cqi_attained = get_object_or_404(AcV2CqiAttained, teaching_assignment=ta)
+
+    body = request.data if isinstance(request.data, dict) else {}
+    reason = str(body.get('reason', '') or '').strip()
+    if not reason:
+        return Response({'detail': 'Reason is required.'}, status=400)
+
+    result = create_cqi_edit_request(cqi_attained, request.user, reason)
+    if not result['success']:
+        return Response({'detail': result['error']}, status=400)
+
+    # Refresh cqi_attained to see newly created request
+    cqi_attained.refresh_from_db()
+
+    # Return updated publish_control payload so frontend can refresh state
+    pc = check_cqi_publish_control(cqi_attained)
+    return Response({'status': 'ok', 'request_id': result['request_id'], 'publish_control': pc})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def faculty_course_cqi_cancel_edit_request(request, ta_id: int):
+    """Cancel a pending CQI edit request submitted by the current user."""
+    from academics.models import TeachingAssignment
+    from .models import AcV2CqiAttained, AcV2CqiEditRequest
+
+    if _has_admin_bypass_access(request.user):
+        ta = get_object_or_404(TeachingAssignment, id=ta_id, is_active=True)
+    else:
+        ta = get_object_or_404(TeachingAssignment, id=ta_id, staff__user=request.user, is_active=True)
+
+    cqi_attained = get_object_or_404(AcV2CqiAttained, teaching_assignment=ta)
+
+    pending = (
+        cqi_attained.edit_requests
+        .filter(status__in=['PENDING', 'HOD_PENDING', 'IQAC_PENDING'])
+        .order_by('-requested_at')
+        .first()
+    )
+    if not pending:
+        return Response({'detail': 'No pending edit request found.'}, status=404)
+
+    pending.status = 'CANCELLED'
+    pending.save(update_fields=['status'])
+    cqi_attained.has_pending_edit_request = False
+    cqi_attained.save(update_fields=['has_pending_edit_request'])
+
+    # Refresh to ensure latest state
+    cqi_attained.refresh_from_db()
+
+    pc = check_cqi_publish_control(cqi_attained)
+    return Response({'status': 'ok', 'publish_control': pc})
 
 
 # ============================================================================
@@ -5592,16 +6710,41 @@ def bypass_reset_course(request, session_id):
             last_saved_at=None,
         )
 
+        # Reset CQI (draft + published) for THIS teaching assignment only
+        from .models import AcV2CqiAssignment, AcV2CqiAttained
+
+        cqi_draft_cleared = 0
+        cqi_published_deleted = 0
+        try:
+            cqi_asg = AcV2CqiAssignment.objects.filter(teaching_assignment_id=ta_id).first()
+            if cqi_asg is not None:
+                cqi_asg.draft_entries = {}
+                cqi_asg.draft_updated_by = None
+                cqi_asg.save(update_fields=['draft_entries', 'draft_updated_by', 'draft_updated_at'])
+                cqi_draft_cleared = 1
+        except Exception:
+            pass
+
+        try:
+            cqi_attained_qs = AcV2CqiAttained.objects.filter(teaching_assignment_id=ta_id)
+            cqi_published_deleted = cqi_attained_qs.count()
+            if cqi_published_deleted:
+                cqi_attained_qs.delete()
+        except Exception:
+            pass
+
     AcV2BypassLog.objects.create(
         session=session,
         actor=request.user,
         action=AcV2BypassLog.ACTION_RESET_COURSE,
-        description=f"Course reset: {session.course_code} – {session.section_name}. {exam_count} exams reset.",
+        description=f"Course reset: {session.course_code} – {session.section_name}. {exam_count} exams reset. CQI reset.",
         extra={
             'teaching_assignment_id': ta_id,
             'exam_count': exam_count,
             'deleted_marks': deleted_marks,
             'deleted_drafts': deleted_drafts,
+            'cqi_draft_cleared': cqi_draft_cleared,
+            'cqi_published_deleted': cqi_published_deleted,
         },
     )
     return Response({
@@ -5609,6 +6752,8 @@ def bypass_reset_course(request, session_id):
         'exam_count': exam_count,
         'deleted_marks': deleted_marks,
         'deleted_drafts': deleted_drafts,
+        'cqi_draft_cleared': cqi_draft_cleared,
+        'cqi_published_deleted': cqi_published_deleted,
     })
 
 
@@ -6077,3 +7222,462 @@ def faculty_reset_notices(request, ta_id: int):
         })
 
     return Response(result)
+
+
+# ============================================================================
+# ADMIN: MY MARKS SETTINGS
+# ============================================================================
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_my_marks_settings(request):
+    """Get or update the My Marks singleton settings (admin only)."""
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Permission denied'}, status=403)
+
+    obj, _ = AcV2MyMarksSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={
+            'viewing_enabled': False,
+            'require_profile_photo': False,
+            'require_mobile_number': False,
+        },
+    )
+
+    if request.method == 'GET':
+        return Response(AcV2MyMarksSettingSerializer(obj).data)
+
+    serializer = AcV2MyMarksSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+# ============================================================================
+# STUDENT: MY MARKS — courses list + course detail
+# ============================================================================
+
+def _get_student_profile(request):
+    """Return the StudentProfile for the current user, or None."""
+    from academics.models import StudentProfile
+    try:
+        return StudentProfile.objects.select_related('user', 'section').get(user=request.user)
+    except Exception:
+        return None
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_courses(request):
+    """
+    Return list of courses for the logged-in student, with weighted mark %.
+    Each item includes course info, faculty names, and obtained_weight_pct.
+    """
+    from academics.models import StudentSectionAssignment, TeachingAssignment
+
+    sp = _get_student_profile(request)
+    if sp is None:
+        return Response({'detail': 'Student profile not found.'}, status=404)
+
+    # Check if My Marks is enabled
+    settings_obj, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
+    if not settings_obj.viewing_enabled:
+        return Response({'detail': 'My Marks is currently disabled.', 'disabled': True}, status=403)
+
+    # Get all active section assignments for this student
+    active_assignments = StudentSectionAssignment.objects.filter(
+        student=sp,
+        end_date__isnull=True,
+    ).select_related('section', 'section__semester').values_list('section_id', flat=True)
+
+    section_ids = list(active_assignments)
+
+    # Find AcV2Sections linked to the student's academic sections
+    acv2_sections = AcV2Section.objects.filter(
+        teaching_assignment__section_id__in=section_ids,
+    ).select_related(
+        'course',
+        'course__class_type',
+        'teaching_assignment',
+        'teaching_assignment__staff',
+        'teaching_assignment__staff__user',
+        'teaching_assignment__section',
+        'teaching_assignment__section__semester',
+    )
+
+    result = []
+    seen_ta_ids: set = set()
+    for acv2_sec in acv2_sections:
+        ta = acv2_sec.teaching_assignment
+        ta_id_str = str(ta.id)
+        if ta_id_str in seen_ta_ids:
+            continue
+        seen_ta_ids.add(ta_id_str)
+        course = acv2_sec.course
+
+        # Get faculty name
+        faculty_name = ''
+        if ta and ta.staff:
+            u = ta.staff.user
+            faculty_name = (u.get_full_name() or u.username) if u else ''
+
+        # Compute weighted mark percentage using actually-published exams.
+        exam_assignments_qs = list(
+            AcV2ExamAssignment.objects
+            .filter(section=acv2_sec)
+            .filter(Q(status__in=['PUBLISHED', 'LOCKED']) | Q(published_at__isnull=False))
+            .exclude(exam__iexact='CQI')
+        )
+
+        # Pre-fetch student marks
+        ea_ids_c = [ea.id for ea in exam_assignments_qs]
+        sm_map_c = {
+            str(sm.exam_assignment_id): sm
+            for sm in AcV2StudentMark.objects.filter(exam_assignment_id__in=ea_ids_c, student=sp)
+        }
+
+        # Deduplicate by exam display name — keep record with mark when duplicate
+        seen_names_c: dict = {}
+        for ea in exam_assignments_qs:
+            key = (ea.exam_display_name or ea.exam or '').strip().lower() or str(ea.id)
+            if key not in seen_names_c:
+                seen_names_c[key] = ea
+            else:
+                existing = seen_names_c[key]
+                if str(ea.id) in sm_map_c and str(existing.id) not in sm_map_c:
+                    seen_names_c[key] = ea
+
+        out_of_c = float(course.class_type.total_internal_marks) if (course.class_type and course.class_type.total_internal_marks) else 40.0
+
+        total_obtained_weight = 0.0
+        total_max_weight = 0.0
+        total_internal_obtained = 0.0
+        total_internal_max = 0.0
+        entered_exam_count = 0
+
+        for ea in seen_names_c.values():
+            total_mark = None
+            is_absent = False
+            sm = sm_map_c.get(str(ea.id))
+            if sm is not None:
+                total_mark = float(sm.total_mark) if sm.total_mark is not None else None
+                is_absent = bool(sm.is_absent)
+            else:
+                pd = ea.published_data if isinstance(ea.published_data, dict) else {}
+                payload = pd.get('marks', {}).get(str(sp.id)) if isinstance(pd.get('marks'), dict) else None
+                if isinstance(payload, dict):
+                    try:
+                        total_mark = float(payload['mark']) if payload.get('mark') not in (None, '') else None
+                    except Exception:
+                        total_mark = None
+                    is_absent = bool(payload.get('is_absent', False))
+
+            max_m = float(ea.max_marks) if ea.max_marks else 0
+            weight = float(ea.weight) if ea.weight else 0
+            i_max = round((weight / 100.0) * out_of_c, 2) if weight > 0 else 0.0
+
+            # Always count towards cycle max
+            if weight > 0:
+                total_max_weight += weight
+                total_internal_max += i_max
+
+            if total_mark is None and not is_absent:
+                continue
+
+            entered_exam_count += 1
+            if is_absent or max_m <= 0 or weight <= 0:
+                continue
+
+            obtained_w = round((float(total_mark) / max_m) * weight, 2)
+            i_obt = round((float(total_mark) / max_m) * i_max, 2)
+            total_obtained_weight += obtained_w
+            total_internal_obtained += i_obt
+
+        if total_max_weight > 0:
+            weight_pct = round((total_obtained_weight / total_max_weight) * 100, 1)
+        else:
+            weight_pct = None
+
+        # Class type display
+        ct_name = ''
+        if course.class_type:
+            ct_name = course.class_type.short_code or course.class_type.name
+        else:
+            ct_name = course.class_type_name or ''
+
+        result.append({
+            'ta_id': ta.id,
+            'course_code': course.subject_code,
+            'course_name': course.subject_name,
+            'class_type': ct_name,
+            'faculty_name': faculty_name,
+            'obtained_weight_pct': weight_pct,
+            'exams_entered': entered_exam_count,
+            'total_internal_obtained': round(total_internal_obtained, 2),
+            'total_internal_max': round(total_internal_max, 2),
+            'total_internal_marks': out_of_c,
+        })
+
+    return Response({'courses': result})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_course_detail(request, ta_id):
+    """
+    Return detail for a specific course for the logged-in student.
+    Groups exam marks by cycle with totals for donut chart display.
+    """
+    from academics.models import StudentSectionAssignment, TeachingAssignment
+
+    sp = _get_student_profile(request)
+    if sp is None:
+        return Response({'detail': 'Student profile not found.'}, status=404)
+
+    # Check if My Marks is enabled
+    settings_obj, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
+    if not settings_obj.viewing_enabled:
+        return Response({'detail': 'My Marks is currently disabled.', 'disabled': True}, status=403)
+
+    # Verify student is enrolled in the section for this TA
+    active_section_ids = list(StudentSectionAssignment.objects.filter(
+        student=sp,
+        end_date__isnull=True,
+    ).values_list('section_id', flat=True))
+
+    acv2_sec = AcV2Section.objects.filter(
+        teaching_assignment_id=ta_id,
+        teaching_assignment__section_id__in=active_section_ids,
+    ).select_related(
+        'course',
+        'course__class_type',
+        'teaching_assignment__staff__user',
+        'teaching_assignment__section__semester',
+    ).first()
+
+    if acv2_sec is None:
+        return Response({'detail': 'Course not found or access denied.'}, status=404)
+
+    ta = acv2_sec.teaching_assignment
+    course = acv2_sec.course
+
+    semester_id = None
+    try:
+        semester_id = getattr(getattr(ta, 'section', None), 'semester_id', None)
+    except Exception:
+        semester_id = None
+
+    # total_internal_marks (e.g. 40) needed to convert weight% → internal mark space
+    out_of = 40.0
+    try:
+        if course.class_type and course.class_type.total_internal_marks:
+            out_of = float(course.class_type.total_internal_marks)
+    except Exception:
+        out_of = 40.0
+
+    # Get all cycles (for sidebar grouping)
+    cycles = list(
+        AcV2Cycle.objects
+        .filter(is_active=True)
+        .order_by('order', 'name')
+        .values('id', 'name', 'code', 'description', 'order')
+    )
+
+    # Get actually-published exams for this section (see note in student_my_courses).
+    exam_assignments = list(
+        AcV2ExamAssignment.objects
+        .filter(section=acv2_sec)
+        .filter(Q(status__in=['PUBLISHED', 'LOCKED']) | Q(published_at__isnull=False))
+        .exclude(exam__iexact='CQI')
+    )
+
+    # Group by cycle
+    cycle_map = {}  # cycle_id -> {cycle_name, exams: [...], total_obtained, total_max_weight}
+
+    cycle_objs = {str(c['id']): c for c in cycles}
+
+    def _exam_sort_key(ea: AcV2ExamAssignment):
+        pattern = _resolve_qp_pattern_for_exam_assignment(ea, class_type=getattr(course, 'class_type', None))
+        pat_order = getattr(pattern, 'order', 999) if pattern else 999
+        return (pat_order, str(getattr(ea, 'exam', '') or ''), str(getattr(ea, 'exam_display_name', '') or ''))
+
+    exam_assignments.sort(key=_exam_sort_key)
+
+    # Pre-fetch student marks for this section's exams (one query)
+    ea_ids = [ea.id for ea in exam_assignments]
+    student_marks_map = {
+        str(sm.exam_assignment_id): sm
+        for sm in AcV2StudentMark.objects.filter(
+            exam_assignment_id__in=ea_ids, student=sp
+        )
+    }
+
+    # Also scan published_data for marks (fallback when AcV2StudentMark row absent)
+    def _get_mark_from_published(ea):
+        pd = ea.published_data if isinstance(ea.published_data, dict) else {}
+        payload = pd.get('marks', {}).get(str(sp.id)) if isinstance(pd.get('marks'), dict) else None
+        if isinstance(payload, dict):
+            try:
+                m = float(payload['mark']) if payload.get('mark') not in (None, '') else None
+            except Exception:
+                m = None
+            return m, bool(payload.get('is_absent', False))
+        return None, False
+
+    # Deduplicate by exam display name — keep the record that has a student mark;
+    # if neither or both have marks, keep the first (already sort-ordered).
+    seen_display: dict = {}  # normalised display_name -> ea
+    for ea in exam_assignments:
+        key = (ea.exam_display_name or ea.exam or '').strip().lower() or str(ea.id)
+        if key not in seen_display:
+            seen_display[key] = ea
+        else:
+            existing = seen_display[key]
+            existing_has_mark = str(existing.id) in student_marks_map
+            current_has_mark = str(ea.id) in student_marks_map
+            if current_has_mark and not existing_has_mark:
+                seen_display[key] = ea
+
+    exam_assignments_deduped = list(seen_display.values())
+
+    # Deduplicate by exam_id (multiple AcV2Section records for same TA can cause dupes)
+    seen_exam_ids: set = set()
+
+    for ea in exam_assignments_deduped:
+        ea_id_str = str(ea.id)
+        if ea_id_str in seen_exam_ids:
+            continue
+        seen_exam_ids.add(ea_id_str)
+        cycle_state = _get_exam_cycle_state(
+            ea,
+            semester_id=semester_id,
+            class_type=getattr(course, 'class_type', None),
+        )
+
+        cycle_id = cycle_state.get('cycle_id')
+        if not cycle_id:
+            cycle_id = 'no_cycle'
+
+        cycle_name = cycle_state.get('cycle_name') or 'General'
+        cycle_desc = ''
+        if cycle_id in cycle_objs:
+            cycle_desc = cycle_objs[cycle_id].get('description', '') or ''
+
+        if cycle_id not in cycle_map:
+            cycle_map[cycle_id] = {
+                'cycle_id': cycle_id,
+                'cycle_name': cycle_name,
+                'cycle_desc': cycle_desc,
+                'exams': [],
+                'total_obtained_weight': 0.0,
+                'total_max_weight': 0.0,
+                'total_internal_obtained': 0.0,
+                'total_internal_max': 0.0,
+                'cycle_order': cycle_objs.get(cycle_id, {}).get('order', 999),
+            }
+
+        # Get student mark — use pre-fetched map first, then published_data fallback
+        total_mark = None
+        is_absent = False
+        sm = student_marks_map.get(str(ea.id))
+        if sm is not None:
+            total_mark = float(sm.total_mark) if sm.total_mark is not None else None
+            is_absent = bool(sm.is_absent)
+        else:
+            total_mark, is_absent = _get_mark_from_published(ea)
+
+        max_m = float(ea.max_marks) if ea.max_marks else 0
+        weight = float(ea.weight) if ea.weight else 0
+
+        # Internal-mark space: (weight / 100) * out_of = max contribution
+        internal_max = round((weight / 100.0) * out_of, 2) if weight > 0 else 0.0
+
+        obtained_weight = None
+        internal_obtained = None
+
+        # Always count this exam's weight in the cycle max (even if mark not yet entered)
+        if weight > 0:
+            cycle_map[cycle_id]['total_max_weight'] += weight
+            cycle_map[cycle_id]['total_internal_max'] += internal_max
+
+        if not is_absent and total_mark is not None and max_m > 0 and weight > 0:
+            obtained_weight = round((total_mark / max_m) * weight, 2)
+            internal_obtained = round((total_mark / max_m) * internal_max, 2)
+            cycle_map[cycle_id]['total_obtained_weight'] += obtained_weight
+            cycle_map[cycle_id]['total_internal_obtained'] += internal_obtained
+
+        cycle_map[cycle_id]['exams'].append({
+            'exam_id': str(ea.id),
+            'exam': ea.exam,
+            'exam_display': ea.exam_display_name or ea.exam,
+            'qp_type': ea.qp_type,
+            'max_marks': max_m,
+            'weight': weight,
+            'total_mark': total_mark,
+            'obtained_weight': obtained_weight,
+            'internal_mark_max': internal_max,
+            'internal_mark_obtained': internal_obtained,
+            'is_absent': is_absent,
+            'published_at': ea.published_at.isoformat() if ea.published_at else None,
+        })
+
+    # Calculate percentage per cycle
+    for v in cycle_map.values():
+        mw = v['total_max_weight']
+        ow = v['total_obtained_weight']
+        v['weight_pct'] = round((ow / mw) * 100, 1) if mw > 0 else None
+        # Internal mark totals (rounded to 2dp)
+        v['total_internal_obtained'] = round(v['total_internal_obtained'], 2)
+        v['total_internal_max'] = round(v['total_internal_max'], 2)
+
+    # Populate cycle names from AcV2Cycle objects
+    for cid, cdata in cycle_map.items():
+        if cid in cycle_objs:
+            cdata['cycle_name'] = cycle_objs[cid]['name']
+            cdata['cycle_desc'] = cycle_objs[cid].get('description', '')
+            cdata['cycle_order'] = cycle_objs[cid].get('order', cdata.get('cycle_order', 999))
+
+    faculty_name = ''
+    if ta and ta.staff:
+        u = ta.staff.user
+        faculty_name = (u.get_full_name() or u.username) if u else ''
+
+    ct_name = ''
+    if course.class_type:
+        ct_name = course.class_type.short_code or course.class_type.name
+    else:
+        ct_name = course.class_type_name or ''
+
+    return Response({
+        'ta_id': ta.id,
+        'course_code': course.subject_code,
+        'course_name': course.subject_name,
+        'class_type': ct_name,
+        'faculty_name': faculty_name,
+        'total_internal_marks': out_of,
+        'cycles': sorted(list(cycle_map.values()), key=lambda c: (c.get('cycle_order', 999), str(c.get('cycle_name', '')))),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_marks_config(request):
+    """Return My Marks settings + student's completion status (public to authenticated students)."""
+    sp = _get_student_profile(request)
+
+    cfg, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
+
+    # Check student's completion status
+    has_profile_photo = False
+    has_mobile_number = False
+    if sp:
+        has_profile_photo = bool(getattr(sp, 'profile_image', None))
+        has_mobile_number = bool(getattr(sp, 'mobile_number', '') or '')
+
+    return Response({
+        'viewing_enabled': cfg.viewing_enabled,
+        'require_profile_photo': cfg.require_profile_photo,
+        'require_mobile_number': cfg.require_mobile_number,
+        'has_profile_photo': has_profile_photo,
+        'has_mobile_number': has_mobile_number,
+    })

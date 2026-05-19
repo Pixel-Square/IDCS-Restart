@@ -10,13 +10,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Save, Send, CheckCircle, AlertTriangle, Info } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Save, Send, CheckCircle, AlertTriangle, Info, Clock, Edit2, X } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
-import { fetchTeachingAssignmentEnabledAssessmentsInfo, requestTeachingAssignmentEnabledAssessmentsEdit } from '../../../services/obe';
 
 // token is now any string (not restricted to 3 values) to support DB-backed token registry
 type CqiIfClauseToken = string;
 
+// token may be empty string to represent a RAW boolean RHS clause (no [TOKEN] and no operator)
 type CqiIfClause = { token: CqiIfClauseToken; operator?: string; rhs: string };
 
 type CqiAdminCondition = {
@@ -85,6 +85,14 @@ function normalizeImplicitTokenSums(input: string) {
 
 function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)); }
 function round2(n: number) { return Math.round(n * 100) / 100; }
+function getContrastColor(hex: string): string {
+  const h = hex.replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#000000';
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5 ? '#1a1a1a' : '#ffffff';
+}
 function parseEntryNumber(raw: string): number | null {
   const s = String(raw ?? '').trim();
   if (!s) return null;
@@ -539,14 +547,21 @@ function evalIfClauses(cond: CqiAdminCondition, ctxBase: Record<string, number>,
 
   // Pinned Before_CQI is clause[0]. Additional clauses are AND'ed.
   const clauseVals = clauses
-    .filter((c) => c && c.token && String(c.rhs || '').trim().length > 0)
+    .filter((c) => c && String(c.rhs || '').trim().length > 0)
     .map((c) => {
-      const tok = c.token;
+      const tok = String((c as any).token || '').trim();
+      const rhs = String(c.rhs || '').trim();
+
+      // RAW clause: RHS is the whole boolean expression
+      if (!tok) {
+        return evalCondition(rhs, ctxBase, coNum);
+      }
+
       const tokenExpr = `[${tok}]`;
       // Support explicit operator field (new format) or operator embedded in rhs (legacy)
       const expr = c.operator
-        ? `${tokenExpr} ${c.operator} ${String(c.rhs || '').trim()}`
-        : `${tokenExpr} ${String(c.rhs || '').trim()}`;
+        ? `${tokenExpr} ${c.operator} ${rhs}`
+        : `${tokenExpr} ${rhs}`;
       return evalCondition(expr, ctxBase, coNum);
     });
 
@@ -562,7 +577,8 @@ function parseConditionClauses(raw: string): CqiIfClause[] {
   for (const part of parts) {
     const match = part.match(/^\(?\s*\[([A-Za-z0-9_-]+)\]\s*(.*?)\)?\s*$/);
     if (!match) continue;
-    const token = String(match[1] || '').toUpperCase();
+    const tokenRaw = String(match[1] || '').toUpperCase();
+    const token = tokenRaw === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : tokenRaw;
     const rest = String(match[2] || '').trim().replace(/\)+$/g, '').trim();
     // Extract leading operator into separate field for new format
     const opMatch = rest.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
@@ -575,10 +591,39 @@ function parseConditionClauses(raw: string): CqiIfClause[] {
   return clauses;
 }
 
+function normalizeConditionClause(clause: CqiIfClause): CqiIfClause {
+  const tokenRaw = String((clause as any)?.token || '').trim().toUpperCase();
+  const token = tokenRaw === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : tokenRaw;
+  if (!token) {
+    return { token: '', rhs: String((clause as any)?.rhs || '').trim() };
+  }
+  let operator = String(clause?.operator || '').trim();
+  if (operator === '=') operator = '==';
+  let rhs = String(clause?.rhs || '').trim();
+
+  const prefixMatch = rhs.match(/^((?:(?:<=|>=|==|!=|=|<|>)\s*)+)(.*)$/);
+  if (prefixMatch) {
+    const ops = prefixMatch[1].match(/<=|>=|==|!=|=|<|>/g) || [];
+    operator = String(ops[ops.length - 1] || operator || '').trim();
+    if (operator === '=') operator = '==';
+    rhs = String(prefixMatch[2] || '').trim();
+  }
+
+  const standaloneExpr = (
+    (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') &&
+    (!operator || operator === '==' || operator === '=') &&
+    /(<=|>=|==|!=|=|<|>)/.test(rhs) &&
+    !/^(<=|>=|==|!=|=|<|>)/.test(rhs)
+  );
+
+  // Convert legacy standalone expression into RAW clause so it stays stable.
+  return standaloneExpr ? { token: '', rhs } : { token, operator, rhs };
+}
+
 function hasConditionClauses(cond: CqiAdminCondition | null | undefined): boolean {
   return Boolean(
     Array.isArray(cond?.if_clauses)
-    && cond!.if_clauses!.some((clause) => clause && clause.token && String(clause.rhs || '').trim().length > 0)
+    && cond!.if_clauses!.some((clause) => clause && String((clause as any).rhs || '').trim().length > 0)
   );
 }
 
@@ -589,18 +634,17 @@ function hasConditionMatcher(cond: CqiAdminCondition | null | undefined): boolea
 
 function buildConditionExpressionFromClauses(clauses: CqiIfClause[]): string {
   return (Array.isArray(clauses) ? clauses : [])
+    .map((clause) => normalizeConditionClause(clause))
     .map((clause, idx) => {
       const rhs = String(clause?.rhs || '').trim();
-      if (!clause?.token || !rhs) return '';
-      const token = String(clause.token || '').trim().toUpperCase();
+      const tokenRaw = String((clause as any)?.token || '').trim();
+      if (!rhs) return '';
+      if (!tokenRaw) return `(${rhs})`;
+      const token = String(tokenRaw || '').trim().toUpperCase();
       const opRaw = String(clause.operator || '').trim();
       const op = opRaw === '=' ? '==' : opRaw;
       // Use explicit operator field when present
       if (op) {
-        // Legacy support: first BEFORE_CQI clause may hold a full boolean RHS expression.
-        if (idx === 0 && (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') && (op === '==' || op === '=') && /(<=|>=|==|!=|=|<|>)/.test(rhs)) {
-          return `(${rhs})`;
-        }
         return `([${clause.token}] ${op} ${rhs})`;
       }
       // Backward-compat for malformed saved clauses: missing operator means
@@ -710,17 +754,18 @@ function evaluateCqiImpact(
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CqiEntryPage() {
-  const { courseId } = useParams<{ courseId: string }>();
+  const { courseId: courseIdParam, examId } = useParams<{ courseId?: string; examId?: string }>();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [announcing, setAnnouncing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [taId, setTaId] = useState<string | null>(courseIdParam ?? null);
+  const [activeCqiConfig, setActiveCqiConfig] = useState<CqiAdminConfig | null>(null);
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
   const [notifFlags, setNotifFlags] = useState<{ student_publish_enabled: boolean; cqi_announce_enabled: boolean } | null>(null);
   const [publishControlInfo, setPublishControlInfo] = useState<any | null>(null);
-  const [requestEditBusy, setRequestEditBusy] = useState(false);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: number | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [entries, setEntries] = useState<CqiEntries>({});
@@ -731,9 +776,57 @@ export default function CqiEntryPage() {
   const [announcementTimeLeft, setAnnouncementTimeLeft] = useState(0);
   const saveTimer = useRef<number | null>(null);
 
+  // Request-edit modal state
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editModalView, setEditModalView] = useState<'reason' | 'sending' | 'track'>('reason');
+  const [editReason, setEditReason] = useState('');
+  const [editModalError, setEditModalError] = useState<string | null>(null);
+  const [processingAction, setProcessingAction] = useState<string | null>(null);
+
   const isPublished = Boolean(publishedLog?.published_at);
-  const tableBlocked = isPublished || publishing;
-  const cqiConfig = coSummary?.cqi_config ?? null;
+
+  // CQI-native publish control (from cqi-published endpoint)
+  const pc = publishControlInfo as any;
+  const publishControlEnabled = Boolean(pc?.publish_control_enabled);
+  const pcLocked = isPublished && !(pc?.is_editable);
+  const pcHasPending = Boolean(pc?.has_pending_request);
+  const editWindowUntilRaw = pc?.edit_window_until as string | null | undefined;
+  const editWindowUntilMs = editWindowUntilRaw ? Date.parse(editWindowUntilRaw) : NaN;
+  const editWindowRemainingSec = Number.isFinite(editWindowUntilMs) && editWindowUntilMs > Date.now()
+    ? Math.ceil((editWindowUntilMs - Date.now()) / 1000)
+    : null;
+  const hasEditWindow = Boolean(editWindowRemainingSec && editWindowRemainingSec > 0);
+  const approvalWorkflowRoles: string[] = Array.isArray(pc?.approval_workflow_roles) ? pc.approval_workflow_roles : [];
+  const approvalWorkflowAssignees: Array<{ role: string; user_id: string | null; user_name: string | null }> =
+    Array.isArray(pc?.approval_workflow_assignees) ? pc.approval_workflow_assignees : [];
+
+  // After publish: table is editable only if there is an open edit window (when publish control is enabled).
+  // If publish control is disabled, CQI should remain editable and allow re-publish anytime.
+  const tableBlocked = isPublished && publishControlEnabled && !hasEditWindow;
+
+  const formatRemaining = (seconds: number) => {
+    const s = Math.max(0, Math.floor(seconds));
+    const days = Math.floor(s / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    const secs = s % 60;
+    if (days > 0) return `${days}d ${hours}h ${mins}m`;
+    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const openRemainingSec = (() => {
+    const openFrom = pc?.open_from;
+    const ms = openFrom ? Date.parse(String(openFrom)) : NaN;
+    if (Number.isFinite(ms) && ms > Date.now()) return Math.ceil((ms - Date.now()) / 1000);
+    return 0;
+  })();
+  const dueRemainingSec = (() => {
+    const dueAt = pc?.due_at;
+    const ms = dueAt ? Date.parse(String(dueAt)) : NaN;
+    if (!Number.isFinite(ms)) return null;
+    return Math.ceil((ms - Date.now()) / 1000);
+  })();
+  const cqiConfig = activeCqiConfig ?? (coSummary?.cqi_config ?? null);
   // A config is active if it has at least one condition matcher or an ELSE expression/task.
   // Some existing DB rows have matcher clauses but empty THEN; in that case we still
   // allow CQI entry and treat mapped value as [CQI].
@@ -810,24 +903,78 @@ export default function CqiEntryPage() {
   }, [coSummary?.co_count, coSummary?.total_internal_marks, consideredExams]);
 
   const loadAll = async () => {
-    if (!courseId) return;
     try {
       setLoading(true); setMessage(null);
-      const [coRes, draftRes, pubRes, flagsRes] = await Promise.all([
-        fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`),
-        fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-draft/`),
-        fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-published/`),
-        fetchWithAuth(`/api/academic-v2/faculty/notification-flags/`).catch(() => null as any),
+
+      let effectiveTaId = courseIdParam ?? taId;
+
+      if (examId) {
+        const exRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
+        if (!exRes.ok) {
+          const err = await exRes.json().catch(() => ({}));
+          throw new Error((err as any)?.detail || 'Failed to load exam info');
+        }
+        const examJson = await exRes.json().catch(() => ({}));
+        if ((examJson as any)?.publish_control) setPublishControlInfo((examJson as any).publish_control);
+        setActiveCqiConfig(((examJson as any)?.cqi_config as any) ?? null);
+        if ((examJson as any)?.course_id !== undefined && (examJson as any)?.course_id !== null) {
+          effectiveTaId = String((examJson as any).course_id);
+          setTaId(effectiveTaId);
+        }
+      } else {
+        setActiveCqiConfig(null);
+      }
+
+      if (!effectiveTaId) {
+        throw new Error('Missing course id');
+      }
+
+      const draftUrl = examId
+        ? `/api/academic-v2/exams/${examId}/cqi-draft/`
+        : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-draft/`;
+      const pubUrl = examId
+        ? `/api/academic-v2/exams/${examId}/cqi-published/`
+        : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-published/`;
+
+      const [coRes, draftResult, pubResult, flagsResult] = await Promise.allSettled([
+        fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/co-summary/`),
+        fetchWithAuth(draftUrl),
+        fetchWithAuth(pubUrl),
+        fetchWithAuth(`/api/academic-v2/faculty/notification-flags/`),
       ]);
-      if (!coRes.ok) throw new Error('Failed to load CO summary');
-      setCoSummary((await coRes.json()) as COSummary);
-      const draftJson = (await draftRes.json().catch(() => ({ draft: null }))) as CqiDraftResponse;
+
+      if (coRes.status !== 'fulfilled') {
+        throw new Error('Failed to load CO summary');
+      }
+
+      if (!coRes.value.ok) {
+        let detail = 'Failed to load CO summary';
+        try {
+          const err = await coRes.value.json();
+          detail = String((err as any)?.detail || detail);
+        } catch {
+          // Keep generic fallback.
+        }
+        throw new Error(detail);
+      }
+
+      setCoSummary((await coRes.value.json()) as COSummary);
+
+      const draftRes = draftResult.status === 'fulfilled' && draftResult.value.ok ? draftResult.value : null;
+      const pubRes = pubResult.status === 'fulfilled' && pubResult.value.ok ? pubResult.value : null;
+      const flagsRes = flagsResult.status === 'fulfilled' && flagsResult.value.ok ? flagsResult.value : null;
+
+      const draftJson = (await draftRes?.json().catch(() => ({ draft: null })) ?? { draft: null }) as CqiDraftResponse;
       setDraftLog({ updated_at: draftJson?.updated_at ?? null, updated_by: draftJson?.updated_by ?? null });
-      const pubJson = (await pubRes.json().catch(() => ({ published: null }))) as CqiPublishedResponse;
+      const pubJson = (await pubRes?.json().catch(() => ({ published: null })) ?? { published: null }) as any;
       setPublishedLog({ published_at: pubJson?.published?.published_at ?? null });
+      // Store CQI-native publish_control (replaces the old enabled-assessments meta)
+      if (pubJson?.publish_control) {
+        setPublishControlInfo(pubJson.publish_control);
+      }
       try {
-        if (flagsRes && (flagsRes as any).ok) {
-          const f = await (flagsRes as any).json();
+        if (flagsRes) {
+          const f = await flagsRes.json();
           setNotifFlags({
             student_publish_enabled: Boolean((f as any)?.student_publish_enabled),
             cqi_announce_enabled: Boolean((f as any)?.cqi_announce_enabled),
@@ -837,24 +984,21 @@ export default function CqiEntryPage() {
       if (pubJson?.published) { setEntries((pubJson.published.entries as any) || {}); setDirty(false); }
       else if (draftJson?.draft?.entries) { setEntries(draftJson.draft.entries); setDirty(false); }
       else { setEntries({}); setDirty(false); }
-      // Fetch publish control / enabled assessments meta for this teaching assignment
-      try {
-        const info = await fetchTeachingAssignmentEnabledAssessmentsInfo(Number(courseId));
-        setPublishControlInfo(info || null);
-      } catch (e) {
-        setPublishControlInfo(null);
-      }
-    } catch (e) { console.error(e); setMessage({ type: 'error', text: 'Failed to load CQI page' }); }
+    } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to load CQI page' }); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [courseId]);
+  useEffect(() => { loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [examId, courseIdParam]);
 
   const saveDraft = async (nextEntries?: CqiEntries) => {
-    if (!courseId) return;
+    const effectiveTaId = courseIdParam ?? taId;
+    if (!examId && !effectiveTaId) return;
     try {
       setSaving(true); setMessage(null);
-      const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-draft/`, {
+      const url = examId
+        ? `/api/academic-v2/exams/${examId}/cqi-draft/`
+        : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-draft/`;
+      const res = await fetchWithAuth(url, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ co_numbers: displayCoNumbers, threshold_percent: THRESHOLD_PERCENT, entries: nextEntries ?? entries }),
       });
@@ -867,29 +1011,160 @@ export default function CqiEntryPage() {
   };
 
   const publish = async () => {
-    if (!courseId) return;
+    const effectiveTaId = courseIdParam ?? taId;
+    if (!examId && !effectiveTaId) return;
     try {
       setPublishing(true); setMessage(null);
       await saveDraft(entries);
-      const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-publish/`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries, co_numbers: displayCoNumbers }),
-      });
-      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
-      const data = await res.json().catch(() => ({}));
-      setPublishedLog({ published_at: (data as any)?.published_at ?? null });
+
+      if (examId) {
+        const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
+        const data = await res.json().catch(() => ({}));
+        setPublishedLog({ published_at: (data as any)?.published_at ?? null });
+        try {
+          const exRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
+          if (exRes.ok) {
+            const exJson = await exRes.json().catch(() => ({}));
+            if ((exJson as any)?.publish_control) setPublishControlInfo((exJson as any).publish_control);
+          }
+        } catch { /* ignore */ }
+      } else {
+        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-publish/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries, co_numbers: displayCoNumbers }),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
+        const data = await res.json().catch(() => ({}));
+        setPublishedLog({ published_at: (data as any)?.published_at ?? null });
+        if ((data as any)?.publish_control) setPublishControlInfo((data as any).publish_control);
+      }
+
       setMessage({ type: 'success', text: 'CQI published' });
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to publish' }); }
     finally { setPublishing(false); }
   };
 
+  const openRequestEditModal = () => {
+    setEditModalError(null);
+    setEditModalView('reason');
+    setEditReason('');
+    setEditModalOpen(true);
+  };
+
+  const openTrackModal = async () => {
+    setEditModalError(null);
+    // Refresh published info to get latest publish_control
+    try {
+      if (examId) {
+        const [exRes, pubRes] = await Promise.all([
+          fetchWithAuth(`/api/academic-v2/exams/${examId}/`),
+          fetchWithAuth(`/api/academic-v2/exams/${examId}/cqi-published/`),
+        ]);
+        if (exRes.ok) {
+          const exJson = await exRes.json().catch(() => ({}));
+          if ((exJson as any)?.publish_control) setPublishControlInfo((exJson as any).publish_control);
+        }
+        if (pubRes.ok) {
+          const data = await pubRes.json().catch(() => ({}));
+          if (data?.publish_control) setPublishControlInfo(data.publish_control);
+          if (data?.published?.published_at !== undefined) setPublishedLog({ published_at: data.published?.published_at ?? null });
+        }
+      } else {
+        const effectiveTaId = courseIdParam ?? taId;
+        if (effectiveTaId) {
+          const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-published/`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.publish_control) setPublishControlInfo(data.publish_control);
+            if (data?.published?.published_at !== undefined) setPublishedLog({ published_at: data.published?.published_at ?? null });
+          }
+        }
+      }
+    } catch (e) { console.error(e); }
+    setEditModalView('track');
+    setEditModalOpen(true);
+  };
+
+  const cancelEditRequest = async () => {
+    const effectiveTaId = courseIdParam ?? taId;
+    if (!examId && !effectiveTaId) return;
+    if (!window.confirm('Are you sure you want to cancel this edit request?')) return;
+    try {
+      setProcessingAction('cancel_edit');
+      if (examId) {
+        const reqId = pc?.pending_request?.id || pc?.pending_request_id || null;
+        if (!reqId) throw new Error('No pending edit request found.');
+        const res = await fetchWithAuth(`/api/academic-v2/edit-requests/${reqId}/cancel/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || (err as any)?.error || 'Failed to cancel request'); }
+        try {
+          const exRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
+          if (exRes.ok) {
+            const exJson = await exRes.json().catch(() => ({}));
+            if ((exJson as any)?.publish_control) setPublishControlInfo((exJson as any).publish_control);
+          }
+        } catch { /* ignore */ }
+      } else {
+        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-cancel-edit-request/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Failed to cancel request'); }
+        const data = await res.json().catch(() => ({}));
+        if (data?.publish_control) setPublishControlInfo(data.publish_control);
+      }
+      setEditModalError(null);
+      setEditReason('');
+      setEditModalView('reason');
+    } catch (e) { alert(e instanceof Error ? e.message : 'Error canceling request'); }
+    finally { setProcessingAction(null); }
+  };
+
+  const submitEditRequest = async () => {
+    const effectiveTaId = courseIdParam ?? taId;
+    if (!examId && !effectiveTaId) return;
+    const reason = String(editReason || '').trim();
+    if (!reason) { setEditModalError('Reason is required.'); return; }
+    try {
+      setEditModalError(null);
+      setEditModalView('sending');
+      setProcessingAction('request_edit');
+      const url = examId
+        ? `/api/academic-v2/exams/${examId}/request-edit/`
+        : `/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-request-edit/`;
+      const res = await fetchWithAuth(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error((errJson as any)?.detail || (errJson as any)?.error || 'Request failed');
+      }
+      const data = await res.json().catch(() => ({}));
+      if ((data as any)?.publish_control) setPublishControlInfo((data as any).publish_control);
+      setEditModalView('track');
+    } catch (e) {
+      setEditModalView('reason');
+      setEditModalError(e instanceof Error ? e.message : 'Failed to request edit');
+    } finally { setProcessingAction(null); }
+  };
+
   const announce = async () => {
-    if (!courseId) return;
+    const effectiveTaId = courseIdParam ?? taId;
+    // Announce currently uses course-level CQI condition evaluation; for multi-CQI
+    // exam pages it can be misleading, so keep it on legacy route only.
+    if (examId) {
+      setMessage({ type: 'error', text: 'CQI announce is available from the course CQI page only.' });
+      return;
+    }
+    if (!effectiveTaId) return;
     try {
       setAnnouncing(true);
       setMessage(null);
       
-      const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/cqi-announce/`, {
+      const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-announce/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -1054,7 +1329,18 @@ export default function CqiEntryPage() {
         if (!c.notAttainedBefore || !c.matchedCond) continue;
         const ctxBase = c.ctxBase;
         const impact = evaluateCqiImpact(cqiConfig, ctxBase, Number(input), c.coNum);
-        if (Number.isFinite(impact.addRaw) && impact.addRaw > 0) { delta += impact.addRaw; afterValue += impact.addRaw; }
+        let addRaw = impact.addRaw;
+        // Apply per-condition cap: if admin set cap_enabled on the matched condition,
+        // clamp so the CO total won't exceed cap_percent% of CO-MAX.
+        if (Number.isFinite(addRaw) && addRaw > 0) {
+          const condCap = c.matchedCond as any;
+          if (condCap?.cap_enabled && Number.isFinite(Number(condCap?.cap_percent)) && Number(condCap.cap_percent) > 0 && c.max > 0) {
+            const capValue = (Number(condCap.cap_percent) / 100) * c.max;
+            const maxAdd = Math.max(0, capValue - c.value);
+            addRaw = round2(Math.min(addRaw, maxAdd));
+          }
+        }
+        if (Number.isFinite(addRaw) && addRaw > 0) { delta += addRaw; afterValue += addRaw; }
       }
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;
       const afterPct = beforeMax > 0 ? (afterValue / beforeMax) * 100 : 0;
@@ -1115,7 +1401,14 @@ export default function CqiEntryPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate(`/academic-v2/course/${courseId}`)} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button
+            onClick={() => {
+              const effectiveTaId = courseIdParam ?? taId;
+              if (effectiveTaId) navigate(`/academic-v2/course/${effectiveTaId}`);
+              else navigate('/academic-v2/courses');
+            }}
+            className="p-2 hover:bg-gray-100 rounded-lg"
+          >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
@@ -1136,71 +1429,119 @@ export default function CqiEntryPage() {
             </p>
             {publishControlInfo?.meta && (
               <p className="text-xs text-gray-400 mt-1">
-                Publish window: {String(publishControlInfo.meta.window_state || 'UNKNOWN')} {publishControlInfo.meta.due_at ? `• Due: ${new Date(publishControlInfo.meta.due_at).toLocaleString()}` : ''}
+                Publish window: {String((publishControlInfo as any)?.meta?.window_state || 'UNKNOWN')} {(publishControlInfo as any)?.meta?.due_at ? `• Due: ${new Date((publishControlInfo as any).meta.due_at).toLocaleString()}` : ''}
               </p>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={loadAll} className="flex items-center gap-2 px-3 py-2 border rounded-lg hover:bg-gray-50 text-sm">
-            <RefreshCw className="w-4 h-4" /> Refresh
+      </div>
+
+      {/* Publish control timers + toolbar (MarkEntry-style) */}
+      <div className="bg-white rounded-xl shadow-sm border">
+        {(openRemainingSec > 0 || dueRemainingSec !== null || hasEditWindow) && (
+          <div className="px-4 py-2 border-b bg-blue-50/40 text-sm flex flex-wrap items-center gap-4">
+            {openRemainingSec > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-blue-700">
+                <AlertTriangle className="w-4 h-4" />
+                Opens in <strong>{formatRemaining(openRemainingSec)}</strong>
+              </span>
+            )}
+            {dueRemainingSec !== null && (
+              <span className={`inline-flex items-center gap-1.5 ${dueRemainingSec <= 0 ? 'text-red-700' : 'text-gray-700'}`}>
+                <Clock className="w-4 h-4" />
+                {dueRemainingSec <= 0 ? 'Due time passed' : <>Due in <strong>{formatRemaining(dueRemainingSec)}</strong></>}
+              </span>
+            )}
+            {hasEditWindow && (
+              <span className="inline-flex items-center gap-1.5 text-teal-700">
+                <Edit2 className="w-4 h-4" />
+                Edit window ends in <strong>{formatRemaining(editWindowRemainingSec || 0)}</strong>
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+          <button onClick={loadAll} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
           <button
             onClick={() => setDebugOpen((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${debugOpen ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-1.5 ${debugOpen ? 'bg-gray-900 text-white border-gray-900' : 'hover:bg-gray-50'}`}
             title="Show formula + token values per cell"
           >
             Debug
           </button>
-          <button onClick={() => saveDraft()} disabled={tableBlocked || saving}
-            className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${tableBlocked || saving ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}>
-            <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Sync Draft'}
+
+          <div className="flex-1" />
+
+          <button
+            onClick={() => saveDraft()}
+            disabled={tableBlocked || saving}
+            className={`px-3 py-1.5 text-sm border rounded-lg flex items-center gap-1.5 ${tableBlocked || saving ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+          >
+            <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : 'Sync Draft'}
           </button>
+
+          {/* Publish / Request Edit / Track */}
           {!isPublished ? (
-            <button onClick={publish} disabled={tableBlocked || publishing}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${tableBlocked || publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
-              <Send className="w-4 h-4" /> Publish
+            <button
+              onClick={publish}
+              disabled={publishing}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white ${publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+            >
+              <Send className="w-3.5 h-3.5" /> {publishing ? 'Publishing…' : 'Publish'}
+            </button>
+          ) : !publishControlEnabled ? (
+            // Publish control disabled → allow re-publish any time
+            <button
+              onClick={publish}
+              disabled={publishing}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white ${publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+            >
+              <Send className="w-3.5 h-3.5" /> {publishing ? 'Publishing…' : 'Re-Publish'}
+            </button>
+          ) : hasEditWindow ? (
+            // Has an approved edit window — allow re-publish
+            <button
+              onClick={publish}
+              disabled={publishing}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white ${publishing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+            >
+              <Send className="w-3.5 h-3.5" /> {publishing ? 'Publishing…' : 'Re-Publish'}
+            </button>
+          ) : pcHasPending ? (
+            // Already submitted, show Track
+            <button
+              onClick={openTrackModal}
+              className="px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 bg-red-600 text-white hover:bg-red-700"
+            >
+              <Clock className="w-3.5 h-3.5" /> Track
             </button>
           ) : (
+            // Published + locked + no pending → faculty can request edit
             <button
-              onClick={async () => {
-                if (!courseId) return;
-                // Guard: request-edit is supported only for SPECIAL_GLOBAL mode
-                const mode = publishControlInfo?.meta?.mode;
-                if (String(mode || '').toUpperCase() !== 'SPECIAL_GLOBAL') {
-                  setMessage({ type: 'error', text: 'Edit approval requests are only supported for SPECIAL courses.' });
-                  return;
-                }
-                try {
-                  setRequestEditBusy(true);
-                  setMessage(null);
-                  const res = await requestTeachingAssignmentEnabledAssessmentsEdit(Number(courseId));
-                  // update meta if returned
-                  if (res && res.meta) setPublishControlInfo((p: any) => ({ ...(p || {}), meta: res.meta }));
-                  setMessage({ type: 'success', text: 'Request edit approval sent' });
-                } catch (err: any) {
-                  console.error(err);
-                  setMessage({ type: 'error', text: err?.message || 'Failed to request edit approval' });
-                } finally { setRequestEditBusy(false); }
-              }}
-              disabled={requestEditBusy}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${requestEditBusy ? 'bg-gray-300 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-700'}`}>
-              <Send className="w-4 h-4" /> {requestEditBusy ? 'Requesting…' : 'Request Edit'}
+              onClick={openRequestEditModal}
+              disabled={processingAction === 'request_edit'}
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white ${processingAction === 'request_edit' ? 'bg-gray-300 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-700'}`}
+            >
+              {processingAction === 'request_edit' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Edit2 className="w-3.5 h-3.5" />}
+              Request Edit
             </button>
           )}
 
-          {Boolean(notifFlags?.cqi_announce_enabled) && (
+          {Boolean(notifFlags?.cqi_announce_enabled) && !examId && (
             <button
               onClick={announce}
               disabled={announcing || publishing}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white ${
+              className={`px-3 py-1.5 text-sm rounded-lg font-medium flex items-center gap-1.5 text-white ${
                 announcing || publishing
                   ? 'bg-gray-300 cursor-not-allowed'
                   : 'bg-green-600 hover:bg-green-700'
               }`}
               title="Send CQI announcement to students who match any condition"
             >
-              <Send className="w-4 h-4" /> {announcing ? 'Announcing…' : 'Announce'}
+              <Send className="w-3.5 h-3.5" /> {announcing ? 'Announcing…' : 'Announce'}
             </button>
           )}
         </div>
@@ -1208,6 +1549,249 @@ export default function CqiEntryPage() {
 
       {message && (
         <div className={`px-4 py-2 rounded-lg text-sm ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>{message.text}</div>
+      )}
+
+      {/* ── Request Edit / Track Modal ──────────────────────────────────────────── */}
+      {editModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border overflow-hidden">
+            <div className="px-5 py-4 border-b flex items-center gap-3">
+              <div className="flex-1">
+                <div className="text-sm text-gray-500">CQI Entry</div>
+                <div className="text-lg font-semibold text-gray-900">
+                  {editModalView === 'track' ? 'Track Edit Request' : 'Request Edit'}
+                </div>
+              </div>
+              <button onClick={() => setEditModalOpen(false)} className="p-2 rounded-lg hover:bg-gray-100" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {editModalView === 'reason' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                    <textarea
+                      value={editReason}
+                      onChange={(e) => setEditReason(e.target.value)}
+                      rows={4}
+                      className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      placeholder="Enter reason for requesting edit access…"
+                    />
+                    <div className="text-xs text-gray-500 mt-1">This reason will be visible to approvers.</div>
+                  </div>
+                  {editModalError && (
+                    <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{editModalError}</div>
+                  )}
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button onClick={() => setEditModalOpen(false)} className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50">Cancel</button>
+                    <button
+                      onClick={submitEditRequest}
+                      disabled={processingAction === 'request_edit'}
+                      className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {editModalView === 'sending' && (
+                <div className="py-10 text-center space-y-3">
+                  <div className="text-lg font-semibold text-gray-900">Sending request…</div>
+                  <div className="text-sm text-gray-500">Please wait while we submit your request.</div>
+                  <div className="flex items-center justify-center gap-2 pt-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{ animationDelay: '120ms' }} />
+                    <span className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{ animationDelay: '240ms' }} />
+                  </div>
+                </div>
+              )}
+
+              {editModalView === 'track' && (() => {
+                const pr = pc?.pending_request;
+                const wf = approvalWorkflowRoles;
+                const wfAssignees = approvalWorkflowAssignees;
+                const statusStr = String(pr?.status || '').toUpperCase();
+                const history: any[] = Array.isArray(pr?.approval_history) ? pr.approval_history : [];
+                const currentStage = Math.max(1, Number(pr?.current_stage || 1));
+                const pendingStatuses = new Set(['PENDING', 'HOD_PENDING', 'IQAC_PENDING']);
+
+                const assigneeByRole = new Map(
+                  wfAssignees.filter((a) => a && a.role).map((a) => [String(a.role).toUpperCase(), a] as const)
+                );
+
+                const liveExpiresSec = (() => {
+                  const ea = pr?.expires_at;
+                  if (!ea) return null;
+                  const ms = Date.parse(ea);
+                  if (!Number.isFinite(ms)) return null;
+                  return Math.max(0, Math.ceil((ms - Date.now()) / 1000));
+                })();
+                const expiresSec = liveExpiresSec !== null ? liveExpiresSec
+                  : (typeof pr?.expires_remaining_seconds === 'number' ? pr.expires_remaining_seconds : null);
+
+                const requiredRole = (() => {
+                  const rr = pr?.required_role ? String(pr.required_role).toUpperCase() : '';
+                  if (rr) return rr;
+                  const idx = Math.max(0, currentStage - 1);
+                  if (wf[idx]) return String(wf[idx]).toUpperCase();
+                  if (statusStr === 'HOD_PENDING') return 'HOD';
+                  if (statusStr === 'IQAC_PENDING') return 'IQAC';
+                  return '';
+                })();
+
+                const stageDoneRoles = new Set(
+                  wf.slice(0, Math.max(0, currentStage - 1)).map((r) => String(r || '').toUpperCase()).filter(Boolean)
+                );
+                const approvedRoles = new Set(
+                  history.filter((h: any) => String(h?.action || '').toUpperCase() === 'APPROVED')
+                    .map((h: any) => String(h?.role || '').toUpperCase()).filter(Boolean)
+                );
+
+                const steps = [
+                  { key: 'FACULTY', label: 'Faculty' },
+                  ...wf.map((r) => {
+                    const role = String(r).toUpperCase();
+                    const a = assigneeByRole.get(role);
+                    return { key: role, label: role, sublabel: a?.user_name || '' };
+                  }),
+                  { key: 'APPROVED', label: 'Approved' },
+                ];
+
+                const isDone = (key: string) => {
+                  if (key === 'FACULTY') return true;
+                  if (key === 'APPROVED') return statusStr === 'APPROVED';
+                  if (statusStr === 'APPROVED') return true;
+                  if (approvedRoles.has(key) || stageDoneRoles.has(key)) return true;
+                  return false;
+                };
+
+                const currentKey = (() => {
+                  if (statusStr === 'APPROVED') return 'APPROVED';
+                  if (statusStr === 'REJECTED') return requiredRole || (wf[0] ? String(wf[0]).toUpperCase() : 'FACULTY');
+                  if (pendingStatuses.has(statusStr)) return requiredRole || (wf[Math.max(0, currentStage - 1)] ? String(wf[Math.max(0, currentStage - 1)]).toUpperCase() : 'FACULTY');
+                  return 'FACULTY';
+                })();
+
+                const nextApprover = (() => {
+                  const na = pr?.next_approver;
+                  if (na && (na.user_name || na.role)) return na;
+                  if (!requiredRole) return null;
+                  const a = assigneeByRole.get(requiredRole);
+                  return a ? { role: requiredRole, user_id: a.user_id ?? null, user_name: a.user_name ?? null }
+                    : { role: requiredRole, user_id: null, user_name: null };
+                })();
+
+                return (
+                  <>
+                    {!pr ? (
+                      <div className="text-sm text-gray-600">No pending request found.</div>
+                    ) : (
+                      <>
+                        <div className="space-y-1">
+                          <div className="text-sm font-medium text-gray-900">
+                            Status: <span className="font-semibold">{statusStr || 'PENDING'}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
+                            {expiresSec !== null && (
+                              <span>Request expires in <span className="font-semibold text-gray-700">{formatRemaining(expiresSec)}</span></span>
+                            )}
+                            {nextApprover && (nextApprover.role || nextApprover.user_name) && (
+                              <span>
+                                Next approver: <span className="font-semibold text-gray-700">{nextApprover.user_name || '—'}</span>
+                                {nextApprover.role ? <span className="text-gray-600"> ({String(nextApprover.role).toUpperCase()})</span> : null}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Approval stepper */}
+                        <div className="pt-6 pb-4">
+                          <div className="relative flex items-start justify-between gap-2">
+                            <div className="absolute top-4 left-0 right-0 h-0.5 bg-gray-200 z-0" style={{ left: '12%', right: '12%', width: '76%' }}>
+                              <div
+                                className="h-full bg-blue-600 transition-all duration-500"
+                                style={{ width: `${Math.round((Math.max(0, steps.filter(s => isDone(s.key)).length - 1) / Math.max(1, steps.length - 1)) * 100)}%` }}
+                              />
+                            </div>
+                            {steps.map((s, idx) => {
+                              const done = isDone(s.key);
+                              const active = s.key === currentKey && statusStr !== 'APPROVED';
+                              const circleClass = done ? 'bg-blue-600 text-white'
+                                : active ? 'bg-white text-yellow-500 border-2 border-yellow-400'
+                                : 'bg-white text-gray-400 border-2 border-gray-200';
+                              return (
+                                <div key={s.key} className="relative z-10 flex flex-col items-center w-24">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-sm ${circleClass}`} title={s.label}>
+                                    {done ? (idx === 0 ? '1' : '✓') : (active ? <Clock className="w-4 h-4 text-yellow-500" /> : <Clock className="w-4 h-4 text-gray-300" />)}
+                                  </div>
+                                  <div className="mt-2 text-[10px] font-bold text-gray-700 uppercase tracking-widest text-center">{s.label}</div>
+                                  <div className="mt-1 flex justify-center w-full">
+                                    {done ? (
+                                      <div className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded-full border border-blue-200 shadow-sm">{idx === 0 ? 'Submitted' : 'Approved'}</div>
+                                    ) : active ? (
+                                      <div className="px-2 py-0.5 border border-yellow-400 text-yellow-600 text-[10px] font-bold rounded-full bg-yellow-50 shadow-sm">{statusStr === 'REJECTED' ? 'Rejected' : 'Pending'}</div>
+                                    ) : (
+                                      <div className="px-2 py-0.5 border border-gray-200 text-gray-400 text-[10px] font-bold rounded-full bg-gray-50 shadow-sm">Pending</div>
+                                    )}
+                                  </div>
+                                  {('sublabel' in s && (s as any).sublabel) ? (
+                                    <div className="mt-2 text-[11px] font-semibold text-gray-900 text-center truncate max-w-full px-1" title={(s as any).sublabel}>{(s as any).sublabel}</div>
+                                  ) : idx === 0 && (
+                                    <div className="mt-2 text-[11px] font-semibold text-gray-900 text-center truncate max-w-full px-1">Faculty</div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {wfAssignees.length > 0 && (
+                          <div className="border rounded-lg p-3 bg-white">
+                            <div className="text-xs font-semibold text-gray-700 mb-2">Approval stages</div>
+                            <div className="space-y-2">
+                              {wfAssignees.map((a) => (
+                                <div key={String(a.role)} className="flex items-center justify-between gap-3">
+                                  <div className="text-sm font-medium text-gray-800">{String(a.role || '').toUpperCase()}</div>
+                                  <div className="text-sm text-gray-600 truncate">{a.user_name || '—'}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="border rounded-lg p-3 bg-gray-50">
+                          <div className="text-xs font-semibold text-gray-700 mb-1">Reason</div>
+                          <div className="text-sm text-gray-700 whitespace-pre-wrap">{pr.reason || '—'}</div>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2 pt-1 border-t mt-4">
+                      {pr && pendingStatuses.has(statusStr) ? (
+                        <button
+                          onClick={cancelEditRequest}
+                          disabled={processingAction === 'cancel_edit'}
+                          className="px-4 py-2 mt-2 rounded-lg border border-red-200 text-red-600 font-semibold hover:bg-red-50 disabled:opacity-50 text-sm"
+                        >
+                          {processingAction === 'cancel_edit' ? 'Canceling…' : 'Cancel Request'}
+                        </button>
+                      ) : <div />}
+                      <button
+                        onClick={() => setEditModalOpen(false)}
+                        className="px-4 py-2 mt-2 rounded-lg bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200 text-sm"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* CQI formula info */}
@@ -1352,6 +1936,7 @@ export default function CqiEntryPage() {
                       const notAttainedBefore = Boolean(cMeta?.notAttainedBefore);
                       const matchedCond = (cMeta?.matchedCond as any) || null;
                       const matchedColor = String(cMeta?.matchedColor || '').trim();
+                      const contrastColor = matchedColor ? getContrastColor(matchedColor) : null;
 
                       /**
                        * Edit+color are driven by IF match (now based on if_clauses).
@@ -1468,9 +2053,9 @@ export default function CqiEntryPage() {
                         >
                           <div
                             className={`rounded-2xl border px-3 py-3 shadow-sm ${cellTone}`}
-                            style={matchedColor ? { backgroundColor: matchedColor, borderColor: matchedColor } : undefined}
+                            style={matchedColor ? { backgroundColor: matchedColor, borderColor: matchedColor, color: contrastColor! } : undefined}
                           >
-                            <div className="mb-2 text-sm font-semibold text-gray-700">{round2(c.value)} / {round2(c.max)}</div>
+                            <div className="mb-2 text-sm font-semibold text-gray-700" style={contrastColor ? { color: contrastColor } : undefined}>{round2(c.value)} / {round2(c.max)}</div>
                             {!hasCqiConfig ? (
                               <div>
                                 <div className="mb-2 text-[11px] font-semibold text-amber-600">Formula not set</div>
@@ -1484,17 +2069,17 @@ export default function CqiEntryPage() {
                                 />
                               </div>
                             ) : !notAttainedBefore ? (
-                              <div className="text-xs font-semibold text-green-700">Attained</div>
+                              <div className="text-xs font-semibold text-green-700" style={contrastColor ? { color: contrastColor } : undefined}>Attained</div>
                             ) : (
                               <div>
                                 {isCqiAttained ? (
-                                  <div className="mb-2 text-[11px] font-bold text-red-600">CQI Attained</div>
+                                  <div className="mb-2 text-[11px] font-bold text-red-600" style={contrastColor ? { color: contrastColor } : undefined}>CQI Attained</div>
                                 ) : hasCqiConfig ? (
-                                  <div className="mb-2 text-[11px] font-semibold text-red-700">
-                                    CO Not Attained{hasInput && addRaw > 0 && <span className="ml-1 text-green-700">+{round2(addRaw)}</span>}
+                                  <div className="mb-2 text-[11px] font-semibold text-red-700" style={contrastColor ? { color: contrastColor } : undefined}>
+                                    CO Not Attained{hasInput && addRaw > 0 && <span className="ml-1 text-green-700" style={contrastColor ? { color: contrastColor } : undefined}>+{round2(addRaw)}</span>}
                                   </div>
                                 ) : (
-                                  <div className="mb-2 text-[11px] font-semibold text-amber-500">Formula not set</div>
+                                  <div className="mb-2 text-[11px] font-semibold text-amber-500" style={contrastColor ? { color: contrastColor } : undefined}>Formula not set</div>
                                 )}
                                 {allowInput ? (
                                   <input
@@ -1505,8 +2090,15 @@ export default function CqiEntryPage() {
                                     placeholder="Enter CQI"
                                     className="w-[96px] rounded-xl border border-gray-300 bg-white px-2 py-1.5 text-center text-sm disabled:bg-gray-100"
                                   />
+                                ) : current !== null && current !== undefined ? (
+                                  <div
+                                    className="w-[96px] rounded-xl border px-2 py-1.5 text-center text-sm font-semibold mx-auto"
+                                    style={{ borderColor: contrastColor ? 'rgba(128,128,128,0.4)' : '#d1d5db', backgroundColor: contrastColor ? 'rgba(255,255,255,0.15)' : '#f9fafb', color: contrastColor || '#374151' }}
+                                  >
+                                    {current}
+                                  </div>
                                 ) : (
-                                  <div className="text-[11px] text-gray-400">—</div>
+                                  <div className="text-[11px] text-gray-400" style={contrastColor ? { color: contrastColor } : undefined}>—</div>
                                 )}
                               </div>
                             )}

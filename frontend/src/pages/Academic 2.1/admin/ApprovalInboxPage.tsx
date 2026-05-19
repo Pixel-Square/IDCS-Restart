@@ -1,23 +1,30 @@
 /**
  * Approval Inbox Page
- * Review and process edit requests from faculty
+ * Review and process edit requests from faculty (exam marks + CQI)
  */
 
 import React, { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Clock, RefreshCw, Eye, Filter, Search } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
+interface ExamInfo {
+  exam: string;
+  subject_code: string;
+  subject_name: string;
+  section_name: string;
+  department_code?: string;
+  department_name?: string;
+  department_short_name?: string;
+}
+
 interface EditRequest {
   id: string;
-  exam_info: {
-    exam: string;
-    subject_code: string;
-    subject_name: string;
-    section_name: string;
-    department_code?: string;
-    department_name?: string;
-    department_short_name?: string;
-  };
+  /** 'exam' for regular mark-entry requests; 'CQI' for CQI requests */
+  request_type?: 'CQI' | 'exam';
+  /** Present for regular mark-entry requests */
+  exam_info?: ExamInfo;
+  /** Present for CQI requests (same shape) */
+  cqi_info?: ExamInfo;
   requested_by: string;
   requested_by_name: string;
   requested_by_username?: string;
@@ -42,10 +49,18 @@ const initialsFromName = (name: string) =>
     .map(s => s[0]?.toUpperCase())
     .join('') || 'U';
 
+/** Return the exam/course info for a request regardless of its type. */
+function getInfo(req: EditRequest): ExamInfo {
+  return (req.request_type === 'CQI' ? req.cqi_info : req.exam_info) || {
+    exam: '—', subject_code: '—', subject_name: '—', section_name: '—',
+  };
+}
+
 export default function ApprovalInboxPage() {
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState<EditRequest[]>([]);
   const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('PENDING');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'CQI' | 'EXAM'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [processing, setProcessing] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -87,10 +102,25 @@ export default function ApprovalInboxPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const response = await fetchWithAuth('/api/academic-v2/edit-requests/');
-      if (!response.ok) throw new Error('Failed to load');
-      const data = await response.json();
-      setRequests(Array.isArray(data) ? data : (data.results || []));
+      const [examRes, cqiRes] = await Promise.all([
+        fetchWithAuth('/api/academic-v2/edit-requests/'),
+        fetchWithAuth('/api/academic-v2/cqi-edit-requests/'),
+      ]);
+      if (!examRes.ok) throw new Error('Failed to load exam requests');
+      const examData = await examRes.json();
+      const examRequests: EditRequest[] = (Array.isArray(examData) ? examData : (examData.results || [])).map((r: any) => ({ ...r, request_type: 'exam' as const }));
+
+      let cqiRequests: EditRequest[] = [];
+      if (cqiRes.ok) {
+        const cqiData = await cqiRes.json();
+        cqiRequests = (Array.isArray(cqiData) ? cqiData : (cqiData.results || [])).map((r: any) => ({ ...r, request_type: 'CQI' as const }));
+      }
+
+      // Merge and sort by date descending
+      const all = [...examRequests, ...cqiRequests].sort((a, b) =>
+        new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime()
+      );
+      setRequests(all);
     } catch (error) {
       console.error('Failed to load:', error);
       setMessage({ type: 'error', text: 'Failed to load edit requests' });
@@ -100,9 +130,11 @@ export default function ApprovalInboxPage() {
   };
 
   const handleApprove = async (requestId: string) => {
+    const req = requests.find(r => r.id === requestId);
+    const base = req?.request_type === 'CQI' ? 'cqi-edit-requests' : 'edit-requests';
     try {
       setProcessing(requestId);
-      const response = await fetchWithAuth(`/api/academic-v2/edit-requests/${requestId}/approve/`, {
+      const response = await fetchWithAuth(`/api/academic-v2/${base}/${requestId}/approve/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes: responseNote }),
@@ -131,10 +163,11 @@ export default function ApprovalInboxPage() {
       setMessage({ type: 'error', text: 'Please provide a reason for rejection' });
       return;
     }
-    
+    const req = requests.find(r => r.id === requestId);
+    const base = req?.request_type === 'CQI' ? 'cqi-edit-requests' : 'edit-requests';
     try {
       setProcessing(requestId);
-      const response = await fetchWithAuth(`/api/academic-v2/edit-requests/${requestId}/reject/`, {
+      const response = await fetchWithAuth(`/api/academic-v2/${base}/${requestId}/reject/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: responseNote }),
@@ -164,14 +197,19 @@ export default function ApprovalInboxPage() {
       if (filter === 'APPROVED' && String(r.status || '').toUpperCase() !== 'APPROVED') return false;
       if (filter === 'REJECTED' && String(r.status || '').toUpperCase() !== 'REJECTED') return false;
     }
+    if (typeFilter !== 'ALL') {
+      if (typeFilter === 'CQI' && r.request_type !== 'CQI') return false;
+      if (typeFilter === 'EXAM' && r.request_type === 'CQI') return false;
+    }
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
+      const info = getInfo(r);
       return (
-        r.exam_info?.subject_code?.toLowerCase().includes(query) ||
-        r.exam_info?.subject_name?.toLowerCase().includes(query) ||
-        r.exam_info?.exam?.toLowerCase().includes(query) ||
+        info.subject_code?.toLowerCase().includes(query) ||
+        info.subject_name?.toLowerCase().includes(query) ||
+        info.exam?.toLowerCase().includes(query) ||
         r.requested_by_name?.toLowerCase().includes(query) ||
-        r.exam_info?.section_name?.toLowerCase().includes(query)
+        info.section_name?.toLowerCase().includes(query)
       );
     }
     return true;
@@ -248,6 +286,22 @@ export default function ApprovalInboxPage() {
               </button>
             ))}
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-500">Type:</span>
+            {(['ALL', 'EXAM', 'CQI'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTypeFilter(t)}
+                className={`px-3 py-1 rounded-lg text-sm ${
+                  typeFilter === t
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
           <div className="flex-1 min-w-[200px]">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -274,7 +328,7 @@ export default function ApprovalInboxPage() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Course</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Exam</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type / Exam</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Faculty</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Reason</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -283,16 +337,26 @@ export default function ApprovalInboxPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {filteredRequests.map((req) => (
+              {filteredRequests.map((req) => {
+                const info = getInfo(req);
+                const isCqi = req.request_type === 'CQI';
+                return (
                 <tr key={req.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
-                    <div className="font-medium">{req.exam_info?.subject_code}</div>
-                    <div className="text-sm text-gray-500">{req.exam_info?.subject_name}</div>
+                    <div className="font-medium">{info.subject_code}</div>
+                    <div className="text-sm text-gray-500">{info.subject_name}</div>
                   </td>
-                  <td className="px-4 py-3 text-sm">{req.exam_info?.exam}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      {isCqi && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-700 uppercase tracking-wide">CQI</span>
+                      )}
+                      <span className="text-sm">{info.exam}</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3">
                     <div className="text-sm">{req.requested_by_name}</div>
-                    <div className="text-xs text-gray-500">{req.exam_info?.section_name}</div>
+                    <div className="text-xs text-gray-500">{info.section_name}</div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">
                     {req.reason}
@@ -322,7 +386,8 @@ export default function ApprovalInboxPage() {
                     )}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
@@ -360,22 +425,27 @@ export default function ApprovalInboxPage() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-gray-500">Course:</span>
-                  <p className="font-medium">{selectedRequest.exam_info?.subject_code}</p>
+                  <p className="font-medium">{getInfo(selectedRequest).subject_code}</p>
                 </div>
                 <div>
-                  <span className="text-gray-500">Exam:</span>
-                  <p className="font-medium">{selectedRequest.exam_info?.exam}</p>
+                  <span className="text-gray-500">{selectedRequest.request_type === 'CQI' ? 'Type' : 'Exam'}:</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    {selectedRequest.request_type === 'CQI' && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-700 uppercase">CQI</span>
+                    )}
+                    <p className="font-medium">{getInfo(selectedRequest).exam}</p>
+                  </div>
                 </div>
                 <div>
                   <span className="text-gray-500">Section:</span>
-                  <p className="font-medium">{selectedRequest.exam_info?.section_name}</p>
+                  <p className="font-medium">{getInfo(selectedRequest).section_name}</p>
                 </div>
                 <div>
                   <span className="text-gray-500">Department:</span>
                   <p className="font-medium">
-                    {selectedRequest.exam_info?.department_short_name ||
-                      selectedRequest.exam_info?.department_name ||
-                      selectedRequest.exam_info?.department_code ||
+                    {getInfo(selectedRequest).department_short_name ||
+                      getInfo(selectedRequest).department_name ||
+                      getInfo(selectedRequest).department_code ||
                       '—'}
                   </p>
                 </div>

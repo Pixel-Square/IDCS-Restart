@@ -359,7 +359,7 @@ export default function InternalMarkPageBypass({
                     <button
                       onClick={() => {
                         if (isCqi) {
-                          navigate(`/academic-v2/course/${courseId}/cqi`);
+                          navigate(`/academic-v2/cqi/${exam.id}`);
                         } else {
                           navigate(`/academic-v2/exam/${exam.id}`);
                         }

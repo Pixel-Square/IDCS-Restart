@@ -9,6 +9,7 @@ from rest_framework import serializers
 from .models import (
     AcV2SemesterConfig,
     AcV2ClassType,
+    AcV2CqiExam,
     Weigthts,
     AcV2QpPattern,
     AcV2QpAssignment,
@@ -25,6 +26,8 @@ from .models import (
     AcV2AcademicNotificationSetting,
     AcV2CqiToken,
     AcV2CqiOperator,
+    AcV2CqiEditRequest,
+    AcV2MyMarksSetting,
 )
 
 
@@ -234,6 +237,68 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
                     ).filter(
                         exam_assignment__name__iexact=exam_display,
                     ).update(pass_mark=pm_val)
+
+                # Sync CQI configs into normalized CQI table
+                req = self.context.get('request')
+                user = getattr(req, 'user', None)
+
+                keep_by_qp: dict[str, list[str]] = {}
+                global_vars = getattr(instance, 'cqi_global_custom_vars', [])
+                if not isinstance(global_vars, list):
+                    global_vars = []
+
+                for idx, ea in enumerate(instance.exam_assignments or []):
+                    if not isinstance(ea, dict):
+                        continue
+                    if str(ea.get('kind') or '').strip().lower() != 'cqi' and ea.get('is_cqi') is not True:
+                        continue
+                    qp_type_code = str(ea.get('qp_type') or '').strip()
+                    if not qp_type_code:
+                        continue
+                    exam_code = str(ea.get('exam') or '').strip()
+                    exam_display = str(ea.get('exam_display_name') or '').strip()
+                    if not exam_code and exam_display:
+                        exam_code = exam_display
+                    if not exam_code:
+                        continue
+
+                    cqi = ea.get('cqi') if isinstance(ea.get('cqi'), dict) else {}
+                    qp_type_obj = AcV2QpType.objects.filter(is_active=True, code__iexact=qp_type_code).order_by('-class_type_id').first()
+
+                    defaults = {
+                        'qp_type': qp_type_obj,
+                        'exam_display_name': exam_display,
+                        'order': int(ea.get('order') or (idx + 1)),
+                        'is_active': bool(ea.get('enabled', True)),
+                        'cqi_name': str(cqi.get('name') or ''),
+                        'cqi_code': str(cqi.get('code') or ''),
+                        'cycle_id': str(cqi.get('cycle_id') or ''),
+                        'cos': cqi.get('cos', []) if isinstance(cqi.get('cos'), list) else [],
+                        'considered_exams': cqi.get('exams', []) if isinstance(cqi.get('exams'), list) else [],
+                        'custom_vars': cqi.get('custom_vars', []) if isinstance(cqi.get('custom_vars'), list) else [],
+                        'global_custom_vars': global_vars,
+                        'derived_variables': cqi.get('derived_variables', []) if isinstance(cqi.get('derived_variables'), list) else [],
+                        'co_value_expr': str(cqi.get('co_value_expr') or ''),
+                        'formula': str(cqi.get('formula') or ''),
+                        'conditions': cqi.get('conditions', []) if isinstance(cqi.get('conditions'), list) else [],
+                        'else_formula': str(cqi.get('else_formula') or ''),
+                        'updated_by': user if getattr(user, 'is_authenticated', False) else None,
+                    }
+
+                    AcV2CqiExam.objects.update_or_create(
+                        class_type=instance,
+                        qp_type_code=qp_type_code,
+                        exam_code=exam_code,
+                        defaults=defaults,
+                    )
+                    keep_by_qp.setdefault(qp_type_code.lower(), []).append(exam_code)
+
+                # Prune removed CQI configs (only for qp_types present in payload)
+                for qp_norm, codes in keep_by_qp.items():
+                    AcV2CqiExam.objects.filter(
+                        class_type=instance,
+                        qp_type_code__iexact=qp_norm,
+                    ).exclude(exam_code__in=codes).delete()
 
             except Exception:
                 # Non-critical: do not block class type updates if mirror sync fails
@@ -458,6 +523,105 @@ class AcV2EditRequestSerializer(serializers.ModelSerializer):
         return f'/media/{cleaned}'
 
 
+class AcV2CqiEditRequestSerializer(serializers.ModelSerializer):
+    """Serializer for CQI edit requests shown in the approval inbox."""
+    cqi_info = serializers.SerializerMethodField()
+    requested_by_name = serializers.CharField(source='requested_by.get_full_name', read_only=True)
+    requested_by_username = serializers.SerializerMethodField()
+    requested_by_staff_id = serializers.SerializerMethodField()
+    requested_by_profile_image = serializers.SerializerMethodField()
+    request_type = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AcV2CqiEditRequest
+        fields = [
+            'id', 'cqi_info', 'request_type',
+            'requested_by', 'requested_by_name', 'requested_by_username',
+            'requested_by_staff_id', 'requested_by_profile_image',
+            'requested_at', 'reason', 'status', 'current_stage',
+            'approval_history', 'approved_until',
+            'reviewed_by', 'reviewed_at', 'rejection_reason',
+        ]
+        read_only_fields = ['id', 'requested_at', 'reviewed_at']
+
+    def get_request_type(self, obj):
+        return 'CQI'
+
+    def get_cqi_info(self, obj):
+        try:
+            ta = obj.cqi_attained.teaching_assignment
+        except Exception:
+            return {}
+        try:
+            subject_code = ta.course.subject_code if hasattr(ta, 'course') else ''
+            subject_name = ta.course.subject_name if hasattr(ta, 'course') else ''
+        except Exception:
+            subject_code = ''
+            subject_name = ''
+        # Try to get section name + department from acv2_sections
+        section_name = ''
+        dept = None
+        try:
+            sec = ta.acv2_sections.select_related('course').first()
+            if sec:
+                section_name = getattr(sec, 'section_name', '') or ''
+                try:
+                    acad_sec = ta.section
+                    dept = (
+                        getattr(acad_sec, 'managing_department', None)
+                        or getattr(getattr(acad_sec, 'batch', None), 'department', None)
+                    )
+                except Exception:
+                    dept = None
+                if not subject_code:
+                    try:
+                        subject_code = sec.course.subject_code or ''
+                        subject_name = sec.course.subject_name or ''
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return {
+            'exam': 'CQI',
+            'subject_code': subject_code,
+            'subject_name': subject_name,
+            'section_name': section_name,
+            'department_code': getattr(dept, 'code', '') or '',
+            'department_name': getattr(dept, 'name', '') or '',
+            'department_short_name': getattr(dept, 'short_name', '') or '',
+        }
+
+    def get_requested_by_username(self, obj):
+        try:
+            return str(getattr(obj.requested_by, 'username', '') or '')
+        except Exception:
+            return ''
+
+    def get_requested_by_staff_id(self, obj):
+        try:
+            from academics.models import StaffProfile
+            profile = StaffProfile.objects.filter(user=obj.requested_by).first()
+            return profile.staff_id if profile and getattr(profile, 'staff_id', None) else (getattr(obj.requested_by, 'username', '') or '')
+        except Exception:
+            return getattr(obj.requested_by, 'username', '') or ''
+
+    def get_requested_by_profile_image(self, obj):
+        value = ''
+        try:
+            staff_profile = getattr(obj.requested_by, 'staff_profile', None)
+            if staff_profile is not None and getattr(staff_profile, 'profile_image', None):
+                value = str(staff_profile.profile_image)
+        except Exception:
+            value = ''
+        value = value.strip()
+        if not value:
+            return ''
+        if value.startswith('http://') or value.startswith('https://'):
+            return value
+        cleaned = value.lstrip('/')
+        return f'/media/{cleaned}'
+
+
 class AcV2InternalMarkSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcV2InternalMark
@@ -549,6 +713,19 @@ class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
             'every_publish_template',
             'cqi_announce_enabled',
             'cqi_announce_template',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'key', 'created_at', 'updated_at']
+
+
+class AcV2MyMarksSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2MyMarksSetting
+        fields = [
+            'id', 'key',
+            'viewing_enabled',
+            'require_profile_photo',
+            'require_mobile_number',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'key', 'created_at', 'updated_at']

@@ -86,6 +86,42 @@ interface CycleOption {
 
 type HighlightToken = { type: 'token' | 'op' | 'paren' | 'number' | 'ident' | 'text'; value: string };
 
+function normalizeClauseOperator(opRaw: string): string {
+  const op = String(opRaw || '').trim();
+  if (!op) return '';
+  return op === '=' ? '==' : op;
+}
+
+function normalizeClauseForEditor(clause: CqiIfClause): CqiIfClause {
+  const tokenRaw = String((clause as any)?.token || '').toUpperCase();
+  const token = tokenRaw === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : tokenRaw;
+  const operatorRaw = String((clause as any)?.operator || '').trim();
+  let operator = normalizeClauseOperator(operatorRaw);
+  let rhs = String((clause as any)?.rhs || '').trim();
+
+  // RAW clause: RHS is the whole boolean expression; don't split/normalize further.
+  if (!token) {
+    return { token: '', rhs };
+  }
+
+  const prefixMatch = rhs.match(/^((?:(?:<=|>=|==|!=|=|<|>)\s*)+)(.*)$/);
+  if (prefixMatch) {
+    const ops = prefixMatch[1].match(/<=|>=|==|!=|=|<|>/g) || [];
+    operator = normalizeClauseOperator((ops[ops.length - 1] || operator || '').trim());
+    rhs = String(prefixMatch[2] || '').trim();
+  }
+
+  const standaloneExpr = (
+    (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') &&
+    (!operator || operator === '==' || operator === '=') &&
+    /(<=|>=|==|!=|=|<|>)/.test(rhs) &&
+    !/^(<=|>=|==|!=|=|<|>)/.test(rhs)
+  );
+
+  // Convert legacy "standalone" expression into a RAW clause to avoid operator dropdown fallback.
+  return standaloneExpr ? { token: '', rhs } : { token, operator, rhs };
+}
+
 function highlightMathLikeExpression(
   expr: string,
   tokenMeta: (code: string) => { badge: string; badgeClass: string; rowClass: string; tokenClass: string }
@@ -171,6 +207,8 @@ function ColoredExpressionPreview({
 type Props = {
   open: boolean;
   onClose: () => void;
+  onSave?: () => Promise<void> | void;
+  saving?: boolean;
 
   // CQI editing identity
   selectedExamAssignment: { exam: ExamAssignment['exam']; exam_display_name: string; qp_type: string } | null;
@@ -252,11 +290,20 @@ export default function QpCqiEditorPopup(props: Props) {
             {props.isEditing && (
               <button
                 type="button"
-                onClick={props.onClose}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100"
+                disabled={!!props.saving}
+                onClick={async () => {
+                  try {
+                    if (props.onSave) await props.onSave();
+                    props.onClose();
+                  } catch (e) {
+                    // Parent is expected to surface an error message.
+                    console.error('CQI save failed', e);
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 disabled:opacity-60"
                 title="Save CQI configuration"
               >
-                <Save className="w-3.5 h-3.5" /> Save & Close
+                <Save className="w-3.5 h-3.5" /> {props.saving ? 'Saving…' : 'Save & Close'}
               </button>
             )}
             <button onClick={props.onClose} className="p-2 rounded hover:bg-gray-100" title="Close">
@@ -673,7 +720,7 @@ export default function QpCqiEditorPopup(props: Props) {
                         onClick={() => {
                           props.updateCqi((prev) => ({
                             ...prev,
-                            conditions: [...(prev.conditions || []), { title: '', if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI_COX', operator: '<', rhs: '' }] }],
+                            conditions: [...(prev.conditions || []), { title: '', if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: '', rhs: '' }] }],
                           }));
                         }}
                         className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-2"
@@ -689,10 +736,7 @@ export default function QpCqiEditorPopup(props: Props) {
                       const rawClauses = Array.isArray((cond as any)?.if_clauses)
                         ? ((cond as any).if_clauses as CqiIfClause[])
                         : props.parseIfClauses(rawIf);
-                      const clauses = (rawClauses || []).map((cl) => ({
-                        ...cl,
-                        token: String((cl as any)?.token || '').toUpperCase() === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : String((cl as any)?.token || '').toUpperCase(),
-                      }));
+                      const clauses = (rawClauses || []).map((cl) => normalizeClauseForEditor(cl));
 
                       const writeClauses = (nextClauses: CqiIfClause[]) => {
                         props.updateCqi((prev) => {
@@ -775,6 +819,7 @@ export default function QpCqiEditorPopup(props: Props) {
 
                               <div className="space-y-2">
                                 {clauses.map((cl, ci) => {
+                                  const tokenValue = String((cl as any)?.token || '').trim();
                                   // Tokens available in conditions from DB (fallback to 3 core tokens)
                                   const conditionTokens = (props.dbCqiTokens || [])
                                     .filter((t) => t.available_in_condition)
@@ -810,6 +855,10 @@ export default function QpCqiEditorPopup(props: Props) {
                                         { id: '5', code: '==', symbol: '=', label: 'Equal', order: 5 },
                                         { id: '6', code: '!=', symbol: '≠', label: 'Not equal', order: 6 },
                                       ];
+                                  const operatorOptionsNormalized = operatorOptions.map((op) => ({
+                                    ...op,
+                                    code: normalizeClauseOperator(String(op.code || '').trim()) || String(op.code || '').trim(),
+                                  }));
                                   return (
                                   <div key={ci} className="flex flex-col gap-1.5">
                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -817,13 +866,19 @@ export default function QpCqiEditorPopup(props: Props) {
                                       {hasDbTokens ? (
                                         <select
                                           disabled={!props.isEditing}
-                                          value={cl.token}
+                                          value={tokenValue}
                                           onChange={(e) => {
-                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value } : x);
+                                            const nextToken = String(e.target.value || '').trim();
+                                            const nextClauses = clauses.map((x, j) => {
+                                              if (j !== ci) return x;
+                                              // RAW clause: clear operator so it doesn't get serialized.
+                                              return nextToken ? { ...x, token: nextToken } : { ...x, token: '', operator: '', rhs: String((x as any).rhs || '') };
+                                            });
                                             writeClauses(nextClauses);
                                           }}
                                           className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 min-w-[120px]"
                                         >
+                                          <option value="">— (RHS only)</option>
                                           {allConditionTokens.map((t) => (
                                             <option key={t.id} value={t.code}>{t.code}</option>
                                           ))}
@@ -831,13 +886,18 @@ export default function QpCqiEditorPopup(props: Props) {
                                       ) : (
                                         <select
                                           disabled={!props.isEditing}
-                                          value={cl.token}
+                                          value={tokenValue}
                                           onChange={(e) => {
-                                            const nextClauses = clauses.map((x, j) => j === ci ? { ...x, token: e.target.value } : x);
+                                            const nextToken = String(e.target.value || '').trim();
+                                            const nextClauses = clauses.map((x, j) => {
+                                              if (j !== ci) return x;
+                                              return nextToken ? { ...x, token: nextToken } : { ...x, token: '', operator: '', rhs: String((x as any).rhs || '') };
+                                            });
                                             writeClauses(nextClauses);
                                           }}
                                           className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700"
                                         >
+                                          <option value="">— (RHS only)</option>
                                             <option value="BEFORE_CQI_COX">BEFORE_CQI_COX</option>
                                           <option value="AFTER_CQI">AFTER_CQI</option>
                                           <option value="TOTAL_CQI">TOTAL_CQI</option>
@@ -846,18 +906,18 @@ export default function QpCqiEditorPopup(props: Props) {
 
                                       {/* Operator selector */}
                                       <select
-                                        disabled={!props.isEditing}
-                                        value={(String(cl.operator || '<').trim() === '=') ? '==' : String(cl.operator || '<').trim()}
+                                        disabled={!props.isEditing || !tokenValue}
+                                        value={tokenValue ? (normalizeClauseOperator(String((cl as any).operator || '').trim()) || '<') : ''}
                                         onChange={(e) => {
-                                          const nextOpRaw = String(e.target.value || '<').trim();
-                                          const nextOp = nextOpRaw === '=' ? '==' : nextOpRaw;
+                                          const nextOp = normalizeClauseOperator(String(e.target.value || '<').trim()) || '<';
                                           const nextClauses = clauses.map((x, j) => j === ci ? { ...x, operator: nextOp } : x);
                                           writeClauses(nextClauses);
                                         }}
                                         className="px-2 py-1.5 border rounded-lg text-xs font-mono bg-white text-gray-700 w-16"
                                       >
-                                        {operatorOptions.map((op) => (
-                                          <option key={op.id} value={(String(op.code || '').trim() === '=') ? '==' : String(op.code || '').trim()} title={op.label}>{op.symbol}</option>
+                                        <option value="" disabled>—</option>
+                                        {operatorOptionsNormalized.map((op) => (
+                                          <option key={op.id} value={String(op.code || '').trim()} title={op.label}>{op.symbol}</option>
                                         ))}
                                       </select>
 
@@ -869,7 +929,7 @@ export default function QpCqiEditorPopup(props: Props) {
                                           const nextClauses = clauses.map((x, j) => j === ci ? { ...x, rhs: e.target.value } : x);
                                           writeClauses(nextClauses);
                                         }}
-                                        placeholder="value e.g. 58"
+                                        placeholder={tokenValue ? 'value e.g. 58' : 'boolean IF expr e.g. ([TOTAL_CQI] < 58)'}
                                         className="flex-1 min-w-[60px] px-2 py-1.5 border rounded-lg text-xs font-mono"
                                       />
 
@@ -970,6 +1030,60 @@ export default function QpCqiEditorPopup(props: Props) {
                                   className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
                                 />
                               </div>
+                            </div>
+                          </div>
+
+                          {/* Cap limit (optional, admin-set per-condition) */}
+                          <div className="mt-3 pt-3 border-t border-dashed border-gray-200">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <label className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean((cond as any)?.cap_enabled)}
+                                  disabled={!props.isEditing}
+                                  onChange={(e) => {
+                                    props.updateCqi((prev) => {
+                                      const next = [...(prev.conditions || [])];
+                                      const c: any = { ...(next[idx] || {}) };
+                                      c.cap_enabled = e.target.checked;
+                                      if (!e.target.checked) delete c.cap_percent;
+                                      next[idx] = c;
+                                      return { ...prev, conditions: next };
+                                    });
+                                  }}
+                                  className="w-4 h-4 rounded text-blue-600"
+                                />
+                                <span className="text-xs font-medium text-gray-700">Cap CO total at</span>
+                              </label>
+                              {Boolean((cond as any)?.cap_enabled) && (
+                                <>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max="100"
+                                      step="0.5"
+                                      value={(cond as any)?.cap_percent ?? 58}
+                                      disabled={!props.isEditing}
+                                      onChange={(e) => {
+                                        const v = parseFloat(e.target.value);
+                                        props.updateCqi((prev) => {
+                                          const next = [...(prev.conditions || [])];
+                                          const c: any = { ...(next[idx] || {}) };
+                                          c.cap_percent = Number.isFinite(v) && v >= 0 ? v : 58;
+                                          next[idx] = c;
+                                          return { ...prev, conditions: next };
+                                        });
+                                      }}
+                                      className="w-20 px-2 py-1.5 border rounded-lg text-center text-xs font-mono focus:ring-2 focus:ring-blue-400"
+                                    />
+                                    <span className="text-xs text-gray-600 font-medium">%</span>
+                                  </div>
+                                  <span className="text-xs text-gray-400">
+                                    Students matching this condition: CQI additions stop once the weighted CO total reaches this % of CO-MAX.
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>

@@ -1502,6 +1502,22 @@ class AcV2CqiAttained(models.Model):
     published_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Edit-request flow (mirrors AcV2ExamAssignment fields)
+    has_pending_edit_request = models.BooleanField(default=False)
+    edit_window_until = models.DateTimeField(null=True, blank=True)
+
+    def get_semester_config(self):
+        """Get semester config for publish control settings."""
+        try:
+            sec = self.teaching_assignment.acv2_sections.select_related(
+                'course__semester__acv2_config'
+            ).first()
+            if sec:
+                return sec.course.semester.acv2_config
+        except Exception:
+            pass
+        return None
+
     class Meta:
         db_table = 'acv2_cqi_attained'
         verbose_name = 'CQI Attained'
@@ -1512,6 +1528,244 @@ class AcV2CqiAttained(models.Model):
 
     def __str__(self):
         return f"CQI Attained - TA {getattr(self.teaching_assignment, 'id', '')}"
+
+
+class AcV2CqiEditRequest(models.Model):
+    """
+    Edit request from faculty after publishing CQI.
+    Mirrors AcV2EditRequest but linked to AcV2CqiAttained.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    cqi_attained = models.ForeignKey(
+        'AcV2CqiAttained',
+        on_delete=models.CASCADE,
+        related_name='edit_requests',
+    )
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='acv2_cqi_edit_requests',
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField()
+
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('HOD_PENDING', 'Pending HOD Approval'),
+        ('IQAC_PENDING', 'Pending IQAC Approval'),
+        ('APPROVED', 'Approved'),
+        ('REJECTED', 'Rejected'),
+        ('EXPIRED', 'Expired'),
+        ('CANCELLED', 'Cancelled'),
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    current_stage = models.IntegerField(default=1)
+    approval_history = models.JSONField(default=list, blank=True)
+    approved_until = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_cqi_reviewed_requests',
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_edit_request'
+        verbose_name = 'CQI Edit Request'
+        verbose_name_plural = 'CQI Edit Requests'
+        indexes = [
+            models.Index(fields=['status', 'requested_at']),
+            models.Index(fields=['cqi_attained', 'status']),
+        ]
+
+    def __str__(self):
+        return f"CQI EditRequest #{self.id} - {self.status}"
+
+    def approve(self, user, window_minutes=120, notes=''):
+        now = timezone.now()
+        self.status = 'APPROVED'
+        self.reviewed_by = user
+        self.reviewed_at = now
+        self.approved_until = now + timedelta(minutes=window_minutes)
+
+        self.cqi_attained.edit_window_until = self.approved_until
+        self.cqi_attained.has_pending_edit_request = False
+        self.cqi_attained.save(update_fields=['edit_window_until', 'has_pending_edit_request'])
+
+        history = self.approval_history or []
+        history.append({
+            'stage': self.current_stage,
+            'user_id': user.id,
+            'user_name': str(user),
+            'action': 'APPROVED',
+            'at': now.isoformat(),
+            'notes': notes,
+            'window_minutes': window_minutes,
+        })
+        self.approval_history = history
+        self.save()
+
+    def reject(self, user, reason=''):
+        now = timezone.now()
+        self.status = 'REJECTED'
+        self.reviewed_by = user
+        self.reviewed_at = now
+        self.rejection_reason = reason
+
+        self.cqi_attained.has_pending_edit_request = False
+        self.cqi_attained.save(update_fields=['has_pending_edit_request'])
+
+        history = self.approval_history or []
+        history.append({
+            'stage': self.current_stage,
+            'user_id': user.id,
+            'user_name': str(user),
+            'action': 'REJECTED',
+            'at': now.isoformat(),
+            'reason': reason,
+        })
+        self.approval_history = history
+        self.save()
+
+
+class AcV2CqiExam(models.Model):
+    """Persisted CQI exam configuration.
+
+    This normalizes CQI config out of AcV2ClassType.exam_assignments JSON so:
+    - CO selections are stable and authoritative
+    - conditions/formulas are persisted without UI normalization drift
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    class_type = models.ForeignKey(
+        'academic_v2.AcV2ClassType',
+        on_delete=models.CASCADE,
+        related_name='cqi_exams',
+    )
+
+    # Stored explicitly for robust matching even if qp_type FK cannot be resolved.
+    qp_type_code = models.CharField(max_length=50, db_index=True)
+
+    # Optional linkage to the resolved QP type row.
+    qp_type = models.ForeignKey(
+        'academic_v2.AcV2QpType',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cqi_exams',
+    )
+
+    # Optional linkage for future use (requested FK). This may be null for CQI.
+    qp_assignment = models.ForeignKey(
+        'academic_v2.AcV2QpAssignment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cqi_exams',
+    )
+
+    exam_code = models.CharField(max_length=50)
+    exam_display_name = models.CharField(max_length=100, blank=True)
+    order = models.IntegerField(default=0, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    cqi_name = models.CharField(max_length=255, blank=True)
+    cqi_code = models.CharField(max_length=50, blank=True)
+    cycle_id = models.CharField(max_length=100, blank=True)
+
+    cos = models.JSONField(default=list, blank=True)
+    considered_exams = models.JSONField(default=list, blank=True)
+    custom_vars = models.JSONField(default=list, blank=True)
+    global_custom_vars = models.JSONField(default=list, blank=True)
+    derived_variables = models.JSONField(default=list, blank=True)
+
+    co_value_expr = models.TextField(blank=True)
+    formula = models.TextField(blank=True)
+    conditions = models.JSONField(default=list, blank=True)
+    else_formula = models.TextField(blank=True)
+
+    updated_by = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_cqi_exam_updates',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_exam'
+        verbose_name = 'CQI Exam'
+        verbose_name_plural = 'CQI Exams'
+        constraints = [
+            UniqueConstraint(
+                fields=['class_type', 'qp_type_code', 'exam_code'],
+                name='unique_acv2_cqi_exam_per_ct_qpt_exam',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['class_type', 'qp_type_code', 'order']),
+            models.Index(fields=['class_type', 'qp_type_code', 'exam_code']),
+        ]
+
+    def __str__(self):
+        nm = self.exam_display_name or self.exam_code
+        return f"CQI Exam {nm} ({self.qp_type_code})"
+
+
+class AcV2CqiMark(models.Model):
+    """CQI marks per student, per CO, per section, for a specific CQI exam."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    cqi_exam = models.ForeignKey(
+        'academic_v2.AcV2CqiExam',
+        on_delete=models.CASCADE,
+        related_name='marks',
+    )
+    section = models.ForeignKey(
+        'academic_v2.AcV2Section',
+        on_delete=models.CASCADE,
+        related_name='cqi_marks',
+    )
+    student = models.ForeignKey(
+        'academics.StudentProfile',
+        on_delete=models.CASCADE,
+        related_name='acv2_cqi_marks',
+    )
+
+    co_number = models.PositiveSmallIntegerField()
+    mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_cqi_mark'
+        verbose_name = 'CQI Mark'
+        verbose_name_plural = 'CQI Marks'
+        constraints = [
+            UniqueConstraint(
+                fields=['cqi_exam', 'section', 'student', 'co_number'],
+                name='unique_acv2_cqi_mark_per_exam_student_co',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['cqi_exam', 'section']),
+            models.Index(fields=['student']),
+        ]
+
+    def __str__(self):
+        return f"CQI Mark {self.student_id} CO{self.co_number}"
 
 
 # ============================================================================
@@ -1866,3 +2120,32 @@ class AcV2BypassLog(models.Model):
 
     def __str__(self):
         return f"[{self.action}] {self.description[:60]}"
+
+
+# ============================================================================
+# MY MARKS SETTINGS (Admin singleton for student My Marks feature)
+# ============================================================================
+
+class AcV2MyMarksSetting(models.Model):
+    """
+    Singleton settings for the Student 'My Marks' feature.
+    """
+    key = models.CharField(max_length=50, unique=True, default='DEFAULT')
+
+    # Master enable/disable
+    viewing_enabled = models.BooleanField(default=False)
+
+    # Requirements before student can view marks
+    require_profile_photo = models.BooleanField(default=False)
+    require_mobile_number = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_my_marks_setting'
+        verbose_name = 'My Marks Setting'
+        verbose_name_plural = 'My Marks Settings'
+
+    def __str__(self):
+        return f"MyMarksSetting ({self.key})"

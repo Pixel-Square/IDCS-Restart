@@ -16,6 +16,7 @@ from .views import (
     AcV2ExamAssignmentViewSet,
     AcV2StudentMarkViewSet,
     AcV2EditRequestViewSet,
+    AcV2CqiEditRequestViewSet,
     AcV2InternalMarkViewSet,
     AcV2UserPatternOverrideViewSet,
     AcV2CqiTokenViewSet,
@@ -26,6 +27,8 @@ from .views import (
     faculty_courses_status,
     faculty_exam_info,
     faculty_exam_marks,
+    faculty_exam_cqi_draft,
+    faculty_exam_cqi_published,
     faculty_exam_publish,
     faculty_exam_request_edit,
     faculty_exam_confirm_mark_manager,
@@ -34,6 +37,8 @@ from .views import (
     faculty_course_cqi_published,
     faculty_course_cqi_publish,
     faculty_course_cqi_announce,
+    faculty_course_cqi_request_edit,
+    faculty_course_cqi_cancel_edit_request,
     faculty_academic_notification_flags,
     faculty_exam_export_template,
     faculty_exam_import_marks,
@@ -54,6 +59,10 @@ from .views import (
     admin_courses_list,
     admin_course_faculty,
     faculty_reset_notices,
+    admin_my_marks_settings,
+    student_my_courses,
+    student_my_course_detail,
+    student_my_marks_config,
 )
 
 app_name = 'academic_v2'
@@ -69,6 +78,7 @@ router.register(r'sections', AcV2SectionViewSet, basename='section')
 router.register(r'exam-assignments', AcV2ExamAssignmentViewSet, basename='exam-assignment')
 router.register(r'student-marks', AcV2StudentMarkViewSet, basename='student-mark')
 router.register(r'edit-requests', AcV2EditRequestViewSet, basename='edit-request')
+router.register(r'cqi-edit-requests', AcV2CqiEditRequestViewSet, basename='cqi-edit-request')
 router.register(r'internal-marks', AcV2InternalMarkViewSet, basename='internal-mark')
 router.register(r'pattern-overrides', AcV2UserPatternOverrideViewSet, basename='pattern-override')
 router.register(r'cqi-tokens', AcV2CqiTokenViewSet, basename='cqi-token')
@@ -84,6 +94,8 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/', faculty_course_info, name='faculty-course-info'),
     path('exams/<uuid:exam_id>/', faculty_exam_info, name='faculty-exam-info'),
     path('exams/<uuid:exam_id>/marks/', faculty_exam_marks, name='faculty-exam-marks'),
+    path('exams/<uuid:exam_id>/cqi-draft/', faculty_exam_cqi_draft, name='faculty-exam-cqi-draft'),
+    path('exams/<uuid:exam_id>/cqi-published/', faculty_exam_cqi_published, name='faculty-exam-cqi-published'),
     path('exams/<uuid:exam_id>/publish/', faculty_exam_publish, name='faculty-exam-publish'),
     path('exams/<uuid:exam_id>/request-edit/', faculty_exam_request_edit, name='faculty-exam-request-edit'),
     path('exams/<uuid:exam_id>/confirm-mark-manager/', faculty_exam_confirm_mark_manager, name='faculty-exam-confirm-mark-manager'),
@@ -94,11 +106,19 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/cqi-published/', faculty_course_cqi_published, name='faculty-course-cqi-published'),
     path('faculty/courses/<int:ta_id>/cqi-publish/', faculty_course_cqi_publish, name='faculty-course-cqi-publish'),
     path('faculty/courses/<int:ta_id>/cqi-announce/', faculty_course_cqi_announce, name='faculty-course-cqi-announce'),
+    path('faculty/courses/<int:ta_id>/cqi-request-edit/', faculty_course_cqi_request_edit, name='faculty-course-cqi-request-edit'),
+    path('faculty/courses/<int:ta_id>/cqi-cancel-edit-request/', faculty_course_cqi_cancel_edit_request, name='faculty-course-cqi-cancel-edit-request'),
     path('faculty/notification-flags/', faculty_academic_notification_flags, name='faculty-notification-flags'),
     path('faculty/courses/<int:ta_id>/reset-notices/', faculty_reset_notices, name='faculty-reset-notices'),
     path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
     path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
     path('admin/academic-notification-settings/', admin_academic_notification_settings, name='admin-academic-notification-settings'),
+    path('admin/my-marks-settings/', admin_my_marks_settings, name='admin-my-marks-settings'),
+
+    # Student My Marks
+    path('student/my-courses/', student_my_courses, name='student-my-courses'),
+    path('student/my-courses/<int:ta_id>/', student_my_course_detail, name='student-my-course-detail'),
+    path('student/my-marks-config/', student_my_marks_config, name='student-my-marks-config'),
 
     # Admin CourseManager
     path('admin/courses/', admin_courses_list, name='admin-courses-list'),

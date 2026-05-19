@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Save, Edit2, X, RefreshCw, CheckCircle, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, Save, Edit2, X, RefreshCw, CheckCircle, AlertTriangle, ChevronUp, ChevronDown, Lock } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface Cycle {
@@ -415,8 +415,8 @@ export default function CycleManagementPage() {
                     <h3 className="truncate font-medium text-gray-900">{cycle.name}</h3>
                     <p className="mt-1 text-xs text-gray-500">{cycle.code}</p>
                     <div className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${cycle.is_active ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                      <CheckCircle size={12} />
-                      {cycle.is_active ? 'Overall Active' : 'Overall Locked'}
+                      {cycle.is_active ? <CheckCircle size={12} /> : <Lock size={12} />}
+                      {cycle.is_active ? 'Overall Active' : 'Locked'}
                     </div>
                   </button>
                 </div>

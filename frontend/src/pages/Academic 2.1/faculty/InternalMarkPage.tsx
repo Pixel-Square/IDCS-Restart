@@ -28,7 +28,7 @@ interface ExamMark {
   total_students: number;
   is_locked: boolean;
   due_date: string | null;
-  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'LOCKED';
+  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'LOCKED' | 'PUBLISHED';
   kind?: 'exam' | 'cqi';
   cqi_cos?: number[];
   cqi_name?: string;
@@ -239,8 +239,12 @@ export default function InternalMarkPage() {
         if (ex.cia_enabled) {
           const n = allCos.length || 1;
           for (const co of allCos) {
-            const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
-            headers.push(`${ex.short_name} Exam-CO${co} (split /${maxSplit})`);
+            if (String(ex.kind || 'exam').toLowerCase() === 'cqi') {
+              headers.push(`${ex.short_name}_CO${co} (CQI)`);
+              continue;
+            }
+            const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
+            headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
           }
         }
         headers.push(`${ex.short_name} Total (/${ex.max_marks})`);
@@ -294,6 +298,7 @@ export default function InternalMarkPage() {
 
   /* ─── status helpers ─── */
   const getStatusBadge = (status: string, locked: boolean) => {
+    if (status === 'PUBLISHED') return <span className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-sm"><CheckCircle className="w-3 h-3" />Published</span>;
     if (locked) return <span className="flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded text-sm"><Lock className="w-3 h-3" />Locked</span>;
     switch (status) {
       case 'COMPLETED': return <span className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-sm"><CheckCircle className="w-3 h-3" />Completed</span>;
@@ -318,10 +323,11 @@ export default function InternalMarkPage() {
 
   const totalEntered = dedupedCourseExams.reduce((sum, e) => sum + (e.status === 'COMPLETED' ? 1 : 0), 0);
   const totalExams = dedupedCourseExams.length;
+  const firstCqiExam = dedupedCourseExams.find((e) => e.kind === 'cqi');
 
   /* ─── render ─── */
   return (
-    <div className="p-4 md:p-6 max-w-[1400px] mx-auto space-y-4">
+    <div className="p-4 md:p-6 max-w-screen-2xl mx-auto space-y-4">
       {/* Reset notice popup — shown when admin has reset this course/exam */}
       {showResetPopup && resetNotices.length > 0 && (
         <ResetNoticePopup
@@ -342,7 +348,13 @@ export default function InternalMarkPage() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => navigate(`/academic-v2/course/${courseId}/cqi`)}
+            onClick={() => {
+              if (firstCqiExam) {
+                navigate(`/academic-v2/cqi/${firstCqiExam.id}`);
+              } else {
+                navigate(`/academic-v2/course/${courseId}/cqi`);
+              }
+            }}
             className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm"
           >
             <BarChart3 className="w-4 h-4" /> CQI Entry
@@ -486,7 +498,7 @@ export default function InternalMarkPage() {
                 className={`p-4 cursor-pointer ${isCqi ? 'bg-purple-50 hover:bg-purple-100 border-l-4 border-purple-400' : 'hover:bg-gray-50'}`}
                 onClick={() => {
                   if (isCqi) {
-                    navigate(`/academic-v2/course/${courseId}/cqi`);
+                    navigate(`/academic-v2/cqi/${exam.id}`);
                   } else {
                     navigate(`/academic-v2/exam/${exam.id}`);
                   }
@@ -555,7 +567,7 @@ export default function InternalMarkPage() {
                       onClick={(e) => {
                         e.stopPropagation();
                         if (isCqi) {
-                          navigate(`/academic-v2/course/${courseId}/cqi`);
+                          navigate(`/academic-v2/cqi/${exam.id}`);
                         } else {
                           navigate(`/academic-v2/exam/${exam.id}`);
                         }
@@ -729,9 +741,10 @@ function COSummaryTab({
       if (view === 'raw') {
         cols.push({ key: `${ex.id}_co${co}`, label: `CO${co}`, sub: `/${coMax}`, examIdx: ei, co });
       } else {
+        const isCqi = String(ex.kind || 'exam').toLowerCase() === 'cqi';
         const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
-        const notSet = !w || w <= 0;
-        const sub = notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`;
+        const notSet = !isCqi && (!w || w <= 0);
+        const sub = isCqi ? 'CQI' : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
         cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
       }
     }
@@ -957,12 +970,18 @@ function COSummaryTab({
                 <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase sticky left-10 bg-gray-100 z-10 min-w-[100px]">Reg No</th>
                 <th rowSpan={2} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase min-w-[140px]">Name</th>
                 {examGroups.map(({ exam, colCount }) => (
-                  <th key={exam.id} colSpan={colCount} className="px-2 py-2 text-center text-xs font-semibold text-gray-700 border-l border-gray-300">
+                  <th
+                    key={exam.id}
+                    colSpan={colCount}
+                    className={`px-2 py-2 text-center text-xs font-semibold border-l ${String(exam.kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-800 border-purple-200' : 'text-gray-700 border-gray-300'}`}
+                  >
                     {exam.name}
                     <div className="text-[10px] text-gray-400 font-normal flex items-center justify-center gap-1 flex-wrap">
                       <span>Max: {exam.max_marks}</span>
                       <span>&middot;</span>
-                      {exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
+                      {String(exam.kind || 'exam').toLowerCase() === 'cqi' ? (
+                        <span className="bg-purple-100 text-purple-800 px-1 rounded">CQI</span>
+                      ) : exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
                         exam.covered_cos.map(co => {
                           const wVal = Number(exam.co_weights[String(co)] ?? 0);
                           return wVal > 0 ? (
@@ -1002,7 +1021,10 @@ function COSummaryTab({
               {/* Header row 2: CO sub-columns */}
               <tr className="bg-gray-50">
                 {cols.map((col, ci) => (
-                  <th key={ci} className={`px-2 py-1.5 text-center text-[11px] font-medium ${col.isExamSplit || col.isCombo ? 'bg-purple-50 text-purple-700' : 'text-gray-500'} ${col.co === 0 ? 'bg-gray-100 font-semibold' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-300' : ''}`}>
+                  <th
+                    key={ci}
+                    className={`px-2 py-1.5 text-center text-[11px] font-medium ${col.isExamSplit || col.isCombo || String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi' ? 'bg-purple-50 text-purple-700' : 'text-gray-500'} ${col.co === 0 ? 'bg-gray-100 font-semibold' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-300' : ''}`}
+                  >
                     {col.label}
                     <div className={`text-[10px] font-normal ${col.weightNotSet ? 'text-red-500 font-medium' : (col.isExamSplit || col.isCombo) ? 'text-purple-400' : 'text-gray-400'}`}>{col.sub}</div>
                   </th>
@@ -1026,17 +1048,18 @@ function COSummaryTab({
                           const val = getCellValue(s, col);
                           const examId = exams[col.examIdx].id;
                           const absent = s.exam_marks[examId]?.is_absent;
-                          const displayVal = typeof val === 'number' ? formatNumber(val) : (val === '' || val === 0 ? null : val);
+                          const displayVal = typeof val === 'number' ? formatNumber(val) : (val === '' ? null : val);
                           const cellKey = getCellKey(si, cellIndex);
                           const isSelected = selectedCells.has(cellKey);
                           cellIndex++;
+                          const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
                           return (
                             <td
                               key={ci}
                               data-cell={cellKey}
                               onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
-                              className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${col.isExamSplit || col.isCombo ? 'bg-purple-50/50 text-purple-700' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
+                              className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${col.isExamSplit || col.isCombo || isCqiCol ? 'bg-purple-50/50 text-purple-700' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
                             >
                               {absent ? 'AB' : displayVal === null ? <span className="text-gray-300">-</span> : displayVal}
                             </td>

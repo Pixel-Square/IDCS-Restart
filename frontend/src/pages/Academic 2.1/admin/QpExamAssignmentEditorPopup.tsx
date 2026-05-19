@@ -86,8 +86,8 @@ type CycleOption = {
 type Props = {
   open: boolean;
   onClose: () => void;
+  onDiscardChanges?: () => void;
 
-  isEditing: boolean;
   onSave?: () => Promise<void>;
   onDelete?: () => void;
 
@@ -104,7 +104,6 @@ type Props = {
   onReplaceRows: (rows: QuestionDef[]) => void;
 
   // CQI embedding support
-  cqiEditorOpen: boolean; // forwarded state (optional)
   cqiVariables: CqiVar[];
   groupedCqiVariables: Array<{
     key: string;
@@ -152,6 +151,18 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleDiscardClick = () => {
+    props.onDiscardChanges?.();
+    setLocalEditing(false);
+  };
+
+  const handleClose = () => {
+    if (localEditing) {
+      handleDiscardClick();
+    }
+    props.onClose();
   };
 
   const handleCopySchema = () => {
@@ -251,7 +262,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               </button>
               {localEditing && (
                 <button
-                  onClick={() => setLocalEditing(false)}
+                  onClick={handleDiscardClick}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 font-medium"
                 >
                   Cancel
@@ -269,7 +280,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
             </button>
           )}
 
-          <button onClick={props.onClose} className="p-2 rounded hover:bg-gray-200" title="Close">
+          <button onClick={handleClose} className="p-2 rounded hover:bg-gray-200" title="Close">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -279,7 +290,8 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
           {isCqi ? (
             <QpCqiEditorPopup
               open={true}
-              onClose={props.onClose}
+              onClose={handleClose}
+              onSave={props.onSave ? async () => { await handleSaveClick(); } : undefined}
               selectedExamAssignment={{
                 exam: exam.exam,
                 exam_display_name: exam.exam_display_name || exam.exam,

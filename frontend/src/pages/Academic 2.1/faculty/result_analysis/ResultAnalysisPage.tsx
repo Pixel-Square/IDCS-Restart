@@ -698,14 +698,152 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
         { align: 'center' },
       );
 
-      /* ── Footer ── */
+      /* ── Footer (page 1 — drawn before any addPage call) ── */
       const footY = PH - 6;
       doc.setDrawColor(180, 190, 210); doc.setLineWidth(0.3);
       doc.line(ML, footY - 3, PW - MR, footY - 3);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(130, 140, 160);
       const now = new Date();
       const dateStr = `${now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
-      doc.text(`Generated: ${dateStr}  |  ${courseName}  |  ${cycleName}  |  Page 1/1`, PW / 2, footY, { align: 'center' });
+      doc.text(`Generated: ${dateStr}  |  ${courseName}  |  ${cycleName}  |  Page 1`, PW / 2, footY, { align: 'center' });
+
+      /* ── Individual Exam Bell Graphs (new page) ── */
+      const examEntries = activeCycleExams.map((ex) => {
+        const students = examMarksMap[ex.id]?.students ?? [];
+        const totals100 = students
+          .filter((s) => !s.is_absent && s.mark != null && ex.max_marks > 0)
+          .map((s) => clamp(Math.round((s.mark! / ex.max_marks) * 100), 0, 100));
+        return { ex, totals100 };
+      }).filter(({ ex }) => ex.kind !== 'cqi');
+
+      if (examEntries.length > 0) {
+        doc.addPage();
+        let epY = 10;
+
+        /* Banner on new page */
+        if (b64Banner) {
+          const { w: bw2, h: bh2 } = await imgSize(b64Banner);
+          const bW2 = Math.min(UW * 0.82, (bw2 / bh2) * HEADER_H);
+          doc.addImage(b64Banner, 'PNG', ML, epY, bW2, HEADER_H);
+        }
+        if (b64Kr) {
+          const { w: kw2, h: kh2 } = await imgSize(b64Kr);
+          const kH2 = Math.min(logoH, (kh2 / kw2) * logoW);
+          doc.addImage(b64Kr, 'PNG', logosX, epY + (HEADER_H - kH2) / 2, logoW, kH2);
+        }
+        if (b64Idcs) {
+          const { w: iw2, h: ih2 } = await imgSize(b64Idcs);
+          const iH2 = Math.min(logoH, (ih2 / iw2) * logoW);
+          doc.addImage(b64Idcs, 'PNG', logosX + logoW + logoGap, epY + (HEADER_H - iH2) / 2, logoW, iH2);
+        }
+        epY += HEADER_H + 2;
+        doc.setDrawColor(30, 58, 95); doc.setLineWidth(0.6);
+        doc.line(ML, epY, PW - MR, epY);
+        epY += 4;
+
+        /* Page title */
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(30, 58, 95);
+        doc.text('Individual Exam Bell Graphs', PW / 2, epY, { align: 'center' });
+        epY += 6;
+
+        /* Draw 3 exam bell graphs per row */
+        const COLS = 3;
+        const cellGap = 4;
+        const cellW = (UW - cellGap * (COLS - 1)) / COLS;
+        const cellH = 48;
+
+        for (let gi = 0; gi < examEntries.length; gi++) {
+          const col = gi % COLS;
+          const row = Math.floor(gi / COLS);
+          const cellX = ML + col * (cellW + cellGap);
+          const cellY = epY + row * (cellH + 4);
+
+          // Add new page if overflowing
+          if (cellY + cellH > PH - 15) {
+            doc.addPage();
+            epY = 15;
+            // Recalculate after page break (handled by continuing; layout restarts)
+          }
+
+          const { ex, totals100 } = examEntries[gi];
+          const eCounts = computeRangeCounts(totals100);
+          const eMax = Math.max(1, ...eCounts.map((r) => r.count));
+          const eAttended = totals100.length;
+          const eAvg = eAttended > 0 ? (totals100.reduce((a, b) => a + b, 0) / eAttended).toFixed(1) : '—';
+
+          /* Title bar */
+          doc.setFillColor(30, 58, 95);
+          doc.rect(cellX, cellY, cellW, 6, 'F');
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(5.5); doc.setTextColor(255, 255, 255);
+          const titleText = doc.splitTextToSize(`${ex.short_name || ex.name} (/${ex.max_marks})`, cellW - 4)[0];
+          doc.text(titleText, cellX + cellW / 2, cellY + 4.2, { align: 'center' });
+
+          const ePlotTop = cellY + 6 + 2;
+          const eXAxisH = 5;
+          const ePlotH = cellH - 6 - eXAxisH - 4;
+          const eBCount = eCounts.length;
+          const eBGap = 0.5;
+          const eBW = (cellW - eBGap * (eBCount + 1)) / eBCount;
+
+          doc.setFillColor(250, 252, 255);
+          doc.rect(cellX, ePlotTop, cellW, ePlotH + eXAxisH, 'F');
+          doc.setDrawColor(220, 228, 238); doc.setLineWidth(0.2);
+          doc.rect(cellX, ePlotTop, cellW, ePlotH + eXAxisH, 'S');
+
+          eCounts.forEach((rc, i) => {
+            const bx2 = cellX + eBGap + i * (eBW + eBGap);
+            const bFrac = rc.count / eMax;
+            const bh2 = bFrac * (ePlotH - 2);
+            const by2 = ePlotTop + ePlotH - bh2;
+            const bc2 = barColors[i] ?? [99, 102, 241];
+            if (rc.count > 0) {
+              const lr2 = Math.round(bc2[0] + (255 - bc2[0]) * 0.6);
+              const lg2 = Math.round(bc2[1] + (255 - bc2[1]) * 0.6);
+              const lb2 = Math.round(bc2[2] + (255 - bc2[2]) * 0.6);
+              doc.setFillColor(lr2, lg2, lb2);
+              doc.rect(bx2, by2, eBW, bh2, 'F');
+              doc.setFont('helvetica', 'bold'); doc.setFontSize(3.5); doc.setTextColor(...bc2);
+              doc.text(String(rc.count), bx2 + eBW / 2, by2 - 0.5, { align: 'center' });
+            }
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(3); doc.setTextColor(100, 110, 130);
+            doc.text(rc.label.replace('–', '-').replace(' ', ''), bx2 + eBW / 2, ePlotTop + ePlotH + eXAxisH - 0.5, { align: 'center' });
+          });
+
+          /* Smooth curve */
+          const eCurvePoints = eCounts.map((rc, i) => {
+            const bx2 = cellX + eBGap + i * (eBW + eBGap);
+            const bFrac = rc.count / eMax;
+            const bh2 = bFrac * (ePlotH - 2);
+            return { x: bx2 + eBW / 2, y: ePlotTop + ePlotH - bh2 };
+          });
+          const eCrPts = [eCurvePoints[0], ...eCurvePoints, eCurvePoints[eCurvePoints.length - 1]];
+          if (eCurvePoints.length >= 2) {
+            doc.setDrawColor(30, 58, 95); doc.setLineWidth(0.5);
+            for (let ci = 0; ci < eCurvePoints.length - 1; ci++) {
+              const p0 = eCrPts[ci], p1 = eCrPts[ci + 1], p2 = eCrPts[ci + 2], p3 = eCrPts[ci + 3];
+              const cp1x = p1.x + (p2.x - p0.x) / 6, cp1y = p1.y + (p2.y - p0.y) / 6;
+              const cp2x = p2.x - (p3.x - p1.x) / 6, cp2y = p2.y - (p3.y - p1.y) / 6;
+              (doc as any).lines([[cp1x - p1.x, cp1y - p1.y, cp2x - p1.x, cp2y - p1.y, p2.x - p1.x, p2.y - p1.y]], p1.x, p1.y, [1, 1], 'S', false);
+            }
+          }
+
+          doc.setDrawColor(180, 190, 208); doc.setLineWidth(0.2);
+          doc.line(cellX + eBGap, ePlotTop + ePlotH, cellX + cellW - eBGap, ePlotTop + ePlotH);
+
+          /* Footnote */
+          doc.setFont('helvetica', 'italic'); doc.setFontSize(3.5); doc.setTextColor(120, 130, 150);
+          doc.text(`n=${eAttended} · avg ${eAvg}/100`, cellX + cellW / 2, cellY + cellH - 0.5, { align: 'center' });
+        }
+
+        /* Footer on new page */
+        const fp2Y = PH - 6;
+        doc.setDrawColor(180, 190, 210); doc.setLineWidth(0.3);
+        doc.line(ML, fp2Y - 3, PW - MR, fp2Y - 3);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(130, 140, 160);
+        const now2 = new Date();
+        const dateStr2 = `${now2.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${now2.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+        doc.text(`Generated: ${dateStr2}  |  ${courseName}  |  Individual Exam Graphs  |  Page 2`, PW / 2, fp2Y, { align: 'center' });
+      }
 
       doc.save(`Result_Analysis_${courseName}_${cycleName}.pdf`);
     } catch (e: any) {

@@ -11,7 +11,6 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, FileText, Edit2, X, RefreshCw, Settings2, Search, ExternalLink, GripVertical } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import fetchWithAuth from '../../../services/fetchAuth';
-import QpCqiEditorPopup from './QpCqiEditorPopup';
 import QpExamAssignmentEditorPopup from './QpExamAssignmentEditorPopup';
 
 interface QuestionDef {
@@ -316,6 +315,7 @@ function isCqiAssignment(exam: ExamAssignment | null | undefined): boolean {
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
 // New format: operator is a separate field. Old format: operator embedded in rhs.
+// token may be empty string to indicate a "RAW" boolean RHS clause (no [TOKEN] and no operator).
 type CqiIfClause = { token: string; operator?: string; rhs: string };
 
 // Admin-defined CO-wise derived variable (name may contain COx as runtime placeholder)
@@ -490,7 +490,7 @@ export default function QpPatternEditorPage() {
     qp_type: string;
     id?: string;
   } | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
+  const [, setIsEditing] = useState(false);
   const [showCreateTypeDialog, setShowCreateTypeDialog] = useState(false);
   const [newTypeName, setNewTypeName] = useState('');
   const [newTypeCode, setNewTypeCode] = useState('');
@@ -518,9 +518,6 @@ export default function QpPatternEditorPage() {
 
   // Horizontal editor popup (for exam assignment click/open)
   const [examEditorModalOpen, setExamEditorModalOpen] = useState(false);
-
-  // Horizontal CQI editor popup (dedicated UI, includes question table, hides Mark Manager)
-  const [cqiEditorModalOpen, setCqiEditorModalOpen] = useState(false);
 
   // Question settings popup
   const [questionSettingsOpen, setQuestionSettingsOpen] = useState(false);
@@ -825,6 +822,7 @@ export default function QpPatternEditorPage() {
         ? {
             name: String(rawCqi.name || ''),
             code: String(rawCqi.code || ''),
+            cycle_id: String(rawCqi.cycle_id || ''),
             cos: Array.isArray(rawCqi.cos) ? rawCqi.cos.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n)) : [],
             exams: Array.isArray(rawCqi.exams) ? rawCqi.exams.map((x: any) => String(x || '')).filter(Boolean) : [],
             custom_vars: Array.isArray(rawCqi.custom_vars)
@@ -845,19 +843,45 @@ export default function QpPatternEditorPage() {
                     const parsedClauses = Array.isArray(c.if_clauses)
                       ? c.if_clauses
                           .filter((cl: any) => cl && typeof cl === 'object')
-                          .map((cl: any) => ({
-                            token: String(cl.token || '').toUpperCase() as CqiIfClause['token'],
-                            rhs: String(cl.rhs || ''),
-                          }))
-                          .filter((cl: any) => CQI_CLAUSE_TOKENS.includes(cl.token))
+                          .map((cl: any) => {
+                            const token = String(cl.token || '').toUpperCase() as CqiIfClause['token'];
+                            const rawOperator = String((cl.operator ?? '') || '').trim();
+                            let operator = rawOperator === '=' ? '==' : rawOperator;
+                            let rhs = String(cl.rhs || '');
+                            if (!operator) {
+                              const rhsTrimmed = rhs.trim();
+                              const opMatch = rhsTrimmed.match(/^(<=|>=|==|!=|=|<|>)\s*(.*)/);
+                              if (opMatch) {
+                                operator = opMatch[1] === '=' ? '==' : opMatch[1];
+                                rhs = opMatch[2] || '';
+                              }
+                            }
+                            return {
+                              token: token === 'BEFORE_CQI' ? 'BEFORE_CQI_COX' : token,
+                              operator,
+                              rhs,
+                            };
+                          })
+                          .filter((cl: any) => String(cl.token || '').trim().length > 0 || String(cl.rhs || '').trim().length > 0)
                       : parseIfClauses(String(c.if || ''));
                     return {
+                      title: String(c.title || ''),
                       if: String(c.if || ''),
                       then: String(c.then || ''),
                       color: c.color == null ? undefined : String(c.color || ''),
+                      cap_enabled: Boolean(c.cap_enabled),
+                      cap_percent: c.cap_percent == null || c.cap_percent === '' ? undefined : Number(c.cap_percent),
                       if_clauses: parsedClauses,
                     };
                   })
+              : [],
+            derived_variables: Array.isArray(rawCqi.derived_variables)
+              ? rawCqi.derived_variables
+                  .filter((dv: any) => dv && typeof dv === 'object')
+                  .map((dv: any) => ({
+                    name: String(dv.name || ''),
+                    formula: String(dv.formula || ''),
+                  }))
               : [],
             else_formula: String(rawCqi.else_formula || ''),
           }
@@ -1023,24 +1047,39 @@ export default function QpPatternEditorPage() {
     setSelectedExamRef({ exam: examCode, exam_display_name: examDisplayName, qp_type: targetQpType, id: null });
   };
 
-  const removeExamAssignmentByIndex = (globalIndex: number) => {
-    if (globalIndex < 0) return;
-    setLocalExamAssignments((prev) => {
-      if (globalIndex >= prev.length) return prev;
-      const target = prev[globalIndex];
-      const next = prev.filter((_, i) => i !== globalIndex);
+  const removeExamAssignmentByIndex = async (globalIndex: number) => {
+    if (globalIndex < 0 || !selectedClassTypeId) return;
+    const current = Array.isArray(localExamAssignments) ? localExamAssignments : [];
+    if (globalIndex >= current.length) return;
 
-      const selectedKey = normalizeExamDisplayKey(String(selectedExamRef?.exam_display_name || selectedExamRef?.exam || ''));
-      const targetKey = normalizeExamDisplayKey(String(target?.exam_display_name || target?.exam || ''));
-      if (selectedKey && targetKey && selectedKey === targetKey) {
-        setSelectedPatternId(null);
-        setSelectedExamRef(null);
-        setExamEditorModalOpen(false);
-        setCqiEditorModalOpen(false);
-      }
-      return next;
-    });
-    markExamDirty();
+    const target = current[globalIndex];
+    const next = current.filter((_, i) => i !== globalIndex);
+    const targetLabel = String(target?.exam_display_name || target?.exam || 'Exam assignment');
+
+    const selectedKey = normalizeExamDisplayKey(String(selectedExamRef?.exam_display_name || selectedExamRef?.exam || ''));
+    const targetKey = normalizeExamDisplayKey(String(target?.exam_display_name || target?.exam || ''));
+
+    setLocalExamAssignments(next);
+    if (selectedKey && targetKey && selectedKey === targetKey) {
+      setSelectedPatternId(null);
+      setSelectedExamRef(null);
+      setExamEditorModalOpen(false);
+    }
+
+    try {
+      setSaving(true);
+      await persistExamAssignments(next, { successMessage: `${targetLabel} deleted` });
+    } catch (error) {
+      console.error('Delete exam assignment failed:', error);
+      const normalized = normalizeExamAssignmentsForEditing(
+        (selectedClassType?.exam_assignments as any[]) || [],
+        patterns.filter((p) => p.class_type == null),
+      );
+      setLocalExamAssignments(normalized);
+      setMessage({ type: 'error', text: 'Failed to delete exam assignment' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const cqiVariables = React.useMemo(() => {
@@ -1328,6 +1367,69 @@ export default function QpPatternEditorPage() {
   // CqiIfClause type is defined at the top of the file (module scope)
   const CQI_CLAUSE_TOKENS = ['BEFORE_CQI_COX', 'AFTER_CQI', 'TOTAL_CQI'] as const;
 
+  const normalizeClauseOperator = (raw: string) => {
+    const op = String(raw || '').trim();
+    return op === '=' ? '==' : op;
+  };
+
+  const splitClauseOperatorFromRhs = (rhsRaw: string) => {
+    const rhsText = String(rhsRaw || '').trim();
+    const prefixMatch = rhsText.match(/^((?:(?:<=|>=|==|!=|=|<|>)\s*)+)(.*)$/);
+    if (!prefixMatch) return { operator: '', rhs: rhsText };
+    const ops = prefixMatch[1].match(/<=|>=|==|!=|=|<|>/g) || [];
+    const inferred = normalizeClauseOperator(ops[ops.length - 1] || '');
+    return {
+      operator: inferred,
+      rhs: String(prefixMatch[2] || '').trim(),
+    };
+  };
+
+  const clauseHasStandaloneExpression = (token: string, operator: string, rhs: string) => {
+    const normalizedToken = String(token || '').trim().toUpperCase();
+    const normalizedOp = normalizeClauseOperator(operator);
+    const normalizedRhs = String(rhs || '').trim();
+    return (
+      (normalizedToken === 'BEFORE_CQI' || normalizedToken === 'BEFORE_CQI_COX') &&
+      (!normalizedOp || normalizedOp === '==' || normalizedOp === '=') &&
+      /(<=|>=|==|!=|=|<|>)/.test(normalizedRhs) &&
+      !/^(<=|>=|==|!=|=|<|>)/.test(normalizedRhs)
+    );
+  };
+
+  // Normalize IF clauses to a stable storage + editing format:
+  // - Keep operator in `operator` and pure value/expression in `rhs`.
+  // - Strip duplicated leading comparators from rhs caused by older malformed saves.
+  // - Support tokenless RAW boolean clauses (token='').
+  const normalizeIfClausesStable = (rawClauses: CqiIfClause[]): CqiIfClause[] => {
+    const clauses = Array.isArray(rawClauses) ? rawClauses : [];
+    return clauses
+      .filter((c) => c && (String((c as any).token || '').trim().length > 0 || String((c as any).rhs || '').trim().length > 0))
+      .map((c) => {
+        const token = String((c as any).token || '').trim().toUpperCase();
+        let rhs = String((c as any).rhs || '').trim();
+        let operator = normalizeClauseOperator(String((c as any).operator || '').trim());
+
+        // RAW clause: RHS is the full boolean expression, no token/operator.
+        if (!token) {
+          return { token: '', rhs };
+        }
+
+        const split = splitClauseOperatorFromRhs(rhs);
+        if (split.operator) {
+          operator = split.operator;
+          rhs = split.rhs;
+        }
+
+        // Legacy malformed saves sometimes put a complete boolean expression in the first clause.
+        // Convert those into a RAW clause so the operator dropdown doesn't fall back to '<'.
+        if (clauseHasStandaloneExpression(token, operator, rhs)) {
+          return { token: '', rhs };
+        }
+
+        return { token, operator, rhs };
+      });
+  };
+
   const parseIfClauses = (raw: string): CqiIfClause[] => {
     const s = String(raw || '').trim();
     // Default first clause uses BEFORE_CQI_COX
@@ -1349,42 +1451,89 @@ export default function QpPatternEditorPage() {
         }
         continue;
       }
-      // Fallback — wrap as BEFORE_CQI_COX clause
-      clauses.push({ token: 'BEFORE_CQI_COX', rhs: p });
+      // Fallback — treat as RAW boolean RHS clause
+      clauses.push({ token: '', rhs: p.replace(/^\((.*)\)$/, '$1').trim() });
     }
     if (!clauses.length) clauses.unshift({ token: 'BEFORE_CQI_COX', operator: '<', rhs: '' });
-    return clauses;
+    return normalizeIfClausesStable(clauses);
   };
 
   const buildIfFromClauses = (clauses: CqiIfClause[]): string => {
-    const list = (Array.isArray(clauses) ? clauses : []).filter((c) => c && c.token);
+    const list = normalizeIfClausesStable(Array.isArray(clauses) ? clauses : []);
     if (!list.length) return '';
     return list
       .map((c, idx) => {
-        const rhs = normalizeImplicitTokenSums(String(c.rhs || '').trim());
+        let rhs = normalizeImplicitTokenSums(String(c.rhs || '').trim());
         if (!rhs) return '';
         const token = String(c.token || '').trim().toUpperCase();
-        const opRaw = String(c.operator || '').trim();
-        const op = opRaw === '=' ? '==' : opRaw;
-        // Use explicit operator field when present, otherwise fall back to reading from rhs
+        const op = normalizeClauseOperator(String((c as any).operator || '').trim());
+
+        // RAW clause: RHS is the full boolean expression (no token/operator)
+        if (!token) {
+          return `(${rhs})`;
+        }
+
         if (op) {
-          // Legacy support: first BEFORE_CQI clause may carry a full boolean RHS expression.
-          if (idx === 0 && (token === 'BEFORE_CQI' || token === 'BEFORE_CQI_COX') && (op === '==' || op === '=') && /(<=|>=|==|!=|=|<|>)/.test(rhs)) {
-            return `(${rhs})`;
-          }
           return `([${c.token}] ${op} ${rhs})`;
         }
-        // Backward-compat for malformed saved clauses with missing operator.
-        if (!/^(<=|>=|==|!=|=|<|>)/.test(rhs)) {
-          return `([${c.token}] < ${rhs})`;
-        }
-        // Legacy: rhs already contains the operator (e.g. '< 58')
-        const isComparatorOnly = /^(<=|>=|==|!=|=|<|>)/.test(rhs);
-        return isComparatorOnly ? `([${c.token}] ${rhs})` : `(${rhs})`;
+
+        return `([${c.token}] < ${rhs})`;
       })
       .filter(Boolean)
       .join(' && ');
   };
+
+  const buildExamAssignmentsPayload = React.useCallback((assignments: ExamAssignment[]) => {
+    const orderedAssignments = renumberExamAssignments(assignments || []);
+    return orderedAssignments.map((exam) => {
+      if (!isCqiAssignment(exam) || !exam.cqi) return exam;
+      const nextConditions = Array.isArray(exam.cqi.conditions)
+        ? exam.cqi.conditions.map((cond) => {
+            const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : parseIfClauses(String(cond.if || ''));
+            const stableClauses = normalizeIfClausesStable(clauses as any);
+            return {
+              ...cond,
+              if_clauses: stableClauses,
+              if: buildIfFromClauses(stableClauses as any),
+            };
+          })
+        : [];
+      return {
+        ...exam,
+        cqi: {
+          ...exam.cqi,
+          conditions: nextConditions,
+        },
+      };
+    });
+  }, [buildIfFromClauses, normalizeIfClausesStable, parseIfClauses, renumberExamAssignments]);
+
+  const persistExamAssignments = React.useCallback(async (
+    assignments: ExamAssignment[],
+    options?: { successMessage?: string; preserveEditOrderMode?: boolean }
+  ) => {
+    if (!selectedClassTypeId) return;
+    const examAssignmentsPayload = buildExamAssignmentsPayload(assignments);
+    const res = await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        exam_assignments: examAssignmentsPayload,
+        cqi_global_custom_vars: normalizeCustomVarList(globalCqiCustomVars),
+      }),
+    });
+    if (!res.ok) throw new Error('Failed to save exam assignments');
+    const updated = await res.json();
+    setClassTypes(prev => prev.map(ct => (ct.id === selectedClassTypeId ? { ...ct, ...updated } : ct)));
+    setLocalExamAssignments(normalizeExamAssignmentsForEditing((updated as any)?.exam_assignments || examAssignmentsPayload, patterns.filter(p => p.class_type == null)));
+    setGlobalCqiCustomVars(normalizeCustomVarList((updated as any)?.cqi_global_custom_vars || globalCqiCustomVars));
+    setExamAssignmentsDirty(false);
+    if (!options?.preserveEditOrderMode) {
+      setEditExamOrderMode(false);
+    }
+    if (options?.successMessage) {
+      setMessage({ type: 'success', text: options.successMessage });
+    }
+  }, [buildExamAssignmentsPayload, globalCqiCustomVars, normalizeExamAssignmentsForEditing, patterns, selectedClassTypeId]);
 
   const hasAssignmentTask = (text: string) => {
     const s = String(text || '');
@@ -1540,42 +1689,7 @@ export default function QpPatternEditorPage() {
   };
 
   const handleExamAssignmentsSave = async () => {
-    if (!selectedClassTypeId) return;
-    const orderedAssignments = renumberExamAssignments(localExamAssignments || []);
-    const examAssignmentsPayload = orderedAssignments.map((exam) => {
-      if (!isCqiAssignment(exam) || !exam.cqi) return exam;
-      const nextConditions = Array.isArray(exam.cqi.conditions)
-        ? exam.cqi.conditions.map((cond) => {
-            const clauses = Array.isArray(cond.if_clauses) ? cond.if_clauses : parseIfClauses(String(cond.if || ''));
-            return {
-              ...cond,
-              if_clauses: clauses,
-              if: buildIfFromClauses(clauses),
-            };
-          })
-        : [];
-      return {
-        ...exam,
-        cqi: {
-          ...exam.cqi,
-          conditions: nextConditions,
-        },
-      };
-    });
-    const res = await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        exam_assignments: examAssignmentsPayload,
-        cqi_global_custom_vars: normalizeCustomVarList(globalCqiCustomVars),
-      }),
-    });
-    if (!res.ok) throw new Error('Failed to save exam assignments');
-    const updated = await res.json();
-    setClassTypes(prev => prev.map(ct => (ct.id === selectedClassTypeId ? { ...ct, ...updated } : ct)));
-    setLocalExamAssignments(normalizeExamAssignmentsForEditing((updated as any)?.exam_assignments || examAssignmentsPayload, patterns.filter(p => p.class_type == null)));
-    setGlobalCqiCustomVars(normalizeCustomVarList((updated as any)?.cqi_global_custom_vars || globalCqiCustomVars));
-    setExamAssignmentsDirty(false);
-    setEditExamOrderMode(false);
+    await persistExamAssignments(localExamAssignments || []);
   };
 
   const moveExamAssignmentWithinSelectedType = (fromVisible: number, toVisible: number) => {
@@ -1711,6 +1825,89 @@ export default function QpPatternEditorPage() {
     }
     setIsDirty(false);
   }, [selectedExamRef, resolvedPattern, selectedExamTemplate]);
+
+  const discardSelectedPopupChanges = React.useCallback(() => {
+    const templatePool = patterns.filter((p) => p.class_type == null);
+    if (selectedClassType) {
+      const normalized = normalizeExamAssignmentsForEditing(
+        (selectedClassType.exam_assignments as any[]) || [],
+        templatePool,
+      );
+      setLocalExamAssignments(normalized);
+    } else {
+      setLocalExamAssignments([]);
+    }
+
+    if (!selectedExamRef) {
+      setLocalName('');
+      setLocalRows([]);
+      setMarkManager(getDefaultMarkManager());
+      setExamAssignmentsDirty(false);
+      setIsDirty(false);
+      return;
+    }
+
+    const defaultName = String(selectedExamRef.exam_display_name || selectedExamRef.exam || '').trim();
+    if (resolvedPattern) {
+      setLocalName(resolvedPattern.name || defaultName);
+      setLocalRows(normalizeRows(resolvedPattern));
+
+      const mm = resolvedPattern.pattern?.mark_manager;
+      if (mm && typeof mm === 'object') {
+        const loaded: MarkManagerConfig = {
+          enabled: !!mm.enabled,
+          mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
+          cia_enabled: !!mm.cia_enabled,
+          cia_max_marks: mm.cia_max_marks ?? 30,
+          whole_number: !!mm.whole_number,
+          arrow_keys: mm.arrow_keys !== false,
+          cos: {},
+        };
+        for (let i = 1; i <= 5; i++) {
+          const c = (mm as any).cos?.[i] || (mm as any).cos?.[String(i)];
+          loaded.cos[i] = c
+            ? { enabled: !!c.enabled, num_items: c.num_items ?? 5, max_marks: c.max_marks ?? 25 }
+            : { enabled: false, num_items: 5, max_marks: 25 };
+        }
+        setMarkManager(loaded);
+      } else {
+        setMarkManager(getDefaultMarkManager());
+      }
+    } else {
+      setLocalName(defaultName);
+      if (selectedExamTemplate) {
+        setLocalRows(normalizeRows(selectedExamTemplate as any));
+
+        const mm = (selectedExamTemplate as any)?.pattern?.mark_manager;
+        if (mm && typeof mm === 'object') {
+          const loaded: MarkManagerConfig = {
+            enabled: !!mm.enabled,
+            mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
+            cia_enabled: !!mm.cia_enabled,
+            cia_max_marks: mm.cia_max_marks ?? 30,
+            whole_number: !!mm.whole_number,
+            arrow_keys: mm.arrow_keys !== false,
+            cos: {},
+          };
+          for (let i = 1; i <= 5; i++) {
+            const c = (mm as any).cos?.[i] || (mm as any).cos?.[String(i)];
+            loaded.cos[i] = c
+              ? { enabled: !!c.enabled, num_items: c.num_items ?? 5, max_marks: c.max_marks ?? 25 }
+              : { enabled: false, num_items: 5, max_marks: 25 };
+          }
+          setMarkManager(loaded);
+        } else {
+          setMarkManager(getDefaultMarkManager());
+        }
+      } else {
+        setLocalRows([]);
+        setMarkManager(getDefaultMarkManager());
+      }
+    }
+
+    setExamAssignmentsDirty(false);
+    setIsDirty(false);
+  }, [normalizeExamAssignmentsForEditing, patterns, resolvedPattern, selectedClassType, selectedExamRef, selectedExamTemplate]);
 
   const updateRow = (index: number, field: keyof QuestionDef, value: unknown) => {
     setLocalRows((prev) => {
@@ -2291,1140 +2488,198 @@ export default function QpPatternEditorPage() {
           </div>
         </div>
 
-        {/* Main Editor */}
+        {/* Main Preview */}
         <div className="xl:col-span-5">
           {selectedExamRef ? (
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-4 border-b flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-5 h-5 text-gray-500" />
-                  {isEditing ? (
-                    <input
-                      type="text"
-                      value={localName}
-                      onChange={(e) => {
-                        setLocalName(e.target.value);
-                        setIsDirty(true);
-                      }}
-                      className="text-lg font-semibold px-2 py-1 border rounded"
-                    />
-                  ) : (
-                    <h2 className="text-lg font-semibold">{localName || selectedExamRef.exam_display_name}</h2>
-                  )}
-                  <span className="px-2 py-1 bg-gray-100 rounded text-sm">{selectedQpType || '-'}</span>
-                </div>
-                <div className="flex gap-2">
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={() => {
-                          setIsEditing(false);
-                          const defaultName = String(selectedExamRef.exam_display_name || selectedExamRef.exam || '').trim();
-                          if (resolvedPattern) {
-                            setLocalName(resolvedPattern.name || defaultName);
-                            setLocalRows(normalizeRows(resolvedPattern));
-                            const mm = resolvedPattern.pattern?.mark_manager;
-                            if (mm && typeof mm === 'object') {
-                              const loaded: MarkManagerConfig = {
-                                enabled: !!mm.enabled,
-                                mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
-                                cia_enabled: !!mm.cia_enabled,
-                                cia_max_marks: mm.cia_max_marks ?? 30,
-                                whole_number: !!mm.whole_number,
-                                arrow_keys: mm.arrow_keys !== false,
-                                cos: {},
-                              };
-                              for (let i = 1; i <= 5; i++) {
-                                const c = (mm as any).cos?.[i] || (mm as any).cos?.[String(i)];
-                                loaded.cos[i] = c
-                                  ? { enabled: !!c.enabled, num_items: c.num_items ?? 5, max_marks: c.max_marks ?? 25 }
-                                  : { enabled: false, num_items: 5, max_marks: 25 };
-                              }
-                              setMarkManager(loaded);
-                            } else {
-                              setMarkManager(getDefaultMarkManager());
-                            }
-                          } else {
-                            setLocalName(defaultName);
-                            setLocalRows([]);
-                            setMarkManager(getDefaultMarkManager());
-                          }
-                          // Revert exam assignment weight edits as well
-                          if (selectedClassType) {
-                            const normalized = normalizeExamAssignmentsForEditing(
-                              (selectedClassType.exam_assignments as any[]) || [],
-                              patterns.filter(p => p.class_type == null)
-                            );
-                            setLocalExamAssignments(normalized);
-                          }
-                          setExamAssignmentsDirty(false);
-                          setIsDirty(false);
-                        }}
-                        className="px-4 py-2 border rounded-lg hover:bg-gray-50"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSave}
-                        disabled={(!isDirty && !examAssignmentsDirty) || saving}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
-                          (isDirty || examAssignmentsDirty) && !saving
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                        }`}
-                      >
-                        <Save className="w-4 h-4" />
-                        Save
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                        Edit
-                      </button>
-                      <button
-                        onClick={handleDelete}
-                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </>
-                  )}
+            <div ref={cqiConfigRef} className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 via-slate-800 to-blue-900 p-5 text-white shadow-lg">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-2xl font-semibold tracking-tight">{localName || selectedExamRef.exam_display_name}</h2>
+                      <span className="rounded-full bg-white/12 px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-blue-100">{selectedQpType || '-'}</span>
+                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${selectedIsCqi ? 'bg-amber-300/20 text-amber-100' : 'bg-emerald-300/20 text-emerald-100'}`}>
+                        {selectedIsCqi ? 'CQI Editor' : 'Question Pattern'}
+                      </span>
+                    </div>
+                    <p className="max-w-2xl text-sm text-slate-200/85">
+                      Editing now happens only inside the popup. This panel stays as a live preview so the saved flow is not split across two different editors.
+                    </p>
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-200/80">
+                      <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">Class Type: {selectedClassType?.display_name || selectedClassType?.name || '-'}</span>
+                      {sourceTag && <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">Source: {sourceTag}</span>}
+                      {selectedExamAssignmentItem?.exam?.pass_mark != null && <span className="rounded-full border border-white/15 bg-white/10 px-3 py-1">Pass Mark: {selectedExamAssignmentItem.exam.pass_mark}</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setExamEditorModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-sm font-medium text-slate-900 shadow-sm transition hover:bg-slate-100"
+                  >
+                    <Edit2 className="w-4 h-4" /> Open Editor Popup
+                  </button>
                 </div>
               </div>
 
-              <div className="p-4 space-y-6">
-                <div className="p-3 rounded-lg bg-blue-50 text-blue-800 text-sm">
-                  <div className="font-medium">Priority Resolution</div>
-                  <div className="mt-1">
-                    Order used for showing questions: <strong>Class Type + QP Type</strong> {'->'} Class Type fallback {'->'} Global fallback.
-                  </div>
-                  {sourceTag && <div className="mt-1">Current source: <strong>{sourceTag}</strong></div>}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Questions</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">{effectiveRows.length}</div>
+                  <div className="mt-1 text-sm text-slate-500">Configured rows in the active pattern</div>
                 </div>
-
-                {/* Stats */}
-                <div className="flex items-center gap-8 p-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <span className="text-sm text-gray-500">Total Questions:</span>
-                    <span className="ml-2 font-medium">{effectiveRows.length}</span>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-500">Total Marks:</span>
-                    <span className={`ml-2 font-medium px-2 py-1 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                      {totalMarks}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-sm text-gray-500">Class Type:</span>
-                    <span className="ml-2 font-medium">{selectedClassType?.display_name || selectedClassType?.name || '-'}</span>
-                  </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Total Marks</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">{totalMarks}</div>
+                  <div className="mt-1 text-sm text-slate-500">Enabled rows only</div>
                 </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Weight Total</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">{Math.round(totalWeight * 100) / 100}</div>
+                  <div className="mt-1 text-sm text-slate-500">Across this QP type</div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Editing Mode</div>
+                  <div className="mt-2 text-lg font-semibold text-slate-900">Popup only</div>
+                  <div className="mt-1 text-sm text-slate-500">Save, cancel, and close are contained in the popup</div>
+                </div>
+              </div>
 
-                {/* Mark Manager Toggle (moved from Exam Assignment page) */}
-                <div className="border rounded-lg p-4 space-y-4">
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={markManager.enabled}
-                        disabled={!isEditing}
-                        onChange={e => { setMarkManager(prev => ({ ...prev, enabled: e.target.checked })); markDirty(); }}
-                        className="w-4 h-4 accent-teal-600"
-                      />
-                      <Settings2 className="w-4 h-4 text-gray-500" />
-                      <span className="text-sm font-semibold text-gray-700">Mark Manager</span>
-                    </label>
-                    {markManager.enabled && (
-                      <span className="text-xs px-2 py-0.5 bg-teal-100 text-teal-700 rounded font-medium">Compact Lab Layout</span>
+              {selectedIsCqi && selectedExamAssignmentItem ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">CQI Snapshot</div>
+                      <div className="mt-1 text-sm text-slate-500">Current popup data for this CQI exam assignment.</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">Name: {selectedExamAssignmentItem.exam.cqi?.name || '—'}</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">Code: {selectedExamAssignmentItem.exam.cqi?.code || '—'}</span>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">Conditions: {(selectedExamAssignmentItem.exam.cqi?.conditions || []).length}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">CO Coverage</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(selectedExamAssignmentItem.exam.cqi?.cos || []).length > 0 ? (
+                          (selectedExamAssignmentItem.exam.cqi?.cos || []).map((co) => (
+                            <span key={co} className="rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700">CO{co}</span>
+                          ))
+                        ) : (
+                          <span className="text-sm text-slate-400">No COs selected</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                      <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Exam Assignments Considered</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(selectedExamAssignmentItem.exam.cqi?.exams || []).length > 0 ? (
+                          (selectedExamAssignmentItem.exam.cqi?.exams || []).map((examCode) => (
+                            <span key={examCode} className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-medium text-emerald-700">{examCode}</span>
+                          ))
+                        ) : (
+                          <span className="rounded-full bg-slate-200 px-3 py-1 text-sm font-medium text-slate-600">All exam assignments</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {(selectedExamAssignmentItem.exam.cqi?.conditions || []).length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                        No CQI conditions configured yet. Open the popup to add IF/THEN rules, colors, and caps.
+                      </div>
+                    ) : (
+                      (selectedExamAssignmentItem.exam.cqi?.conditions || []).map((cond, idx) => (
+                        <div key={idx} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">{String((cond as any).title || '').trim() || `Condition ${idx + 1}`}</div>
+                              <div className="mt-1 text-xs text-slate-500">{String((cond as any).if || '').trim() || 'No IF expression saved'}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {Boolean((cond as any).cap_enabled) && (
+                                <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">Cap {(cond as any).cap_percent ?? 58}%</span>
+                              )}
+                              <span className="h-6 w-6 rounded-full border border-slate-200" style={{ backgroundColor: String((cond as any).color || '#FEE2E2') }} />
+                            </div>
+                          </div>
+                          <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-mono text-slate-700">
+                            {String((cond as any).then || '').trim() || 'No THEN expression saved'}
+                          </div>
+                        </div>
+                      ))
                     )}
                   </div>
 
-                  {markManager.enabled && (
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-4">
-                        <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.mode === 'admin_define' ? 'bg-teal-50 border-teal-400 ring-1 ring-teal-400' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="radio"
-                            name="mm_mode"
-                            checked={markManager.mode === 'admin_define'}
-                            disabled={!isEditing}
-                            onChange={() => { setMarkManager(prev => ({ ...prev, mode: 'admin_define' })); markDirty(); }}
-                            className="accent-teal-600"
-                          />
-                          <div>
-                            <span className="text-sm font-semibold text-gray-800">Admin Define</span>
-                            <p className="text-[11px] text-gray-500">Admin configures COs, items & marks here</p>
-                          </div>
-                        </label>
-                        <label className={`flex items-center gap-2 px-4 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.mode === 'user_define' ? 'bg-blue-50 border-blue-400 ring-1 ring-blue-400' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="radio"
-                            name="mm_mode"
-                            checked={markManager.mode === 'user_define'}
-                            disabled={!isEditing}
-                            onChange={() => { setMarkManager(prev => ({ ...prev, mode: 'user_define' })); markDirty(); }}
-                            className="accent-blue-600"
-                          />
-                          <div>
-                            <span className="text-sm font-semibold text-gray-800">User Define</span>
-                            <p className="text-[11px] text-gray-500">Faculty configures before mark entry</p>
-                          </div>
-                        </label>
+                  <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Else Formula</div>
+                    <div className="mt-2 text-sm font-mono text-slate-700">{selectedExamAssignmentItem.exam.cqi?.else_formula || '—'}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                  <div className="border-b border-slate-100 px-5 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Question Table Preview</div>
+                        <div className="mt-1 text-sm text-slate-500">Readonly snapshot. Use the popup for edits and save.</div>
                       </div>
-
-                      <div className="flex flex-wrap items-center gap-4">
-                        <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.whole_number ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.whole_number}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, whole_number: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-amber-600"
-                          />
-                          <div>
-                            <span className="text-sm font-medium text-gray-800">Whole Number</span>
-                            <p className="text-[10px] text-gray-500">No decimals allowed in mark entry</p>
-                          </div>
-                        </label>
-                        <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${markManager.arrow_keys ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.arrow_keys}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, arrow_keys: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-indigo-600"
-                          />
-                          <div>
-                            <span className="text-sm font-medium text-gray-800">Arrow Keys Inc/Dec</span>
-                            <p className="text-[10px] text-gray-500">Up/Down arrows change value; unchecked = navigate cells</p>
-                          </div>
-                        </label>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        {markManager.enabled && <span className="rounded-full bg-teal-100 px-3 py-1 font-medium text-teal-700">Mark Manager On</span>}
+                        {selectedExamAssignmentItem?.exam?.pass_mark != null && <span className="rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-700">Pass Mark {selectedExamAssignmentItem.exam.pass_mark}</span>}
                       </div>
-
-                      {markManager.mode === 'user_define' && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
-                          Faculty will see the Mark Manager setup when they open this exam for mark entry. They can select COs, set number of items and max marks, then confirm to generate the question table.
+                    </div>
+                  </div>
+                  {effectiveRows.length === 0 ? (
+                    <div className="px-5 py-10 text-center text-sm text-slate-500">No question rows configured yet. Open the popup to add rows or paste a schema.</div>
+                  ) : (
+                    <div className="overflow-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em]">Title</th>
+                            <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em]">Max</th>
+                            <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em]">BTL</th>
+                            <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em]">CO</th>
+                            <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-[0.18em]">State</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {effectiveRows.slice(0, 8).map((row, idx) => (
+                            <tr key={`${row.title}-${idx}`} className="hover:bg-slate-50/80">
+                              <td className="px-4 py-3 font-medium text-slate-900">{row.title || `Q${idx + 1}`}</td>
+                              <td className="px-4 py-3 text-center text-slate-700">{row.max_marks}</td>
+                              <td className="px-4 py-3 text-center text-slate-700">{row.btl_level ? `BT${row.btl_level}` : 'User'}</td>
+                              <td className="px-4 py-3 text-center text-slate-700">{coLabel(row.co_number)}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className={`rounded-full px-3 py-1 text-xs font-medium ${row.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                  {row.enabled ? 'Enabled' : 'Disabled'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {effectiveRows.length > 8 && (
+                        <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                          Showing first 8 rows of {effectiveRows.length}. Open the popup to edit the full pattern.
                         </div>
-                      )}
-
-                      {markManager.mode === 'admin_define' && (
-                      <>
-                      <div className="flex flex-wrap items-center gap-3">
-                        {[1, 2, 3, 4, 5].map(co => (
-                          <label key={co} className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer select-none transition-colors ${markManager.cos[co]?.enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
-                            <input
-                              type="checkbox"
-                              checked={markManager.cos[co]?.enabled || false}
-                              disabled={!isEditing}
-                              onChange={e => {
-                                setMarkManager(prev => ({
-                                  ...prev,
-                                  cos: { ...prev.cos, [co]: { ...prev.cos[co], enabled: e.target.checked } },
-                                }));
-                                markDirty();
-                              }}
-                              className="w-4 h-4 accent-teal-600"
-                            />
-                            <span className="text-sm font-medium">CO-{co}</span>
-                          </label>
-                        ))}
-                        <label className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer select-none transition-colors ${markManager.cia_enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
-                          <input
-                            type="checkbox"
-                            checked={markManager.cia_enabled}
-                            disabled={!isEditing}
-                            onChange={e => { setMarkManager(prev => ({ ...prev, cia_enabled: e.target.checked })); markDirty(); }}
-                            className="w-4 h-4 accent-teal-600"
-                          />
-                          <span className="text-sm font-medium">Exam</span>
-                        </label>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-4">
-                        {markManager.cia_enabled && (
-                          <div className="border rounded-lg p-4 bg-gray-50">
-                            <h4 className="text-sm font-bold text-gray-800 mb-1">Exam</h4>
-                            <label className="block text-xs text-gray-500 mb-1">Max marks</label>
-                            {isEditing ? (
-                              <input
-                                type="number" min={0}
-                                value={markManager.cia_max_marks}
-                                onChange={e => { setMarkManager(prev => ({ ...prev, cia_max_marks: Number(e.target.value) || 0 })); markDirty(); }}
-                                className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                              />
-                            ) : (
-                              <div className="text-sm font-semibold text-gray-900">{markManager.cia_max_marks}</div>
-                            )}
-                          </div>
-                        )}
-                        {[1, 2, 3, 4, 5].filter(co => markManager.cos[co]?.enabled).map(co => (
-                          <div key={co} className="border rounded-lg p-4 bg-gray-50">
-                            <h4 className="text-sm font-bold text-gray-800 mb-2">CO-{co}</h4>
-                            <div className="space-y-2">
-                              <div>
-                                <label className="block text-xs text-teal-600 mb-0.5">No. of experiments</label>
-                                {isEditing ? (
-                                  <input
-                                    type="number" min={1} max={20}
-                                    value={markManager.cos[co].num_items}
-                                    onChange={e => {
-                                      setMarkManager(prev => ({
-                                        ...prev,
-                                        cos: { ...prev.cos, [co]: { ...prev.cos[co], num_items: Number(e.target.value) || 1 } },
-                                      }));
-                                      markDirty();
-                                    }}
-                                    className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                                  />
-                                ) : (
-                                  <div className="text-sm font-semibold text-gray-900">{markManager.cos[co].num_items}</div>
-                                )}
-                              </div>
-                              <div>
-                                <label className="block text-xs text-teal-600 mb-0.5">Max marks</label>
-                                {isEditing ? (
-                                  <input
-                                    type="number" min={0}
-                                    value={markManager.cos[co].max_marks}
-                                    onChange={e => {
-                                      setMarkManager(prev => ({
-                                        ...prev,
-                                        cos: { ...prev.cos, [co]: { ...prev.cos[co], max_marks: Number(e.target.value) || 0 } },
-                                      }));
-                                      markDirty();
-                                    }}
-                                    className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-teal-500"
-                                  />
-                                ) : (
-                                  <div className="text-sm font-semibold text-gray-900">{markManager.cos[co].max_marks}</div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className={`font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                          Total: {totalMarks} marks
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.num_items, 0)} items across {Object.values(markManager.cos).filter(c => c.enabled).length} COs
-                          {markManager.cia_enabled ? ' + Exam' : ''}
-                        </span>
-                      </div>
-                      </>
                       )}
                     </div>
                   )}
                 </div>
-
-                {/* Question table — shown only when Mark Manager is OFF (moved from Exam Assignment page) */}
-                {!markManager.enabled && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-700">Question Table</h3>
-                    <div className="flex items-center gap-3">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        Total: {totalMarks} marks
-                      </span>
-                      {isEditing && (
-                        <button onClick={addQuestion} className="flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 text-sm rounded-lg hover:bg-blue-200">
-                          <Plus className="w-3.5 h-3.5" /> Add Row
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm table-fixed">
-                      <thead className="bg-gray-50 border-b">
-                        <tr>
-                          {isEditing && <th className="w-8 px-2 py-2 text-gray-400">#</th>}
-                          <th className="w-20 px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Enabled</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase">Question Title</th>
-                          <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">Max</th>
-                          <th className="w-24 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">BTL</th>
-                          <th className="w-56 px-3 py-2 text-center text-xs font-semibold text-gray-600 uppercase">CO</th>
-                          <th className="w-14 px-2 py-2"></th>
-                          {isEditing && <th className="px-2 py-2 w-8"></th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {localRows.length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan={
-                                (isEditing ? 1 : 0)
-                                + 1 /* enabled */
-                                + 1 /* title */
-                                + 1 /* max */
-                                + 1 /* btl */
-                                + 1 /* co */
-                                + 1 /* settings */
-                                + (isEditing ? 1 : 0) /* delete */
-                              }
-                              className="text-center py-8 text-gray-400"
-                            >
-                              No questions yet. {isEditing && 'Click "Add Row" to create one.'}
-                            </td>
-                          </tr>
-                        ) : (
-                          localRows.map((row, idx) => (
-                            <tr key={idx} className={`hover:bg-gray-50 ${!row.enabled ? 'opacity-50' : ''}`}>
-                              {isEditing && (
-                                <td className="px-2 py-2 text-center text-gray-300 cursor-grab">
-                                  <GripVertical className="w-4 h-4 inline" />
-                                </td>
-                              )}
-                              <td className="px-3 py-2 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={row.enabled}
-                                  disabled={!isEditing}
-                                  onChange={e => updateRow(idx, 'enabled', e.target.checked)}
-                                  className="w-4 h-4 accent-blue-600"
-                                />
-                              </td>
-                              <td className="px-3 py-2">
-                                {isEditing ? (
-                                  <input
-                                    value={row.title}
-                                    onChange={e => updateRow(idx, 'title', e.target.value)}
-                                    className="w-full px-2 py-1 border rounded focus:ring-1 focus:ring-blue-500 text-sm"
-                                    placeholder="Q1 (a)"
-                                  />
-                                ) : (
-                                  <span className="font-medium truncate inline-block max-w-full align-middle">{row.title}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={row.max_marks}
-                                    onChange={e => updateRow(idx, 'max_marks', Number(e.target.value))}
-                                    className="w-16 px-2 py-1 border rounded text-center focus:ring-1 focus:ring-blue-500 text-sm"
-                                  />
-                                ) : (
-                                  <span className="font-semibold text-gray-700">{row.max_marks}</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <select value={row.btl_level ?? ''} onChange={e => updateRow(idx, 'btl_level', e.target.value ? Number(e.target.value) : null)} className="px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500">
-                                    <option value="">User Selection</option>
-                                    {BTL_LEVELS.map(l => <option key={l} value={l}>BT{l}</option>)}
-                                  </select>
-                                ) : (
-                                  row.btl_level ? <span className="bg-indigo-100 text-indigo-700 text-xs px-1.5 py-0.5 rounded">BT{row.btl_level}</span> : <span className="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">User Sel.</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                {isEditing ? (
-                                  <select
-                                    value={coToSelectVal(row.co_number)}
-                                    onChange={e => { updateRow(idx, 'co_number', selectValToCo(e.target.value)); markDirty(); }}
-                                    className="w-full max-w-[14rem] px-2 py-1 border rounded text-sm focus:ring-1 focus:ring-blue-500"
-                                  >
-                                    <option value="">—</option>
-                                    <optgroup label="Single CO">
-                                      {CO_NUMBERS.map(c => <option key={c} value={String(c)}>CO{c}</option>)}
-                                    </optgroup>
-                                    <optgroup label="Combination COs (mark split equally)" style={{ background: '#f3e8ff' }}>
-                                      {CO_COMBINATIONS.map(combo => {
-                                        const val = combo.join(',');
-                                        const label = combo.map(c => `CO${c}`).join(' & ');
-                                        return (
-                                          <option key={val} value={val} style={{ background: '#f3e8ff' }}>
-                                            {label}
-                                          </option>
-                                        );
-                                      })}
-                                    </optgroup>
-                                  </select>
-                                ) : (
-                                  row.co_number != null
-                                    ? Array.isArray(row.co_number)
-                                      ? <span className="bg-violet-100 text-violet-700 text-xs px-1.5 py-0.5 rounded font-medium inline-block max-w-[14rem] truncate align-middle">{coLabel(row.co_number)}</span>
-                                      : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded inline-block max-w-[14rem] truncate align-middle">{coLabel(row.co_number)}</span>
-                                    : <span className="text-gray-300">—</span>
-                                )}
-                              </td>
-                              <td className="px-2 py-2 text-center">
-                                <button
-                                  onClick={() => openQuestionSettings(idx)}
-                                  className="p-1.5 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded"
-                                  title="Question settings"
-                                >
-                                  <Settings2 className="w-4 h-4" />
-                                </button>
-                              </td>
-                              {isEditing && (
-                                <td className="px-2 py-2 text-center">
-                                  <button onClick={() => removeQuestion(idx)} className="p-1 text-red-400 hover:text-red-600 rounded">
-                                    <X className="w-4 h-4" />
-                                  </button>
-                                </td>
-                              )}
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                )}
-
-                {/* Question Settings Modal */}
-                {questionSettingsOpen && settingsQuestionIndex != null && settingsRow && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-                    <div className="w-full max-w-xl bg-white rounded-lg shadow-lg border overflow-hidden">
-                      <div className="px-4 py-3 border-b flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-semibold text-gray-900">Question Settings</div>
-                          <div className="text-xs text-gray-400">Q{settingsQuestionIndex + 1}: {settingsRow.title || `Q${settingsQuestionIndex + 1}`}</div>
-                        </div>
-                        <button onClick={closeQuestionSettings} className="p-2 rounded hover:bg-gray-100" title="Close">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="p-4 space-y-4">
-                        <div className="text-xs text-gray-500">
-                          This popup is designed to hold more per-question options later.
-                        </div>
-
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            className="w-4 h-4 accent-violet-600"
-                            disabled={!isEditing}
-                            checked={!!settingsRow.special_split}
-                            onChange={(e) => {
-                              updateRow(settingsQuestionIndex, 'special_split', e.target.checked);
-                              if (!e.target.checked) {
-                                updateRow(settingsQuestionIndex, 'special_split_sources', []);
-                              }
-                            }}
-                          />
-                          <span className="font-medium text-gray-800">special_split</span>
-                        </label>
-
-                        {settingsSpecialEnabled && (
-                          <div className="border rounded-lg p-3 bg-violet-50/40">
-                            {(() => {
-                              const p = getSpecialSplitPreview(settingsQuestionIndex);
-                              return (
-                                <div className="space-y-2">
-                                  <div className="text-xs text-gray-600">
-                                    Formula (preview): <span className="font-semibold">sum(checked max marks) + (special max marks / unique CO count)</span>
-                                  </div>
-                                  <div className="grid grid-cols-2 gap-2 text-sm">
-                                    <div className="bg-white rounded border p-2">
-                                      <div className="text-xs text-gray-500">Checked sum</div>
-                                      <div className="font-semibold">{p.sumMarks}</div>
-                                    </div>
-                                    <div className="bg-white rounded border p-2">
-                                      <div className="text-xs text-gray-500">Special max</div>
-                                      <div className="font-semibold">{p.specialMarks}</div>
-                                    </div>
-                                    <div className="bg-white rounded border p-2">
-                                      <div className="text-xs text-gray-500">Unique COs</div>
-                                      <div className="font-semibold">{p.coCount || 0}{p.coSet.length ? ` (${p.coSet.map((c) => `CO${c}`).join(', ')})` : ''}</div>
-                                    </div>
-                                    <div className="bg-white rounded border p-2">
-                                      <div className="text-xs text-gray-500">Result</div>
-                                      <div className="font-semibold text-violet-700">{p.result}</div>
-                                    </div>
-                                  </div>
-                                  <div className="text-xs text-gray-600 mt-3 font-medium">Select source questions</div>
-                                  <div className="max-h-48 overflow-auto bg-white rounded border">
-                                    {localRows
-                                      .map((r, i) => ({ r, i }))
-                                      .filter(({ i }) => i !== settingsQuestionIndex)
-                                      .map(({ r, i }) => {
-                                        const selected = Array.isArray(settingsRow.special_split_sources)
-                                          ? (settingsRow.special_split_sources as number[]).includes(i)
-                                          : false;
-                                        const disabled = !isEditing || !r.enabled;
-                                        return (
-                                          <label
-                                            key={i}
-                                            className={`flex items-center justify-between gap-3 px-3 py-2 text-sm border-b last:border-b-0 ${disabled ? 'opacity-60' : 'hover:bg-gray-50'}`}
-                                          >
-                                            <div className="flex items-center gap-2 min-w-0">
-                                              <input
-                                                type="checkbox"
-                                                className="w-4 h-4 accent-violet-600"
-                                                disabled={disabled}
-                                                checked={selected}
-                                                onChange={(e) => toggleSpecialSplitSource(settingsQuestionIndex, i, e.target.checked)}
-                                              />
-                                              <div className="min-w-0">
-                                                <div className="font-medium truncate">Q{i + 1}: {r.title || `Q${i + 1}`}</div>
-                                                <div className="text-xs text-gray-500 truncate">Max {Number(r.max_marks) || 0} · {coLabel(r.co_number)}</div>
-                                              </div>
-                                            </div>
-                                            {!r.enabled && (
-                                              <span className="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600">Disabled</span>
-                                            )}
-                                          </label>
-                                        );
-                                      })}
-                                  </div>
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="px-4 py-3 border-t flex justify-end gap-2">
-                        <button
-                          onClick={closeQuestionSettings}
-                          className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
-                        >
-                          Close
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {!cqiEditorModalOpen && selectedIsCqi && selectedExamAssignmentItem && (
-                  <div ref={cqiConfigRef} className="border-t pt-5 mt-5">
-                    <div className="border rounded-lg p-4 bg-white">
-                        <div className="mb-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <h4 className="text-sm font-semibold text-gray-800">CQI Configuration</h4>
-                              <div className="text-xs text-gray-400">Saved inside Class Type exam assignments (selected CQI)</div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setCqiEditorModalOpen(true)}
-                              disabled={!isEditing}
-                              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                              title={!isEditing ? 'Enable Edit mode to modify CQI' : 'Open horizontal CQI editor'}
-                            >
-                              Edit CQI
-                            </button>
-                          </div>
-                        </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs text-gray-500">CQI Name</label>
-                          <input
-                            value={selectedExamAssignmentItem.exam.cqi?.name || ''}
-                            onChange={(e) => updateCqi((prev) => ({ ...prev, name: e.target.value }))}
-                            placeholder="CQI"
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            disabled={!isEditing}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs text-gray-500">CQI Code</label>
-                          <input
-                            value={selectedExamAssignmentItem.exam.cqi?.code || ''}
-                            onChange={(e) => updateCqi((prev) => ({ ...prev, code: normalizeTypeCode(e.target.value) }))}
-                            placeholder="CQI"
-                            className="w-full px-3 py-2 border rounded-lg text-sm"
-                            disabled={!isEditing}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-4">
-                        <div className="text-xs text-gray-500 mb-2">CO Selection</div>
-                        <div className="flex flex-wrap gap-3">
-                          {Array.from({ length: Number(selectedClassType?.default_co_count ?? 5) || 5 }, (_, i) => i + 1).map((co) => {
-                            const selected = (selectedExamAssignmentItem.exam.cqi?.cos || []).includes(co);
-                            return (
-                              <label key={co} className="flex items-center gap-2 text-sm">
-                                <input
-                                  type="checkbox"
-                                  checked={selected}
-                                  disabled={!isEditing}
-                                  onChange={(e) => {
-                                    updateCqi((prev) => {
-                                      const set = new Set(prev.cos || []);
-                                      if (e.target.checked) set.add(co);
-                                      else set.delete(co);
-                                      return { ...prev, cos: Array.from(set).sort((a, b) => a - b) };
-                                    });
-                                  }}
-                                  className="w-4 h-4"
-                                />
-                                <span className="text-gray-700">CO{co}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="mt-4">
-                        <div className="text-xs text-gray-500 mb-2">Exam Assignments Considered</div>
-                        <div className="text-[11px] text-gray-400 mb-2">
-                          If none selected, all exam assignments are considered.
-                        </div>
-                        <div className="flex flex-wrap gap-3">
-                          {(() => {
-                            const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
-                            const allCodes = baseExams
-                              .map((e) => normalizeTypeCode(e.exam_display_name || e.exam || ''))
-                              .filter(Boolean);
-                            const rawSelected = selectedExamAssignmentItem.exam.cqi?.exams || [];
-                            const selectedSet = new Set(
-                              (Array.isArray(rawSelected) && rawSelected.length > 0 ? rawSelected : allCodes)
-                                .map((x) => normalizeTypeCode(String(x || '')))
-                                .filter(Boolean)
-                            );
-                            return baseExams.map((ex) => {
-                              const code = normalizeTypeCode(ex.exam_display_name || ex.exam || '');
-                              const label = String(ex.exam_display_name || ex.exam || code);
-                              const checked = code ? selectedSet.has(code) : false;
-                              return (
-                                <label key={code || label} className="flex items-center gap-2 text-sm">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    disabled={!isEditing || !code}
-                                    onChange={(e) => {
-                                      if (!code) return;
-                                      updateCqi((prev) => {
-                                        const nextAll = allCodes;
-                                        const init = new Set(
-                                          (Array.isArray(prev.exams) && prev.exams.length > 0 ? prev.exams : nextAll)
-                                            .map((x) => normalizeTypeCode(String(x || '')))
-                                            .filter(Boolean)
-                                        );
-                                        if (e.target.checked) init.add(code);
-                                        else init.delete(code);
-                                        return { ...prev, exams: Array.from(init).sort((a, b) => a.localeCompare(b)) };
-                                      });
-                                    }}
-                                    className="w-4 h-4"
-                                  />
-                                  <span className="text-gray-700">{label}</span>
-                                </label>
-                              );
-                            });
-                          })()}
-                        </div>
-                      </div>
-
-                      <div className="mt-5 border-t pt-4">
-                        <div className="text-sm font-semibold text-gray-700 mb-1">Custom Variable (Token) Creator</div>
-                        <div className="text-xs text-gray-400 mb-2">Create reusable tokens like C = [COX-SSA_1-OBT] + [FORMATIVE_1-OBT]. Use them in IF/THEN/ELSE.</div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          <div className="md:col-span-2">
-                            <div className="flex items-center justify-between mb-2">
-                              <label className="text-xs text-gray-500">Custom Variables</label>
-                              {isEditing && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateCqi((prev) => ({
-                                      ...prev,
-                                      custom_vars: [...(prev.custom_vars || []), { code: '', label: '', expr: '' }],
-                                    }))
-                                  }
-                                  className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                >
-                                  + Add Custom Variable
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="space-y-2">
-                              {(selectedExamAssignmentItem.exam.cqi?.custom_vars || []).length === 0 ? (
-                                <div className="text-xs text-gray-400">No custom variables created</div>
-                              ) : (
-                                (selectedExamAssignmentItem.exam.cqi?.custom_vars || []).map((cv, idx) => (
-                                  <div key={idx} className="border rounded-lg p-2 bg-gray-50">
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
-                                      <div>
-                                        <div className="flex items-center justify-between">
-                                          <label className="text-[11px] text-gray-500">Token Code</label>
-                                          {isEditing && (
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                updateCqi((prev) => {
-                                                  const next = [...(prev.custom_vars || [])];
-                                                  next.splice(idx, 1);
-                                                  return { ...prev, custom_vars: next };
-                                                })
-                                              }
-                                              className="text-[11px] text-red-600 hover:underline"
-                                            >
-                                              Remove
-                                            </button>
-                                          )}
-                                        </div>
-                                        <input
-                                          value={cv?.code || ''}
-                                          disabled={!isEditing}
-                                          onChange={(e) =>
-                                            updateCqi((prev) => {
-                                              const next = [...(prev.custom_vars || [])];
-                                              next[idx] = { ...(next[idx] as any), code: normalizeCustomVarCode(e.target.value) };
-                                              return { ...prev, custom_vars: next };
-                                            })
-                                          }
-                                          placeholder="C"
-                                          className="w-full px-2 py-2 border rounded text-sm font-mono"
-                                        />
-                                        <div className="text-[10px] text-gray-400 mt-1">Will be used as <code className="font-mono">[{normalizeCustomVarCode(cv?.code || '') || 'CODE'}]</code></div>
-                                      </div>
-
-                                      <div>
-                                        <label className="text-[11px] text-gray-500">Label (optional)</label>
-                                        <input
-                                          value={cv?.label || ''}
-                                          disabled={!isEditing}
-                                          onChange={(e) =>
-                                            updateCqi((prev) => {
-                                              const next = [...(prev.custom_vars || [])];
-                                              next[idx] = { ...(next[idx] as any), label: e.target.value };
-                                              return { ...prev, custom_vars: next };
-                                            })
-                                          }
-                                          placeholder="Custom variable"
-                                          className="w-full px-2 py-2 border rounded text-sm"
-                                        />
-                                      </div>
-
-                                      <div>
-                                        <div className="flex items-center justify-between">
-                                          <label className="text-[11px] text-gray-500">Expression</label>
-                                          {isEditing && (
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                openTokenPicker((token) =>
-                                                  updateCqi((prev) => {
-                                                    const next = [...(prev.custom_vars || [])];
-                                                    const prevExpr = String((next[idx] as any)?.expr || '');
-                                                    next[idx] = { ...(next[idx] as any), expr: appendToken(prevExpr, token) };
-                                                    return { ...prev, custom_vars: next };
-                                                  })
-                                                )
-                                              }
-                                              className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                            >
-                                              + Token
-                                            </button>
-                                          )}
-                                        </div>
-                                        <input
-                                          value={cv?.expr || ''}
-                                          disabled={!isEditing}
-                                          onChange={(e) =>
-                                            updateCqi((prev) => {
-                                              const next = [...(prev.custom_vars || [])];
-                                              next[idx] = { ...(next[idx] as any), expr: e.target.value };
-                                              return { ...prev, custom_vars: next };
-                                            })
-                                          }
-                                          placeholder="Example: ([COX-SSA_1-OBT] / 10) * 1.5"
-                                          className="w-full px-2 py-2 border rounded text-sm font-mono"
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500">Variable Tokens</label>
-                            <div className="border rounded-lg p-2 max-h-[120px] overflow-auto bg-gray-50">
-                              {cqiVariables.length === 0 ? (
-                                <div className="text-xs text-gray-400">No variables available</div>
-                              ) : (
-                                <div className="space-y-1">
-                                  {cqiVariables.slice(0, 40).map((v) => (
-                                    <button
-                                      key={v.code}
-                                      type="button"
-                                      disabled={!isEditing}
-                                      onClick={() => { /* tokens inserted via +Token buttons */ }}
-                                      className={`w-full text-left flex items-center justify-between gap-2 rounded px-1 py-0.5 hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed ${v.kind === 'custom' ? 'bg-indigo-50' : tokenMeta(v.code).rowClass}`}
-                                      title={isEditing ? 'Use + Token buttons to insert' : ''}
-                                    >
-                                      <div className="flex items-center gap-2 min-w-0">
-                                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${v.kind === 'custom' ? 'bg-indigo-100 text-indigo-700' : tokenMeta(v.code).badgeClass}`}>{v.kind === 'custom' ? 'CUSTOM' : tokenMeta(v.code).badge}</span>
-                                        <code className={`text-[11px] ${v.kind === 'custom' ? 'text-indigo-700 font-semibold' : tokenMeta(v.code).tokenClass}`}>{v.token}</code>
-                                      </div>
-                                      <span className="text-[11px] text-gray-400 truncate">{v.label}</span>
-                                    </button>
-                                  ))}
-                                  {cqiVariables.length > 40 && (
-                                    <div className="text-[11px] text-gray-400">…and {cqiVariables.length - 40} more</div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 border-t pt-4">
-                        <div className="flex items-center justify-between mb-2">
-                          <div>
-                            <div className="text-sm font-semibold text-gray-700">CQI Operation (Conditions)</div>
-                            <div className="text-xs text-gray-400">Condition ladder: IF → THEN; last Else used as default</div>
-                          </div>
-                          {isEditing && (
-                            <button
-                              onClick={() => updateCqi((prev) => ({ ...prev, conditions: [...(prev.conditions || []), { if: '', then: '', color: '#FEE2E2', if_clauses: [{ token: 'BEFORE_CQI_COX', rhs: '' }] }] }))}
-                              className="px-3 py-1.5 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 flex items-center gap-1"
-                            >
-                              <Plus className="w-3.5 h-3.5" /> Add Condition
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="space-y-3">
-                          {(selectedExamAssignmentItem.exam.cqi?.conditions || []).map((cond, idx) => (
-                            <div key={idx} className="border rounded-lg p-3 bg-gray-50">
-                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                <div>
-                                  <div className="flex items-center justify-between">
-                                    <label className="text-xs text-gray-500">Condition (IF)</label>
-                                    {isEditing && (
-                                      <div className="flex items-center gap-2">
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            updateCqi((prev) => {
-                                              const next = [...(prev.conditions || [])];
-                                              const existing = next[idx] as any;
-                                              const clauses: CqiIfClause[] = Array.isArray(existing?.if_clauses)
-                                                ? existing.if_clauses
-                                                : parseIfClauses(existing?.if || '');
-                                              clauses.push({ token: 'TOTAL_CQI', rhs: '' });
-                                              next[idx] = { ...next[idx], if_clauses: clauses, if: buildIfFromClauses(clauses) };
-                                              return { ...prev, conditions: next };
-                                            })
-                                          }
-                                          className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                          title="Add AND condition"
-                                        >
-                                          + AND
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            openTokenPicker((token) =>
-                                              updateCqi((prev) => {
-                                                const next = [...(prev.conditions || [])];
-                                                const existing = next[idx] as any;
-                                                const clauses: CqiIfClause[] = Array.isArray(existing?.if_clauses)
-                                                  ? existing.if_clauses
-                                                  : parseIfClauses(existing?.if || '');
-                                                const lastIdx = Math.max(0, clauses.length - 1);
-                                                clauses[lastIdx] = { ...clauses[lastIdx], rhs: appendToken(clauses[lastIdx]?.rhs || '', token) };
-                                                next[idx] = { ...next[idx], if_clauses: clauses, if: buildIfFromClauses(clauses) };
-                                                return { ...prev, conditions: next };
-                                              })
-                                            )
-                                          }
-                                          className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                        >
-                                          + Token
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                  {(() => {
-                                    const cAny = cond as any;
-                                    const clauses: CqiIfClause[] = Array.isArray(cAny?.if_clauses)
-                                      ? cAny.if_clauses
-                                      : parseIfClauses(cAny?.if || '');
-
-                                    const writeClauses = (nextClauses: CqiIfClause[]) =>
-                                      updateCqi((prev) => {
-                                        const next = [...(prev.conditions || [])];
-                                        next[idx] = { ...(next[idx] as any), if_clauses: nextClauses, if: buildIfFromClauses(nextClauses) };
-                                        return { ...prev, conditions: next };
-                                      });
-
-                                    return (
-                                      <div className="space-y-2">
-                                        {clauses.map((cl, ci) => (
-                                          <div key={ci} className="flex items-center gap-2">
-                                            {ci === 0 ? (
-                                              <div className="px-2 py-2 border rounded-lg text-sm font-mono bg-gray-100 text-gray-600 whitespace-nowrap">
-                                                BEFORE_CQI_COX =
-                                              </div>
-                                            ) : (
-                                              <select
-                                                disabled={!isEditing}
-                                                value={cl.token}
-                                                onChange={(e) => {
-                                                  const t = String(e.target.value || '').toUpperCase() as any;
-                                                  if (!CQI_CLAUSE_TOKENS.includes(t)) return;
-                                                  const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, token: t } : x));
-                                                  writeClauses(nextClauses);
-                                                }}
-                                                className="px-2 py-2 border rounded-lg text-sm font-mono bg-white text-gray-700"
-                                                title="Token"
-                                              >
-                                                {CQI_CLAUSE_TOKENS.map((t) => (
-                                                  <option key={t} value={t}>{t} =</option>
-                                                ))}
-                                              </select>
-                                            )}
-
-                                            <input
-                                              value={cl.rhs || ''}
-                                              disabled={!isEditing}
-                                              onChange={(e) => {
-                                                const nextClauses = clauses.map((x, j) => (j === ci ? { ...x, rhs: e.target.value } : x));
-                                                writeClauses(nextClauses);
-                                              }}
-                                              placeholder={ci === 0 ? 'Example: < 58' : 'Example: >= 58'}
-                                              className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                                            />
-                                          </div>
-                                        ))}
-                                      </div>
-                                    );
-                                  })()}
-                                </div>
-                                <div>
-                                  <div className="flex items-center justify-between">
-                                    <label className="text-xs text-gray-500">Internal Mark Value (THEN)</label>
-                                    {isEditing && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          openTokenPicker((token) =>
-                                            updateCqi((prev) => {
-                                              const next = [...(prev.conditions || [])];
-                                              next[idx] = { ...next[idx], then: appendToken(next[idx]?.then || '', token) };
-                                              return { ...prev, conditions: next };
-                                            })
-                                          )
-                                        }
-                                        className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                      >
-                                        + Token
-                                      </button>
-                                    )}
-                                  </div>
-                                  <input
-                                    value={cond.then || ''}
-                                    disabled={!isEditing}
-                                    onChange={(e) =>
-                                      updateCqi((prev) => {
-                                        const next = [...(prev.conditions || [])];
-                                        next[idx] = { ...next[idx], then: e.target.value };
-                                        return { ...prev, conditions: next };
-                                      })
-                                    }
-                                    placeholder="Example: [CQI] * 1.5"
-                                    className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-xs text-gray-500">Cell Color</label>
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="color"
-                                      value={String((cond as any).color || '#FEE2E2')}
-                                      disabled={!isEditing}
-                                      onChange={(e) =>
-                                        updateCqi((prev) => {
-                                          const next = [...(prev.conditions || [])];
-                                          next[idx] = { ...next[idx], color: e.target.value };
-                                          return { ...prev, conditions: next };
-                                        })
-                                      }
-                                      className="h-9 w-12 p-0 border rounded bg-white"
-                                      title="Pick background color for matched cells"
-                                    />
-                                    <input
-                                      value={String((cond as any).color || '')}
-                                      disabled={!isEditing}
-                                      onChange={(e) =>
-                                        updateCqi((prev) => {
-                                          const next = [...(prev.conditions || [])];
-                                          next[idx] = { ...next[idx], color: e.target.value };
-                                          return { ...prev, conditions: next };
-                                        })
-                                      }
-                                      placeholder="#FEE2E2"
-                                      className="flex-1 px-3 py-2 border rounded-lg text-sm font-mono"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                              {isEditing && (
-                                <div className="mt-2 flex justify-end">
-                                  <button
-                                    onClick={() =>
-                                      updateCqi((prev) => {
-                                        const next = [...(prev.conditions || [])];
-                                        next.splice(idx, 1);
-                                        return { ...prev, conditions: next };
-                                      })
-                                    }
-                                    className="text-xs text-red-600 hover:underline"
-                                  >
-                                    Remove
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-
-                          <div>
-                            <div className="flex items-center justify-between">
-                              <label className="text-xs text-gray-500">Else Formula (default)</label>
-                              {isEditing && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    openTokenPicker((token) =>
-                                      updateCqi((prev) => ({ ...prev, else_formula: appendToken(prev.else_formula || '', token) }))
-                                    )
-                                  }
-                                  className="text-[11px] px-2 py-1 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                                >
-                                  + Token
-                                </button>
-                              )}
-                            </div>
-                            <input
-                              value={selectedExamAssignmentItem.exam.cqi?.else_formula || ''}
-                              onChange={(e) => updateCqi((prev) => ({ ...prev, else_formula: e.target.value }))}
-                              placeholder="Example: [CQI] * 1.5"
-                              className="w-full px-3 py-2 border rounded-lg text-sm font-mono"
-                              disabled={!isEditing}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
           ) : (
-            <div className="bg-white rounded-lg shadow border-dashed border-2 p-12 text-center">
-              <FileText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500 mb-4">Select Class Type and QP Type, then click Add to choose an exam to edit.</p>
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-sm">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100">
+                <FileText className="w-8 h-8 text-slate-400" />
+              </div>
+              <h3 className="mt-5 text-xl font-semibold text-slate-900">Choose an exam assignment</h3>
+              <p className="mx-auto mt-2 max-w-xl text-sm text-slate-500">
+                The page now stays focused on navigation and preview. Click any exam assignment on the left to open the popup editor and complete all edits there.
+              </p>
             </div>
           )}
         </div>
@@ -3649,55 +2904,12 @@ export default function QpPatternEditorPage() {
         </div>
       )}
 
-      {/* CQI Editor Popup (horizontal) */}
-      {cqiEditorModalOpen && selectedIsCqi && selectedExamAssignmentItem && (
-        <QpCqiEditorPopup
-          open={cqiEditorModalOpen}
-          onClose={() => setCqiEditorModalOpen(false)}
-          selectedExamAssignment={
-            selectedExamAssignmentItem
-              ? {
-                  exam: selectedExamAssignmentItem.exam.exam,
-                  exam_display_name: selectedExamAssignmentItem.exam.exam_display_name || selectedExamAssignmentItem.exam.exam,
-                  qp_type: selectedQpType,
-                }
-              : null
-          }
-          selectedExamAssignmentItem={selectedExamAssignmentItem}
-          isEditing={isEditing}
-          localRows={localRows}
-          onUpdateRow={updateRow}
-          onRemoveQuestion={removeQuestion}
-          onAddQuestion={addQuestion}
-          onOpenQuestionSettings={openQuestionSettings}
-          cqiVariables={cqiVariables}
-          groupedCqiVariables={groupedCqiVariables}
-          tokenMeta={tokenMeta}
-          tokenInsertRequested={tokenPickerOpen}
-          onRequestTokenPicker={(insert) => openTokenPicker(insert)}
-          updateCqi={updateCqi}
-          availableExamAssignments={visibleExamAssignments.filter((exam) => !isCqiAssignment(exam))}
-          sharedCustomVars={globalCqiCustomVars}
-          updateSharedCustomVars={updateGlobalCqiCustomVars}
-          onSaveSharedCustomVars={saveGlobalCqiCustomVars}
-          savingSharedCustomVars={savingGlobalCqiCustomVars}
-          onEnableEditing={() => setIsEditing(true)}
-          parseIfClauses={parseIfClauses}
-          buildIfFromClauses={buildIfFromClauses}
-          appendToken={appendToken}
-          selectedClassTypeDefaultCoCount={Number(selectedClassType?.default_co_count ?? 5) || 5}
-          cycles={cycles}
-          dbCqiTokens={dbCqiTokens}
-          dbCqiOperators={dbCqiOperators}
-        />
-      )}
-
       {/* Exam Assignment Editor Popup (horizontal) */}
       {examEditorModalOpen && selectedExamAssignmentItem && (
         <QpExamAssignmentEditorPopup
           open={examEditorModalOpen}
           onClose={() => setExamEditorModalOpen(false)}
-          isEditing={isEditing}
+          onDiscardChanges={discardSelectedPopupChanges}
           onSave={async () => { await handleSave(); }}
           onDelete={resolvedPattern ? handleDelete : undefined}
           selectedExamAssignmentItem={selectedExamAssignmentItem}
@@ -3708,7 +2920,6 @@ export default function QpPatternEditorPage() {
           onUpdateRow={updateRow}
           onOpenQuestionSettings={openQuestionSettings}
           onReplaceRows={(rows) => { setLocalRows(rows); markDirty(); }}
-          cqiEditorOpen={cqiEditorModalOpen}
           cqiVariables={cqiVariables}
           groupedCqiVariables={groupedCqiVariables}
           tokenMeta={tokenMeta as any}
@@ -3725,6 +2936,121 @@ export default function QpPatternEditorPage() {
           selectedClassTypeDefaultCoCount={Number(selectedClassType?.default_co_count ?? 5) || 5}
           cycles={cycles}
         />
+      )}
+
+      {/* Question Settings Modal */}
+      {questionSettingsOpen && settingsQuestionIndex != null && settingsRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-xl bg-white rounded-lg shadow-lg border overflow-hidden">
+            <div className="px-4 py-3 border-b flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-gray-900">Question Settings</div>
+                <div className="text-xs text-gray-400">Q{settingsQuestionIndex + 1}: {settingsRow.title || `Q${settingsQuestionIndex + 1}`}</div>
+              </div>
+              <button onClick={closeQuestionSettings} className="p-2 rounded hover:bg-gray-100" title="Close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="text-xs text-gray-500">
+                This popup is designed to hold more per-question options later.
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-violet-600"
+                  checked={!!settingsRow.special_split}
+                  onChange={(e) => {
+                    updateRow(settingsQuestionIndex, 'special_split', e.target.checked);
+                    if (!e.target.checked) {
+                      updateRow(settingsQuestionIndex, 'special_split_sources', []);
+                    }
+                  }}
+                />
+                <span className="font-medium text-gray-800">special_split</span>
+              </label>
+
+              {settingsSpecialEnabled && (
+                <div className="border rounded-lg p-3 bg-violet-50/40">
+                  {(() => {
+                    const p = getSpecialSplitPreview(settingsQuestionIndex);
+                    return (
+                      <div className="space-y-2">
+                        <div className="text-xs text-gray-600">
+                          Formula (preview): <span className="font-semibold">sum(checked max marks) + (special max marks / unique CO count)</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div className="bg-white rounded border p-2">
+                            <div className="text-xs text-gray-500">Checked sum</div>
+                            <div className="font-semibold">{p.sumMarks}</div>
+                          </div>
+                          <div className="bg-white rounded border p-2">
+                            <div className="text-xs text-gray-500">Special max</div>
+                            <div className="font-semibold">{p.specialMarks}</div>
+                          </div>
+                          <div className="bg-white rounded border p-2">
+                            <div className="text-xs text-gray-500">Unique COs</div>
+                            <div className="font-semibold">{p.coCount || 0}{p.coSet.length ? ` (${p.coSet.map((c) => `CO${c}`).join(', ')})` : ''}</div>
+                          </div>
+                          <div className="bg-white rounded border p-2">
+                            <div className="text-xs text-gray-500">Result</div>
+                            <div className="font-semibold text-violet-700">{p.result}</div>
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-600 mt-3 font-medium">Select source questions</div>
+                        <div className="max-h-48 overflow-auto bg-white rounded border">
+                          {localRows
+                            .map((r, i) => ({ r, i }))
+                            .filter(({ i }) => i !== settingsQuestionIndex)
+                            .map(({ r, i }) => {
+                              const selected = Array.isArray(settingsRow.special_split_sources)
+                                ? (settingsRow.special_split_sources as number[]).includes(i)
+                                : false;
+                              const disabled = !r.enabled;
+                              return (
+                                <label
+                                  key={i}
+                                  className={`flex items-center justify-between gap-3 px-3 py-2 text-sm border-b last:border-b-0 ${disabled ? 'opacity-60' : 'hover:bg-gray-50'}`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <input
+                                      type="checkbox"
+                                      className="w-4 h-4 accent-violet-600"
+                                      disabled={disabled}
+                                      checked={selected}
+                                      onChange={(e) => toggleSpecialSplitSource(settingsQuestionIndex, i, e.target.checked)}
+                                    />
+                                    <div className="min-w-0">
+                                      <div className="font-medium truncate">Q{i + 1}: {r.title || `Q${i + 1}`}</div>
+                                      <div className="text-xs text-gray-500 truncate">Max {Number(r.max_marks) || 0} · {coLabel(r.co_number)}</div>
+                                    </div>
+                                  </div>
+                                  {!r.enabled && (
+                                    <span className="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-600">Disabled</span>
+                                  )}
+                                </label>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 py-3 border-t flex justify-end gap-2">
+              <button
+                onClick={closeQuestionSettings}
+                className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Token Picker Modal */}
