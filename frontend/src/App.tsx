@@ -134,9 +134,9 @@ const AcV2AdminBypassCoursePage = React.lazy(() => import('./pages/Academic 2.1/
 const AcV2BypassLogsPage = React.lazy(() => import('./pages/Academic 2.1/admin/BypassLogsPage'));
 const AcV2BypassShareLandingPage = React.lazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'));
 const AcV2PassMarkSettingsPage = React.lazy(() => import('./pages/Academic 2.1/admin/SettingsPage'));
-const AcV2StudentMyMarksDashboard = React.lazy(() => import('./pages/Academic 2.1/students/StudentMyMarksDashboard'));
-const AcV2StudentCourseListPage = React.lazy(() => import('./pages/Academic 2.1/students/StudentCourseListPage'));
-const AcV2StudentCourseDetailPage = React.lazy(() => import('./pages/Academic 2.1/students/StudentCourseDetailPage'));
+const AcV2StudentDashboardPage = React.lazy(() => import('./pages/Academic 2.1/students/DashboardPage'));
+const AcV2StudentCourseListPage = React.lazy(() => import('./pages/Academic 2.1/students/CourseListPage'));
+const AcV2StudentCourseDetailPage = React.lazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'));
 
 type RoleObj = { name: string };
 type Me = {
@@ -906,6 +906,49 @@ export default function App() {
                     />
                   }
                 />
+                {/* Academic 2.1 Student Routes */}
+                <Route
+                  path="/academic-v2/student/dashboard"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STUDENT'}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2StudentDashboardPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/student/courses"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STUDENT'}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2StudentCourseListPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/student/course/:courseId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredProfile={'STUDENT'}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2StudentCourseDetailPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
                 <Route
                   path="/academic-v2/cqi/:examId"
                   element={
@@ -1016,49 +1059,6 @@ export default function App() {
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2PassMarkSettingsPage />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                {/* ── Student: My Marks ─────────────────────────────────── */}
-                <Route
-                  path="/academic-v2/student/dashboard"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentMyMarksDashboard />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/student/courses"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentCourseListPage />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/student/course/:courseId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentCourseDetailPage />
                         </React.Suspense>
                       }
                     />

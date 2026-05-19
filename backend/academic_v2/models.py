@@ -1934,6 +1934,31 @@ class AcV2PassMarkSetting(models.Model):
 
 
 # ============================================================================
+# MY MARKS SETTINGS
+# ============================================================================
+
+
+class AcV2MyMarksSetting(models.Model):
+    """Singleton settings for student My Marks access and profile requirements."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=40, default='DEFAULT', unique=True)
+    viewing_enabled = models.BooleanField(default=False)
+    require_profile_photo = models.BooleanField(default=False)
+    require_mobile_number = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_my_marks_setting'
+        verbose_name = 'My Marks Setting'
+        verbose_name_plural = 'My Marks Settings'
+
+    def __str__(self):
+        return f"My Marks ({self.key})"
+
+
+# ============================================================================
 # ACADEMIC NOTIFICATION SETTINGS
 # ============================================================================
 
@@ -2120,32 +2145,3 @@ class AcV2BypassLog(models.Model):
 
     def __str__(self):
         return f"[{self.action}] {self.description[:60]}"
-
-
-# ============================================================================
-# MY MARKS SETTINGS (Admin singleton for student My Marks feature)
-# ============================================================================
-
-class AcV2MyMarksSetting(models.Model):
-    """
-    Singleton settings for the Student 'My Marks' feature.
-    """
-    key = models.CharField(max_length=50, unique=True, default='DEFAULT')
-
-    # Master enable/disable
-    viewing_enabled = models.BooleanField(default=False)
-
-    # Requirements before student can view marks
-    require_profile_photo = models.BooleanField(default=False)
-    require_mobile_number = models.BooleanField(default=False)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        db_table = 'acv2_my_marks_setting'
-        verbose_name = 'My Marks Setting'
-        verbose_name_plural = 'My Marks Settings'
-
-    def __str__(self):
-        return f"MyMarksSetting ({self.key})"

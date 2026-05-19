@@ -44,7 +44,11 @@ from .views import (
     faculty_exam_import_marks,
     admin_secure_delete,
     admin_pass_mark_settings,
+    admin_my_marks_settings,
     admin_academic_notification_settings,
+    student_my_marks_config,
+    student_my_courses,
+    student_my_course_detail,
     # Bypass API
     bypass_start,
     bypass_end,
@@ -59,10 +63,6 @@ from .views import (
     admin_courses_list,
     admin_course_faculty,
     faculty_reset_notices,
-    admin_my_marks_settings,
-    student_my_courses,
-    student_my_course_detail,
-    student_my_marks_config,
 )
 
 app_name = 'academic_v2'
@@ -112,13 +112,11 @@ urlpatterns = [
     path('faculty/courses/<int:ta_id>/reset-notices/', faculty_reset_notices, name='faculty-reset-notices'),
     path('admin/secure-delete/', admin_secure_delete, name='admin-secure-delete'),
     path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
-    path('admin/academic-notification-settings/', admin_academic_notification_settings, name='admin-academic-notification-settings'),
     path('admin/my-marks-settings/', admin_my_marks_settings, name='admin-my-marks-settings'),
-
-    # Student My Marks
+    path('admin/academic-notification-settings/', admin_academic_notification_settings, name='admin-academic-notification-settings'),
+    path('student/my-marks-config/', student_my_marks_config, name='student-my-marks-config'),
     path('student/my-courses/', student_my_courses, name='student-my-courses'),
     path('student/my-courses/<int:ta_id>/', student_my_course_detail, name='student-my-course-detail'),
-    path('student/my-marks-config/', student_my_marks_config, name='student-my-marks-config'),
 
     # Admin CourseManager
     path('admin/courses/', admin_courses_list, name='admin-courses-list'),

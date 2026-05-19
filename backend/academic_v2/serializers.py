@@ -23,11 +23,11 @@ from .models import (
     AcV2QpType,
     AcV2Cycle,
     AcV2PassMarkSetting,
+    AcV2MyMarksSetting,
     AcV2AcademicNotificationSetting,
     AcV2CqiToken,
     AcV2CqiOperator,
     AcV2CqiEditRequest,
-    AcV2MyMarksSetting,
 )
 
 
@@ -699,6 +699,19 @@ class AcV2PassMarkSettingSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class AcV2MyMarksSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2MyMarksSetting
+        fields = [
+            'id', 'key',
+            'viewing_enabled',
+            'require_profile_photo',
+            'require_mobile_number',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'key', 'created_at', 'updated_at']
+
+
 class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = AcV2AcademicNotificationSetting
@@ -713,19 +726,6 @@ class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
             'every_publish_template',
             'cqi_announce_enabled',
             'cqi_announce_template',
-            'created_at', 'updated_at',
-        ]
-        read_only_fields = ['id', 'key', 'created_at', 'updated_at']
-
-
-class AcV2MyMarksSettingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AcV2MyMarksSetting
-        fields = [
-            'id', 'key',
-            'viewing_enabled',
-            'require_profile_photo',
-            'require_mobile_number',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'key', 'created_at', 'updated_at']

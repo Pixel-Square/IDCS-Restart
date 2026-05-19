@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Bell, BookOpen, Save, Settings, ShieldCheck, Tag, Users } from 'lucide-react';
+import { Bell, Eye, Save, Settings, ShieldCheck, Tag, Users } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 // ─── Android-style Toggle Switch Component ──────────────────────────────────
@@ -59,6 +59,15 @@ interface AcademicNotificationSetting {
   every_publish_template: string;
   cqi_announce_enabled: boolean;
   cqi_announce_template: string;
+  updated_at: string;
+}
+
+interface MyMarksSetting {
+  id: string;
+  key: string;
+  viewing_enabled: boolean;
+  require_profile_photo: boolean;
+  require_mobile_number: boolean;
   updated_at: string;
 }
 
@@ -171,6 +180,119 @@ function PassMarkSection() {
       </p>
 
       {error   && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-700">{error}</div>}
+      {success && <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-700">Saved successfully!</div>}
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+function MyMarksSection() {
+  const [setting, setSetting] = useState<MyMarksSetting | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const [viewingEnabled, setViewingEnabled] = useState(false);
+  const [requirePhoto, setRequirePhoto] = useState(false);
+  const [requireMobile, setRequireMobile] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchWithAuth('/api/academic-v2/admin/my-marks-settings/');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: MyMarksSetting = await res.json();
+      setSetting(data);
+      setViewingEnabled(Boolean(data.viewing_enabled));
+      setRequirePhoto(Boolean(data.require_profile_photo));
+      setRequireMobile(Boolean(data.require_mobile_number));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load My Marks settings');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await fetchWithAuth('/api/academic-v2/admin/my-marks-settings/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          viewing_enabled: viewingEnabled,
+          require_profile_photo: requirePhoto,
+          require_mobile_number: requireMobile,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: MyMarksSetting = await res.json();
+      setSetting(data);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save My Marks settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="py-6 text-sm text-gray-400">Loading…</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
+        Control whether students can open Academic 2.1 <strong>My Marks</strong> and whether their profile must include a photo and mobile number before access is granted.
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-4 py-4">
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Viewing My Marks</div>
+            <div className="text-xs text-gray-500 mt-1">Master switch for the student Academic 2.1 My Marks pages.</div>
+          </div>
+          <AndroidSwitch checked={viewingEnabled} onChange={setViewingEnabled} disabled={saving} />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-4 py-4">
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Profile photo required</div>
+            <div className="text-xs text-gray-500 mt-1">Students must upload a profile photo before opening My Marks.</div>
+          </div>
+          <AndroidSwitch checked={requirePhoto} onChange={setRequirePhoto} disabled={saving} />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-4 py-4">
+          <div>
+            <div className="text-sm font-semibold text-gray-900">Mobile number required</div>
+            <div className="text-xs text-gray-500 mt-1">Students must add a mobile number before opening My Marks.</div>
+          </div>
+          <AndroidSwitch checked={requireMobile} onChange={setRequireMobile} disabled={saving} />
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-500">
+        {setting?.updated_at && <span>Last saved: {new Date(setting.updated_at).toLocaleString()}</span>}
+      </p>
+
+      {error && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-700">{error}</div>}
       {success && <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-700">Saved successfully!</div>}
 
       <div className="flex justify-end">
@@ -500,127 +622,6 @@ interface FacultyRequestSetting {
   updated_at: string;
 }
 
-interface MyMarksSetting {
-  id: string;
-  key: string;
-  viewing_enabled: boolean;
-  require_profile_photo: boolean;
-  require_mobile_number: boolean;
-  updated_at: string;
-}
-
-function MyMarksSection() {
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  const [viewingEnabled, setViewingEnabled] = useState(false);
-  const [requirePhoto, setRequirePhoto] = useState(false);
-  const [requireMobile, setRequireMobile] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetchWithAuth('/api/academic-v2/admin/my-marks-settings/');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: MyMarksSetting = await res.json();
-      setViewingEnabled(Boolean(data.viewing_enabled));
-      setRequirePhoto(Boolean(data.require_profile_photo));
-      setRequireMobile(Boolean(data.require_mobile_number));
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    setSuccess(false);
-    try {
-      const res = await fetchWithAuth('/api/academic-v2/admin/my-marks-settings/', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          viewing_enabled: viewingEnabled,
-          require_profile_photo: requirePhoto,
-          require_mobile_number: requireMobile,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (loading) {
-    return <div className="py-10 text-center text-gray-400 text-sm">Loading…</div>;
-  }
-
-  return (
-    <div className="space-y-6">
-      {error && (
-        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">{error}</div>
-      )}
-
-      {/* Master enable */}
-      <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200">
-        <div>
-          <p className="text-sm font-semibold text-gray-800">Viewing My Marks Page</p>
-          <p className="text-xs text-gray-500 mt-0.5">Enable or disable student access to the My Marks feature</p>
-        </div>
-        <AndroidSwitch checked={viewingEnabled} onChange={setViewingEnabled} />
-      </div>
-
-      {/* Sub-requirements */}
-      <div className={`space-y-3 transition-opacity duration-300 ${viewingEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Student Requirements</p>
-
-        <div className="flex items-center justify-between p-4 bg-white rounded-xl border border-gray-200">
-          <div>
-            <p className="text-sm font-medium text-gray-800">Profile Photo Required</p>
-            <p className="text-xs text-gray-500 mt-0.5">Students must have a profile photo before viewing marks</p>
-          </div>
-          <AndroidSwitch checked={requirePhoto} onChange={setRequirePhoto} disabled={!viewingEnabled} />
-        </div>
-
-        <div className="flex items-center justify-between p-4 bg-white rounded-xl border border-gray-200">
-          <div>
-            <p className="text-sm font-medium text-gray-800">Mobile Number Required</p>
-            <p className="text-xs text-gray-500 mt-0.5">Students must have a mobile number on their profile</p>
-          </div>
-          <AndroidSwitch checked={requireMobile} onChange={setRequireMobile} disabled={!viewingEnabled} />
-        </div>
-      </div>
-
-      {/* Save */}
-      <div className="flex items-center justify-between pt-2">
-        {success && (
-          <span className="text-sm text-green-600 font-medium">✓ Saved successfully</span>
-        )}
-        {!success && <span />}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-semibold text-sm hover:bg-blue-700 disabled:opacity-60 transition-colors shadow"
-        >
-          <Save size={15} />
-          {saving ? 'Saving…' : 'Save Changes'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function FacultyRequestSection() {
   const [setting, setSetting] = useState<FacultyRequestSetting | null>(null);
   const [loading, setLoading] = useState(true);
@@ -926,7 +927,7 @@ function SettingsSection({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const [active, setActive] = useState<'pass_mark' | 'academic_notifications' | 'faculty_request' | 'my_marks'>('pass_mark');
+  const [active, setActive] = useState<'pass_mark' | 'my_marks' | 'academic_notifications' | 'faculty_request'>('pass_mark');
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4">
@@ -973,6 +974,19 @@ export default function SettingsPage() {
           </button>
           <button
             type="button"
+            onClick={() => setActive('my_marks')}
+            className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 ${active === 'my_marks' ? 'bg-gray-50' : ''}`}
+          >
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Eye className="w-4 h-4 text-gray-600" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900">My Marks</div>
+              <div className="text-xs text-gray-500 truncate">Student viewing and requirements</div>
+            </div>
+          </button>
+          <button
+            type="button"
             onClick={() => setActive('faculty_request')}
             className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 ${active === 'faculty_request' ? 'bg-gray-50' : ''}`}
           >
@@ -982,19 +996,6 @@ export default function SettingsPage() {
             <div className="min-w-0">
               <div className="text-sm font-semibold text-gray-900">Faculty Request</div>
               <div className="text-xs text-gray-500 truncate">Request rules and notifications</div>
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActive('my_marks')}
-            className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 ${active === 'my_marks' ? 'bg-gray-50' : ''}`}
-          >
-            <div className="p-2 bg-gray-100 rounded-lg">
-              <BookOpen className="w-4 h-4 text-gray-600" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-gray-900">My Marks</div>
-              <div className="text-xs text-gray-500 truncate">Student marks viewing feature</div>
             </div>
           </button>
         </div>
@@ -1021,6 +1022,16 @@ export default function SettingsPage() {
             </SettingsSection>
           )}
 
+          {active === 'my_marks' && (
+            <SettingsSection
+              icon={<Eye className="w-5 h-5" />}
+              title="My Marks"
+              description="Control whether students can view Academic 2.1 My Marks and which profile requirements must be completed first."
+            >
+              <MyMarksSection />
+            </SettingsSection>
+          )}
+
           {active === 'faculty_request' && (
             <SettingsSection
               icon={<Users className="w-5 h-5" />}
@@ -1028,16 +1039,6 @@ export default function SettingsPage() {
               description="Configure faculty request feature settings, verification requirements, and WhatsApp notifications."
             >
               <FacultyRequestSection />
-            </SettingsSection>
-          )}
-
-          {active === 'my_marks' && (
-            <SettingsSection
-              icon={<BookOpen className="w-5 h-5" />}
-              title="My Marks"
-              description="Control student access to the My Marks viewing page and configure profile requirements."
-            >
-              <MyMarksSection />
             </SettingsSection>
           )}
         </div>

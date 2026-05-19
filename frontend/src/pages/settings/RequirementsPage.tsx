@@ -1,247 +1,171 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldAlert, Camera, Phone, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronRight, Lock, Phone, UserCircle2 } from 'lucide-react';
+import idcsLogo from '../../assets/idcs-logo.png';
 
-interface RequirementsConfig {
+type RequirementsConfig = {
   viewing_enabled: boolean;
   require_profile_photo: boolean;
   require_mobile_number: boolean;
   has_profile_photo: boolean;
   has_mobile_number: boolean;
-}
+};
 
-interface Props {
-  /** If provided, the page auto-loads from the API. Pass null to use externalConfig. */
-  externalConfig?: RequirementsConfig | null;
-  /** Called when all requirements are met and the user presses "Continue" */
-  onAllMet?: () => void;
-}
-
-function PulsingDot() {
-  return (
-    <span className="relative flex h-3 w-3">
-      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-      <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
-    </span>
-  );
+interface RequirementsPageProps {
+  externalConfig: RequirementsConfig;
+  title?: string;
 }
 
 function RequirementRow({
-  icon: Icon,
   title,
   description,
-  met,
-  actionLabel,
-  onAction,
-  delay,
+  done,
+  accent,
+  icon,
 }: {
-  icon: React.ElementType;
   title: string;
   description: string;
-  met: boolean;
-  actionLabel?: string;
-  onAction?: () => void;
-  delay: number;
+  done: boolean;
+  accent: string;
+  icon: React.ReactNode;
 }) {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), delay);
-    return () => clearTimeout(t);
-  }, [delay]);
-
   return (
-    <div
-      className={`transition-all duration-500 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}
-    >
-      <div className={`flex items-start gap-4 p-4 rounded-2xl border-2 transition-colors ${
-        met
-          ? 'border-green-200 bg-green-50'
-          : 'border-orange-200 bg-orange-50'
-      }`}>
-        <div className={`mt-0.5 p-2.5 rounded-xl flex-shrink-0 ${met ? 'bg-green-100' : 'bg-orange-100'}`}>
-          <Icon size={20} className={met ? 'text-green-600' : 'text-orange-500'} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <p className={`font-semibold text-sm ${met ? 'text-green-800' : 'text-orange-800'}`}>{title}</p>
-            {met ? (
-              <CheckCircle2 size={15} className="text-green-500 flex-shrink-0" />
+    <div className="rounded-2xl border border-white/60 bg-white/80 p-4 shadow-sm backdrop-blur">
+      <div className="flex items-start gap-3">
+        <div className={`mt-0.5 rounded-2xl p-3 ${accent}`}>{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+            </div>
+            {done ? (
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
             ) : (
-              <PulsingDot />
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />
             )}
           </div>
-          <p className={`text-xs mt-0.5 ${met ? 'text-green-600' : 'text-orange-600'}`}>{description}</p>
-          {!met && actionLabel && onAction && (
-            <button
-              onClick={onAction}
-              className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-orange-700 underline underline-offset-2 hover:text-orange-900 transition-colors"
-            >
-              {actionLabel} <ArrowRight size={12} />
-            </button>
-          )}
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ${done ? 'bg-emerald-500 w-full' : 'bg-amber-400 w-2/5'}`}
+            />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/**
- * RequirementsPage — animated gate page shown when student has unmet requirements.
- * Used for My Marks feature (and can be reused for others).
- */
-export default function RequirementsPage({ externalConfig, onAllMet }: Props) {
-  const [config, setConfig] = useState<RequirementsConfig | null>(externalConfig ?? null);
-  const [loading, setLoading] = useState(!externalConfig);
-  const [logoVisible, setLogoVisible] = useState(false);
+export default function RequirementsPage({
+  externalConfig,
+  title = 'Complete your profile to view My Marks',
+}: RequirementsPageProps) {
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const t = setTimeout(() => setLogoVisible(true), 100);
-    return () => clearTimeout(t);
-  }, []);
-
-  useEffect(() => {
-    if (externalConfig !== undefined) {
-      setConfig(externalConfig);
-      setLoading(false);
-      return;
-    }
-    // Auto-fetch from API
-    import('../../services/fetchAuth').then(({ default: fetchWithAuth }) => {
-      fetchWithAuth('/api/academic-v2/student/my-marks-config/')
-        .then((r) => r.json())
-        .then((d) => setConfig(d))
-        .catch(() => setConfig(null))
-        .finally(() => setLoading(false));
-    });
-  }, [externalConfig]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="animate-spin text-indigo-400" size={32} />
-      </div>
-    );
-  }
-
-  if (!config) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3 text-gray-400">
-        <ShieldAlert size={48} strokeWidth={1.2} />
-        <p className="font-medium">Unable to load requirements.</p>
-      </div>
-    );
-  }
-
-  if (!config.viewing_enabled) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-6 text-center">
-        <div className={`transition-all duration-700 ${logoVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-90'}`}>
-          <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-            <ShieldAlert size={36} className="text-gray-400" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-700 mb-2">My Marks Unavailable</h2>
-          <p className="text-gray-500 text-sm max-w-xs">
-            The My Marks feature is currently disabled by your institution.
-            Please check back later.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const requirements: Array<{
-    key: string;
-    icon: React.ElementType;
-    title: string;
-    description: string;
-    required: boolean;
-    met: boolean;
-    actionLabel: string;
-    actionPath: string;
-  }> = [
+  const requirements = [
+    {
+      key: 'viewing',
+      enabled: true,
+      done: externalConfig.viewing_enabled,
+      title: 'My Marks viewing enabled',
+      description: 'Academic 2.1 student marks are currently controlled by admin settings.',
+      accent: 'bg-rose-50 text-rose-500',
+      icon: <Lock className="h-5 w-5" />,
+    },
     {
       key: 'photo',
-      icon: Camera,
-      title: 'Profile Photo',
-      description: 'A profile photo is required to access your marks.',
-      required: config.require_profile_photo,
-      met: config.has_profile_photo,
-      actionLabel: 'Upload profile photo',
-      actionPath: '/profile',
+      enabled: externalConfig.require_profile_photo,
+      done: externalConfig.has_profile_photo,
+      title: 'Profile photo required',
+      description: 'Upload a profile photo so your student account is complete for secure marks viewing.',
+      accent: 'bg-sky-50 text-sky-500',
+      icon: <UserCircle2 className="h-5 w-5" />,
     },
     {
       key: 'mobile',
-      icon: Phone,
-      title: 'Mobile Number',
-      description: 'A verified mobile number is required to access your marks.',
-      required: config.require_mobile_number,
-      met: config.has_mobile_number,
-      actionLabel: 'Add mobile number',
-      actionPath: '/profile',
+      enabled: externalConfig.require_mobile_number,
+      done: externalConfig.has_mobile_number,
+      title: 'Mobile number required',
+      description: 'Add your mobile number in the student profile before opening My Marks.',
+      accent: 'bg-violet-50 text-violet-500',
+      icon: <Phone className="h-5 w-5" />,
     },
-  ].filter((r) => r.required);
+  ].filter((item) => item.enabled || item.key === 'viewing');
 
-  const allMet = requirements.every((r) => r.met);
+  const completedCount = requirements.filter((item) => item.done).length;
+  const totalCount = requirements.length || 1;
+  const progress = Math.round((completedCount / totalCount) * 100);
+  const blockedByAdmin = !externalConfig.viewing_enabled;
 
   return (
-    <div className="max-w-md mx-auto px-4 py-10">
-      {/* Header */}
-      <div
-        className={`text-center mb-8 transition-all duration-700 ${logoVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}
-      >
-        {/* Logo / Icon */}
-        <div className={`w-20 h-20 mx-auto rounded-full flex items-center justify-center mb-5 shadow-lg ${
-          allMet ? 'bg-gradient-to-br from-green-400 to-emerald-500' : 'bg-gradient-to-br from-orange-400 to-red-500'
-        }`}>
-          <ShieldAlert size={36} className="text-white" />
-        </div>
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="relative overflow-hidden rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(244,114,182,0.18),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(56,189,248,0.18),_transparent_24%),linear-gradient(135deg,_#fff7ed_0%,_#ffffff_42%,_#eff6ff_100%)] p-6 shadow-xl sm:p-8">
+        <div className="absolute inset-y-0 right-0 hidden w-80 translate-x-20 rounded-full bg-gradient-to-br from-amber-100/60 via-rose-100/40 to-sky-100/60 blur-3xl lg:block" />
+        <div className="relative grid gap-8 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
+          <div>
+            <div className="mb-5 inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/70 px-4 py-2 shadow-sm backdrop-blur">
+              <img src={idcsLogo} alt="IDCS" className="h-8 w-8 rounded-full object-cover" />
+              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Academic 2.1</span>
+            </div>
+            <h1 className="max-w-xl text-3xl font-black tracking-tight text-slate-900 sm:text-4xl">{title}</h1>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">
+              {blockedByAdmin
+                ? 'My Marks is currently disabled by the administrator. Once it is enabled, the remaining profile requirements below will be checked automatically.'
+                : 'Your My Marks page is protected by profile requirements. Complete the missing items below and come back to view your course marks and cycle analytics.'}
+            </p>
 
-        <h1 className="text-2xl font-extrabold text-gray-800 mb-2">
-          {allMet ? 'You\'re all set!' : 'Action Required'}
-        </h1>
-        <p className="text-gray-500 text-sm">
-          {allMet
-            ? 'All requirements are met. You can now view your marks.'
-            : 'Complete the following steps to access My Marks.'}
-        </p>
+            <div className="mt-6 rounded-3xl border border-white/70 bg-white/75 p-4 shadow-sm backdrop-blur sm:p-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Completion Progress</p>
+                  <p className="mt-2 text-3xl font-black text-slate-900">{progress}%</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-slate-700">{completedCount}/{totalCount} requirements ready</p>
+                  <p className="mt-1 text-xs text-slate-500">Profile checks update automatically after you save changes.</p>
+                </div>
+              </div>
+              <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-amber-400 via-rose-400 to-sky-500 transition-all duration-1000"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => navigate('/profile')}
+                className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                Update Profile
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard')}
+                className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                Back to Dashboard
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {requirements.map((item) => (
+              <RequirementRow
+                key={item.key}
+                title={item.title}
+                description={item.description}
+                done={item.done}
+                accent={item.accent}
+                icon={item.icon}
+              />
+            ))}
+          </div>
+        </div>
       </div>
-
-      {/* Requirements list */}
-      {requirements.length > 0 ? (
-        <div className="flex flex-col gap-3 mb-8">
-          {requirements.map((req, i) => (
-            <RequirementRow
-              key={req.key}
-              icon={req.icon}
-              title={req.title}
-              description={req.description}
-              met={req.met}
-              actionLabel={req.met ? undefined : req.actionLabel}
-              onAction={req.met ? undefined : () => navigate(req.actionPath)}
-              delay={200 + i * 150}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      {/* CTA */}
-      {allMet && (
-        <div className={`transition-all duration-500 delay-500 ${logoVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-          <button
-            onClick={() => {
-              if (onAllMet) {
-                onAllMet();
-              } else {
-                navigate('/academic-v2/student/courses');
-              }
-            }}
-            className="w-full py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-2xl font-semibold shadow-lg hover:shadow-indigo-200 hover:shadow-xl transition-all active:scale-95"
-          >
-            Continue to My Marks →
-          </button>
-        </div>
-      )}
     </div>
   );
 }

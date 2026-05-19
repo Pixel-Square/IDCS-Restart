@@ -25,6 +25,9 @@ const CourseFacultyPage = React.lazy(() => import('./admin/CourseFacultyPage'));
 const AdminBypassCoursePage = React.lazy(() => import('./admin/AdminBypassCoursePage'));
 const BypassLogsPage = React.lazy(() => import('./admin/BypassLogsPage'));
 const CourseManagerDashboard = React.lazy(() => import('./admin/CourseManagerDashboard'));
+const StudentDashboardPage = React.lazy(() => import('./students/DashboardPage'));
+const StudentCourseListPage = React.lazy(() => import('./students/CourseListPage'));
+const StudentCourseDetailPage = React.lazy(() => import('./students/CourseDetailPage'));
 
 export const academicV2Routes: RouteObject[] = [
   // Admin Routes - Dashboard
@@ -94,6 +97,18 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/course/:courseId',
     element: <InternalMarkPage />,
+  },
+  {
+    path: 'academic-v2/student/dashboard',
+    element: <StudentDashboardPage />,
+  },
+  {
+    path: 'academic-v2/student/courses',
+    element: <StudentCourseListPage />,
+  },
+  {
+    path: 'academic-v2/student/course/:courseId',
+    element: <StudentCourseDetailPage />,
   },
   {
     path: 'academic-v2/exam/:examId',

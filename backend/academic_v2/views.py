@@ -28,10 +28,10 @@ from .models import (
     AcV2QpType,
     AcV2QpAssignment,
     AcV2Cycle,
+    AcV2MyMarksSetting,
     AcV2CqiToken,
     AcV2CqiOperator,
     AcV2AcademicNotificationSetting,
-    AcV2MyMarksSetting,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -49,10 +49,10 @@ from .serializers import (
     AcV2QpTypeSerializer,
     AcV2CycleSerializer,
     AcV2PassMarkSettingSerializer,
+    AcV2MyMarksSettingSerializer,
     AcV2AcademicNotificationSettingSerializer,
     AcV2CqiTokenSerializer,
     AcV2CqiOperatorSerializer,
-    AcV2MyMarksSettingSerializer,
 )
 from .models import AcV2PassMarkSetting
 
@@ -82,6 +82,365 @@ def _resolve_mobile_for_student_profile(sp) -> str:
         except Exception:
             mobile = ''
     return str(mobile or '').strip()
+
+
+def _get_student_profile(request):
+    from academics.models import StudentProfile
+
+    return get_object_or_404(
+        StudentProfile.objects.select_related('user'),
+        user=request.user,
+    )
+
+
+def _get_or_create_my_marks_setting():
+    return AcV2MyMarksSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={
+            'viewing_enabled': False,
+            'require_profile_photo': False,
+            'require_mobile_number': False,
+        },
+    )
+
+
+def _student_exam_payload_for_assignment(exam_assignment, student_profile, student_marks_map=None):
+    from decimal import Decimal
+
+    def _sum_numeric_marks(obj):
+        if not isinstance(obj, dict) or not obj:
+            return None
+        total = 0.0
+        has_any = False
+        for v in obj.values():
+            # bool is a subclass of int; ignore it.
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float, Decimal)):
+                try:
+                    fv = float(v)
+                except Exception:
+                    continue
+                if fv != fv or fv in (float('inf'), float('-inf')):
+                    continue
+                total += fv
+                has_any = True
+        return round(total, 2) if has_any else None
+
+    student_marks_map = student_marks_map or {}
+    sm = student_marks_map.get(str(getattr(exam_assignment, 'id', '')))
+    if sm is not None:
+        is_absent = bool(sm.is_absent)
+        total_mark = float(sm.total_mark) if sm.total_mark is not None else None
+        # Some Mark Manager payloads persist question-wise marks but may omit total_mark.
+        if not is_absent:
+            q_total = _sum_numeric_marks(getattr(sm, 'question_marks', None))
+            if q_total is not None and (total_mark is None or abs(float(total_mark) - float(q_total)) > 0.01):
+                total_mark = q_total
+        return total_mark, is_absent, True
+
+    published_data = exam_assignment.published_data if isinstance(exam_assignment.published_data, dict) else {}
+    published_marks = published_data.get('marks', {}) if isinstance(published_data.get('marks'), dict) else {}
+    payload = published_marks.get(str(getattr(student_profile, 'id', '')))
+    if isinstance(payload, dict):
+        is_absent = bool(payload.get('is_absent', False))
+        try:
+            total_mark = float(payload.get('mark')) if payload.get('mark') not in (None, '') else None
+        except Exception:
+            total_mark = None
+        # Fallback: snapshot may store per-question marks under `co_marks`.
+        if not is_absent:
+            q_total = _sum_numeric_marks(payload.get('co_marks'))
+            if q_total is not None and (total_mark is None or abs(float(total_mark) - float(q_total)) > 0.01):
+                total_mark = q_total
+        return total_mark, is_absent, True
+
+    return None, False, False
+
+
+def _dedupe_exam_assignments_for_student(exam_assignments, student_profile):
+    exam_assignments = list(exam_assignments or [])
+    exam_ids = [getattr(ea, 'id', None) for ea in exam_assignments if getattr(ea, 'id', None)]
+    student_marks_map = {
+        str(sm.exam_assignment_id): sm
+        for sm in AcV2StudentMark.objects.filter(
+            exam_assignment_id__in=exam_ids,
+            student=student_profile,
+        )
+    }
+
+    grouped = {}
+    ordered_keys = []
+    for index, ea in enumerate(exam_assignments):
+        display_name = str(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or '').strip()
+        group_key = display_name.lower() or str(getattr(ea, 'id', ''))
+        total_mark, is_absent, has_payload = _student_exam_payload_for_assignment(ea, student_profile, student_marks_map)
+        candidate = {
+            'index': index,
+            'exam_assignment': ea,
+            'total_mark': total_mark,
+            'is_absent': is_absent,
+            'has_payload': has_payload,
+        }
+        if group_key not in grouped:
+            grouped[group_key] = candidate
+            ordered_keys.append(group_key)
+            continue
+
+        existing = grouped[group_key]
+        existing_score = (
+            1 if existing['has_payload'] else 0,
+            1 if existing['total_mark'] is not None else 0,
+            1 if existing['is_absent'] else 0,
+            -(existing['index']),
+        )
+        candidate_score = (
+            1 if candidate['has_payload'] else 0,
+            1 if candidate['total_mark'] is not None else 0,
+            1 if candidate['is_absent'] else 0,
+            -(candidate['index']),
+        )
+        if candidate_score > existing_score:
+            grouped[group_key] = candidate
+
+    return [grouped[key] for key in ordered_keys], student_marks_map
+
+
+def _norm_exam_key(value: str) -> str:
+    return str(value or '').strip().lower()
+
+
+def _extract_co_list_for_pattern(raw_co, *, co_count: int) -> list[int]:
+    if raw_co is None:
+        return []
+    if isinstance(raw_co, (list, tuple, set)):
+        items = list(raw_co)
+    else:
+        items = [raw_co]
+
+    out: list[int] = []
+    for item in items:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            parts = re.split(r'[^0-9]+', item)
+            for p in parts:
+                if not p:
+                    continue
+                try:
+                    n = int(p)
+                except Exception:
+                    continue
+                if 1 <= n <= co_count and n not in out:
+                    out.append(n)
+            continue
+        try:
+            n = int(item)
+        except Exception:
+            continue
+        if 1 <= n <= co_count and n not in out:
+            out.append(n)
+    return out
+
+
+def _derive_co_max_from_qp_pattern(pattern: dict, *, co_count: int) -> tuple[float | None, dict[int, float], list[int]]:
+    """Return (derived_total_max, co_max_map, covered_cos) from a QP pattern-like dict."""
+    if not isinstance(pattern, dict):
+        return None, {}, []
+    marks = pattern.get('marks', []) if isinstance(pattern.get('marks'), list) else []
+    cos = pattern.get('cos', []) if isinstance(pattern.get('cos'), list) else []
+    enabled = pattern.get('enabled', [])
+    if not isinstance(enabled, list) or len(enabled) != len(marks):
+        enabled = [True] * len(marks)
+
+    total_max = 0.0
+    co_max_map: dict[int, float] = {}
+    covered: set[int] = set()
+    for i, mark in enumerate(marks):
+        if i < len(enabled) and not enabled[i]:
+            continue
+        try:
+            m = float(mark or 0)
+        except Exception:
+            m = 0.0
+        if m <= 0:
+            continue
+        total_max += m
+        raw_co = cos[i] if i < len(cos) else None
+        co_list = _extract_co_list_for_pattern(raw_co, co_count=co_count)
+        if not co_list:
+            continue
+        share = float(m) / max(len(co_list), 1)
+        for co_num in co_list:
+            covered.add(int(co_num))
+            co_max_map[int(co_num)] = float(co_max_map.get(int(co_num), 0.0) + share)
+
+    covered_cos = sorted(covered)
+    return (round(total_max, 2) if total_max > 0 else None), co_max_map, covered_cos
+
+
+def _build_class_type_co_weight_map(*, class_type, qp_type_code: str) -> dict[str, dict[int, float]]:
+    """Map normalized exam key -> per-CO weight map."""
+    out: dict[str, dict[int, float]] = {}
+    if not class_type:
+        return out
+    configs = getattr(class_type, 'exam_assignments', None)
+    if not isinstance(configs, list):
+        return out
+    qp_norm = (qp_type_code or '').strip().lower()
+    for conf in configs:
+        if not isinstance(conf, dict):
+            continue
+        conf_qp = (str(conf.get('qp_type', '') or '').strip().lower())
+        if qp_norm and conf_qp and conf_qp != qp_norm:
+            continue
+        co_weights = conf.get('co_weights')
+        if not isinstance(co_weights, dict) or not co_weights:
+            continue
+        try:
+            w = {int(k): float(v or 0) for k, v in co_weights.items() if str(k).isdigit()}
+        except Exception:
+            continue
+        exam_key = _norm_exam_key(conf.get('exam_display_name') or conf.get('exam') or '')
+        if not exam_key:
+            continue
+        if exam_key not in out:
+            out[exam_key] = w
+    return out
+
+
+def _compute_student_obtained_weight(
+    *,
+    exam_assignment,
+    student_mark,
+    class_type,
+    qp_type_code: str,
+    co_count: int,
+    qp_pattern_cache: dict,
+) -> tuple[float | None, float]:
+    """Return (obtained_weight, effective_max_marks) for one exam.
+
+    Preference order:
+    1) CO-wise weighting (matches InternalMarkPage weighted marks) when CO config exists.
+    2) Fallback to (total/max)*weight.
+    """
+    weight = float(getattr(exam_assignment, 'weight', 0) or 0)
+    max_marks_db = float(getattr(exam_assignment, 'max_marks', 0) or 0)
+    effective_max_marks = max_marks_db
+
+    if not student_mark or bool(getattr(student_mark, 'is_absent', False)):
+        return (0.0 if weight > 0 else None), effective_max_marks
+
+    exam_key = _norm_exam_key(getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or '')
+
+    ct_co_weights = _build_class_type_co_weight_map(class_type=class_type, qp_type_code=qp_type_code)
+    co_weights = ct_co_weights.get(exam_key) or {}
+
+    derived_total_max = None
+    co_max_map: dict[int, float] = {}
+    covered_cos: list[int] = list(getattr(exam_assignment, 'covered_cos', None) or [])
+
+    # Prefer course-specific Mark Manager pattern saved on the exam assignment.
+    draft = getattr(exam_assignment, 'draft_data', None)
+    user_pattern = draft.get('user_pattern') if isinstance(draft, dict) else None
+    if isinstance(user_pattern, dict):
+        derived_total_max, co_max_map, derived_covered = _derive_co_max_from_qp_pattern(user_pattern, co_count=co_count)
+        if derived_covered:
+            covered_cos = derived_covered
+    else:
+        # Fall back to global QP pattern.
+        qp_type_val = (getattr(exam_assignment, 'qp_type', None) or getattr(exam_assignment, 'exam', '') or '').strip()
+        exam_label = (getattr(exam_assignment, 'exam_display_name', '') or getattr(exam_assignment, 'exam', '') or '').strip()
+        cache_key = (str(getattr(class_type, 'id', '') or ''), (qp_type_val or '').lower(), exam_label.lower())
+        qp_pattern = qp_pattern_cache.get(cache_key)
+        if qp_pattern is None:
+            qp_match = (
+                AcV2QpPattern.objects.filter(
+                    name__iexact=exam_label,
+                    qp_type=qp_type_val,
+                    class_type=class_type,
+                    is_active=True,
+                ).first()
+                or AcV2QpPattern.objects.filter(
+                    name__iexact=exam_label,
+                    qp_type=qp_type_val,
+                    is_active=True,
+                ).first()
+                or AcV2QpPattern.objects.filter(
+                    qp_type=qp_type_val,
+                    class_type=class_type,
+                    is_active=True,
+                ).first()
+                or AcV2QpPattern.objects.filter(
+                    qp_type=qp_type_val,
+                    is_active=True,
+                ).first()
+            )
+            qp_pattern = qp_match.pattern if (qp_match and isinstance(qp_match.pattern, dict)) else {}
+            qp_pattern_cache[cache_key] = qp_pattern
+        if isinstance(qp_pattern, dict) and qp_pattern:
+            derived_total_max, co_max_map, derived_covered = _derive_co_max_from_qp_pattern(qp_pattern, co_count=co_count)
+            if derived_covered:
+                covered_cos = derived_covered
+
+    if derived_total_max and derived_total_max > 0:
+        effective_max_marks = float(derived_total_max)
+
+    # Attempt CO-wise weighting when we have per-CO weights.
+    if co_weights and covered_cos:
+        max_per_co = (effective_max_marks / len(covered_cos)) if len(covered_cos) > 0 else effective_max_marks
+        obtained = 0.0
+        used_any = False
+
+        # If co marks are all 0/None but total exists, fall back to even split.
+        total_mark = getattr(student_mark, 'total_mark', None)
+        try:
+            total_val = float(total_mark) if total_mark is not None else None
+        except Exception:
+            total_val = None
+
+        co_vals = []
+        for co_num in covered_cos:
+            try:
+                v = float(getattr(student_mark, f'co{int(co_num)}_mark', 0) or 0)
+            except Exception:
+                v = 0.0
+            co_vals.append(v)
+
+        all_zero = all(abs(v) < 1e-9 for v in co_vals)
+        for idx, co_num in enumerate(covered_cos):
+            co_num = int(co_num)
+            if not (1 <= co_num <= co_count):
+                continue
+            co_weight = float(co_weights.get(co_num, 0) or 0)
+            if co_weight <= 0:
+                continue
+
+            raw = co_vals[idx]
+            if all_zero and total_val is not None and len(covered_cos) > 0:
+                raw = float(total_val) / len(covered_cos)
+
+            co_max = float(co_max_map.get(co_num, max_per_co) or 0)
+            if co_max <= 0:
+                continue
+
+            used_any = True
+            obtained += (float(raw) / co_max) * co_weight
+
+        if used_any:
+            # Clamp to [0, weight] since weights are points.
+            obtained = max(0.0, min(float(obtained), float(weight)))
+            return round(obtained, 2), effective_max_marks
+
+    # Fallback to simple total/max * weight
+    try:
+        total = float(getattr(student_mark, 'total_mark', None)) if getattr(student_mark, 'total_mark', None) is not None else None
+    except Exception:
+        total = None
+    if total is None or effective_max_marks <= 0 or weight <= 0:
+        return None, effective_max_marks
+    safe_mark = max(0.0, min(float(total), float(effective_max_marks)))
+    return round((safe_mark / float(effective_max_marks)) * float(weight), 2), effective_max_marks
 
 
 def _send_student_publish_notifications(
@@ -271,6 +630,305 @@ def admin_pass_mark_settings(request):
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_my_marks_settings(request):
+    """Get or update My Marks viewing settings (singleton)."""
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Permission denied'}, status=403)
+
+    obj, _ = _get_or_create_my_marks_setting()
+    if request.method == 'GET':
+        return Response(AcV2MyMarksSettingSerializer(obj).data)
+
+    serializer = AcV2MyMarksSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_marks_config(request):
+    """Return My Marks gate config plus profile-completion flags for the student."""
+    sp = _get_student_profile(request)
+    obj, _ = _get_or_create_my_marks_setting()
+
+    return Response({
+        'viewing_enabled': bool(obj.viewing_enabled),
+        'require_profile_photo': bool(obj.require_profile_photo),
+        'require_mobile_number': bool(obj.require_mobile_number),
+        'has_profile_photo': bool(getattr(sp, 'profile_image', None)),
+        'has_mobile_number': bool(str(getattr(sp, 'mobile_number', '') or '').strip()),
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_courses(request):
+    """Return student course cards for Academic 2.1 My Marks.
+
+    The right-side percentage is based only on entered exams:
+    (obtained_weight_of_entered_exams / max_weight_of_entered_exams) * 100
+    """
+    from academics.models import StudentSectionAssignment
+
+    sp = _get_student_profile(request)
+    section_ids = list(
+        StudentSectionAssignment.objects.filter(
+            student=sp,
+            end_date__isnull=True,
+        ).values_list('section_id', flat=True)
+    )
+
+    acv2_sections = (
+        AcV2Section.objects
+        .filter(teaching_assignment__section_id__in=section_ids)
+        .select_related(
+            'course',
+            'course__class_type',
+            'teaching_assignment',
+            'teaching_assignment__staff',
+            'teaching_assignment__staff__user',
+        )
+    )
+
+    results = []
+    seen_ta_ids = set()
+    for acv2_sec in acv2_sections:
+        ta = acv2_sec.teaching_assignment
+        ta_id = getattr(ta, 'id', None)
+        if ta_id in seen_ta_ids:
+            continue
+        seen_ta_ids.add(ta_id)
+
+        course = acv2_sec.course
+        class_type = getattr(course, 'class_type', None)
+        qp_type_code = str(
+            getattr(course, 'question_paper_type', None)
+            or getattr(course, 'qp_type', None)
+            or ''
+        ).strip()
+        co_count = int(getattr(course, 'co_count', None) or 5)
+        qp_pattern_cache: dict = {}
+
+        exam_assignments = (
+            AcV2ExamAssignment.objects
+            .filter(section=acv2_sec)
+            .filter(Q(status__in=PUBLISHED_EXAM_STATUSES) | Q(published_at__isnull=False))
+            .exclude(exam__iexact='CQI')
+            .order_by('created_at', 'exam_display_name', 'exam')
+        )
+        if qp_type_code:
+            exam_assignments = exam_assignments.filter(qp_type__iexact=qp_type_code)
+        deduped_exams, _student_marks_map = _dedupe_exam_assignments_for_student(exam_assignments, sp)
+
+        entered_exam_count = 0
+        total_entered_weight = 0.0
+        total_obtained_weight = 0.0
+
+        for item in deduped_exams:
+            ea = item['exam_assignment']
+            total_mark = item['total_mark']
+            is_absent = item['is_absent']
+            has_payload = item['has_payload']
+            if not has_payload:
+                continue
+
+            weight = float(getattr(ea, 'weight', 0) or 0)
+            max_marks = float(getattr(ea, 'max_marks', 0) or 0)
+            entered_exam_count += 1
+            total_entered_weight += weight
+
+            sm = _student_marks_map.get(str(getattr(ea, 'id', '')))
+            if sm is not None and not is_absent and weight > 0:
+                obtained_w, _eff_max = _compute_student_obtained_weight(
+                    exam_assignment=ea,
+                    student_mark=sm,
+                    class_type=class_type,
+                    qp_type_code=qp_type_code,
+                    co_count=co_count,
+                    qp_pattern_cache=qp_pattern_cache,
+                )
+                if obtained_w is not None:
+                    total_obtained_weight += float(obtained_w)
+            elif not is_absent and total_mark is not None and max_marks > 0 and weight > 0:
+                safe_mark = max(0.0, min(float(total_mark), max_marks))
+                total_obtained_weight += round((safe_mark / max_marks) * weight, 2)
+
+        entered_weight_pct = round((total_obtained_weight / total_entered_weight) * 100, 1) if total_entered_weight > 0 else None
+
+        faculty_name = ''
+        if getattr(ta, 'staff', None) and getattr(ta.staff, 'user', None):
+            faculty_name = ta.staff.user.get_full_name() or ta.staff.user.username or ''
+
+        class_type_name = ''
+        if getattr(course, 'class_type', None):
+            class_type_name = course.class_type.short_code or course.class_type.name or ''
+        else:
+            class_type_name = str(getattr(course, 'class_type_name', '') or '')
+
+        results.append({
+            'ta_id': ta_id,
+            'course_code': getattr(course, 'subject_code', ''),
+            'course_name': getattr(course, 'subject_name', ''),
+            'class_type': class_type_name,
+            'faculty_name': faculty_name,
+            'exams_entered': entered_exam_count,
+            'obtained_weight': round(total_obtained_weight, 2),
+            'max_weight': round(total_entered_weight, 2),
+            'entered_weight_pct': entered_weight_pct,
+        })
+
+    return Response({'courses': results})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_my_course_detail(request, ta_id):
+    """Return cycle-wise exam detail for a student's Academic 2.1 course."""
+    from academics.models import StudentSectionAssignment, TeachingAssignment
+
+    sp = _get_student_profile(request)
+    section_ids = list(
+        StudentSectionAssignment.objects.filter(
+            student=sp,
+            end_date__isnull=True,
+        ).values_list('section_id', flat=True)
+    )
+    ta = get_object_or_404(
+        TeachingAssignment.objects.select_related('staff__user', 'section'),
+        id=ta_id,
+        section_id__in=section_ids,
+    )
+    acv2_sec = get_object_or_404(
+        AcV2Section.objects.select_related('course', 'course__class_type', 'teaching_assignment'),
+        teaching_assignment=ta,
+    )
+    course = acv2_sec.course
+    class_type = getattr(course, 'class_type', None)
+    qp_type_code = str(
+        getattr(course, 'question_paper_type', None)
+        or getattr(course, 'qp_type', None)
+        or ''
+    ).strip()
+    co_count = int(getattr(course, 'co_count', None) or 5)
+    qp_pattern_cache: dict = {}
+    semester_id = getattr(getattr(ta, 'section', None), 'semester_id', None)
+
+    exam_assignments = (
+        AcV2ExamAssignment.objects
+        .filter(section=acv2_sec)
+        .filter(Q(status__in=PUBLISHED_EXAM_STATUSES) | Q(published_at__isnull=False))
+        .exclude(exam__iexact='CQI')
+        .order_by('created_at', 'exam_display_name', 'exam')
+    )
+    if qp_type_code:
+        exam_assignments = exam_assignments.filter(qp_type__iexact=qp_type_code)
+    deduped_exams, _student_marks_map = _dedupe_exam_assignments_for_student(exam_assignments, sp)
+
+    cycle_objs = {
+        str(cycle.id): cycle
+        for cycle in AcV2Cycle.objects.filter(is_active=True).order_by('order', 'name')
+    }
+    cycle_map = {}
+
+    for item in deduped_exams:
+        ea = item['exam_assignment']
+        total_mark = item['total_mark']
+        is_absent = item['is_absent']
+        has_payload = item['has_payload']
+
+        cycle_state = _get_exam_cycle_state(
+            ea,
+            semester_id=semester_id,
+            class_type=getattr(course, 'class_type', None),
+        )
+        cycle_id = cycle_state.get('cycle_id') or 'general'
+        cycle_name = cycle_state.get('cycle_name') or 'General'
+        cycle_obj = cycle_objs.get(cycle_id)
+
+        if cycle_id not in cycle_map:
+            cycle_map[cycle_id] = {
+                'cycle_id': cycle_id,
+                'cycle_name': cycle_name,
+                'cycle_desc': getattr(cycle_obj, 'description', '') or '',
+                'cycle_order': getattr(cycle_obj, 'order', 999),
+                'entered_exam_count': 0,
+                'total_obtained_weight': 0.0,
+                'total_entered_weight': 0.0,
+                'entered_weight_pct': None,
+                'exams': [],
+            }
+
+        weight = float(getattr(ea, 'weight', 0) or 0)
+        max_marks = float(getattr(ea, 'max_marks', 0) or 0)
+        obtained_weight = None
+        effective_max_marks = max_marks
+
+        if has_payload:
+            cycle_map[cycle_id]['entered_exam_count'] += 1
+            cycle_map[cycle_id]['total_entered_weight'] += weight
+
+        if has_payload and not is_absent and weight > 0:
+            sm = _student_marks_map.get(str(getattr(ea, 'id', '')))
+            if sm is not None:
+                obtained_weight, effective_max_marks = _compute_student_obtained_weight(
+                    exam_assignment=ea,
+                    student_mark=sm,
+                    class_type=class_type,
+                    qp_type_code=qp_type_code,
+                    co_count=co_count,
+                    qp_pattern_cache=qp_pattern_cache,
+                )
+                if obtained_weight is not None:
+                    cycle_map[cycle_id]['total_obtained_weight'] += float(obtained_weight)
+            elif total_mark is not None and max_marks > 0:
+                safe_mark = max(0.0, min(float(total_mark), max_marks))
+                obtained_weight = round((safe_mark / max_marks) * weight, 2)
+                cycle_map[cycle_id]['total_obtained_weight'] += obtained_weight
+
+        cycle_map[cycle_id]['exams'].append({
+            'exam_id': str(getattr(ea, 'id', '')),
+            'exam': getattr(ea, 'exam', ''),
+            'exam_display': getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', ''),
+            'qp_type': getattr(ea, 'qp_type', ''),
+            'max_marks': float(effective_max_marks),
+            'weight': weight,
+            'total_mark': total_mark,
+            'obtained_weight': obtained_weight,
+            'has_payload': has_payload,
+            'is_absent': is_absent,
+            'published_at': ea.published_at.isoformat() if getattr(ea, 'published_at', None) else None,
+        })
+
+    for cycle_data in cycle_map.values():
+        entered_weight = cycle_data['total_entered_weight']
+        obtained_weight = cycle_data['total_obtained_weight']
+        cycle_data['total_entered_weight'] = round(entered_weight, 2)
+        cycle_data['total_obtained_weight'] = round(obtained_weight, 2)
+        cycle_data['entered_weight_pct'] = round((obtained_weight / entered_weight) * 100, 1) if entered_weight > 0 else None
+
+    faculty_name = ''
+    if getattr(ta, 'staff', None) and getattr(ta.staff, 'user', None):
+        faculty_name = ta.staff.user.get_full_name() or ta.staff.user.username or ''
+
+    class_type_name = ''
+    if getattr(course, 'class_type', None):
+        class_type_name = course.class_type.short_code or course.class_type.name or ''
+    else:
+        class_type_name = str(getattr(course, 'class_type_name', '') or '')
+
+    return Response({
+        'ta_id': ta.id,
+        'course_code': getattr(course, 'subject_code', ''),
+        'course_name': getattr(course, 'subject_name', ''),
+        'class_type': class_type_name,
+        'faculty_name': faculty_name,
+        'cycles': sorted(cycle_map.values(), key=lambda item: (item.get('cycle_order', 999), str(item.get('cycle_name', '')))),
+    })
 
 
 @api_view(['GET', 'PUT', 'PATCH'])
@@ -7222,462 +7880,3 @@ def faculty_reset_notices(request, ta_id: int):
         })
 
     return Response(result)
-
-
-# ============================================================================
-# ADMIN: MY MARKS SETTINGS
-# ============================================================================
-
-@api_view(['GET', 'PATCH'])
-@permission_classes([IsAuthenticated])
-def admin_my_marks_settings(request):
-    """Get or update the My Marks singleton settings (admin only)."""
-    if not _has_admin_bypass_access(request.user):
-        return Response({'detail': 'Permission denied'}, status=403)
-
-    obj, _ = AcV2MyMarksSetting.objects.get_or_create(
-        key='DEFAULT',
-        defaults={
-            'viewing_enabled': False,
-            'require_profile_photo': False,
-            'require_mobile_number': False,
-        },
-    )
-
-    if request.method == 'GET':
-        return Response(AcV2MyMarksSettingSerializer(obj).data)
-
-    serializer = AcV2MyMarksSettingSerializer(obj, data=request.data, partial=True)
-    serializer.is_valid(raise_exception=True)
-    serializer.save()
-    return Response(serializer.data)
-
-
-# ============================================================================
-# STUDENT: MY MARKS — courses list + course detail
-# ============================================================================
-
-def _get_student_profile(request):
-    """Return the StudentProfile for the current user, or None."""
-    from academics.models import StudentProfile
-    try:
-        return StudentProfile.objects.select_related('user', 'section').get(user=request.user)
-    except Exception:
-        return None
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def student_my_courses(request):
-    """
-    Return list of courses for the logged-in student, with weighted mark %.
-    Each item includes course info, faculty names, and obtained_weight_pct.
-    """
-    from academics.models import StudentSectionAssignment, TeachingAssignment
-
-    sp = _get_student_profile(request)
-    if sp is None:
-        return Response({'detail': 'Student profile not found.'}, status=404)
-
-    # Check if My Marks is enabled
-    settings_obj, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
-    if not settings_obj.viewing_enabled:
-        return Response({'detail': 'My Marks is currently disabled.', 'disabled': True}, status=403)
-
-    # Get all active section assignments for this student
-    active_assignments = StudentSectionAssignment.objects.filter(
-        student=sp,
-        end_date__isnull=True,
-    ).select_related('section', 'section__semester').values_list('section_id', flat=True)
-
-    section_ids = list(active_assignments)
-
-    # Find AcV2Sections linked to the student's academic sections
-    acv2_sections = AcV2Section.objects.filter(
-        teaching_assignment__section_id__in=section_ids,
-    ).select_related(
-        'course',
-        'course__class_type',
-        'teaching_assignment',
-        'teaching_assignment__staff',
-        'teaching_assignment__staff__user',
-        'teaching_assignment__section',
-        'teaching_assignment__section__semester',
-    )
-
-    result = []
-    seen_ta_ids: set = set()
-    for acv2_sec in acv2_sections:
-        ta = acv2_sec.teaching_assignment
-        ta_id_str = str(ta.id)
-        if ta_id_str in seen_ta_ids:
-            continue
-        seen_ta_ids.add(ta_id_str)
-        course = acv2_sec.course
-
-        # Get faculty name
-        faculty_name = ''
-        if ta and ta.staff:
-            u = ta.staff.user
-            faculty_name = (u.get_full_name() or u.username) if u else ''
-
-        # Compute weighted mark percentage using actually-published exams.
-        exam_assignments_qs = list(
-            AcV2ExamAssignment.objects
-            .filter(section=acv2_sec)
-            .filter(Q(status__in=['PUBLISHED', 'LOCKED']) | Q(published_at__isnull=False))
-            .exclude(exam__iexact='CQI')
-        )
-
-        # Pre-fetch student marks
-        ea_ids_c = [ea.id for ea in exam_assignments_qs]
-        sm_map_c = {
-            str(sm.exam_assignment_id): sm
-            for sm in AcV2StudentMark.objects.filter(exam_assignment_id__in=ea_ids_c, student=sp)
-        }
-
-        # Deduplicate by exam display name — keep record with mark when duplicate
-        seen_names_c: dict = {}
-        for ea in exam_assignments_qs:
-            key = (ea.exam_display_name or ea.exam or '').strip().lower() or str(ea.id)
-            if key not in seen_names_c:
-                seen_names_c[key] = ea
-            else:
-                existing = seen_names_c[key]
-                if str(ea.id) in sm_map_c and str(existing.id) not in sm_map_c:
-                    seen_names_c[key] = ea
-
-        out_of_c = float(course.class_type.total_internal_marks) if (course.class_type and course.class_type.total_internal_marks) else 40.0
-
-        total_obtained_weight = 0.0
-        total_max_weight = 0.0
-        total_internal_obtained = 0.0
-        total_internal_max = 0.0
-        entered_exam_count = 0
-
-        for ea in seen_names_c.values():
-            total_mark = None
-            is_absent = False
-            sm = sm_map_c.get(str(ea.id))
-            if sm is not None:
-                total_mark = float(sm.total_mark) if sm.total_mark is not None else None
-                is_absent = bool(sm.is_absent)
-            else:
-                pd = ea.published_data if isinstance(ea.published_data, dict) else {}
-                payload = pd.get('marks', {}).get(str(sp.id)) if isinstance(pd.get('marks'), dict) else None
-                if isinstance(payload, dict):
-                    try:
-                        total_mark = float(payload['mark']) if payload.get('mark') not in (None, '') else None
-                    except Exception:
-                        total_mark = None
-                    is_absent = bool(payload.get('is_absent', False))
-
-            max_m = float(ea.max_marks) if ea.max_marks else 0
-            weight = float(ea.weight) if ea.weight else 0
-            i_max = round((weight / 100.0) * out_of_c, 2) if weight > 0 else 0.0
-
-            # Always count towards cycle max
-            if weight > 0:
-                total_max_weight += weight
-                total_internal_max += i_max
-
-            if total_mark is None and not is_absent:
-                continue
-
-            entered_exam_count += 1
-            if is_absent or max_m <= 0 or weight <= 0:
-                continue
-
-            obtained_w = round((float(total_mark) / max_m) * weight, 2)
-            i_obt = round((float(total_mark) / max_m) * i_max, 2)
-            total_obtained_weight += obtained_w
-            total_internal_obtained += i_obt
-
-        if total_max_weight > 0:
-            weight_pct = round((total_obtained_weight / total_max_weight) * 100, 1)
-        else:
-            weight_pct = None
-
-        # Class type display
-        ct_name = ''
-        if course.class_type:
-            ct_name = course.class_type.short_code or course.class_type.name
-        else:
-            ct_name = course.class_type_name or ''
-
-        result.append({
-            'ta_id': ta.id,
-            'course_code': course.subject_code,
-            'course_name': course.subject_name,
-            'class_type': ct_name,
-            'faculty_name': faculty_name,
-            'obtained_weight_pct': weight_pct,
-            'exams_entered': entered_exam_count,
-            'total_internal_obtained': round(total_internal_obtained, 2),
-            'total_internal_max': round(total_internal_max, 2),
-            'total_internal_marks': out_of_c,
-        })
-
-    return Response({'courses': result})
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def student_my_course_detail(request, ta_id):
-    """
-    Return detail for a specific course for the logged-in student.
-    Groups exam marks by cycle with totals for donut chart display.
-    """
-    from academics.models import StudentSectionAssignment, TeachingAssignment
-
-    sp = _get_student_profile(request)
-    if sp is None:
-        return Response({'detail': 'Student profile not found.'}, status=404)
-
-    # Check if My Marks is enabled
-    settings_obj, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
-    if not settings_obj.viewing_enabled:
-        return Response({'detail': 'My Marks is currently disabled.', 'disabled': True}, status=403)
-
-    # Verify student is enrolled in the section for this TA
-    active_section_ids = list(StudentSectionAssignment.objects.filter(
-        student=sp,
-        end_date__isnull=True,
-    ).values_list('section_id', flat=True))
-
-    acv2_sec = AcV2Section.objects.filter(
-        teaching_assignment_id=ta_id,
-        teaching_assignment__section_id__in=active_section_ids,
-    ).select_related(
-        'course',
-        'course__class_type',
-        'teaching_assignment__staff__user',
-        'teaching_assignment__section__semester',
-    ).first()
-
-    if acv2_sec is None:
-        return Response({'detail': 'Course not found or access denied.'}, status=404)
-
-    ta = acv2_sec.teaching_assignment
-    course = acv2_sec.course
-
-    semester_id = None
-    try:
-        semester_id = getattr(getattr(ta, 'section', None), 'semester_id', None)
-    except Exception:
-        semester_id = None
-
-    # total_internal_marks (e.g. 40) needed to convert weight% → internal mark space
-    out_of = 40.0
-    try:
-        if course.class_type and course.class_type.total_internal_marks:
-            out_of = float(course.class_type.total_internal_marks)
-    except Exception:
-        out_of = 40.0
-
-    # Get all cycles (for sidebar grouping)
-    cycles = list(
-        AcV2Cycle.objects
-        .filter(is_active=True)
-        .order_by('order', 'name')
-        .values('id', 'name', 'code', 'description', 'order')
-    )
-
-    # Get actually-published exams for this section (see note in student_my_courses).
-    exam_assignments = list(
-        AcV2ExamAssignment.objects
-        .filter(section=acv2_sec)
-        .filter(Q(status__in=['PUBLISHED', 'LOCKED']) | Q(published_at__isnull=False))
-        .exclude(exam__iexact='CQI')
-    )
-
-    # Group by cycle
-    cycle_map = {}  # cycle_id -> {cycle_name, exams: [...], total_obtained, total_max_weight}
-
-    cycle_objs = {str(c['id']): c for c in cycles}
-
-    def _exam_sort_key(ea: AcV2ExamAssignment):
-        pattern = _resolve_qp_pattern_for_exam_assignment(ea, class_type=getattr(course, 'class_type', None))
-        pat_order = getattr(pattern, 'order', 999) if pattern else 999
-        return (pat_order, str(getattr(ea, 'exam', '') or ''), str(getattr(ea, 'exam_display_name', '') or ''))
-
-    exam_assignments.sort(key=_exam_sort_key)
-
-    # Pre-fetch student marks for this section's exams (one query)
-    ea_ids = [ea.id for ea in exam_assignments]
-    student_marks_map = {
-        str(sm.exam_assignment_id): sm
-        for sm in AcV2StudentMark.objects.filter(
-            exam_assignment_id__in=ea_ids, student=sp
-        )
-    }
-
-    # Also scan published_data for marks (fallback when AcV2StudentMark row absent)
-    def _get_mark_from_published(ea):
-        pd = ea.published_data if isinstance(ea.published_data, dict) else {}
-        payload = pd.get('marks', {}).get(str(sp.id)) if isinstance(pd.get('marks'), dict) else None
-        if isinstance(payload, dict):
-            try:
-                m = float(payload['mark']) if payload.get('mark') not in (None, '') else None
-            except Exception:
-                m = None
-            return m, bool(payload.get('is_absent', False))
-        return None, False
-
-    # Deduplicate by exam display name — keep the record that has a student mark;
-    # if neither or both have marks, keep the first (already sort-ordered).
-    seen_display: dict = {}  # normalised display_name -> ea
-    for ea in exam_assignments:
-        key = (ea.exam_display_name or ea.exam or '').strip().lower() or str(ea.id)
-        if key not in seen_display:
-            seen_display[key] = ea
-        else:
-            existing = seen_display[key]
-            existing_has_mark = str(existing.id) in student_marks_map
-            current_has_mark = str(ea.id) in student_marks_map
-            if current_has_mark and not existing_has_mark:
-                seen_display[key] = ea
-
-    exam_assignments_deduped = list(seen_display.values())
-
-    # Deduplicate by exam_id (multiple AcV2Section records for same TA can cause dupes)
-    seen_exam_ids: set = set()
-
-    for ea in exam_assignments_deduped:
-        ea_id_str = str(ea.id)
-        if ea_id_str in seen_exam_ids:
-            continue
-        seen_exam_ids.add(ea_id_str)
-        cycle_state = _get_exam_cycle_state(
-            ea,
-            semester_id=semester_id,
-            class_type=getattr(course, 'class_type', None),
-        )
-
-        cycle_id = cycle_state.get('cycle_id')
-        if not cycle_id:
-            cycle_id = 'no_cycle'
-
-        cycle_name = cycle_state.get('cycle_name') or 'General'
-        cycle_desc = ''
-        if cycle_id in cycle_objs:
-            cycle_desc = cycle_objs[cycle_id].get('description', '') or ''
-
-        if cycle_id not in cycle_map:
-            cycle_map[cycle_id] = {
-                'cycle_id': cycle_id,
-                'cycle_name': cycle_name,
-                'cycle_desc': cycle_desc,
-                'exams': [],
-                'total_obtained_weight': 0.0,
-                'total_max_weight': 0.0,
-                'total_internal_obtained': 0.0,
-                'total_internal_max': 0.0,
-                'cycle_order': cycle_objs.get(cycle_id, {}).get('order', 999),
-            }
-
-        # Get student mark — use pre-fetched map first, then published_data fallback
-        total_mark = None
-        is_absent = False
-        sm = student_marks_map.get(str(ea.id))
-        if sm is not None:
-            total_mark = float(sm.total_mark) if sm.total_mark is not None else None
-            is_absent = bool(sm.is_absent)
-        else:
-            total_mark, is_absent = _get_mark_from_published(ea)
-
-        max_m = float(ea.max_marks) if ea.max_marks else 0
-        weight = float(ea.weight) if ea.weight else 0
-
-        # Internal-mark space: (weight / 100) * out_of = max contribution
-        internal_max = round((weight / 100.0) * out_of, 2) if weight > 0 else 0.0
-
-        obtained_weight = None
-        internal_obtained = None
-
-        # Always count this exam's weight in the cycle max (even if mark not yet entered)
-        if weight > 0:
-            cycle_map[cycle_id]['total_max_weight'] += weight
-            cycle_map[cycle_id]['total_internal_max'] += internal_max
-
-        if not is_absent and total_mark is not None and max_m > 0 and weight > 0:
-            obtained_weight = round((total_mark / max_m) * weight, 2)
-            internal_obtained = round((total_mark / max_m) * internal_max, 2)
-            cycle_map[cycle_id]['total_obtained_weight'] += obtained_weight
-            cycle_map[cycle_id]['total_internal_obtained'] += internal_obtained
-
-        cycle_map[cycle_id]['exams'].append({
-            'exam_id': str(ea.id),
-            'exam': ea.exam,
-            'exam_display': ea.exam_display_name or ea.exam,
-            'qp_type': ea.qp_type,
-            'max_marks': max_m,
-            'weight': weight,
-            'total_mark': total_mark,
-            'obtained_weight': obtained_weight,
-            'internal_mark_max': internal_max,
-            'internal_mark_obtained': internal_obtained,
-            'is_absent': is_absent,
-            'published_at': ea.published_at.isoformat() if ea.published_at else None,
-        })
-
-    # Calculate percentage per cycle
-    for v in cycle_map.values():
-        mw = v['total_max_weight']
-        ow = v['total_obtained_weight']
-        v['weight_pct'] = round((ow / mw) * 100, 1) if mw > 0 else None
-        # Internal mark totals (rounded to 2dp)
-        v['total_internal_obtained'] = round(v['total_internal_obtained'], 2)
-        v['total_internal_max'] = round(v['total_internal_max'], 2)
-
-    # Populate cycle names from AcV2Cycle objects
-    for cid, cdata in cycle_map.items():
-        if cid in cycle_objs:
-            cdata['cycle_name'] = cycle_objs[cid]['name']
-            cdata['cycle_desc'] = cycle_objs[cid].get('description', '')
-            cdata['cycle_order'] = cycle_objs[cid].get('order', cdata.get('cycle_order', 999))
-
-    faculty_name = ''
-    if ta and ta.staff:
-        u = ta.staff.user
-        faculty_name = (u.get_full_name() or u.username) if u else ''
-
-    ct_name = ''
-    if course.class_type:
-        ct_name = course.class_type.short_code or course.class_type.name
-    else:
-        ct_name = course.class_type_name or ''
-
-    return Response({
-        'ta_id': ta.id,
-        'course_code': course.subject_code,
-        'course_name': course.subject_name,
-        'class_type': ct_name,
-        'faculty_name': faculty_name,
-        'total_internal_marks': out_of,
-        'cycles': sorted(list(cycle_map.values()), key=lambda c: (c.get('cycle_order', 999), str(c.get('cycle_name', '')))),
-    })
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def student_my_marks_config(request):
-    """Return My Marks settings + student's completion status (public to authenticated students)."""
-    sp = _get_student_profile(request)
-
-    cfg, _ = AcV2MyMarksSetting.objects.get_or_create(key='DEFAULT')
-
-    # Check student's completion status
-    has_profile_photo = False
-    has_mobile_number = False
-    if sp:
-        has_profile_photo = bool(getattr(sp, 'profile_image', None))
-        has_mobile_number = bool(getattr(sp, 'mobile_number', '') or '')
-
-    return Response({
-        'viewing_enabled': cfg.viewing_enabled,
-        'require_profile_photo': cfg.require_profile_photo,
-        'require_mobile_number': cfg.require_mobile_number,
-        'has_profile_photo': has_profile_photo,
-        'has_mobile_number': has_mobile_number,
-    })
