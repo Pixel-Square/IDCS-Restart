@@ -411,7 +411,7 @@ export default function App() {
                 />
                 <Route
                   path="/curriculum/elective-poll"
-                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.manage_elective_poll", "curriculum.choose_elective"]} requiredRoles={["IQAC"]} element={<ElectivePollPage user={user} />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.manage_elective_poll", "curriculum.choose_elective", "curriculum.hod_elective_manage"]} requiredRoles={["IQAC"]} element={<ElectivePollPage user={user} />} />}
                 />
 
                 {/* OBE/marks/COAttainment routes removed */}

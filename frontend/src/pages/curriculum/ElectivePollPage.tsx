@@ -3,7 +3,7 @@ import { X, Plus, ShieldAlert, Users, Trash2, Download, Upload, Check, LayoutDas
 import * as XLSX from 'xlsx';
 import { fetchDepartments, DepartmentRow } from '../../services/academics';
 import { fetchDepartmentStaff, StaffMember } from '../../services/staff';
-import { fetchBatchYears, fetchElectives, fetchDepartmentGroups, BatchYear, DepartmentGroup, fetchElectivePolls, createElectivePoll, updateElectivePollStatus, fetchActiveStudentPolls, submitElectiveChoice, ElectivePoll, fetchDeptRows, DeptRow, downloadElectivePollExport } from '../../services/curriculum';
+import { fetchBatchYears, fetchElectives, fetchDepartmentGroups, BatchYear, DepartmentGroup, fetchElectivePolls, createElectivePoll, updateElectivePollStatus, fetchActiveStudentPolls, submitElectiveChoice, ElectivePoll, fetchDeptRows, DeptRow, downloadElectivePollExport, fetchHodElectivePollStatus, HodElectiveDepartmentStatus, updateElectivePollSubjectStatus, updateElectivePollSubjectDetails, fetchElectivePollSeatCounts } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { downloadExcel } from '../../utils/downloadFile';
 
@@ -108,9 +108,10 @@ function StudentElectiveChoosing() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                     {(poll.poll_subjects || []).map((sub: any) => {
                       const isFull = sub.seats != null && Number(sub.seats) <= 0;
+                      const isInactive = sub.is_active === false;
                       const isChosen = isLocked && selections[poll.id] === String(sub.id);
                       const isOther = isLocked && !isChosen;
-                      const isDisabled = isLocked || isFull;
+                      const isDisabled = isLocked || isFull || isInactive;
                       return (
                         <label
                           key={sub.id}
@@ -119,13 +120,18 @@ function StudentElectiveChoosing() {
                               ? 'border-green-500 bg-green-50/60 ring-2 ring-green-300 cursor-default'
                               : isOther
                               ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
-                              : isFull
+                              : isFull || isInactive
                               ? 'border-rose-200 bg-rose-50/60 opacity-60 cursor-not-allowed'
                               : selections[poll.id] === String(sub.id)
                               ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-300 cursor-pointer'
                               : 'border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/20 cursor-pointer'
                           }`}
                         >
+                          {isInactive && !isChosen && (
+                            <span className="absolute top-2 right-2 bg-rose-100 text-rose-700 rounded-full px-2 py-0.5 text-[10px] font-semibold">
+                              Inactive
+                            </span>
+                          )}
                           {isChosen ? (
                             <span className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-0.5">
                               <Check className="w-3 h-3" />
@@ -188,15 +194,272 @@ function StudentElectiveChoosing() {
   );
 }
 
+function HodElectiveStatusView() {
+  const [departments, setDepartments] = useState<HodElectiveDepartmentStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedPolls, setExpandedPolls] = useState<Record<string, boolean>>({});
+  const [showOnlyNotChosen, setShowOnlyNotChosen] = useState(false);
+
+  const summary = useMemo(() => {
+    let totalPolls = 0;
+    let totalStudents = 0;
+    let totalChosen = 0;
+    for (const dept of departments) {
+      for (const poll of dept.polls || []) {
+        totalPolls += 1;
+        totalStudents += Number(poll.total_students || 0);
+        totalChosen += Number(poll.chosen_count || 0);
+      }
+    }
+    return { totalPolls, totalStudents, totalChosen };
+  }, [departments]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await fetchHodElectivePollStatus();
+        setDepartments(data.departments || []);
+      } catch (err: any) {
+        setError(err?.message || 'Failed to load elective poll status.');
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
+  const togglePoll = (key: string) => {
+    setExpandedPolls(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const sanitizeFileName = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+  const buildStudentRows = (students: any[], statusLabel: string) => {
+    return students.map((student) => ({
+      'Reg No': student.reg_no || '',
+      'Student': student.name || student.username || '',
+      'Username': student.username || '',
+      'Section': student.section || '',
+      'Department': student.department || '',
+      'Batch Year': student.batch_year || '',
+      'Chosen Subject Code': student.chosen_subject_code || '',
+      'Chosen Subject Name': student.chosen_subject_name || '',
+      'Status': statusLabel,
+    }));
+  };
+
+  const handleDownloadPoll = (poll: any, deptLabel: string) => {
+    const chosenStudents = (poll.students || []).filter((student: any) => student.chosen);
+    const notChosenStudents = (poll.students || []).filter((student: any) => !student.chosen);
+
+    const wb = XLSX.utils.book_new();
+    const chosenSheet = XLSX.utils.json_to_sheet(buildStudentRows(chosenStudents, 'Chosen'));
+    const notChosenSheet = XLSX.utils.json_to_sheet(buildStudentRows(notChosenStudents, 'Not chosen'));
+
+    XLSX.utils.book_append_sheet(wb, chosenSheet, 'Chosen');
+    XLSX.utils.book_append_sheet(wb, notChosenSheet, 'Not chosen');
+
+    const pollLabel = sanitizeFileName(String(poll.parent_elective_name || 'elective_poll')) || 'elective_poll';
+    const deptSafe = sanitizeFileName(String(deptLabel || 'department')) || 'department';
+    const filename = `${pollLabel}_${deptSafe}_choices.xlsx`;
+
+    XLSX.writeFile(wb, filename);
+  };
+
+  if (loading) {
+    return <div className="p-8 text-center text-slate-500">Loading elective poll status...</div>;
+  }
+
+  if (error) {
+    return <div className="p-8 text-center text-rose-600">{error}</div>;
+  }
+
+  const hasPolls = departments.some(dep => (dep.polls || []).length > 0);
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 font-sans text-slate-800">
+      <div className="max-w-6xl mx-auto space-y-4">
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">Elective Poll Status</h1>
+              <p className="text-xs text-slate-500 mt-1">Active polls and student choices for your department.</p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full">{summary.totalPolls} polls</span>
+              <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full">{summary.totalStudents} students</span>
+              <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">{summary.totalChosen} chosen</span>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-slate-600">
+            <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1">
+              <input
+                type="checkbox"
+                className="accent-indigo-600"
+                checked={showOnlyNotChosen}
+                onChange={(e) => setShowOnlyNotChosen(e.target.checked)}
+              />
+              Show only not chosen
+            </label>
+          </div>
+        </div>
+
+        {!hasPolls && (
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-center text-slate-500">
+            No active elective polls found for your department.
+          </div>
+        )}
+
+        {departments.map((dept) => (
+          <div key={dept.department_id} className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-indigo-500"></div>
+                <h2 className="text-sm font-semibold text-slate-800">{dept.department}</h2>
+              </div>
+              <span className="text-[11px] text-slate-500">{dept.polls?.length || 0} polls</span>
+            </div>
+
+            {(dept.polls || []).map((poll) => {
+              const pollKey = `${dept.department_id}-${poll.poll_id}`;
+              const expanded = expandedPolls[pollKey] ?? true;
+              const chosenCount = poll.chosen_count || 0;
+              const totalStudents = poll.total_students || 0;
+              const visibleStudents = showOnlyNotChosen
+                ? poll.students.filter((student) => !student.chosen)
+                : poll.students;
+              const sortedStudents = [...visibleStudents].sort((a, b) => {
+                const aLabel = (a.name || a.username || a.reg_no || '').toString().toLowerCase();
+                const bLabel = (b.name || b.username || b.reg_no || '').toString().toLowerCase();
+                return aLabel.localeCompare(bLabel);
+              });
+              return (
+                <div key={poll.poll_id} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => togglePoll(pollKey)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-slate-50 border-b border-slate-200"
+                  >
+                    <div className="text-left">
+                      <div className="text-sm font-semibold text-slate-900">{poll.parent_elective_name}</div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                        <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                          {poll.batch_year ? `Batch ${poll.batch_year}` : 'All batches'}
+                        </span>
+                        {poll.department_group && (
+                          <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-full">{poll.department_group}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-slate-600">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDownloadPoll(poll, dept.department);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                      >
+                        <Download className="w-3.5 h-3.5" /> Download
+                      </button>
+                      <span className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-medium">
+                        {chosenCount}/{totalStudents} chosen
+                      </span>
+                      {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </div>
+                  </button>
+
+                  {expanded && (
+                    <div className="p-4">
+                      {visibleStudents.length === 0 ? (
+                        <div className="text-xs text-slate-500">No students found for this poll.</div>
+                      ) : (
+                        <div className="overflow-auto">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-slate-100 text-slate-600">
+                              <tr className="text-left">
+                                <th className="py-2 px-3 font-semibold">Reg No</th>
+                                <th className="py-2 px-3 font-semibold">Student</th>
+                                <th className="py-2 px-3 font-semibold">Section</th>
+                                <th className="py-2 px-3 font-semibold">Department</th>
+                                <th className="py-2 px-3 font-semibold">Chosen Subject</th>
+                                <th className="py-2 px-3 font-semibold">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sortedStudents.map((student, idx) => (
+                                <tr key={student.student_id} className={`border-b last:border-0 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                                  <td className="py-2 px-3 text-slate-700 font-mono">{student.reg_no || '-'}</td>
+                                  <td className="py-2 px-3 text-slate-700">
+                                    {student.name || student.username || '-'}
+                                  </td>
+                                  <td className="py-2 px-3 text-slate-600">{student.section || '-'}</td>
+                                  <td className="py-2 px-3 text-slate-600">{student.department || '-'}</td>
+                                  <td className="py-2 px-3 text-slate-600">
+                                    {student.chosen_subject_name
+                                      ? `${student.chosen_subject_code ? `${student.chosen_subject_code} - ` : ''}${student.chosen_subject_name}`
+                                      : '-'}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {student.chosen ? (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-[11px] font-medium">
+                                        <Check className="w-3 h-3" /> Chosen
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 text-rose-600 px-2 py-0.5 text-[11px] font-medium">
+                                        <X className="w-3 h-3" /> Not chosen
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function ElectivePollPage({ user }: { user?: any }) {
   const hasStudentPermission = Array.isArray(user?.permissions) && user.permissions.includes('curriculum.choose_elective');
+  const hasHodPermission = Array.isArray(user?.permissions) && user.permissions.includes('curriculum.hod_elective_manage');
+  const hasManagePermission = Array.isArray(user?.permissions) && user.permissions.includes('curriculum.manage_elective_poll');
 
   if (hasStudentPermission) {
     return <StudentElectiveChoosing />;
   }
 
+  if (hasHodPermission && !hasManagePermission) {
+    return <HodElectiveStatusView />;
+  }
+
   const [view, setView] = useState<'dashboard' | 'create' | 'manage'>('dashboard');
-  const [electivesForm, setElectivesForm] = useState([{ code: '', name: '', seats: '', staff: '', dept: '', blocked_depts: [] as number[] }]);
+  const [electivesForm, setElectivesForm] = useState([
+    {
+      code: '',
+      name: '',
+      seats: '',
+      seats_mode: 'custom',
+      seats_divide_by: '1',
+      staff: '',
+      dept: '',
+      blocked_depts: [] as number[],
+    }
+  ]);
   const [departmentGroups, setDepartmentGroups] = useState<DepartmentGroup[]>([]);
   const [departments, setDepartments] = useState<DepartmentRow[]>([]);
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
@@ -212,12 +475,20 @@ export default function ElectivePollPage({ user }: { user?: any }) {
   const [selectedParent, setSelectedParent] = useState('');
   const uniqueSemesters = [1, 2, 3, 4, 5, 6, 7, 8];
 
+  const [seatCounts, setSeatCounts] = useState<Record<number, number>>({});
+  const [seatCountsLoading, setSeatCountsLoading] = useState(false);
+
 
   // Polls State
   const [polls, setPolls] = useState<ElectivePoll[]>([]); 
   const [isLoadingPolls, setIsLoadingPolls] = useState(false);
   const [expandedPolls, setExpandedPolls] = useState<Record<number, boolean>>({});
   const [downloading, setDownloading] = useState<Record<number, boolean>>({});
+  const [manageYearFilter, setManageYearFilter] = useState('');
+  const [manageSemesterFilter, setManageSemesterFilter] = useState('');
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [subjectUpdating, setSubjectUpdating] = useState<Record<string, boolean>>({});
+  const [editingSubjects, setEditingSubjects] = useState<Record<string, { code: string; name: string; seats: string }>>({});
 
   const updateRow = (index: number, field: string, value: any) => {
     const newForm = [...electivesForm];
@@ -245,6 +516,19 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       return {
         ...el,
         blocked_depts: blocked.includes(deptId) ? blocked : [...blocked, deptId]
+      };
+    });
+    setElectivesForm(newForm);
+  };
+
+  const handleBlockOtherDepartments = () => {
+    const newForm = electivesForm.map(el => {
+      if (!el.dept) return el;
+      const deptId = Number(el.dept);
+      const blocked = departments.filter(d => d.id !== deptId).map(d => d.id);
+      return {
+        ...el,
+        blocked_depts: blocked,
       };
     });
     setElectivesForm(newForm);
@@ -363,6 +647,8 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         let blocked: number[] = [];
         if (blockRule === 'block providing dept' && deptId) {
           blocked = [Number(deptId)];
+        } else if ((blockRule === 'block other depts' || blockRule === 'block other departments' || blockRule === 'block other departments than providing department') && deptId) {
+          blocked = departments.filter((d) => d.id !== Number(deptId)).map((d) => d.id);
         } else if (blockRule === 'block outside group') {
           if (!selectedGroup) {
             alert('Select a Department Group before using "Block outside group".');
@@ -379,6 +665,8 @@ export default function ElectivePollPage({ user }: { user?: any }) {
           code,
           name,
           seats,
+          seats_mode: 'custom',
+          seats_divide_by: '1',
           staff: staffId,
           dept: deptId,
           blocked_depts: blocked,
@@ -418,6 +706,41 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       })));
     }
   }, [selectedGroup, departmentGroups, departments]);
+
+  useEffect(() => {
+    const loadSeatCounts = async () => {
+      if (!selectedYear) {
+        setSeatCounts({});
+        return;
+      }
+      setSeatCountsLoading(true);
+      try {
+        const data = await fetchElectivePollSeatCounts(selectedYear);
+        setSeatCounts(data?.counts || {});
+      } catch (err) {
+        console.error('Failed to load seat counts', err);
+        setSeatCounts({});
+      } finally {
+        setSeatCountsLoading(false);
+      }
+    };
+    loadSeatCounts();
+  }, [selectedYear]);
+
+  const getDeptStudentCount = (deptId?: string | number) => {
+    if (!deptId) return null;
+    const key = Number(deptId);
+    if (Number.isNaN(key)) return null;
+    return seatCounts[key] ?? 0;
+  };
+
+  const getAutoSeatValue = (deptId?: string | number, divisorRaw?: string) => {
+    const count = getDeptStudentCount(deptId);
+    if (count == null) return null;
+    const divisor = Number(divisorRaw);
+    if (!divisor || divisor <= 0) return null;
+    return Math.floor(count / divisor);
+  };
 
   useEffect(() => {
     async function loadData() {
@@ -479,6 +802,19 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       alert(`Please select a providing department for subject #${missingDept + 1}.`);
       return;
     }
+
+    const autoSeatIssue = electivesForm.findIndex((s) => {
+      if (s.seats_mode !== 'dept_divide') return false;
+      const divisor = Number(s.seats_divide_by);
+      const deptId = Number(s.dept);
+      if (!deptId || Number.isNaN(deptId)) return true;
+      if (!divisor || divisor <= 0) return true;
+      return getDeptStudentCount(deptId) == null;
+    });
+    if (autoSeatIssue !== -1) {
+      alert(`Check seats settings for subject #${autoSeatIssue + 1}.`);
+      return;
+    }
     
     try {
       const payload = {
@@ -489,7 +825,9 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         subjects: electivesForm.map(s => ({
           code: s.code,
           name: s.name,
-          seats: s.seats || null,
+          seats: s.seats_mode === 'dept_divide'
+            ? getAutoSeatValue(s.dept, s.seats_divide_by)
+            : (s.seats || null),
           staff_id: s.staff || null,
           dept_id: s.dept || null,
           blocked_departments: s.blocked_depts || []
@@ -531,6 +869,127 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       alert(err?.message || 'Failed to download export.');
     } finally {
       setDownloading(prev => ({ ...prev, [pollId]: false }));
+    }
+  };
+
+  const handleToggleSubjectStatus = async (pollId: number, subjectId: number, nextStatus: boolean) => {
+    const key = `${pollId}-${subjectId}`;
+    setSubjectUpdating(prev => ({ ...prev, [key]: true }));
+    try {
+      const updated = await updateElectivePollSubjectStatus(pollId, subjectId, nextStatus);
+      setPolls(prev => prev.map(p => (
+        p.id === pollId
+          ? {
+              ...p,
+              poll_subjects: (p.poll_subjects || []).map(s =>
+                s.id === subjectId ? { ...s, is_active: updated.is_active } : s
+              )
+            }
+          : p
+      )));
+    } catch (err: any) {
+      console.error('Failed to update subject status', err);
+      alert(err?.message || 'Failed to update subject status.');
+    } finally {
+      setSubjectUpdating(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const startEditSubject = (pollId: number, sub: any) => {
+    if (sub?.is_active !== false) {
+      alert('Deactivate the subject before editing.');
+      return;
+    }
+    const key = `${pollId}-${sub.id}`;
+    setEditingSubjects(prev => ({
+      ...prev,
+      [key]: {
+        code: String(sub.course_code || ''),
+        name: String(sub.course_name || ''),
+        seats: sub.seats !== null && sub.seats !== undefined ? String(sub.seats) : '',
+      }
+    }));
+  };
+
+  const cancelEditSubject = (pollId: number, subjectId: number) => {
+    const key = `${pollId}-${subjectId}`;
+    setEditingSubjects(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const updateEditingSubject = (key: string, field: 'code' | 'name' | 'seats', value: string) => {
+    setEditingSubjects(prev => ({
+      ...prev,
+      [key]: { ...prev[key], [field]: value }
+    }));
+  };
+
+  const handleSaveSubject = async (pollId: number, subjectId: number) => {
+    const key = `${pollId}-${subjectId}`;
+    const draft = editingSubjects[key];
+    if (!draft) return;
+
+    setSubjectUpdating(prev => ({ ...prev, [key]: true }));
+    try {
+      const updated = await updateElectivePollSubjectDetails(pollId, subjectId, {
+        course_code: draft.code,
+        course_name: draft.name,
+        seats: draft.seats === '' ? null : draft.seats,
+      });
+      setPolls(prev => prev.map(p => (
+        p.id === pollId
+          ? {
+              ...p,
+              poll_subjects: (p.poll_subjects || []).map(s =>
+                s.id === subjectId
+                  ? { ...s, course_code: updated.course_code, course_name: updated.course_name, seats: updated.seats }
+                  : s
+              )
+            }
+          : p
+      )));
+      cancelEditSubject(pollId, subjectId);
+    } catch (err: any) {
+      console.error('Failed to update subject', err);
+      alert(err?.message || 'Failed to update subject.');
+    } finally {
+      setSubjectUpdating(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const getFilteredPolls = () => {
+    return polls.filter((poll) => {
+      if (manageYearFilter && String(poll.batch_year || '') !== String(manageYearFilter)) {
+        return false;
+      }
+      if (manageSemesterFilter) {
+        const semValue = Number(manageSemesterFilter);
+        const hasSemester = (poll.poll_subjects || []).some((sub: any) => Number(sub.semester) === semValue);
+        if (!hasSemester) return false;
+      }
+      return true;
+    });
+  };
+
+  const handleBulkTogglePolls = async (nextStatus: boolean) => {
+    const filtered = getFilteredPolls();
+    const targets = filtered.filter((poll) => poll.is_active !== nextStatus);
+    if (!targets.length) return;
+    setBulkUpdating(true);
+    try {
+      const updated = await Promise.all(
+        targets.map((poll) => updateElectivePollStatus(poll.id, nextStatus))
+      );
+      const updatedMap = new Map(updated.map((poll) => [poll.id, poll]));
+      setPolls((prev) => prev.map((poll) => updatedMap.get(poll.id) || poll));
+    } catch (err) {
+      console.error('Failed to update polls', err);
+      alert('Failed to update polls.');
+    } finally {
+      setBulkUpdating(false);
     }
   };
 
@@ -610,7 +1069,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-6">
               <button 
                 onClick={() => {
-                  setElectivesForm([{ code: '', name: '', seats: '', staff: '', dept: '', blocked_depts: [] }]);
+                  setElectivesForm([{ code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }]);
                   setSelectedYear('');
                   setSelectedSemester('');
                   setSelectedGroup('');
@@ -666,6 +1125,11 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                   <ShieldAlert className="w-4 h-4" /> Block providing dept
                 </button>
                 <button 
+                  onClick={handleBlockOtherDepartments}
+                  className="flex items-center gap-2 text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors">
+                  <ShieldAlert className="w-4 h-4" /> Block other depts
+                </button>
+                <button 
                   onClick={handleBlockOutsideGroup}
                   className="flex items-center gap-2 text-sm font-medium text-indigo-600 bg-indigo-50 px-4 py-2 rounded-lg hover:bg-indigo-100 transition-colors">
                   <Users className="w-4 h-4" /> Block outside group
@@ -717,7 +1181,48 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-slate-500 mb-1.5">Seats</label>
-                        <input type="text" placeholder="60" value={el.seats} onChange={e => updateRow(i, 'seats', e.target.value)} className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500" />
+                        <select
+                          value={el.seats_mode || 'custom'}
+                          onChange={e => updateRow(i, 'seats_mode', e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-white outline-none focus:border-indigo-500"
+                        >
+                          <option value="custom">Custom number</option>
+                          <option value="dept_divide">By dept count / divisor</option>
+                        </select>
+                        {el.seats_mode === 'dept_divide' ? (
+                          <div className="mt-2 space-y-2">
+                            <input
+                              type="text"
+                              placeholder="Divide by"
+                              value={el.seats_divide_by || ''}
+                              onChange={e => updateRow(i, 'seats_divide_by', e.target.value)}
+                              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500"
+                            />
+                            <div className="text-[11px] text-slate-500">
+                              {selectedYear ? (
+                                seatCountsLoading ? (
+                                  'Loading department count...'
+                                ) : (
+                                  (() => {
+                                    const count = getDeptStudentCount(el.dept);
+                                    const seats = getAutoSeatValue(el.dept, el.seats_divide_by);
+                                    return `Dept students: ${count ?? '-'} • Seats: ${seats ?? '-'}`;
+                                  })()
+                                )
+                              ) : (
+                                'Select a batch year to calculate seats.'
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder="60"
+                            value={el.seats}
+                            onChange={e => updateRow(i, 'seats', e.target.value)}
+                            className="mt-2 w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:border-indigo-500"
+                          />
+                        )}
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-slate-500 mb-1.5">Staff</label>
@@ -763,7 +1268,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
 
               <div className="mt-6 flex justify-center">
                 <button 
-                  onClick={() => setElectivesForm([...electivesForm, { code: '', name: '', seats: '', staff: '', dept: '', blocked_depts: [] }])}
+                  onClick={() => setElectivesForm([...electivesForm, { code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }])}
                   className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm transition-colors">
                   <Plus className="w-4 h-4" /> Add another elective
                 </button>
@@ -783,9 +1288,54 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         {/* Manage View */}
         {view === 'manage' && (
           <div className="space-y-6">
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-700">Manage Elective Polls</h2>
+                <p className="text-xs text-slate-500">Filter by batch year or semester to find polls faster.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs font-medium text-slate-600">Year</label>
+                <select
+                  value={manageYearFilter}
+                  onChange={(e) => setManageYearFilter(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {batchYears.map((year) => (
+                    <option key={year.id} value={String(year.id)}>{year.name}</option>
+                  ))}
+                </select>
+                <label className="text-xs font-medium text-slate-600">Semester</label>
+                <select
+                  value={manageSemesterFilter}
+                  onChange={(e) => setManageSemesterFilter(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-indigo-500"
+                >
+                  <option value="">All</option>
+                  {uniqueSemesters.map((semester) => (
+                    <option key={semester} value={String(semester)}>Sem {semester}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => handleBulkTogglePolls(true)}
+                  disabled={bulkUpdating}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {bulkUpdating ? 'Working...' : 'Activate all'}
+                </button>
+                <button
+                  onClick={() => handleBulkTogglePolls(false)}
+                  disabled={bulkUpdating}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold bg-rose-100 text-rose-700 hover:bg-rose-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {bulkUpdating ? 'Working...' : 'Deactivate all'}
+                </button>
+              </div>
+            </div>
+
             {polls.length > 0 ? (
               <div className="space-y-6">
-                {polls.map((poll) => (
+                {getFilteredPolls().map((poll) => (
                   <div key={poll.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                     <div className="bg-slate-50 border-b border-slate-200 p-5 flex items-center justify-between">
                       <div>
@@ -838,18 +1388,109 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                               <th className="px-4 py-3">Subject Name</th>
                               <th className="px-4 py-3">Seats</th>
                               <th className="px-4 py-3">Staff</th>
-                              <th className="px-4 py-3 rounded-tr-lg">Providing Dept</th>
+                              <th className="px-4 py-3">Providing Dept</th>
+                              <th className="px-4 py-3">Status</th>
+                              <th className="px-4 py-3 rounded-tr-lg">Action</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {(poll.poll_subjects || []).map((sub: any, idx: number) => (
+                            {[...(poll.poll_subjects || [])]
+                              .sort((a: any, b: any) => {
+                                const aDept = String(a.department_code || a.department_name || '').toLowerCase();
+                                const bDept = String(b.department_code || b.department_name || '').toLowerCase();
+                                const deptCompare = aDept.localeCompare(bDept);
+                                if (deptCompare !== 0) return deptCompare;
+                                const aName = String(a.course_name || a.course_code || '').toLowerCase();
+                                const bName = String(b.course_name || b.course_code || '').toLowerCase();
+                                return aName.localeCompare(bName);
+                              })
+                              .map((sub: any, idx: number) => (
+                              (() => {
+                                const statusKey = `${poll.id}-${sub.id}`;
+                                const isActive = sub.is_active !== false;
+                                const isEditing = Boolean(editingSubjects[statusKey]);
+                                const draft = editingSubjects[statusKey];
+                                return (
                               <tr key={idx} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
-                                <td className="px-4 py-3 font-medium text-slate-900">{sub.course_code || '-'}</td>
-                                <td className="px-4 py-3">{sub.course_name || '-'}</td>
-                                <td className="px-4 py-3">{sub.seats || '-'}</td>
+                                <td className="px-4 py-3 font-medium text-slate-900">
+                                  {isEditing ? (
+                                    <input
+                                      value={draft?.code || ''}
+                                      onChange={(e) => updateEditingSubject(statusKey, 'code', e.target.value)}
+                                      className="w-24 border border-slate-200 rounded-md px-2 py-1 text-xs"
+                                    />
+                                  ) : (
+                                    sub.course_code || '-'
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {isEditing ? (
+                                    <input
+                                      value={draft?.name || ''}
+                                      onChange={(e) => updateEditingSubject(statusKey, 'name', e.target.value)}
+                                      className="w-56 border border-slate-200 rounded-md px-2 py-1 text-xs"
+                                    />
+                                  ) : (
+                                    sub.course_name || '-'
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {isEditing ? (
+                                    <input
+                                      value={draft?.seats || ''}
+                                      onChange={(e) => updateEditingSubject(statusKey, 'seats', e.target.value)}
+                                      className="w-20 border border-slate-200 rounded-md px-2 py-1 text-xs"
+                                    />
+                                  ) : (
+                                    sub.seats || '-'
+                                  )}
+                                </td>
                                 <td className="px-4 py-3">{sub.staff_name || '-'}</td>
                                 <td className="px-4 py-3">{sub.department_code || sub.department_name || '-'}</td>
+                                <td className="px-4 py-3">
+                                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                    {isActive ? 'Active' : 'Inactive'}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      onClick={() => handleToggleSubjectStatus(poll.id, sub.id, !isActive)}
+                                      disabled={subjectUpdating[statusKey]}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isActive ? 'bg-rose-100 text-rose-700 hover:bg-rose-200' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'} disabled:opacity-60 disabled:cursor-not-allowed`}
+                                    >
+                                      {subjectUpdating[statusKey] ? 'Working...' : isActive ? 'Deactivate' : 'Activate'}
+                                    </button>
+                                    {isEditing ? (
+                                      <>
+                                        <button
+                                          onClick={() => handleSaveSubject(poll.id, sub.id)}
+                                          disabled={subjectUpdating[statusKey]}
+                                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                                        >
+                                          Save
+                                        </button>
+                                        <button
+                                          onClick={() => cancelEditSubject(poll.id, sub.id)}
+                                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        onClick={() => startEditSubject(poll.id, sub)}
+                                        disabled={isActive}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isActive ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                      >
+                                        {isActive ? 'Deactivate to edit' : 'Edit'}
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
                               </tr>
+                                );
+                              })()
                             ))}
                           </tbody>
                         </table>

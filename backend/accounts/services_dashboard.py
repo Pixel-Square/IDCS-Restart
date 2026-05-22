@@ -165,6 +165,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_manage_academic_calendar': 'academic_calendar.admin' in lower_perms,
         'can_manage_elective_poll': 'curriculum.manage_elective_poll' in lower_perms,
         'can_choose_elective': 'curriculum.choose_elective' in lower_perms,
+        'can_hod_elective_manage': 'curriculum.hod_elective_manage' in lower_perms,
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.
@@ -188,7 +189,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'feedback_page': bool(flags.get('can_view_feedback_page')),
         'coe_portal': bool(flags.get('can_access_coe_portal')),
         'academic_calendar_admin': bool(flags.get('can_manage_academic_calendar')),
-        'elective_poll': bool(flags.get('can_manage_elective_poll') or flags.get('can_choose_elective')),
+        'elective_poll': bool(flags.get('can_manage_elective_poll') or flags.get('can_choose_elective') or flags.get('can_hod_elective_manage')),
     }
 
     return {

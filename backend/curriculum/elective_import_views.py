@@ -191,7 +191,7 @@ class ElectivePollSubjectTemplateDownloadView(APIView):
                 ws.add_data_validation(dv_dept)
                 dv_dept.add('E2:E1000')
 
-            block_values = ['Block providing dept', 'Block outside group']
+            block_values = ['Block providing dept', 'Block other depts', 'Block outside group']
             for idx, value in enumerate(block_values, start=1):
                 lists_ws.cell(row=idx, column=3, value=value)
 

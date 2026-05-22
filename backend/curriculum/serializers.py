@@ -355,6 +355,7 @@ class ElectivePollSubjectSerializer(serializers.ModelSerializer):
     department_name = serializers.CharField(source='elective_subject.department.name', read_only=True, default=None)
     department_code = serializers.CharField(source='elective_subject.department.short_name', read_only=True, default=None)
     department_id = serializers.IntegerField(source='elective_subject.department.id', read_only=True, default=None)
+    semester = serializers.IntegerField(source='elective_subject.semester.number', read_only=True, default=None)
     staff_name = serializers.SerializerMethodField()
 
     blocked_departments = serializers.PrimaryKeyRelatedField(many=True, read_only=True, source='elective_subject.blocked_departments')
@@ -364,7 +365,7 @@ class ElectivePollSubjectSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'elective_subject_id', 'staff_id',
             'course_code', 'course_name', 'department_name', 'department_code', 'department_id',
-            'seats', 'staff_name', 'blocked_departments'
+            'semester', 'seats', 'staff_name', 'blocked_departments', 'is_active'
         ]
 
     def get_staff_name(self, obj):

@@ -542,6 +542,7 @@ class ElectivePoll(models.Model):
         verbose_name_plural = 'Elective Polls'
         permissions = [
             ('choose_elective', 'Can choose elective subjects'),
+            ('hod_elective_manage', 'Can view elective poll status for department students'),
         ]
 
     def __str__(self):
@@ -554,6 +555,7 @@ class ElectivePollSubject(models.Model):
     elective_subject = models.ForeignKey(ElectiveSubject, on_delete=models.CASCADE, related_name='poll_associations')
     seats = models.PositiveIntegerField(null=True, blank=True)
     staff = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_poll_subjects')
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = 'Elective Poll Subject'

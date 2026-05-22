@@ -10,6 +10,7 @@ from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSeriali
 from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
+from academics.models import StudentProfile
 import logging
 from rest_framework.views import exception_handler, APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -709,7 +710,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from django.db.models import Q
 from .models import ElectivePoll, ElectivePollSubject, ElectiveChoice, DepartmentGroupMapping
-from .serializers import ElectivePollSerializer
+from .serializers import ElectivePollSerializer, ElectivePollSubjectSerializer
 
 class ElectivePollView(APIView):
     permission_classes = [IsAuthenticated]
@@ -756,6 +757,111 @@ class ElectivePollDetailView(APIView):
             return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
         poll.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ElectivePollSubjectStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, poll_id, subject_id):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or user.groups.filter(name__in=['IQAC']).exists() or 'curriculum.manage_elective_poll' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        poll_subject = ElectivePollSubject.objects.filter(poll_id=poll_id, id=subject_id).first()
+        if not poll_subject:
+            return Response({'detail': 'Subject not found in this poll'}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = request.data or {}
+        updated = False
+
+        edit_fields = {'seats', 'course_code', 'course_name'}
+        if any(field in payload for field in edit_fields) and poll_subject.is_active:
+            return Response({'detail': 'Deactivate the subject before editing.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'is_active' in payload:
+            raw_active = payload.get('is_active')
+            poll_subject.is_active = str(raw_active).strip().lower() in {'1', 'true', 'yes', 'y'}
+            updated = True
+
+        if 'seats' in payload:
+            raw_seats = payload.get('seats')
+            if raw_seats in (None, '', 'null'):
+                poll_subject.seats = None
+            else:
+                try:
+                    seats_val = int(raw_seats)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Invalid seats value'}, status=status.HTTP_400_BAD_REQUEST)
+                if seats_val < 0:
+                    return Response({'detail': 'Seats cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+                poll_subject.seats = seats_val
+            updated = True
+
+        es = poll_subject.elective_subject
+        if 'course_code' in payload:
+            es.course_code = str(payload.get('course_code') or '').strip() or None
+            updated = True
+        if 'course_name' in payload:
+            es.course_name = str(payload.get('course_name') or '').strip() or None
+            updated = True
+
+        if not updated:
+            return Response({'detail': 'No fields provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if updated:
+            if 'course_code' in payload or 'course_name' in payload:
+                es.save(update_fields=['course_code', 'course_name', 'updated_at'])
+            poll_subject.save(update_fields=['is_active', 'seats'])
+
+        return Response(ElectivePollSubjectSerializer(poll_subject).data)
+
+
+class ElectivePollSeatCountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or user.groups.filter(name__in=['IQAC']).exists() or 'curriculum.manage_elective_poll' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        batch_year_id = request.query_params.get('batch_year_id')
+        if not batch_year_id:
+            return Response({'detail': 'batch_year_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            batch_year_id = int(batch_year_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid batch_year_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        counts: dict[int, int] = {}
+        students = StudentProfile.objects.filter(
+            status='ACTIVE',
+            section__batch__batch_year_id=batch_year_id,
+        ).select_related(
+            'home_department',
+            'section__batch__course__department',
+            'section__batch__department',
+        )
+
+        for student in students:
+            dept = getattr(student, 'home_department', None)
+            if dept is None:
+                try:
+                    dept = student.section.batch.course.department
+                except Exception:
+                    dept = None
+            if dept is None:
+                try:
+                    dept = student.section.batch.department
+                except Exception:
+                    dept = None
+            if dept is None:
+                continue
+            counts[dept.id] = counts.get(dept.id, 0) + 1
+
+        return Response({'batch_year_id': batch_year_id, 'counts': counts})
 
 class ActiveStudentPollsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -870,6 +976,179 @@ class ActiveStudentPollsView(APIView):
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class HodElectivePollStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or user.groups.filter(name__in=['IQAC']).exists() or 'curriculum.hod_elective_manage' in perms):
+            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        dept_ids = get_user_effective_departments(user) or []
+        if not dept_ids:
+            return Response({'departments': []})
+
+        from academics.models import Department, StudentProfile
+
+        dept_qs = Department.objects.filter(id__in=dept_ids)
+        dept_map = {d.id: d for d in dept_qs}
+
+        group_map = {}
+        for dept_id, group_id in DepartmentGroupMapping.objects.filter(
+            department_id__in=dept_ids, is_active=True
+        ).values_list('department_id', 'group_id'):
+            group_map.setdefault(dept_id, set()).add(group_id)
+
+        polls = list(
+            ElectivePoll.objects.filter(is_active=True)
+            .select_related('batch_year', 'department_group')
+            .order_by('-created_at')
+        )
+
+        students = list(
+            StudentProfile.objects.select_related(
+                'user',
+                'home_department',
+                'section',
+                'section__batch',
+                'section__batch__batch_year',
+                'section__batch__course',
+                'section__batch__course__department',
+                'section__batch__department',
+                'section__managing_department',
+            )
+            .filter(status='ACTIVE')
+            .filter(
+                Q(home_department_id__in=dept_ids)
+                | Q(section__batch__course__department_id__in=dept_ids)
+                | Q(section__batch__department_id__in=dept_ids)
+                | Q(section__managing_department_id__in=dept_ids)
+            )
+            .distinct()
+        )
+
+        def resolve_student_dept_id(student):
+            if getattr(student, 'home_department_id', None):
+                return student.home_department_id
+            section = getattr(student, 'section', None)
+            if section and getattr(section, 'managing_department_id', None):
+                return section.managing_department_id
+            batch = getattr(section, 'batch', None) if section else None
+            if batch:
+                if getattr(batch, 'course_id', None) and getattr(batch, 'course', None):
+                    return getattr(batch.course, 'department_id', None)
+                if getattr(batch, 'department_id', None):
+                    return batch.department_id
+            return None
+
+        def resolve_student_batch_year(student):
+            section = getattr(student, 'section', None)
+            batch = getattr(section, 'batch', None) if section else None
+            if batch and getattr(batch, 'batch_year_id', None):
+                return batch.batch_year_id, getattr(getattr(batch, 'batch_year', None), 'name', None)
+            return None, None
+
+        students_by_dept = {dept_id: [] for dept_id in dept_ids}
+        all_student_ids = []
+        for student in students:
+            dept_id = resolve_student_dept_id(student)
+            if not dept_id or dept_id not in students_by_dept:
+                continue
+            dept_label = None
+            dept_obj = dept_map.get(dept_id)
+            if dept_obj:
+                dept_label = getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', None) or getattr(dept_obj, 'name', None)
+            batch_year_id, batch_year_name = resolve_student_batch_year(student)
+            user_obj = getattr(student, 'user', None)
+            student_name = None
+            if user_obj:
+                student_name = (getattr(user_obj, 'get_full_name', lambda: '')() or '').strip() or getattr(user_obj, 'username', None)
+            students_by_dept[dept_id].append({
+                'student_id': student.id,
+                'reg_no': student.reg_no,
+                'name': student_name,
+                'username': getattr(user_obj, 'username', None) if user_obj else None,
+                'section': getattr(getattr(student, 'section', None), 'name', None),
+                'department': dept_label,
+                'batch_year_id': batch_year_id,
+                'batch_year_name': batch_year_name,
+            })
+            all_student_ids.append(student.id)
+
+        poll_ids = [p.id for p in polls]
+        choice_map = {}
+        if poll_ids and all_student_ids:
+            choice_rows = ElectiveChoice.objects.filter(
+                student_id__in=all_student_ids,
+                elective_subject__poll_associations__poll_id__in=poll_ids,
+            ).values(
+                'student_id',
+                'elective_subject__poll_associations__poll_id',
+                'elective_subject__course_name',
+                'elective_subject__course_code',
+            )
+            for row in choice_rows:
+                key = (row.get('student_id'), row.get('elective_subject__poll_associations__poll_id'))
+                if key not in choice_map:
+                    choice_map[key] = {
+                        'course_name': row.get('elective_subject__course_name'),
+                        'course_code': row.get('elective_subject__course_code'),
+                    }
+
+        department_payloads = []
+        for dept_id in dept_ids:
+            dept_obj = dept_map.get(dept_id)
+            dept_label = None
+            if dept_obj:
+                dept_label = dept_obj.short_name or dept_obj.code or dept_obj.name
+            dept_label = dept_label or f'Dept {dept_id}'
+            group_ids = group_map.get(dept_id, set())
+
+            poll_payloads = []
+            for poll in polls:
+                if poll.department_group_id and poll.department_group_id not in group_ids:
+                    continue
+
+                student_rows = []
+                for student in students_by_dept.get(dept_id, []):
+                    if poll.batch_year_id:
+                        if not student.get('batch_year_id') or poll.batch_year_id != student.get('batch_year_id'):
+                            continue
+                    choice_key = (student['student_id'], poll.id)
+                    choice_info = choice_map.get(choice_key)
+                    chosen = choice_info is not None
+                    student_rows.append({
+                        'student_id': student['student_id'],
+                        'reg_no': student.get('reg_no'),
+                        'name': student.get('name'),
+                        'username': student.get('username'),
+                        'section': student.get('section'),
+                        'batch_year': student.get('batch_year_name'),
+                        'chosen': chosen,
+                        'chosen_subject_name': choice_info.get('course_name') if choice_info else None,
+                        'chosen_subject_code': choice_info.get('course_code') if choice_info else None,
+                    })
+
+                poll_payloads.append({
+                    'poll_id': poll.id,
+                    'parent_elective_name': poll.parent_elective_name,
+                    'batch_year': getattr(getattr(poll, 'batch_year', None), 'name', None),
+                    'department_group': getattr(getattr(poll, 'department_group', None), 'name', None),
+                    'total_students': len(student_rows),
+                    'chosen_count': sum(1 for s in student_rows if s['chosen']),
+                    'students': student_rows,
+                })
+
+            department_payloads.append({
+                'department_id': dept_id,
+                'department': dept_label,
+                'polls': poll_payloads,
+            })
+
+        return Response({'departments': department_payloads})
+
 class SubmitElectiveChoiceView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -888,7 +1167,11 @@ class SubmitElectiveChoiceView(APIView):
                 # Lock student row to prevent concurrent double-submits from same user.
                 from academics.models import StudentProfile
                 StudentProfile.objects.select_for_update().get(pk=student_profile.pk)
-                poll_subject = ElectivePollSubject.objects.select_for_update().get(id=poll_subject_id, poll=poll)
+                poll_subject = ElectivePollSubject.objects.select_for_update().get(
+                    id=poll_subject_id,
+                    poll=poll,
+                    is_active=True,
+                )
                 
                 # Check if the student has already chosen an elective for this poll
                 existing_choice = ElectiveChoice.objects.filter(
@@ -920,7 +1203,7 @@ class SubmitElectiveChoiceView(APIView):
         except ElectivePoll.DoesNotExist:
             return Response({'detail': 'Active poll not found'}, status=status.HTTP_404_NOT_FOUND)
         except ElectivePollSubject.DoesNotExist:
-            return Response({'detail': 'Subject not found in this poll'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Subject not found or inactive in this poll'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -959,15 +1242,16 @@ class ElectivePollExportView(APIView):
 
         wb = Workbook()
         ws = wb.active
-        ws.title = 'Elective Poll'
+        ws.title = 'Chosen'
 
-        ws.append([
+        header = [
             'Poll', 'Batch Year',
             'Subject Code', 'Subject Name',
             'Providing Dept', 'Staff',
             'Student Reg No', 'Student Name', 'Student Username',
-            'Section', 'Academic Year'
-        ])
+            'Section', 'Student Department', 'Academic Year'
+        ]
+        ws.append(header)
 
         for choice in choices:
             es = choice.elective_subject
@@ -984,6 +1268,14 @@ class ElectivePollExportView(APIView):
             dept_short = getattr(dept, 'short_name', None) if dept else None
             if not dept_short and dept is not None:
                 dept_short = getattr(dept, 'code', None)
+            student_dept = None
+            student_dept_obj = getattr(student, 'home_department', None)
+            if not student_dept_obj and getattr(student, 'section', None):
+                sec_batch = getattr(getattr(student, 'section', None), 'batch', None)
+                if sec_batch and getattr(sec_batch, 'course', None):
+                    student_dept_obj = getattr(sec_batch.course, 'department', None)
+            if student_dept_obj:
+                student_dept = getattr(student_dept_obj, 'short_name', None) or getattr(student_dept_obj, 'code', None) or getattr(student_dept_obj, 'name', None)
             ws.append([
                 poll.parent_elective_name,
                 getattr(poll.batch_year, 'name', None),
@@ -995,7 +1287,80 @@ class ElectivePollExportView(APIView):
                 student_name,
                 getattr(user, 'username', None),
                 getattr(getattr(student, 'section', None), 'name', None),
+                student_dept,
                 getattr(getattr(choice, 'academic_year', None), 'name', None),
+            ])
+
+        # Build "Not chosen" sheet with eligible students for this poll
+        not_chosen_ws = wb.create_sheet('Not chosen')
+        not_chosen_ws.append(header)
+
+        chosen_student_ids = set(choices.values_list('student_id', flat=True))
+
+        from academics.models import StudentProfile
+
+        def resolve_student_dept(student):
+            if getattr(student, 'home_department_id', None):
+                return student.home_department
+            section = getattr(student, 'section', None)
+            if section and getattr(section, 'batch', None) and getattr(section.batch, 'course', None):
+                return section.batch.course.department
+            return None
+
+        students_qs = StudentProfile.objects.select_related(
+            'user',
+            'section',
+            'section__batch',
+            'section__batch__batch_year',
+            'section__batch__course',
+            'section__batch__course__department',
+            'home_department',
+        ).filter(status='ACTIVE')
+
+        if poll.batch_year_id:
+            students_qs = students_qs.filter(section__batch__batch_year_id=poll.batch_year_id)
+
+        for student in students_qs:
+            if student.id in chosen_student_ids:
+                continue
+
+            dept = resolve_student_dept(student)
+            if poll.department_group_id:
+                if not dept:
+                    continue
+                in_group = DepartmentGroupMapping.objects.filter(
+                    department=dept,
+                    group_id=poll.department_group_id,
+                    is_active=True
+                ).exists()
+                if not in_group:
+                    continue
+            else:
+                # If student has no dept group mapping, allow only polls without group restrictions
+                if dept and DepartmentGroupMapping.objects.filter(department=dept, is_active=True).exists():
+                    pass
+
+            user_obj = getattr(student, 'user', None)
+            student_name = None
+            if user_obj:
+                student_name = getattr(student, 'name', None) or (user_obj.get_full_name() if user_obj else None) or (user_obj.username if user_obj else None)
+
+            student_dept = None
+            if dept:
+                student_dept = getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', None)
+            not_chosen_ws.append([
+                poll.parent_elective_name,
+                getattr(poll.batch_year, 'name', None),
+                None,
+                None,
+                None,
+                None,
+                getattr(student, 'reg_no', None),
+                student_name,
+                getattr(user_obj, 'username', None),
+                getattr(getattr(student, 'section', None), 'name', None),
+                student_dept,
+                None,
             ])
 
         response = HttpResponse(
