@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import logging
+import math
 import re
 
 from django.contrib.auth.decorators import login_required
@@ -1413,6 +1414,45 @@ def _build_cqi_entries_payload(existing_entries, page_key: str | None, assessmen
     return payload, merged_co_numbers or co_numbers, snapshot
 
 
+def _sanitize_cqi_entries(entries):
+    """Ensure CQI entries are dict-shaped and clamp numeric marks to [0, 10]."""
+    if not isinstance(entries, dict):
+        return {}
+
+    sanitized: dict = {}
+    for student_id, student_entries in entries.items():
+        if not isinstance(student_entries, dict):
+            continue
+
+        clean_student: dict = {}
+        for co_key, raw_value in student_entries.items():
+            key = str(co_key or '').strip()
+            if not key:
+                continue
+
+            if raw_value is None or raw_value == '':
+                clean_student[key] = None
+                continue
+
+            if isinstance(raw_value, bool):
+                continue
+
+            try:
+                numeric_value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+
+            if not math.isfinite(numeric_value):
+                continue
+
+            clean_student[key] = max(0, min(10, numeric_value))
+
+        if clean_student:
+            sanitized[str(student_id)] = clean_student
+
+    return sanitized
+
+
 def _resolve_section_name_from_ta(ta) -> str:
     if not ta:
         return ''
@@ -1638,12 +1678,10 @@ def _enforce_mark_entry_not_blocked(
     teaching_assignment_id: int | None = None,
 ):
     """Block edits after publish unless an IQAC approval window is active."""
-    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=str(assessment).lower(), teaching_assignment_id=teaching_assignment_id)
-    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
-
+    # Check master config to see if publish lock is active globally
     master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
     master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
-    if global_unlimited or (not master_cfg.get('edit_requests_enabled', True)):
+    if not master_cfg.get('edit_requests_enabled', True):
         return None
 
     user = getattr(request, 'user', None)
@@ -1895,8 +1933,8 @@ def _normalise_class_type_weights_array(class_type: str, arr):
     expected = _EXPECTED_INTERNAL_WEIGHTS_SLOTS.get(ct, _DEFAULT_INTERNAL_WEIGHTS_SLOTS)
     defaults = _TCPL_DEFAULT_21 if ct == 'TCPL' else _THEORY_DEFAULT_17
 
-    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG/TAMIL – pass through as-is
-    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights', 'tamil_exam_weights'):
+    # Structured format for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG – pass through as-is
+    if isinstance(arr, dict) and arr.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights'):
         return arr
 
     if not isinstance(arr, list):
@@ -1961,7 +1999,11 @@ def class_type_weights_list(request):
             'internal_mark_weights': (
                 o.internal_mark_weights
                 if isinstance(getattr(o, 'internal_mark_weights', None), dict)
-                   and o.internal_mark_weights.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl')
+                   and o.internal_mark_weights.get('type') in (
+                       'lab_cycles', 'project_reviews', 'project_prbl',
+                       'special_exam_weights', 'english_exam_weights',
+                       'foreign_lang_exam_weights', 'tamil_exam_weights',
+                   )
                 else _normalise_class_type_weights_array(
                     ct, o.internal_mark_weights if isinstance(getattr(o, 'internal_mark_weights', None), list) else None
                 )
@@ -2084,6 +2126,7 @@ def cqi_draft(request, subject_id: str):
         return Response({'detail': 'Missing entries.'}, status=status.HTTP_400_BAD_REQUEST)
     if not isinstance(entries, dict):
         return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+    entries = _sanitize_cqi_entries(entries)
 
     user_id = getattr(getattr(request, 'user', None), 'id', None)
     existing = ObeCqiDraft.objects.filter(subject=subject, teaching_assignment=ta).first()
@@ -2273,6 +2316,7 @@ def cqi_publish(request, subject_id: str):
         return Response({'detail': 'Missing entries (send in body or save a draft first).'}, status=status.HTTP_400_BAD_REQUEST)
     if not isinstance(entries, dict):
         return Response({'detail': 'entries must be an object.'}, status=status.HTTP_400_BAD_REQUEST)
+    entries = _sanitize_cqi_entries(entries)
 
     from .models import ObeCqiPublished
 
@@ -2468,7 +2512,11 @@ def class_type_weights_upsert(request):
             try:
                 im_raw = v.get('internal_mark_weights') if isinstance(v, dict) else None
                 # Structured format (dict) for LAB/PRACTICAL/PROJECT/SPECIAL/ENGLISH/FOREIGN_LANG/TAMIL – store as-is
-                if isinstance(im_raw, dict) and im_raw.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl', 'special_exam_weights', 'english_exam_weights', 'foreign_lang_exam_weights', 'tamil_exam_weights'):
+                if isinstance(im_raw, dict) and im_raw.get('type') in (
+                    'lab_cycles', 'project_reviews', 'project_prbl',
+                    'special_exam_weights', 'english_exam_weights',
+                    'foreign_lang_exam_weights', 'tamil_exam_weights',
+                ):
                     im = im_raw
                 elif isinstance(im_raw, list):
                     im = []
@@ -2522,7 +2570,11 @@ def class_type_weights_upsert(request):
                 )
             im_val = getattr(obj, 'internal_mark_weights', None)
             # Return structured dicts as-is; arrays as lists; fallback to empty list
-            if isinstance(im_val, dict) and im_val.get('type') in ('lab_cycles', 'project_reviews', 'project_prbl'):
+            if isinstance(im_val, dict) and im_val.get('type') in (
+                'lab_cycles', 'project_reviews', 'project_prbl',
+                'special_exam_weights', 'english_exam_weights',
+                'foreign_lang_exam_weights', 'tamil_exam_weights',
+            ):
                 im_out = im_val
             elif isinstance(im_val, list):
                 im_out = im_val
@@ -3709,8 +3761,6 @@ def _normalize_obe_class_type(value) -> str:
         return 'AUDIT'
     if compact == 'SPECIAL':
         return 'SPECIAL'
-    if compact == 'TAMIL':
-        return 'TAMIL'
     return raw or 'THEORY'
 
 
@@ -8787,18 +8837,13 @@ def mark_table_lock_status(request, assessment: str, subject_id: str):
     if gate is not None:
         return gate
 
+    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
+    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
+    unlimited_publish = not master_cfg.get('edit_requests_enabled', True)
+
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
     academic_year = getattr(ta, 'academic_year', None) if ta else None
     section_name = _resolve_section_name_from_ta(ta)
-
-    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
-    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
-
-    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
-    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
-    unlimited_publish = global_unlimited or (not master_cfg.get('edit_requests_enabled', True))
-
-
 
     try:
         lock = _get_mark_table_lock_if_exists(
@@ -8975,17 +9020,7 @@ def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: s
     except OperationalError:
         return Response({'detail': 'Database unavailable.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-    info = _get_due_schedule_for_request(request, subject_code=subject_code, assessment=assessment_key, teaching_assignment_id=ta_id)
-    global_unlimited = bool(info.get('global_override_active') and info.get('global_is_open'))
-
-    master_cfg_qs = ObeAssessmentMasterConfig.objects.filter(id=1).first()
-    master_cfg = master_cfg_qs.config if master_cfg_qs and getattr(master_cfg_qs, 'config', None) else {}
-    unlimited_publish = global_unlimited or (not master_cfg.get('edit_requests_enabled', True))
-
     entry_open = (not bool(getattr(lock, 'mark_entry_blocked', False))) and bool(getattr(lock, 'mark_manager_locked', False))
-    if _has_obe_master_permission(getattr(request, 'user', None)) or unlimited_publish:
-        entry_open = True
-
     return Response(
         {
             'status': 'ok',

@@ -50,7 +50,9 @@ export function getNormalizedInternalMarkWeights(
   const rawWeights = weightItem?.internal_mark_weights;
 
   if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG' || ct === 'TAMIL') {
-    const cfg = ct === 'ENGLISH' ? getEnglishExamWeightConfig(rawWeights) : ct === 'TAMIL' ? getTamilExamWeightConfig(rawWeights) : getForeignLangExamWeightConfig(rawWeights);
+    const cfg = ct === 'ENGLISH'
+      ? getEnglishExamWeightConfig(rawWeights)
+      : (ct === 'FOREIGN_LANG' ? getForeignLangExamWeightConfig(rawWeights) : getTamilExamWeightConfig(rawWeights));
     const perCo = (entry: EnglishCycleEntry, fallbackCos: number[]) => {
       const cos = Array.isArray(entry?.cos) && entry.cos.length ? entry.cos : fallbackCos;
       const n = Math.max(1, cos.length);
@@ -149,9 +151,7 @@ export function getInternalMarkWeightSlotsForCo(
     const rawWeights = weightItem?.internal_mark_weights;
     const cfg = ct === 'ENGLISH'
       ? getEnglishExamWeightConfig(rawWeights)
-      : ct === 'TAMIL'
-      ? getTamilExamWeightConfig(rawWeights)
-      : getForeignLangExamWeightConfig(rawWeights);
+      : (ct === 'FOREIGN_LANG' ? getForeignLangExamWeightConfig(rawWeights) : getTamilExamWeightConfig(rawWeights));
     const cia1Per = Number(cfg.cia1?.weight || 0) / 5;
     const cia2Per = Number(cfg.cia2?.weight || 0) / 5;
     const bothCia = cia1Per + cia2Per;
@@ -373,7 +373,11 @@ export type SpecialExamWeights = {
 
 export const DEFAULT_SPECIAL_EXAM_WEIGHTS: SpecialExamWeights = {
   type: 'special_exam_weights',
-  weights: { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 },
+  // Column totals for SPECIAL (CSD) components. CIA1/SSA1/FA1 = cycle 1,
+  // CIA2/SSA2/FA2 = cycle 2, MODEL = cycle 3. Real weights come from the
+  // CO-wise matrix stored in ClassTypeWeights; this default keeps the shape
+  // valid (including formatives) if the matrix has not been saved yet.
+  weights: { CIA1: 5, SSA1: 4, FORMATIVE1: 6, CIA2: 5, SSA2: 4, FORMATIVE2: 6, MODEL: 10 },
 };
 
 export function isSpecialExamWeights(w: any): w is SpecialExamWeights {
@@ -462,7 +466,7 @@ export function getForeignLangExamWeightConfig(raw: any): ForeignLangExamWeights
   return JSON.parse(JSON.stringify(DEFAULT_FOREIGN_LANG_EXAM_WEIGHTS));
 }
 
-// ─── TAMIL Exam Weights (same 3-cycle structure as ENGLISH/FOREIGN_LANG) ─────
+// ─── TAMIL Exam Weights (same 3-cycle structure as ENGLISH) ────────────────
 
 export type TamilExamWeights = {
   type: 'tamil_exam_weights';

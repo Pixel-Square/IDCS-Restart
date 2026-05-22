@@ -336,10 +336,9 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       }
 
       // Pass through any non-empty QP code so DB-managed types work.
-      // THEORY, ENGLISH, FOREIGN_LANG, and TAMIL all support QP-type-specific patterns.
+      // Use empty string only for null/non-THEORY contexts (qpForApi null-coalesces it).
       const qpKey = String(normalizedQpType || '').trim();
-      const qpTypeClasses = new Set(['THEORY', 'ENGLISH', 'FOREIGN_LANG', 'TAMIL']);
-      const qpForApi = qpTypeClasses.has(classKey) ? (qpKey ? qpKey : null) : null;
+      const qpForApi = classKey === 'THEORY' ? (qpKey ? qpKey : null) : null;
 
       setIqacPatternLoading(true);
       setIqacPatternError(null);
@@ -1171,12 +1170,11 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const tcplLabShareMax = tcplReviewIsCo5 ? 0 : tcplLabMax / tcplCoCount;
   const tcplLabLabel = tcplLikeKind === 'TCPR' ? 'REVIEW' : 'LAB';
 
-  // THEORY / ENGLISH header template (matches provided screenshot)
+  // THEORY header template (matches provided screenshot)
   const theoryQuestions = useMemo<QuestionDef[]>(() => {
     // Prefer IQAC-configured QP pattern if present.
-    // ENGLISH/FOREIGN_LANG also use this path (their questions are driven by the IQAC pattern).
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
-    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial || isEnglishLike)) {
+    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial)) {
       return marks.map((max, i) => ({
         key: `q${i + 1}`,
         label: `Q${i + 1}`,

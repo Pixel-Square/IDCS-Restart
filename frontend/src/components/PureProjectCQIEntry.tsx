@@ -12,6 +12,7 @@
  *  - If adding makes total exceed 58, cap at 58.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import fetchWithAuth from '../services/fetchAuth';
 import { ensureMobileVerified } from '../services/auth';
 import {
@@ -27,6 +28,7 @@ import { useCqiEditRequestsEnabled } from '../utils/requestControl';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
+import { exportCqiPdf } from '../utils/cqiExportPdf';
 
 // ──────────────────────────────────────────────────────────────────────
 //  Constants
@@ -338,6 +340,60 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
       return { student: s, review1, review2, combined, needsCqi, afterCqi };
     });
   }, [roster, review1Res, review2Res, review1SheetRes, review2SheetRes, cqiEntries]);
+
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+
+  // ── Export handlers ───────────────────────────────────────────────
+  const flaggedRows = useMemo(() => rows.filter((r) => r.needsCqi), [rows]);
+
+  const handleExportExcel = () => {
+    const code = String(subjectId || 'CQI_Project').replace(/[^A-Za-z0-9_-]/g, '_');
+    const wsData: (string | number)[][] = [
+      ['S.No', 'Reg No.', 'Student Name', 'Section', 'Review 1 (/50)', 'Review 2 (/50)', 'Total (/100)', 'CQI Mark (/10)', 'After CQI (/100)'],
+      ...flaggedRows.map((r, idx) => {
+        const cqiMark = cqiEntries[String(r.student.id)];
+        return [
+          idx + 1,
+          r.student.reg_no,
+          r.student.name,
+          r.student.section || '',
+          r.review1 ?? '',
+          r.review2 ?? '',
+          r.combined ?? '',
+          cqiMark !== undefined && cqiMark !== '' ? Number(cqiMark) : '',
+          r.afterCqi ?? '',
+        ];
+      }),
+    ];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    XLSX.utils.book_append_sheet(wb, ws, 'CQI Marks');
+    XLSX.writeFile(wb, `CQI_Project_${code}.xlsx`);
+    setShowDownloadModal(false);
+  };
+
+  const handleExportPdf = () => {
+    const code = String(subjectId || 'CQI_Project').trim();
+    const pdfRows = flaggedRows.map((r) => {
+      const cqiMark = cqiEntries[String(r.student.id)];
+      const cqiStr = cqiMark !== undefined && cqiMark !== '' ? `${cqiMark}/10` : '—';
+      return {
+        regNo: r.student.reg_no,
+        name: r.student.name,
+        section: r.student.section ?? null,
+        flaggedCos: [`CQI Mark: ${cqiStr}`, `After CQI: ${r.afterCqi ?? '—'}/100`],
+        total: r.combined != null ? `${r.combined}/100` : null,
+      };
+    });
+    exportCqiPdf({
+      subjectCode: code,
+      coNumbers: [],
+      rows: pdfRows,
+      title: `CQI Project Report — ${code}`,
+      filename: `CQI_Project_${code}.pdf`,
+    });
+    setShowDownloadModal(false);
+  };
 
   // ── Save draft ────────────────────────────────────────────────────────
   async function saveDraft() {
@@ -839,6 +895,20 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
         </div>
       )}
 
+      {/* Download CQI Marks button — always visible */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <button
+          type="button"
+          onClick={() => setShowDownloadModal(true)}
+          style={{
+            padding: '8px 18px', borderRadius: 6, border: '1px solid #0284c7',
+            background: '#f0f9ff', color: '#0284c7', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+          }}
+        >
+          Download CQI Marks
+        </button>
+      </div>
+
       {/* Reset Marks — always visible */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <button
@@ -974,6 +1044,67 @@ export default function PureProjectCQIEntry({ subjectId, teachingAssignmentId }:
                 {editReasonBusy ? 'Submitting…' : 'Submit Request'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Download CQI Marks Modal ── */}
+      {showDownloadModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(15,23,42,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+          onClick={() => setShowDownloadModal(false)}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 16, padding: 32, width: 400,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+              Download CQI Marks
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: 13, color: '#64748b' }}>
+              Exports {flaggedRows.length} flagged student(s) with CQI NOT ATTAINED.
+            </p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {([
+                { fmt: 'pdf',   icon: '📄', label: 'PDF',   color: '#dc2626' },
+                { fmt: 'excel', icon: '📊', label: 'Excel', color: '#16a34a' },
+              ] as const).map(({ fmt, icon, label, color }) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  onClick={fmt === 'pdf' ? handleExportPdf : handleExportExcel}
+                  style={{
+                    flex: 1, padding: '18px 8px', borderRadius: 12,
+                    border: `2px solid ${color}20`, background: `${color}08`,
+                    cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', gap: 8,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = `${color}15`)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = `${color}08`)}
+                >
+                  <span style={{ fontSize: 28 }}>{icon}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14, color }}>{label}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDownloadModal(false)}
+              style={{
+                marginTop: 16, width: '100%', padding: '10px 0', borderRadius: 8,
+                border: '1px solid #e2e8f0', background: 'transparent', cursor: 'pointer',
+                color: '#64748b', fontWeight: 600, fontSize: 14,
+              }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

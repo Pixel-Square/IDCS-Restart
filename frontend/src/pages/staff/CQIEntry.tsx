@@ -498,11 +498,32 @@ export default function CQIEntry({
     return qs ? `?${qs}` : '';
   }, [assessmentType, cqiPageKey, coNumbers, teachingAssignmentId]);
 
+  const clampCqiMarkValue = (value: unknown): number | null => {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return Math.max(0, Math.min(Number(value), 10));
+  };
+
+  const sanitizeCqiEntries = (raw: unknown): Record<number, CQIEntry> => {
+    if (!raw || typeof raw !== 'object') return {};
+    const out: Record<string, CQIEntry> = {};
+    for (const [studentId, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (!entry || typeof entry !== 'object') continue;
+      const cleanEntry: CQIEntry = {};
+      for (const [coKey, coValue] of Object.entries(entry as Record<string, unknown>)) {
+        cleanEntry[coKey] = clampCqiMarkValue(coValue);
+      }
+      out[String(studentId)] = cleanEntry;
+    }
+    return out as Record<number, CQIEntry>;
+  };
+
   const buildCqiPayload = (entries: Record<number, CQIEntry>) => ({
     pageKey: cqiPageKey,
     assessmentType: assessmentType || null,
     coNumbers,
-    entries,
+    entries: sanitizeCqiEntries(entries),
   });
 
   const cqiAssessmentKey = useMemo(() => {
@@ -583,7 +604,7 @@ export default function CQIEntry({
           const j = await res.json().catch(() => null);
           const pub = j?.published;
           if (pub && typeof pub === 'object' && pub.entries && typeof pub.entries === 'object') {
-            setCqiEntries(pub.entries || {});
+            setCqiEntries(sanitizeCqiEntries(pub.entries || {}));
             setDirty(false);
             setPublishedLog({ published_at: pub.publishedAt ?? null });
             if (pub.publishedAt) setLocalPublished(true);
@@ -604,7 +625,7 @@ export default function CQIEntry({
         if (res && res.ok) {
           const j = await res.json().catch(() => null);
           if (j?.draft) {
-            setCqiEntries(j.draft.entries || j.draft || {});
+            setCqiEntries(sanitizeCqiEntries(j.draft.entries || j.draft || {}));
             setDraftLog({ updated_at: j.updated_at || null, updated_by: j.updated_by || null });
           } else {
             setCqiEntries({});
@@ -702,7 +723,16 @@ export default function CQIEntry({
               for (const [studentId, entry] of Object.entries(pgEntries)) {
                 if (!entry || typeof entry !== 'object') continue;
                 if (!allEntries[studentId]) allEntries[studentId] = {};
-                Object.assign(allEntries[studentId], entry);
+                for (const [coKey, coValue] of Object.entries(entry)) {
+                  if (coValue == null) {
+                    allEntries[studentId][coKey] = null;
+                    continue;
+                  }
+                  const clamped = clampCqiMarkValue(coValue);
+                  if (clamped != null) {
+                    allEntries[studentId][coKey] = clamped;
+                  }
+                }
               }
             }
 
@@ -992,11 +1022,7 @@ export default function CQIEntry({
         // 1) Server draft sheet, 2) server published sheet, 3) localStorage fallback.
         // This avoids stale browser cache mismatches against Internal Mark computation.
         const canUseLocalModel = !isLabLike && !isProject;
-        // Only include MODEL marks when this CQI page's assessmentType is 'model'.
-        // CIA1/CIA2 CQI pages should NOT pull in model exam marks — they only cover
-        // their own cycle's assessments (SSA1+CIA1+FA1 or SSA2+CIA2+FA2).
-        const isModelAssessment = String(assessmentType || '').toLowerCase() === 'model';
-        const needsMe = canUseLocalModel && isModelAssessment && coNumbers.some((co) => co >= 1 && co <= 5);
+        const needsMe = canUseLocalModel && coNumbers.some((co) => co >= 1 && co <= 5);
         const pickModelSheetFromPayload = (raw: any) => {
           if (!raw || typeof raw !== 'object') return null;
           const payload = raw?.sheet && typeof raw.sheet === 'object'
@@ -1032,9 +1058,6 @@ export default function CQIEntry({
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           } else if (ct === 'ENGLISH' || ct === 'FOREIGN_LANG') {
-            candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
-            candidates.push(`model_theory_sheet_${subjectId}_none`);
-          } else if (ct === 'TAMIL') {
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           }
@@ -1076,10 +1099,8 @@ export default function CQIEntry({
           modelSheet = readLocalModelSheet();
         }
         
-        // QP1 FINAL YEAR detection: theory + QP1FINAL type, OR Tamil + TAM_THEORY.
-        const isQp1FinalCqi =
-          (ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey)) ||
-          (ct === 'TAMIL' && qpTypeKey === 'TAM_THEORY');
+        // QP1 FINAL YEAR detection: theory + QP1FINAL type.
+        const isQp1FinalCqi = ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey);
 
         // Fetch published marks based on class type and enabled assessments.
         const needs12 = coNumbers.some((co) => co === 1 || co === 2);
@@ -1274,10 +1295,22 @@ export default function CQIEntry({
                 const ck = `co${i}` as 'co1' | 'co2' | 'co3' | 'co4' | 'co5';
                 const tMax = (modelQuestionMaxByCo as any)[ck] || 0;
                 const tRaw = theoryRawCo[ck] || 0;
-                const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
-                const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
-                const recordWeighted = i === 5 ? recordContribution : 0;
-                sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+                if (i === 5) {
+                  const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
+                  const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
+                  const recordWeighted = recordContribution;
+                  sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+                } else {
+                  // CO1..CO4 (TCPL): normalize combined (theory + lab-share) over
+                  // the total allocated CO marks in model exam: 20 + 6 = 26,
+                  // then scale to final model weight 3.
+                  const combinedMax = tMax + TCPL_LAB_SHARE_MAX;
+                  const combinedRaw = tRaw + labShare;
+                  const combinedWeighted = combinedMax > 0
+                    ? (combinedRaw / combinedMax) * TCPL_CO_TOTAL_W[ck]
+                    : 0;
+                  sums[ck] = combinedWeighted;
+                }
               }
             }
           }
@@ -3182,12 +3215,13 @@ export default function CQIEntry({
                 const coData: any = studentTotals[coKey];
                 if (!coData) return;
 
-                // For already-attained COs (published in a prior CQI page), do NOT add
-                // their CQI marks to this page's AFTER CQI total. Only this page's own
-                // COs (CO3/CO4/CO5 for model CQI) should contribute CQI marks.
+                // For already-attained COs, use the prior published value
                 const isAlreadyAttained = priorPublishedCos.has(coNum);
-                if (isAlreadyAttained) return;
-                const input = cqiEntries[student.id]?.[coKey] ?? null;
+                const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
+                const priorValue = isAlreadyAttained ? clampCqiMarkValue(priorEntry[coKey]) : null;
+                const input = isAlreadyAttained
+                  ? priorValue
+                  : (cqiEntries[student.id]?.[coKey] ?? null);
                 if (input == null) return;
 
                 const coVal = Number(coData.value);
@@ -3348,10 +3382,10 @@ export default function CQIEntry({
                     // Check if this CO was already published in a prior CQI page
                     const isAlreadyAttained = priorPublishedCos.has(coNum);
                     const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
-                    const priorValue = isAlreadyAttained ? (priorEntry[coKey] ?? null) : null;
+                    const priorValue = isAlreadyAttained ? clampCqiMarkValue(priorEntry[coKey]) : null;
 
                     // Live feedback: CQI mark entered AND overall now meets threshold
-                    const hasCqiMark = cqiValue != null && cqiValue !== '' && Number.isFinite(Number(cqiValue));
+                    const hasCqiMark = cqiValue != null && Number.isFinite(Number(cqiValue));
                     const isNowAttained = hasCqiMark && afterPercentage >= THRESHOLD_PERCENT;
 
                     return (
@@ -3398,12 +3432,27 @@ export default function CQIEntry({
                             }}>
                               CQI ALREADY ATTAINED
                             </div>
-                            <div style={{
-                              fontSize: 12,
-                              color: '#6b7280',
-                            }}>
-                              (handled in prior CQI)
-                            </div>
+                            {priorValue != null && Number.isFinite(Number(priorValue)) ? (
+                              <div style={{
+                                display: 'inline-block',
+                                padding: '4px 14px',
+                                background: '#dbeafe',
+                                borderRadius: 6,
+                                fontWeight: 800,
+                                fontSize: 14,
+                                color: '#1e40af',
+                                border: '1px solid #93c5fd',
+                              }}>
+                                {round2(Number(priorValue))} / 10
+                              </div>
+                            ) : (
+                              <div style={{
+                                fontSize: 12,
+                                color: '#6b7280',
+                              }}>
+                                (no mark entered)
+                              </div>
+                            )}
                             <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>
                               Published — read-only
                             </div>

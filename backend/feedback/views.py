@@ -138,6 +138,48 @@ def get_feedback_department_scope(user):
     }
 
 
+def resolve_student_department_id(student_profile, section=None):
+    """Resolve the student's core department for feedback targeting.
+
+    Prefer home_department; fall back to active SECONDARY section mapping (dept-core)
+    and finally the primary section's batch department if available.
+    """
+    if student_profile and getattr(student_profile, 'home_department_id', None):
+        return student_profile.home_department_id
+
+    try:
+        from academics.models import StudentSectionAssignment
+
+        secondary = StudentSectionAssignment.objects.filter(
+            student=student_profile,
+            end_date__isnull=True,
+            section_type=StudentSectionAssignment.SECTION_TYPE_SECONDARY,
+        ).select_related('section', 'section__batch', 'section__batch__course').first()
+
+        if secondary and secondary.section and secondary.section.batch:
+            batch = secondary.section.batch
+            if getattr(batch, 'course_id', None) and getattr(batch, 'course', None):
+                if getattr(batch.course, 'department_id', None):
+                    return batch.course.department_id
+            if getattr(batch, 'department_id', None):
+                return batch.department_id
+    except Exception:
+        pass
+
+    if section and section.batch:
+        batch = section.batch
+        if getattr(batch, 'course_id', None) and getattr(batch, 'course', None):
+            if getattr(batch.course, 'department_id', None):
+                return batch.course.department_id
+        # Avoid mapping Year-1 S&H sections to S&H when no core dept is resolved.
+        if getattr(section, 'managing_department_id', None):
+            return None
+        if getattr(batch, 'department_id', None):
+            return batch.department_id
+
+    return None
+
+
 def apply_department_scope_filter(queryset, scope, field_name='department_id'):
     if scope.get('all_departments'):
         return queryset
@@ -174,10 +216,31 @@ def calculate_feedback_response_metrics(feedback_form):
                 department_id=feedback_form.department_id
             ).count()
     elif feedback_form.target_type == 'STUDENT':
+        is_year1_target = False
+        if feedback_form.years and 1 in feedback_form.years:
+            is_year1_target = True
+        if feedback_form.year == 1:
+            is_year1_target = True
+
         if feedback_form.all_classes:
-            expected_count = StudentProfile.objects.filter(
-                section__batch__course__department_id=feedback_form.department_id
-            ).count()
+            if is_year1_target:
+                expected_count = StudentProfile.objects.filter(
+                    Q(home_department_id=feedback_form.department_id) |
+                    Q(
+                        section_assignments__section_type='SECONDARY',
+                        section_assignments__end_date__isnull=True,
+                        section_assignments__section__batch__course__department_id=feedback_form.department_id,
+                    ) |
+                    Q(
+                        section_assignments__section_type='SECONDARY',
+                        section_assignments__end_date__isnull=True,
+                        section_assignments__section__batch__department_id=feedback_form.department_id,
+                    )
+                ).distinct().count()
+            else:
+                expected_count = StudentProfile.objects.filter(
+                    section__batch__course__department_id=feedback_form.department_id
+                ).count()
         else:
             sections_to_query = []
 
@@ -194,33 +257,80 @@ def calculate_feedback_response_metrics(feedback_form):
             elif feedback_form.section_id:
                 sections_to_query = [feedback_form.section_id]
             else:
-                sections_filter = Q(batch__course__department_id=feedback_form.department_id)
+                if is_year1_target:
+                    student_filters = (
+                        Q(home_department_id=feedback_form.department_id) |
+                        Q(
+                            section_assignments__section_type='SECONDARY',
+                            section_assignments__end_date__isnull=True,
+                            section_assignments__section__batch__course__department_id=feedback_form.department_id,
+                        ) |
+                        Q(
+                            section_assignments__section_type='SECONDARY',
+                            section_assignments__end_date__isnull=True,
+                            section_assignments__section__batch__department_id=feedback_form.department_id,
+                        )
+                    )
 
-                if feedback_form.years:
-                    year_filters = Q()
-                    for year in feedback_form.years:
+                    if feedback_form.years:
+                        year_filters = Q()
+                        for year in feedback_form.years:
+                            if current_acad_year:
+                                batch_start_year = current_acad_year - year + 1
+                                year_filters |= Q(section__batch__start_year=batch_start_year)
+                        student_filters &= year_filters
+                    elif feedback_form.year:
                         if current_acad_year:
-                            batch_start_year = current_acad_year - year + 1
-                            year_filters |= Q(batch__start_year=str(batch_start_year))
-                    sections_filter &= year_filters
-                elif feedback_form.year:
-                    if current_acad_year:
-                        batch_start_year = current_acad_year - feedback_form.year + 1
-                        sections_filter &= Q(batch__start_year=str(batch_start_year))
+                            batch_start_year = current_acad_year - feedback_form.year + 1
+                            student_filters &= Q(section__batch__start_year=batch_start_year)
 
-                if feedback_form.semesters:
-                    sections_filter &= Q(semester_id__in=feedback_form.semesters)
-                elif feedback_form.semester_id:
-                    sections_filter &= Q(semester_id=feedback_form.semester_id)
+                    if feedback_form.semesters:
+                        student_filters &= Q(section__semester_id__in=feedback_form.semesters)
+                    elif feedback_form.semester_id:
+                        student_filters &= Q(section__semester_id=feedback_form.semester_id)
 
-                sections_to_query = list(
-                    Section.objects.filter(sections_filter).values_list('id', flat=True)
-                )
+                    expected_count = StudentProfile.objects.filter(student_filters).distinct().count()
+                else:
+                    sections_filter = Q(batch__course__department_id=feedback_form.department_id)
+
+                    if feedback_form.years:
+                        year_filters = Q()
+                        for year in feedback_form.years:
+                            if current_acad_year:
+                                batch_start_year = current_acad_year - year + 1
+                                year_filters |= Q(batch__start_year=batch_start_year)
+                        sections_filter &= year_filters
+                    elif feedback_form.year:
+                        if current_acad_year:
+                            batch_start_year = current_acad_year - feedback_form.year + 1
+                            sections_filter &= Q(batch__start_year=batch_start_year)
+
+                    if feedback_form.semesters:
+                        sections_filter &= Q(semester_id__in=feedback_form.semesters)
+                    elif feedback_form.semester_id:
+                        sections_filter &= Q(semester_id=feedback_form.semester_id)
+
+                    sections_to_query = list(
+                        Section.objects.filter(sections_filter).values_list('id', flat=True)
+                    )
 
             if sections_to_query:
-                expected_count = StudentProfile.objects.filter(
-                    section_id__in=sections_to_query
-                ).count()
+                student_filters = Q(section_id__in=sections_to_query)
+                if is_year1_target:
+                    student_filters &= (
+                        Q(home_department_id=feedback_form.department_id) |
+                        Q(
+                            section_assignments__section_type='SECONDARY',
+                            section_assignments__end_date__isnull=True,
+                            section_assignments__section__batch__course__department_id=feedback_form.department_id,
+                        ) |
+                        Q(
+                            section_assignments__section_type='SECONDARY',
+                            section_assignments__end_date__isnull=True,
+                            section_assignments__section__batch__department_id=feedback_form.department_id,
+                        )
+                    )
+                expected_count = StudentProfile.objects.filter(student_filters).distinct().count()
 
     percentage = round((response_count / expected_count * 100) if expected_count > 0 else 0, 1)
     return response_count, expected_count, percentage
@@ -535,8 +645,8 @@ class GetFeedbackFormsView(APIView):
                             except:
                                 pass
                     
-                    # Get department from section -> batch -> course -> department
-                    department_id = batch.course.department_id if batch.course else batch.department_id
+                    # Get department: prefer home_department, then secondary dept-core section
+                    department_id = resolve_student_department_id(student_profile, section)
                     
                     # For students: filter by target_type, department, and class info
                     # Include forms where:
@@ -1550,77 +1660,14 @@ class GetResponseStatisticsView(APIView):
         
         response_count = len(set(responded_users))
         
-        # Calculate expected responses based on target type and class info
-        expected_count = 0
-        
-        if feedback_form.target_type == 'STAFF':
-            # Count staff in department
-            expected_count = StaffProfile.objects.filter(
-                department=feedback_form.department
-            ).count()
-        elif feedback_form.target_type == 'STUDENT':
-            from academics.models import StudentProfile, Section, AcademicYear
-            
-            if feedback_form.all_classes:
-                # All students in department
-                expected_count = StudentProfile.objects.filter(
-                    section__batch__course__department=feedback_form.department
-                ).count()
-            else:
-                # Students matching year/semester/section criteria
-                sections_to_query = []
-                
-                # Get current academic year for year calculation
-                current_ay = AcademicYear.objects.filter(is_active=True).first()
-                current_acad_year = None
-                if current_ay:
-                    try:
-                        current_acad_year = int(str(current_ay.name).split('-')[0])
-                    except:
-                        pass
-                
-                # Build list of matching sections
-                if feedback_form.sections:  # Multi-class: use sections list
-                    sections_to_query = list(feedback_form.sections)
-                elif feedback_form.section_id:  # Legacy: single section
-                    sections_to_query = [feedback_form.section_id]
-                else:
-                    # No specific sections: query by year and semester
-                    sections_filter = Q(batch__course__department=feedback_form.department)
-                    
-                    # Filter by years
-                    if feedback_form.years:
-                        year_filters = Q()
-                        for year in feedback_form.years:
-                            if current_acad_year:
-                                batch_start_year = current_acad_year - year + 1
-                                year_filters |= Q(batch__start_year=str(batch_start_year))
-                        sections_filter &= year_filters
-                    elif feedback_form.year:
-                        if current_acad_year:
-                            batch_start_year = current_acad_year - feedback_form.year + 1
-                            sections_filter &= Q(batch__start_year=str(batch_start_year))
-                    
-                    # Filter by semesters
-                    if feedback_form.semesters:
-                        sections_filter &= Q(semester_id__in=feedback_form.semesters)
-                    elif feedback_form.semester_id:
-                        sections_filter &= Q(semester=feedback_form.semester)
-                    
-                    matching_sections = Section.objects.filter(sections_filter)
-                    sections_to_query = [s.id for s in matching_sections]
-                
-                # Count students in matching sections
-                if sections_to_query:
-                    expected_count = StudentProfile.objects.filter(
-                        section_id__in=sections_to_query
-                    ).count()
+        # Use shared metrics for consistent expected counts
+        response_count, expected_count, percentage = calculate_feedback_response_metrics(feedback_form)
         
         return Response({
             'feedback_form_id': form_id,
             'response_count': response_count,
             'expected_count': expected_count,
-            'percentage': round((response_count / expected_count * 100) if expected_count > 0 else 0, 1)
+            'percentage': percentage
         }, status=status.HTTP_200_OK)
 
 
@@ -2104,11 +2151,31 @@ class GetResponseListView(APIView):
                     staff_profile__department_id=form_department
                 ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
             elif feedback_form.target_type == 'STUDENT':
-                
+                is_year1_target = False
+                if feedback_form.years and 1 in feedback_form.years:
+                    is_year1_target = True
+                if feedback_form.year == 1:
+                    is_year1_target = True
+
                 if feedback_form.all_classes:
-                    expected_users = User.objects.filter(
-                        student_profile__section__batch__course__department_id=form_department
-                    ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
+                    if is_year1_target:
+                        expected_users = User.objects.filter(
+                            Q(student_profile__home_department_id=form_department)
+                            | Q(
+                                student_profile__section_assignments__section_type='SECONDARY',
+                                student_profile__section_assignments__end_date__isnull=True,
+                                student_profile__section_assignments__section__batch__course__department_id=form_department,
+                            )
+                            | Q(
+                                student_profile__section_assignments__section_type='SECONDARY',
+                                student_profile__section_assignments__end_date__isnull=True,
+                                student_profile__section_assignments__section__batch__department_id=form_department,
+                            )
+                        ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True).distinct()
+                    else:
+                        expected_users = User.objects.filter(
+                            student_profile__section__batch__course__department_id=form_department
+                        ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
                 else:
                     # Build query for matching students
                     sections_to_query = []
@@ -2126,20 +2193,22 @@ class GetResponseListView(APIView):
                     elif feedback_form.section_id:
                         sections_to_query = [feedback_form.section_id]
                     else:
-                        # Use form's department for sections query
-                        sections_filter = Q(batch__course__department_id=form_department)
+                        # Use form's department for sections query (skip dept filter for Year-1)
+                        sections_filter = Q()
+                        if not is_year1_target:
+                            sections_filter = Q(batch__course__department_id=form_department)
                         
                         if feedback_form.years:
                             year_filters = Q()
                             for year in feedback_form.years:
                                 if current_acad_year:
                                     batch_start_year = current_acad_year - year + 1
-                                    year_filters |= Q(batch__start_year=str(batch_start_year))
+                                    year_filters |= Q(batch__start_year=batch_start_year)
                             sections_filter &= year_filters
                         elif feedback_form.year:
                             if current_acad_year:
                                 batch_start_year = current_acad_year - feedback_form.year + 1
-                                sections_filter &= Q(batch__start_year=str(batch_start_year))
+                                sections_filter &= Q(batch__start_year=batch_start_year)
                         
                         if feedback_form.semesters:
                             sections_filter &= Q(semester_id__in=feedback_form.semesters)
@@ -2150,9 +2219,24 @@ class GetResponseListView(APIView):
                         sections_to_query = [s.id for s in matching_sections]
                     
                     if sections_to_query:
-                        expected_users = User.objects.filter(
+                        expected_qs = User.objects.filter(
                             student_profile__section_id__in=sections_to_query
-                        ).exclude(id=feedback_form.created_by.id).values_list('id', flat=True)
+                        )
+                        if is_year1_target:
+                            expected_qs = expected_qs.filter(
+                                Q(student_profile__home_department_id=form_department)
+                                | Q(
+                                    student_profile__section_assignments__section_type='SECONDARY',
+                                    student_profile__section_assignments__end_date__isnull=True,
+                                    student_profile__section_assignments__section__batch__course__department_id=form_department,
+                                )
+                                | Q(
+                                    student_profile__section_assignments__section_type='SECONDARY',
+                                    student_profile__section_assignments__end_date__isnull=True,
+                                    student_profile__section_assignments__section__batch__department_id=form_department,
+                                )
+                            )
+                        expected_users = expected_qs.exclude(id=feedback_form.created_by.id).values_list('id', flat=True).distinct()
                         logger.info(f"[GetResponseListView] Found {len(expected_users)} students in {len(sections_to_query)} sections (form department: {form_department})")
                     else:
                         logger.warning(f"[GetResponseListView] No sections found for filter (form department: {form_department}), expected_users will be empty")
@@ -2311,21 +2395,15 @@ class GetStudentSubjectsView(APIView):
             if not student_year:
                 print(f"[GetStudentSubjectsView] WARNING: Could not determine student year")
             
-            # Exclude 1st year students
-            if student_year == 1:
-                return Response({
-                    'detail': 'Subject feedback is not applicable for 1st year students.',
-                    'is_first_year': True,
-                    'subjects': [],
-                    'total_subjects': 0,
-                    'completed_subjects': 0,
-                    'all_completed': False
-                }, status=status.HTTP_200_OK)
-            
-            # Get student's department
+            # Get student's department (prefer home_department, then secondary dept-core mapping)
             student_department = None
-            if section.batch and section.batch.course:
-                student_department = section.batch.course.department
+            if student_profile.home_department:
+                student_department = student_profile.home_department
+            else:
+                student_department_id = resolve_student_department_id(student_profile, section)
+                if student_department_id:
+                    from academics.models import Department
+                    student_department = Department.objects.filter(id=student_department_id).first()
             
             print(f"[GetStudentSubjectsView] Student info - Year: {student_year}, Section: {section.name} (ID: {section.id}), Department: {student_department.code if student_department else 'None'}")
             print(f"[GetStudentSubjectsView] Feedback targets - Years: {feedback_form.years}, Sections: {feedback_form.sections}, Department: {feedback_form.department.code}")
@@ -2387,7 +2465,9 @@ class GetStudentSubjectsView(APIView):
                     calculated_year = delta + 1
                     
                     # Map year to semesters (e.g., Year 3 = Sem 5 or 6)
-                    if calculated_year == 2:
+                    if calculated_year == 1:
+                        target_semesters = [1, 2]  # 1st year = Sem 1 or 2
+                    elif calculated_year == 2:
                         target_semesters = [3, 4]  # 2nd year = Sem 3 or 4
                     elif calculated_year == 3:
                         target_semesters = [5, 6]  # 3rd year = Sem 5 or 6
@@ -3008,6 +3088,15 @@ class GetStudentSubjectsView(APIView):
                     subject_name = assignment.curriculum_row.course_name
                     subject_code = assignment.curriculum_row.course_code
                     is_elective = assignment.curriculum_row.is_elective
+                    if getattr(assignment.curriculum_row, 'is_dept_core', False) and student_profile.home_department:
+                        from curriculum.models import ElectiveSubject
+                        dept_core = ElectiveSubject.objects.filter(
+                            parent=assignment.curriculum_row,
+                            department=student_profile.home_department,
+                        ).first()
+                        if dept_core:
+                            subject_name = dept_core.course_name
+                            subject_code = dept_core.course_code
                 # Priority 2: elective_subject (elective courses)
                 elif assignment.elective_subject:
                     subject_name = assignment.elective_subject.course_name
@@ -4189,6 +4278,30 @@ class IQACExportYearsView(APIView):
                 except:
                     pass
             
+            # Add years inferred from student semesters (covers Year-1 S&H sections)
+            try:
+                from academics.models import StudentProfile
+                student_qs = StudentProfile.objects.filter(status='ACTIVE')
+                if not scope.get('all_departments'):
+                    department_ids = scope.get('department_ids') or []
+                    student_qs = student_qs.filter(
+                        Q(home_department_id__in=department_ids) |
+                        Q(section__batch__course__department_id__in=department_ids) |
+                        Q(section__batch__department_id__in=department_ids)
+                    )
+                sem_numbers = student_qs.values_list('section__semester__number', flat=True).distinct()
+                for sem_num in sem_numbers:
+                    if sem_num in (1, 2):
+                        years_list.append(1)
+                    elif sem_num in (3, 4):
+                        years_list.append(2)
+                    elif sem_num in (5, 6):
+                        years_list.append(3)
+                    elif sem_num in (7, 8):
+                        years_list.append(4)
+            except Exception:
+                pass
+
             # Remove duplicates and sort
             years_list = sorted(list(set(years_list)))
             
@@ -4611,6 +4724,19 @@ class NonRespondersExportView(APIView):
 
             def _student_year_from_section(section):
                 if not section or not current_acad_year:
+                    # Fallback to semester-based mapping when batch year is unavailable.
+                    try:
+                        sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                        if sem_num in (1, 2):
+                            return 1
+                        if sem_num in (3, 4):
+                            return 2
+                        if sem_num in (5, 6):
+                            return 3
+                        if sem_num in (7, 8):
+                            return 4
+                    except Exception:
+                        return None
                     return None
                 try:
                     batch = getattr(section, 'batch', None)
@@ -4621,14 +4747,69 @@ class NonRespondersExportView(APIView):
                         except Exception:
                             start_year = None
                     if not start_year:
+                        # Fallback to semester-based mapping when batch year is missing.
+                        try:
+                            sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                            if sem_num in (1, 2):
+                                return 1
+                            if sem_num in (3, 4):
+                                return 2
+                            if sem_num in (5, 6):
+                                return 3
+                            if sem_num in (7, 8):
+                                return 4
+                        except Exception:
+                            return None
                         return None
-                    return int(current_acad_year) - int(start_year) + 1
+                    derived_year = int(current_acad_year) - int(start_year) + 1
+                    # For S&H Year-1 sections, prefer semester mapping over batch start year.
+                    try:
+                        managing_dept = getattr(section, 'managing_department', None)
+                        is_sh = bool(getattr(managing_dept, 'is_sh_main', False))
+                        if not is_sh and batch:
+                            batch_dept = getattr(batch, 'department', None)
+                            is_sh = bool(getattr(batch_dept, 'is_sh_main', False))
+                    except Exception:
+                        is_sh = False
+
+                    if is_sh:
+                        sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                        if sem_num in (1, 2):
+                            return 1
+                        if sem_num in (3, 4):
+                            return 2
+                        if sem_num in (5, 6):
+                            return 3
+                        if sem_num in (7, 8):
+                            return 4
+
+                    if derived_year < 1 or derived_year > 4:
+                        sem_num = getattr(getattr(section, 'semester', None), 'number', None)
+                        if sem_num in (1, 2):
+                            return 1
+                        if sem_num in (3, 4):
+                            return 2
+                        if sem_num in (5, 6):
+                            return 3
+                        if sem_num in (7, 8):
+                            return 4
+
+                    return derived_year
                 except Exception:
                     return None
 
             non_responder_rows = []
 
             for form in forms_qs.order_by('department__name', '-created_at', 'id'):
+                is_year1_form = False
+                try:
+                    if form.years and 1 in [int(y) for y in form.years if str(y).strip()]:
+                        is_year1_form = True
+                except Exception:
+                    pass
+                if form.year == 1:
+                    is_year1_form = True
+
                 # Determine responded users per form using submission tracker first.
                 # This avoids counting partial/incomplete responses as submitted.
                 responded_user_ids = set(
@@ -4660,6 +4841,16 @@ class NonRespondersExportView(APIView):
                     Q(student_profile__home_department_id=form.department_id)
                     | Q(student_profile__section__batch__course__department_id=form.department_id)
                     | Q(student_profile__section__batch__department_id=form.department_id)
+                    | Q(
+                        student_profile__section_assignments__section_type='SECONDARY',
+                        student_profile__section_assignments__end_date__isnull=True,
+                        student_profile__section_assignments__section__batch__course__department_id=form.department_id,
+                    )
+                    | Q(
+                        student_profile__section_assignments__section_type='SECONDARY',
+                        student_profile__section_assignments__end_date__isnull=True,
+                        student_profile__section_assignments__section__batch__department_id=form.department_id,
+                    )
                 )
 
                 if form.all_classes:
@@ -4711,10 +4902,49 @@ class NonRespondersExportView(APIView):
                             student_profile__status='ACTIVE',
                             student_profile__section_id__in=sections_to_query,
                         )
+                        # For Year-1 dept-based forms, restrict to core dept mapping
+                        if is_year1_form:
+                            expected_qs = expected_qs.filter(
+                                Q(student_profile__home_department_id=form.department_id)
+                                | Q(
+                                    student_profile__section_assignments__section_type='SECONDARY',
+                                    student_profile__section_assignments__end_date__isnull=True,
+                                    student_profile__section_assignments__section__batch__course__department_id=form.department_id,
+                                )
+                                | Q(
+                                    student_profile__section_assignments__section_type='SECONDARY',
+                                    student_profile__section_assignments__end_date__isnull=True,
+                                    student_profile__section_assignments__section__batch__department_id=form.department_id,
+                                )
+                            )
                     else:
                         # If a form has incomplete targeting metadata, fallback to
                         # department students so 0-response forms are still represented.
                         expected_qs = dept_students_qs
+
+                if is_year1_form and current_acad_year:
+                    expected_qs = expected_qs.filter(
+                        Q(student_profile__section__semester__number__in=[1, 2])
+                        | Q(student_profile__section__batch__start_year=current_acad_year)
+                    )
+
+                # Fallback: if Year-1 form still has no students, use section list only.
+                try:
+                    if is_year1_form and not expected_qs.exists():
+                        if sections_to_query:
+                            expected_qs = User.objects.filter(
+                                is_active=True,
+                                student_profile__status='ACTIVE',
+                                student_profile__section_id__in=sections_to_query,
+                            )
+                        else:
+                            expected_qs = User.objects.filter(
+                                is_active=True,
+                                student_profile__status='ACTIVE',
+                                student_profile__section__semester__number__in=[1, 2],
+                            )
+                except Exception:
+                    pass
 
                 expected_qs = expected_qs.select_related(
                     'student_profile',
@@ -4731,8 +4961,22 @@ class NonRespondersExportView(APIView):
                         continue
 
                     student_year = _student_year_from_section(getattr(student_profile, 'section', None))
+                    if is_year1_form:
+                        # For Year-1 dept forms, include all matching students regardless of derived year.
+                        student_year = 1
                     if years and (student_year is None or int(student_year) not in years):
-                        continue
+                        # Fallback: allow year filtering based on form targeting when year is unknown
+                        form_years = []
+                        if form.years:
+                            form_years = [int(y) for y in form.years if str(y).strip()]
+                        elif form.year:
+                            form_years = [int(form.year)]
+
+                        if form_years and any(y in years for y in form_years):
+                            if student_year is None and len(form_years) == 1:
+                                student_year = form_years[0]
+                        else:
+                            continue
 
                     section_name = ''
                     if getattr(student_profile, 'section', None):
@@ -4743,12 +4987,9 @@ class NonRespondersExportView(APIView):
                     if form.department:
                         dept_short_name = form.department.short_name or form.department.code or form.department.name or 'Unknown'
 
-                    # Apply anonymous masking if feedback form is anonymous
+                    # Always include name/register for non-responders export
                     student_name = user.get_full_name() or user.username
                     register_number = getattr(student_profile, 'reg_no', '') or user.username
-                    if form.anonymous:
-                        student_name = "Anonymous"
-                        register_number = ""
 
                     # Use only the user-entered form_name, no ID fallback
                     form_name_display = form.form_name or ""

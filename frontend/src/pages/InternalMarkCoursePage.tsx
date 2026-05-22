@@ -534,23 +534,28 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
   }
 
   if (ct === 'SPECIAL') {
-    // SPECIAL uses exam-level columns: SSA1, SSA2, CIA1, CIA2, MODEL
-    // Each scaled to its configured weight (e.g. 10, 10, 5, 5, 10 = 40).
-    const exams: string[] = [];
-    const pushExam = (key: string) => {
-      if (!enabledSet.size || enabledSet.has(key.toLowerCase())) exams.push(key);
-    };
-    pushExam('SSA1');
-    pushExam('SSA2');
-    pushExam('CIA1');
-    pushExam('CIA2');
-    pushExam('MODEL');
+    // SPECIAL (CSD) uses cycle-grouped exam-level columns:
+    //   Cycle 1 → CIA1, SSA1, FA1
+    //   Cycle 2 → CIA2, SSA2, FA2
+    //   Cycle 3 → MODEL
+    // Each column is scaled to its configured weight (matrix column total).
+    type SpecialExam = { key: string; enabledKey: string; header: string; cycle: string };
+    const allExams: SpecialExam[] = [
+      { key: 'CIA1',       enabledKey: 'cia1',       header: 'CIA1',  cycle: 'CIA' },
+      { key: 'SSA1',       enabledKey: 'ssa1',       header: 'SSA1',  cycle: 'SSA' },
+      { key: 'FORMATIVE1', enabledKey: 'formative1', header: 'FA1',   cycle: 'FA' },
+      { key: 'CIA2',       enabledKey: 'cia2',       header: 'CIA2',  cycle: 'CIA' },
+      { key: 'SSA2',       enabledKey: 'ssa2',       header: 'SSA2',  cycle: 'SSA' },
+      { key: 'FORMATIVE2', enabledKey: 'formative2', header: 'FA2',   cycle: 'FA' },
+      { key: 'MODEL',      enabledKey: 'model',      header: 'MODEL', cycle: 'MODEL' },
+    ];
+    const exams = allExams.filter((e) => !enabledSet.size || enabledSet.has(e.enabledKey));
     const vis = Array.from({ length: exams.length }, (_, i) => i);
     return {
       visible: vis,
-      header: exams,
-      cycles: exams.map((e) => e.startsWith('SSA') ? 'SSA' : e.startsWith('CIA') ? 'CIA' : 'MODEL'),
-      labels: exams,
+      header: exams.map((e) => e.header),
+      cycles: exams.map((e) => e.cycle),
+      labels: exams.map((e) => e.key),
     };
   }
 
@@ -641,11 +646,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const qpTypeNorm = useMemo(() => String(qpTypeProp ?? '').trim().toUpperCase(), [qpTypeProp]);
   const isQp1Final = useMemo(
-    () =>
-      // Standard THEORY + QP1FINAL/QP1FINALYEAR
-      (effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm)) ||
-      // TAMIL + TAM_THEORY → same 3-CO structure, same QP1FINAL weights, scaled to 60
-      (effectiveClassType === 'TAMIL' && qpTypeNorm === 'TAM_THEORY'),
+    () => effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm),
     [effectiveClassType, qpTypeNorm],
   );
 
@@ -1087,10 +1088,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         // Preload IQAC QP patterns (CIA entry uses these to override question maxima/count).
         // Internal Marks must match the same question definitions, especially when drafts exist
         // (draft snapshots don't store `questions`).
-        // THEORY and TAMIL pass the QP type when fetching IQAC CIA patterns.
-        // Other class types (TCPR/TCPL/LAB/ENGLISH/etc.) save patterns with question_paper_type=null.
-        const _qpTypeClasses = new Set(['THEORY', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG']);
-        const qpForPattern = _qpTypeClasses.has(ct ?? '') ? (qpTypeNorm || null) : null;
+        const qpForPattern = ct === 'THEORY' ? (qpTypeNorm || null) : null;
         const fetchPattern = async (exam: 'CIA1' | 'CIA2'): Promise<IqacPattern | null> => {
           if (!ct) return null;
           let best: IqacPattern | null = null;
@@ -1529,11 +1527,14 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       return { header: schema.header, weights: coTotals, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
     }
 
-    // SPECIAL: use structured per-exam weights
+    // SPECIAL: use structured per-exam weights (CIA1, SSA1, FORMATIVE1, CIA2,
+    // SSA2, FORMATIVE2, MODEL). Look up by the full label key — the header may
+    // be a short display string ("FA1") that doesn't match the storage key
+    // ("FORMATIVE1").
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
       const wMap = cfg.weights;
-      const weights = schema.header.map((h) => Number(wMap[h]) || 0);
+      const weights = schema.labels.map((label) => Number(wMap[label]) || 0);
       return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
     }
 
@@ -2147,10 +2148,22 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             const ck = `co${i}` as 'co1' | 'co2' | 'co3' | 'co4' | 'co5';
             const tMax = (modelQuestionMaxByCo as any)[ck] || 0;
             const tRaw = theoryRawCo[ck] || 0;
-            const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
-            const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
-            const recordWeighted = i === 5 ? recordContribution : 0;
-            sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+            if (i === 5) {
+              const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
+              const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
+              const recordWeighted = recordContribution;
+              sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+            } else {
+              // CO1..CO4 (TCPL): compute on total allocated CO mark in model exam.
+              // theory max per CO = 20, lab share max per CO = 6, total = 26.
+              // final model weight per CO1..CO4 is 3.
+              const combinedMax = tMax + TCPL_LAB_SHARE_MAX;
+              const combinedRaw = tRaw + labShare;
+              const combinedWeighted = combinedMax > 0
+                ? (combinedRaw / combinedMax) * TCPL_CO_TOTAL_W[ck]
+                : 0;
+              sums[ck] = combinedWeighted;
+            }
           }
         }
       }
@@ -2305,7 +2318,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       });
     }
 
-    // ── SPECIAL: exam-level columns (SSA1, SSA2, CIA1, CIA2, MODEL) ────
+    // ── SPECIAL: exam-level columns (CIA1, SSA1, FA1, CIA2, SSA2, FA2, MODEL) ────
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
       const wMap = cfg.weights;
@@ -2322,6 +2335,25 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const modelMax = iqacModelPattern?.marks?.length
         ? iqacModelPattern.marks.reduce((s, m) => s + Number(m || 0), 0)
         : 60;
+      // Formative total max — Formative1Mark stores all four parts (skill1+att1+skill2+att2)
+      // in the `total` field. Default per-CO max is 10 (configured via masterCfg.assessments.formative1.maxCo),
+      // so the full-marks total = 2 * maxCo. SPECIAL CSD single-CO formatives still sum to the same total.
+      const fa1MaxTotal = Number.isFinite(maxes.f1.co1 + maxes.f1.co2) && (maxes.f1.co1 + maxes.f1.co2) > 0
+        ? maxes.f1.co1 + maxes.f1.co2 : 20;
+      const fa2MaxTotal = Number.isFinite(maxes.f2.co3 + maxes.f2.co4) && (maxes.f2.co3 + maxes.f2.co4) > 0
+        ? maxes.f2.co3 + maxes.f2.co4 : 20;
+
+      const sumFormativeRow = (row: any): number | null => {
+        if (!row || typeof row !== 'object') return null;
+        const totalDirect = toNumOrNull(row.total);
+        if (totalDirect != null) return totalDirect;
+        const s1 = toNumOrNull(row.skill1);
+        const s2 = toNumOrNull(row.skill2);
+        const a1 = toNumOrNull(row.att1);
+        const a2 = toNumOrNull(row.att2);
+        if (s1 == null && s2 == null && a1 == null && a2 == null) return null;
+        return (s1 || 0) + (s2 || 0) + (a1 || 0) + (a2 || 0);
+      };
 
       return students.map((s, idx) => {
         const sid = String(s.id);
@@ -2344,6 +2376,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         const cia1Total = getCiaTotal(cia1ById);
         const cia2Total = getCiaTotal(cia2ById);
 
+        // Formative totals (sum of skill1 + att1 + skill2 + att2 → `total` field)
+        const fa1Total = sumFormativeRow((published.f1 || {})[sid]);
+        const fa2Total = sumFormativeRow((published.f2 || {})[sid]);
+
         // MODEL total: sum of all CO marks
         const model = getModelCoMarks(s);
         let modelTotal: number | null = null;
@@ -2356,16 +2392,19 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         }
         if (mHas) modelTotal = mSum;
 
-        // Build parts array matching schema column order (SSA1, SSA2, CIA1, CIA2, MODEL)
+        // Build parts array keyed by the schema label (storage key like FORMATIVE1),
+        // not the display header (FA1) — the weight map uses storage keys.
         const examMap: Record<string, number | null> = {
-          SSA1: ssa1Total != null ? scale(ssa1Total, ssa1Max, Number(wMap.SSA1 || 0)) : null,
-          SSA2: ssa2Total != null ? scale(ssa2Total, ssa2Max, Number(wMap.SSA2 || 0)) : null,
-          CIA1: cia1Total != null ? scale(cia1Total, cia1Max, Number(wMap.CIA1 || 0)) : null,
-          CIA2: cia2Total != null ? scale(cia2Total, cia2Max, Number(wMap.CIA2 || 0)) : null,
-          MODEL: modelTotal != null ? scale(modelTotal, modelMax, Number(wMap.MODEL || 0)) : null,
+          SSA1:       ssa1Total  != null ? scale(ssa1Total,  ssa1Max,     Number(wMap.SSA1       || 0)) : null,
+          SSA2:       ssa2Total  != null ? scale(ssa2Total,  ssa2Max,     Number(wMap.SSA2       || 0)) : null,
+          CIA1:       cia1Total  != null ? scale(cia1Total,  cia1Max,     Number(wMap.CIA1       || 0)) : null,
+          CIA2:       cia2Total  != null ? scale(cia2Total,  cia2Max,     Number(wMap.CIA2       || 0)) : null,
+          FORMATIVE1: fa1Total   != null ? scale(fa1Total,   fa1MaxTotal, Number(wMap.FORMATIVE1 || 0)) : null,
+          FORMATIVE2: fa2Total   != null ? scale(fa2Total,   fa2MaxTotal, Number(wMap.FORMATIVE2 || 0)) : null,
+          MODEL:      modelTotal != null ? scale(modelTotal, modelMax,    Number(wMap.MODEL      || 0)) : null,
         };
-        const parts = schema.header.map((h) => {
-          const v = examMap[h];
+        const parts = schema.labels.map((label) => {
+          const v = examMap[label];
           return v != null ? round2(v) : null;
         });
 
@@ -2877,10 +2916,22 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         for (let i = 0; i < 5; i++) {
           const tMax = theoryMaxByCo[i] || 0;
           const tRaw = theoryRawByCo[i] || 0;
-          const theoryPart = tMax > 0 ? clamp((tRaw / tMax) * THEORY_W[i], 0, THEORY_W[i]) : 0;
-          const labPart = labRaw != null ? clamp((labRaw / 30) * 1, 0, 1) : 0;
-          const recPart = i === 4 && recordEnabled && recordNorm != null ? clamp(recordNorm * 2, 0, 2) : 0;
-          const fixedCo = theoryPart + labPart + recPart;
+          const labShare = labRaw != null ? (labRaw / 5) : 0;
+          const labShareMax = 30 / 5;
+
+          let fixedCo = 0;
+          if (i === 4) {
+            const theoryPart = tMax > 0 ? clamp((tRaw / tMax) * THEORY_W[i], 0, THEORY_W[i]) : 0;
+            const labPart = labRaw != null ? clamp((labShare / labShareMax) * 1, 0, 1) : 0;
+            const recPart = recordEnabled && recordNorm != null ? clamp(recordNorm * 2, 0, 2) : 0;
+            fixedCo = theoryPart + labPart + recPart;
+          } else {
+            // CO1..CO4 (TCPL): normalize combined (theory + lab-share) out of total 26,
+            // then scale to the final model weight 3.
+            const combinedMax = tMax + labShareMax;
+            const combinedRaw = tRaw + labShare;
+            fixedCo = combinedMax > 0 ? clamp((combinedRaw / combinedMax) * CO_TOTAL_W[i], 0, CO_TOTAL_W[i]) : 0;
+          }
           out[i] = clamp(fixedCo, 0, CO_TOTAL_W[i]);
         }
 

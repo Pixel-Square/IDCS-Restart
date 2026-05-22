@@ -387,8 +387,8 @@ export default function COTargetPage({
     });
   }, [threeScaleRows]);
 
-  // computed BCO values (based on BTL selection)
-  const bcoComputed = React.useMemo(() => btlSelection.map((s) => (s ? s * 10 : null)), [btlSelection]);
+  // computed BCO values (based on BTL selection): BTL-1=100, BTL-2=90, ..., BTL-6=50
+  const bcoComputed = React.useMemo(() => btlSelection.map((s) => (s ? 110 - s * 10 : null)), [btlSelection]);
 
   const apiGpaComputed = React.useMemo(() => {
     const strength = Number(apiSummary.batchCay);

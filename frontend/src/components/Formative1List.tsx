@@ -235,7 +235,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     let alive = true;
     (async () => {
       if (!classTypeKey) { setIqacPattern(null); return; }
-      const qpForApi = classTypeKey === 'THEORY' ? (qpTypeKey || null) : null;
+      // SPECIAL courses save the QP pattern keyed by question_paper_type (e.g. CSD),
+      // so the lookup must include it — otherwise the backend returns no record
+      // and the table falls back to the default CO1/CO2 layout instead of the
+      // configured single-CO (e.g. CO3) layout.
+      const qpForApi = (classTypeKey === 'THEORY' || classTypeKey === 'SPECIAL') ? (qpTypeKey || null) : null;
       const examForApi = assessmentKey === 'formative2' ? 'FORMATIVE2' : 'FORMATIVE1';
       try {
         const res: any = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: qpForApi, exam: examForApi as any });
@@ -283,6 +287,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
     }
     return DEFAULT_CO_B;
   }, [iqacPattern, DEFAULT_CO_B]);
+
+  // True when the IQAC QP pattern routes every question to a single CO
+  // (e.g. CSD SPECIAL where Formative1/2 are entirely CO3). In that case the
+  // mark entry table collapses the two CO mark/% pairs into one combined pair
+  // so the user sees a single CO column instead of two duplicate labels.
+  const singleCo = CO_A === CO_B;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -732,10 +742,11 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
   const totalTableCols = useMemo(() => {
     // Base columns: S.No, RegNo, Name, Skill1, Skill2, Att1, Att2, Total = 8
-    // CO columns (two CO mark/% pairs) = 4
+    // CO columns: 4 cells (two CO mark/% pairs), or 2 cells when collapsed to a single CO
     // BTL columns = selected count * 2
-    return 12 + visibleBtlIndices.length * 2;
-  }, [visibleBtlIndices.length]);
+    const coCells = singleCo ? 2 : 4;
+    return 8 + coCells + visibleBtlIndices.length * 2;
+  }, [singleCo, visibleBtlIndices.length]);
 
   useEffect(() => {
     // load persisted per-part BTL mapping per subject
@@ -1459,10 +1470,22 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
         att1: att1 ?? '',
         att2: att2 ?? '',
         total: total === '' ? '' : total,
-        [`co${CO_A}_mark`]: co1 === '' ? '' : co1,
-        [`co${CO_A}_pct`]: co1 === '' ? '' : pct(co1 as number, MAX_CO),
-        [`co${CO_B}_mark`]: co2 === '' ? '' : co2,
-        [`co${CO_B}_pct`]: co2 === '' ? '' : pct(co2 as number, MAX_CO),
+        // When CO_A === CO_B (single-CO formative), combine both halves into one
+        // CO entry so the second write doesn't clobber the first.
+        ...(singleCo
+          ? (() => {
+              const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+              return {
+                [`co${CO_A}_mark`]: combined === '' ? '' : combined,
+                [`co${CO_A}_pct`]: combined === '' ? '' : pct(combined as number, MAX_TOTAL),
+              };
+            })()
+          : {
+              [`co${CO_A}_mark`]: co1 === '' ? '' : co1,
+              [`co${CO_A}_pct`]: co1 === '' ? '' : pct(co1 as number, MAX_CO),
+              [`co${CO_B}_mark`]: co2 === '' ? '' : co2,
+              [`co${CO_B}_pct`]: co2 === '' ? '' : pct(co2 as number, MAX_CO),
+            }),
         btl1_mark: btlMarksByIndex[0] ?? '',
         btl1_pct: btlMarksByIndex[0] === '' ? '' : pct(Number(btlMarksByIndex[0]), btlMaxByIndex[0]),
         btl2_mark: btlMarksByIndex[1] ?? '',
@@ -1837,7 +1860,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Skill/Attitude max: {MAX_PART} each | Total: {MAX_TOTAL} | CO-{CO_A}: {MAX_CO} | CO-{CO_B}: {MAX_CO}
+            Skill/Attitude max: {MAX_PART} each | Total: {MAX_TOTAL} | {singleCo ? `CO-${CO_A}: ${MAX_TOTAL}` : `CO-${CO_A}: ${MAX_CO} | CO-${CO_B}: ${MAX_CO}`}
           </div>
         </div>
       </div>
@@ -1878,8 +1901,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                           <th style={cellTh}>Att 1</th>
                           <th style={cellTh}>Att 2</th>
                           <th style={cellTh}>Total</th>
-                          <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
-                          <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                          {singleCo ? (
+                            <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                          ) : (
+                            <>
+                              <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                              <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                            </>
+                          )}
                           {visibleBtlIndices.map((n) => (
                             <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
                               BTL-{n}
@@ -1897,8 +1926,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                           <th style={cellTh} />
                           <th style={cellTh}>Mark</th>
                           <th style={cellTh}>%</th>
-                          <th style={cellTh}>Mark</th>
-                          <th style={cellTh}>%</th>
+                          {!singleCo && (
+                            <>
+                              <th style={cellTh}>Mark</th>
+                              <th style={cellTh}>%</th>
+                            </>
+                          )}
                           {visibleBtlIndices.map((n) => (
                             <React.Fragment key={`pv_btl_sub_${n}`}>
                               <th style={cellTh}>Mark</th>
@@ -1946,10 +1979,24 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                                 <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
                                 <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
                                 <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                {singleCo ? (
+                                  (() => {
+                                    const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+                                    return (
+                                      <>
+                                        <td style={{ ...cellTd, textAlign: 'center' }}>{combined}</td>
+                                        <td style={{ ...cellTd, textAlign: 'center' }}>{combined === '' ? '' : <span className="obe-pct-badge">{pct(combined as number, MAX_TOTAL)}</span>}</td>
+                                      </>
+                                    );
+                                  })()
+                                ) : (
+                                  <>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                  </>
+                                )}
                                 {visibleBtlIndices.map((n) => {
                                   const idx = n - 1;
                                   const mark = btlMarksByIndex[idx];
@@ -2002,10 +2049,24 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                                 <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
                                 <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
                                 <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                {singleCo ? (
+                                  (() => {
+                                    const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+                                    return (
+                                      <>
+                                        <td style={{ ...cellTd, textAlign: 'center' }}>{combined}</td>
+                                        <td style={{ ...cellTd, textAlign: 'center' }}>{combined === '' ? '' : <span className="obe-pct-badge">{pct(combined as number, MAX_TOTAL)}</span>}</td>
+                                      </>
+                                    );
+                                  })()
+                                ) : (
+                                  <>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                                  </>
+                                )}
                                 {visibleBtlIndices.map((n) => {
                                   const idx = n - 1;
                                   const mark = btlMarksByIndex[idx];
@@ -2062,7 +2123,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     <th style={cellTh} rowSpan={3}>
                       Total
                     </th>
-                    <th style={cellTh} colSpan={4}>
+                    <th style={cellTh} colSpan={singleCo ? 2 : 4}>
                       {assessmentKey === 'formative2' ? 'CIA 2' : 'CIA 1'}
                     </th>
                     {visibleBtlIndices.length ? (
@@ -2076,12 +2137,20 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     <th style={cellTh}>2</th>
                     <th style={cellTh}>1</th>
                     <th style={cellTh}>2</th>
-                    <th style={cellTh} colSpan={2}>
-                      CO-{CO_A}
-                    </th>
-                    <th style={cellTh} colSpan={2}>
-                      CO-{CO_B}
-                    </th>
+                    {singleCo ? (
+                      <th style={cellTh} colSpan={2}>
+                        CO-{CO_A}
+                      </th>
+                    ) : (
+                      <>
+                        <th style={cellTh} colSpan={2}>
+                          CO-{CO_A}
+                        </th>
+                        <th style={cellTh} colSpan={2}>
+                          CO-{CO_B}
+                        </th>
+                      </>
+                    )}
                     {visibleBtlIndices.map((n) => (
                       <th key={`btlhead-${n}`} style={cellTh} colSpan={2}>
                         BTL-{n}
@@ -2095,8 +2164,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     <th style={cellTh} />
                     <th style={cellTh}>Mark</th>
                     <th style={cellTh}>%</th>
-                    <th style={cellTh}>Mark</th>
-                    <th style={cellTh}>%</th>
+                    {!singleCo && (
+                      <>
+                        <th style={cellTh}>Mark</th>
+                        <th style={cellTh}>%</th>
+                      </>
+                    )}
                     {visibleBtlIndices.map((n) => (
                       <React.Fragment key={`btl-sub-${n}`}>
                         <th style={cellTh}>Mark</th>
@@ -2173,7 +2246,7 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       </td>
                     ))}
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
+                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={singleCo ? 2 : 4} />
                     {visibleBtlIndices.map((n) => (
                       <React.Fragment key={`btl-pad-${n}`}>
                         <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
@@ -2191,10 +2264,19 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_PART}</td>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_TOTAL}</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                    {singleCo ? (
+                      <>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_TOTAL}</td>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{MAX_CO}</td>
+                        <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                      </>
+                    )}
                   </tr>
 
                   {students.map((s, i) => {
@@ -2345,14 +2427,30 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
 
                         <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
 
-                        <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>
-                          {co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}
-                        </td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>
-                          {co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}
-                        </td>
+                        {singleCo ? (
+                          (() => {
+                            const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+                            return (
+                              <>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{combined}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>
+                                  {combined === '' ? '' : <span className="obe-pct-badge">{pct(combined as number, MAX_TOTAL)}</span>}
+                                </td>
+                              </>
+                            );
+                          })()
+                        ) : (
+                          <>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>
+                              {co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}
+                            </td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                            <td style={{ ...cellTd, textAlign: 'center' }}>
+                              {co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}
+                            </td>
+                          </>
+                        )}
                         {visibleBtlIndices.map((n) => {
                           const idx = n - 1;
                           const mark = btlMarksByIndex[idx];
@@ -2636,14 +2734,23 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Total max</td>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_TOTAL}</td>
                       </tr>
-                      <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_A} max</td>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
-                      </tr>
-                      <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_B} max</td>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
-                      </tr>
+                      {singleCo ? (
+                        <tr>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_A} max</td>
+                          <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_TOTAL}</td>
+                        </tr>
+                      ) : (
+                        <>
+                          <tr>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_A} max</td>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
+                          </tr>
+                          <tr>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{CO_B} max</td>
+                            <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_CO}</td>
+                          </tr>
+                        </>
+                      )}
                       {parts.map((p) => (
                         <tr key={`mm_${p.key}`}>
                           <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>{p.label} BTL</td>
@@ -2757,8 +2864,14 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       <th style={cellTh}>Att 1</th>
                       <th style={cellTh}>Att 2</th>
                       <th style={cellTh}>Total</th>
-                      <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
-                      <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                      {singleCo ? (
+                        <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                      ) : (
+                        <>
+                          <th style={cellTh} colSpan={2}>CO-{CO_A}</th>
+                          <th style={cellTh} colSpan={2}>CO-{CO_B}</th>
+                        </>
+                      )}
                       {visibleBtlIndices.map((n) => (
                         <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
                           BTL-{n}
@@ -2776,8 +2889,12 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                       <th style={cellTh} />
                       <th style={cellTh}>Mark</th>
                       <th style={cellTh}>%</th>
-                      <th style={cellTh}>Mark</th>
-                      <th style={cellTh}>%</th>
+                      {!singleCo && (
+                        <>
+                          <th style={cellTh}>Mark</th>
+                          <th style={cellTh}>%</th>
+                        </>
+                      )}
                       {visibleBtlIndices.map((n) => (
                         <React.Fragment key={`pv_btl_sub_${n}`}>
                           <th style={cellTh}>Mark</th>
@@ -2825,10 +2942,24 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                             <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
                             <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
                             <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                            {singleCo ? (
+                              (() => {
+                                const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+                                return (
+                                  <>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{combined}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{combined === '' ? '' : <span className="obe-pct-badge">{pct(combined as number, MAX_TOTAL)}</span>}</td>
+                                  </>
+                                );
+                              })()
+                            ) : (
+                              <>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                              </>
+                            )}
                             {visibleBtlIndices.map((n) => {
                               const idx = n - 1;
                               const mark = btlMarksByIndex[idx];
@@ -2881,10 +3012,24 @@ export default function Formative1List({ subjectId, teachingAssignmentId, assess
                             <td style={{ ...cellTd, textAlign: 'center' }}>{att1}</td>
                             <td style={{ ...cellTd, textAlign: 'center' }}>{att2}</td>
                             <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{total}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
-                            <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                            {singleCo ? (
+                              (() => {
+                                const combined = co1 !== '' && co2 !== '' ? clamp((co1 as number) + (co2 as number), 0, MAX_TOTAL) : '';
+                                return (
+                                  <>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{combined}</td>
+                                    <td style={{ ...cellTd, textAlign: 'center' }}>{combined === '' ? '' : <span className="obe-pct-badge">{pct(combined as number, MAX_TOTAL)}</span>}</td>
+                                  </>
+                                );
+                              })()
+                            ) : (
+                              <>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co1 === '' ? '' : <span className="obe-pct-badge">{pct(co1 as number, MAX_CO)}</span>}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                                <td style={{ ...cellTd, textAlign: 'center' }}>{co2 === '' ? '' : <span className="obe-pct-badge">{pct(co2 as number, MAX_CO)}</span>}</td>
+                              </>
+                            )}
                             {visibleBtlIndices.map((n) => {
                               const idx = n - 1;
                               const mark = btlMarksByIndex[idx];

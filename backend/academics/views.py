@@ -1926,13 +1926,18 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
 
         if class_type == 'SPECIAL':
             # ── SPECIAL: per-exam scaled marks + FIM (Before CQI) + FIM (After CQI) ──
+            # SPECIAL (CSD) uses 7 components: CIA1, SSA1, FA1, CIA2, SSA2, FA2, MODEL.
+            # Column totals come from the per-CO weight matrix; the legacy
+            # `weights` dict is kept in sync so this read path still works.
             sp_weights = _get_special_exam_weights() or {}
             w_ssa1 = float(sp_weights.get('SSA1', 10))
             w_ssa2 = float(sp_weights.get('SSA2', 10))
             w_cia1 = float(sp_weights.get('CIA1', 5))
             w_cia2 = float(sp_weights.get('CIA2', 5))
+            w_fa1 = float(sp_weights.get('FORMATIVE1', 0))
+            w_fa2 = float(sp_weights.get('FORMATIVE2', 0))
             w_model_sp = float(sp_weights.get('MODEL', 10))
-            sp_max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_model_sp
+            sp_max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_fa1 + w_fa2 + w_model_sp
 
             ssa1_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA1', batch_id=batch_id)
             ssa2_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='SSA2', batch_id=batch_id)
@@ -1946,6 +1951,12 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             cia1_rows_sp = cia1_sheet.get('rowsByStudentId') if isinstance(cia1_sheet.get('rowsByStudentId'), dict) else {}
             cia2_rows_sp = cia2_sheet.get('rowsByStudentId') if isinstance(cia2_sheet.get('rowsByStudentId'), dict) else {}
             model_mx = sum(float(m) for m in ((model_pattern or {}).get('marks') or [])) or 60.0
+
+            # Formative raw max — sum of pattern marks (skill1+skill2+att1+att2 stored in `total`)
+            fa1_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='FORMATIVE1', batch_id=batch_id)
+            fa2_pat = _get_qp_pattern(class_type='SPECIAL', qp_type=None, exam='FORMATIVE2', batch_id=batch_id)
+            fa1_mx = sum(float(m) for m in ((fa1_pat or {}).get('marks') or [])) or 20.0
+            fa2_mx = sum(float(m) for m in ((fa2_pat or {}).get('marks') or [])) or 20.0
 
             def _cia_total_sp(rows_map, sid):
                 row = rows_map.get(str(sid)) or rows_map.get(sid) or {}
@@ -1961,14 +1972,29 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                         has_any = True
                 return _round2(total) if has_any else None
 
+            def _fa_total_sp(fa_rows_map, sid):
+                row = fa_rows_map.get(sid)
+                if not isinstance(row, dict):
+                    return None
+                t = _sf(row.get('total'))
+                if t is not None:
+                    return _round2(t)
+                # Fallback: sum of skill/att fields when `total` isn't stored
+                vals = [_sf(row.get('skill1')), _sf(row.get('skill2')),
+                        _sf(row.get('att1')), _sf(row.get('att2'))]
+                if all(v is None for v in vals):
+                    return None
+                return _round2(sum((v or 0) for v in vals))
+
             scaled_label = str(int(scaled_max))
             sp_section = ['', '', '',
-                          '', '', '', '', '',          # raw marks
-                          '', '', '', '', '',          # scaled
-                          '', '']                       # 40, 100 (per-exam)
+                          '', '', '', '', '', '', '',  # raw marks (7)
+                          '', '', '', '', '', '', '',  # scaled (7)
+                          '', '']                      # total, scaled total
             sp_col = ['S.no', "Student's Name", 'Register Number',
-                      'SSA1', 'SSA2', 'CIA1', 'CIA2', 'MODEL',
-                      'SSA1 Scaled', 'SSA2 Scaled', 'CIA1 Scaled', 'CIA2 Scaled', 'MODEL Scaled',
+                      'CIA1', 'SSA1', 'FA1', 'CIA2', 'SSA2', 'FA2', 'MODEL',
+                      'CIA1 Scaled', 'SSA1 Scaled', 'FA1 Scaled',
+                      'CIA2 Scaled', 'SSA2 Scaled', 'FA2 Scaled', 'MODEL Scaled',
                       str(int(sp_max_total)), scaled_label]
             for label in ('FIM (Before CQI)', 'FIM (After CQI)'):
                 for sub in ('CO1', 'CO2', 'CO3', 'CO4', 'CO5', '40', scaled_label):
@@ -2009,6 +2035,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 ssa2_raw = _sf(ssa2_totals.get(sid))
                 cia1_raw = _cia_total_sp(cia1_rows_sp, sid)
                 cia2_raw = _cia_total_sp(cia2_rows_sp, sid)
+                fa1_raw = _fa_total_sp(f1_rows_all, sid)
+                fa2_raw = _fa_total_sp(f2_rows_all, sid)
                 model_marks_sp = _extract_model_co_marks_for_student(
                     model_sheet=model_sheet, student_id=sid,
                     reg_no=reg_map.get(sid, ''), model_pattern=model_pattern, class_type=class_type,
@@ -2025,13 +2053,15 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                     if m_has:
                         model_raw = _round2(m_sum)
 
-                ssa1_sc = _sp_scale(ssa1_raw, ssa1_mx, w_ssa1)
-                ssa2_sc = _sp_scale(ssa2_raw, ssa2_mx, w_ssa2)
                 cia1_sc = _sp_scale(cia1_raw, cia1_mx, w_cia1)
+                ssa1_sc = _sp_scale(ssa1_raw, ssa1_mx, w_ssa1)
+                fa1_sc = _sp_scale(fa1_raw, fa1_mx, w_fa1)
                 cia2_sc = _sp_scale(cia2_raw, cia2_mx, w_cia2)
+                ssa2_sc = _sp_scale(ssa2_raw, ssa2_mx, w_ssa2)
+                fa2_sc = _sp_scale(fa2_raw, fa2_mx, w_fa2)
                 model_sc = _sp_scale(model_raw, model_mx, w_model_sp)
 
-                parts = [ssa1_sc, ssa2_sc, cia1_sc, cia2_sc, model_sc]
+                parts = [cia1_sc, ssa1_sc, fa1_sc, cia2_sc, ssa2_sc, fa2_sc, model_sc]
                 parts_valid = [p for p in parts if p is not None]
                 sp_total = _round2(sum(parts_valid)) if parts_valid else None
                 sp_pct = round(sp_total / sp_max_total * scaled_max) if sp_total is not None and sp_max_total else None
@@ -2040,8 +2070,12 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                     idx_sp,
                     _ms_safe_text(s.get('name')),
                     _ms_safe_text(s.get('reg_no')),
-                    _v(ssa1_raw), _v(ssa2_raw), _v(cia1_raw), _v(cia2_raw), _v(model_raw),
-                    _v(ssa1_sc), _v(ssa2_sc), _v(cia1_sc), _v(cia2_sc), _v(model_sc),
+                    _v(cia1_raw), _v(ssa1_raw), _v(fa1_raw),
+                    _v(cia2_raw), _v(ssa2_raw), _v(fa2_raw),
+                    _v(model_raw),
+                    _v(cia1_sc), _v(ssa1_sc), _v(fa1_sc),
+                    _v(cia2_sc), _v(ssa2_sc), _v(fa2_sc),
+                    _v(model_sc),
                     _v(sp_total), sp_pct if sp_pct is not None else '-',
                     # FIM (Before CQI)
                     _v(fim_row.get('base_co1')), _v(fim_row.get('base_co2')),
@@ -10137,7 +10171,6 @@ class StudentMarksView(APIView):
         ta_ids_by_code = defaultdict(list)
         ta_meta_by_code = {}
         ta_subject_by_code = {}
-        ta_obj_by_code = {}  # section-matched TA object keyed by course code (for on-the-fly compute)
         try:
             ay_active = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
         except Exception:
@@ -10205,15 +10238,10 @@ class StudentMarksView(APIView):
                                 ta_subj = None
                             if ta_subj is not None:
                                 ta_subject_by_code[tcode] = ta_subj
-
-                            # Keep full TA object for on-the-fly mark computation (section-exact only).
-                            if is_section_match:
-                                ta_obj_by_code[tcode] = ta
         except Exception:
             ta_ids_by_code = defaultdict(list)
             ta_meta_by_code = {}
             ta_subject_by_code = {}
-            ta_obj_by_code = {}
 
         try:
             from OBE.models import LabPublishedSheet, ModelPublishedSheet, ObeCqiPublished
@@ -10226,7 +10254,6 @@ class StudentMarksView(APIView):
         # - curriculum rows (core)
         # - elective choices
         # - any Subject rows resolved for the student
-        # - any TeachingAssignment codes for the student's section (covers lab/theory/special etc.)
         codes_set = set()
         for c in (allowed_codes or []):
             cc = str(c or '').strip()
@@ -10239,14 +10266,6 @@ class StudentMarksView(APIView):
             sc = str(getattr(s, 'code', '') or '').strip()
             if sc:
                 codes_set.add(sc)
-        # Include TA codes that are SECTION-MATCHED (exact section, not null-section global TAs)
-        # so lab/theory/special courses that lack a CurriculumDepartment entry still appear.
-        # Null-section TAs are shared/global and must NOT be used to add extra courses.
-        for tc, meta in (ta_meta_by_code or {}).items():
-            if meta.get('section_match'):
-                tc = str(tc or '').strip()
-                if tc:
-                    codes_set.add(tc)
 
         # Map code -> Subject (prefer course-specific Subject when available)
         subject_by_code = {}
@@ -10283,143 +10302,6 @@ class StudentMarksView(APIView):
                         bi_data_by_subj[sid] = d
         except Exception:
             pass
-
-        # FinalInternalMark: stores the persisted final mark (with CQI) per subject/student.
-        # This is the authoritative source for the "100" column in Internal Mark page.
-        fim_by_subj_id: dict = {}
-        try:
-            from OBE.models import FinalInternalMark as _FinalInternalMark
-            fim_qs = (
-                _FinalInternalMark.objects.filter(student=sp)
-                .values('subject_id', 'final_mark', 'max_mark', 'teaching_assignment_id')
-            )
-            for fim in fim_qs:
-                sid = fim['subject_id']
-                if sid is None:
-                    continue
-                # Prefer TA-scoped row; fallback to any row for the subject
-                existing = fim_by_subj_id.get(sid)
-                is_ta_scoped = fim.get('teaching_assignment_id') is not None
-                if existing is None or is_ta_scoped:
-                    fim_by_subj_id[sid] = fim
-        except Exception:
-            fim_by_subj_id = {}
-
-        # For subjects still missing a FinalInternalMark (e.g., staff hasn't run recompute yet),
-        # compute on-the-fly using the same service functions that populate FinalInternalMark.
-        # This ensures THEORY / LAB / SPECIAL / PROJECT etc. all show marks without a manual recompute.
-        try:
-            from OBE.services.final_internal_marks import (
-                _compute_weighted_final_total_theory_like,
-                _compute_tcpr_final_total,
-                _compute_tcpl_final_total,
-                _compute_lab_final_total,
-                _compute_project_final_total,
-                _compute_english_final_total,
-                _compute_foreign_lang_final_total,
-                _compute_tamil_final_total,
-                _compute_prbl_final_total,
-                _resolve_class_type as _fim_resolve_class_type,
-                _get_internal_weight_slots,
-            )
-            _fim_service_available = True
-        except Exception:
-            _fim_service_available = False
-
-        if _fim_service_available:
-            _student_ref = {'id': sp.id, 'reg_no': getattr(sp, 'reg_no', '')}
-            for code, ta in (ta_obj_by_code or {}).items():
-                subj_for_code = ta_subject_by_code.get(code) or subject_by_code.get(code)
-                if subj_for_code is None:
-                    continue
-                subj_id = getattr(subj_for_code, 'id', None)
-                if subj_id is None or subj_id in fim_by_subj_id:
-                    continue  # already have a FIM record; skip
-                ta_id = getattr(ta, 'id', None)
-                if ta_id is None:
-                    continue
-                try:
-                    ct = _fim_resolve_class_type(ta)
-                    computed_total = None
-
-                    # Try theory-like path first (handles THEORY, SPECIAL, THEORY_PMBL)
-                    computed_total = _compute_weighted_final_total_theory_like(
-                        ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                    )
-
-                    if computed_total is None and ct == 'TCPR':
-                        computed_total = _compute_tcpr_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct == 'PROJECT':
-                        computed_total = _compute_project_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct in ('LAB', 'PRACTICAL'):
-                        computed_total = _compute_lab_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id, class_type=ct
-                        )
-                    if computed_total is None and ct == 'TCPL':
-                        computed_total = _compute_tcpl_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct == 'PRBL':
-                        computed_total = _compute_prbl_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct == 'ENGLISH':
-                        computed_total = _compute_english_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct == 'FOREIGN_LANG':
-                        computed_total = _compute_foreign_lang_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-                    if computed_total is None and ct == 'TAMIL':
-                        computed_total = _compute_tamil_final_total(
-                            ta=ta, subject=subj_for_code, student=_student_ref, ta_id=ta_id
-                        )
-
-                    if computed_total is not None:
-                        # Determine max_mark from class type weight slots
-                        try:
-                            weights = _get_internal_weight_slots(ct)
-                            max_mark = float(sum(weights)) if weights else 40.0
-                        except Exception:
-                            max_mark = 40.0
-                        fim_by_subj_id[subj_id] = {
-                            'subject_id': subj_id,
-                            'final_mark': computed_total,
-                            'max_mark': max_mark,
-                            'teaching_assignment_id': ta_id,
-                            '_computed_live': True,
-                        }
-                except Exception:
-                    pass
-
-        import decimal as _decimal_mod
-        from decimal import Decimal as _Decimal, ROUND_HALF_UP as _ROUND_HALF_UP
-
-        def _build_fim_marks(fim_row):
-            """Return dict with final_mark and final_mark_100 from a FinalInternalMark row dict."""
-            if not fim_row:
-                return {}
-            fm = fim_row.get('final_mark')
-            mm = fim_row.get('max_mark')
-            try:
-                fm_f = float(fm) if fm is not None else None
-                mm_f = float(mm) if mm is not None else None
-            except (TypeError, ValueError):
-                return {}
-            if fm_f is None:
-                return {}
-            result = {'final_mark': fm_f}
-            if mm_f and mm_f > 0:
-                raw_100 = (fm_f / mm_f) * 100.0
-                total_100 = int(_Decimal(str(float(raw_100))).quantize(_Decimal('1'), rounding=_ROUND_HALF_UP))
-                result['final_mark_100'] = total_100
-                result['final_mark_max'] = mm_f
-            return result
 
         out_courses = []
 
@@ -10687,7 +10569,6 @@ class StudentMarksView(APIView):
                         'has_cqi': has_cqi,
                         **({'cos': cos} if cos is not None else {}),
                         'bi': {k: (float(v) if isinstance(v, decimal.Decimal) else v) for k, v in bi_data_by_subj.get(getattr(subj, 'id', None), {}).items() if v is not None} if getattr(subj, 'id', None) else {},
-                        **_build_fim_marks(fim_by_subj_id.get(getattr(subj, 'id', None))),
                     },
                 }
             )

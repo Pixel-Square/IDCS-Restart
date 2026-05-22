@@ -27,6 +27,7 @@ import {
   isTamilExamWeights,
   getTamilExamWeightConfig,
   DEFAULT_TAMIL_EXAM_WEIGHTS,
+  isSpecialExamWeights,
   type LabCycleWeights,
   type LabCycleCoWeight,
   type ProjectWeights,
@@ -34,7 +35,17 @@ import {
   type EnglishExamWeights,
   type ForeignLangExamWeights,
   type TamilExamWeights,
+  type SpecialExamWeights,
 } from '../../utils/internalMarkWeights';
+import {
+  DEFAULT_SPECIAL_CO_WISE_CONFIG,
+  SPECIAL_COMPONENT_KEYS,
+  SPECIAL_COMPONENT_LABELS,
+  deriveSpecialColumnTotals,
+  getSpecialCoWiseConfig,
+  isSpecialCoWiseConfig,
+  type SpecialCoWiseConfig,
+} from '../../utils/specialCoWiseWeights';
 
 const DEFAULT_INTERNAL_MARK_WEIGHTS_17 = [1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 1.5, 3.0, 2.5, 2.0, 2.0, 2.0, 2.0, 4.0];
 
@@ -61,7 +72,7 @@ type WeightsRow = {
   ssa1: number | string;
   cia1: number | string;
   formative1: number | string;
-  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights | EnglishExamWeights | ForeignLangExamWeights | TamilExamWeights;
+  internal_mark_weights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights | EnglishExamWeights | ForeignLangExamWeights | TamilExamWeights | SpecialExamWeights;
 };
 
 const INTERNAL_CELL_PADDING = 6;
@@ -384,9 +395,14 @@ function applyAny(src: any): Record<string, WeightsRow> {
       }
     }
 
-    // SPECIAL: structured exam weights from QP config – pass through as-is
-    if (k === 'SPECIAL' && rawIm && typeof rawIm === 'object' && (rawIm as any).type === 'special_exam_weights') {
-      out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
+    // SPECIAL: normalize into matrix form (fills missing co_weights from legacy column totals).
+    if (k === 'SPECIAL' && (isSpecialExamWeights(rawIm) || isSpecialCoWiseConfig(rawIm))) {
+      out[k] = {
+        ssa1: seedRow.ssa1,
+        cia1: seedRow.cia1,
+        formative1: seedRow.formative1,
+        internal_mark_weights: getSpecialCoWiseConfig(rawIm) as unknown as SpecialExamWeights,
+      };
       continue;
     }
 
@@ -470,25 +486,34 @@ export default function AcademicControllerWeightsPage() {
     })().finally(() => setLoading(false));
   }, []);
 
-  // ── handler: update a single SPECIAL exam weight in state ──
-  const handleSpecialWeightChange = (exam: string, value: string) => {
+  // ── handler: update a single CO×component cell in the SPECIAL matrix ──
+  const handleSpecialMatrixChange = (coKey: string, component: string, value: string) => {
     setWeights((prev) => {
-      const prevRow = prev['SPECIAL'] || { ssa1: 0, cia1: 0, formative1: 0 };
-      const im = (prevRow as any).internal_mark_weights;
-      const prevWeights: Record<string, number> =
-        im && typeof im === 'object' && im.type === 'special_exam_weights' && typeof im.weights === 'object'
-          ? { ...im.weights }
-          : { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
+      const prevRow = prev['SPECIAL'] || { ssa1: 0, cia1: 0, formative1: 0, internal_mark_weights: DEFAULT_SPECIAL_CO_WISE_CONFIG };
+      const cfg = getSpecialCoWiseConfig((prevRow as any).internal_mark_weights);
       const n = Number(value);
-      prevWeights[exam] = Number.isFinite(n) ? n : 0;
+      const next: SpecialCoWiseConfig = JSON.parse(JSON.stringify(cfg));
+      if (!next.co_weights[coKey]) next.co_weights[coKey] = {};
+      next.co_weights[coKey][component] = Number.isFinite(n) ? n : 0;
+      next.weights = deriveSpecialColumnTotals(next.co_weights);
       return {
         ...prev,
         SPECIAL: {
           ...prevRow,
-          internal_mark_weights: { type: 'special_exam_weights', weights: prevWeights },
+          internal_mark_weights: next as unknown as SpecialExamWeights,
         } as unknown as WeightsRow,
       };
     });
+  };
+
+  const resetSpecialMatrixToDefaults = () => {
+    setWeights((prev) => ({
+      ...prev,
+      SPECIAL: {
+        ...(prev['SPECIAL'] || { ssa1: 0, cia1: 0, formative1: 0 }),
+        internal_mark_weights: JSON.parse(JSON.stringify(DEFAULT_SPECIAL_CO_WISE_CONFIG)) as unknown as SpecialExamWeights,
+      } as unknown as WeightsRow,
+    }));
   };
 
   const handleInternalWeightChange = (classType: string, index: number, value: string) => {
@@ -540,13 +565,13 @@ export default function AcademicControllerWeightsPage() {
           continue;
         }
 
-        // SPECIAL: structured exam weights – pass through as-is
-        if (k === 'SPECIAL' && w?.internal_mark_weights && typeof w.internal_mark_weights === 'object' && w.internal_mark_weights.type === 'special_exam_weights') {
+        // SPECIAL: structured exam weights – send the normalized matrix (column totals stay in sync).
+        if (k === 'SPECIAL' && (isSpecialExamWeights(w?.internal_mark_weights) || isSpecialCoWiseConfig(w?.internal_mark_weights))) {
           normalized[k] = {
             ssa1: Number(w?.ssa1) || 0,
             cia1: Number(w?.cia1) || 0,
             formative1: Number(w?.formative1) || 0,
-            internal_mark_weights: w.internal_mark_weights,
+            internal_mark_weights: getSpecialCoWiseConfig(w.internal_mark_weights),
           };
           continue;
         }
@@ -954,61 +979,105 @@ export default function AcademicControllerWeightsPage() {
             );
           })()}
 
-          {/* ─── SPECIAL (CSD) Exam Weights Editor ─── */}
+          {/* ─── SPECIAL (CSD) CO-Wise Weights Matrix ─── */}
           {(() => {
             const spRow = weights['SPECIAL'];
-            const spIm = (spRow as any)?.internal_mark_weights;
-            const spStoredWeights: Record<string, number> =
-              spIm && typeof spIm === 'object' && spIm.type === 'special_exam_weights' && typeof spIm.weights === 'object'
-                ? spIm.weights
-                : { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
-            const examsToShow = specialExams.length > 0 ? specialExams : Object.keys(spStoredWeights);
-            const spTotal = examsToShow.reduce((s, ex) => {
-              const v = Number(spStoredWeights[ex]);
-              return s + (Number.isFinite(v) ? v : 0);
-            }, 0);
+            const cfg = getSpecialCoWiseConfig((spRow as any)?.internal_mark_weights);
+            const cos = cfg.cos && cfg.cos.length ? cfg.cos : ['CO1', 'CO2', 'CO3'];
+            // Show every component the QP Config enables, plus any component already present in the matrix.
+            const enabled = new Set(specialExams.map((e) => e.toUpperCase()));
+            const matrixHas = new Set<string>();
+            for (const co of cos) {
+              for (const comp of Object.keys(cfg.co_weights?.[co] || {})) matrixHas.add(comp);
+            }
+            const components = [...SPECIAL_COMPONENT_KEYS].filter(
+              (c) => enabled.size === 0 || enabled.has(c) || matrixHas.has(c)
+            );
+            const colTotal = (comp: string) =>
+              cos.reduce((s, co) => s + (Number(cfg.co_weights?.[co]?.[comp]) || 0), 0);
+            const rowTotal = (co: string) =>
+              components.reduce((s, comp) => s + (Number(cfg.co_weights?.[co]?.[comp]) || 0), 0);
+            const grandTotal = components.reduce((s, comp) => s + colTotal(comp), 0);
+            const totalOk = Math.abs(grandTotal - 40) < 1e-6;
             return (
               <div style={{ marginBottom: 24, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfc' }}>
-                <div style={{ fontWeight: 800, marginBottom: 4 }}>Special (CSD)</div>
-                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
-                  Per-exam weights for SPECIAL class-type (CSD QP). Exams are derived from the QP Config.
-                  Total: <b style={{ color: spTotal === 40 ? '#059669' : '#b45309' }}>{Math.round(spTotal * 100) / 100}</b>
-                  {spTotal !== 40 && <span style={{ color: '#b45309', marginLeft: 6, fontSize: 11 }}>(expected 40)</span>}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 4 }}>
+                  <div style={{ fontWeight: 800 }}>Special (CSD) — CO-wise Weights</div>
+                  <button
+                    type="button"
+                    onClick={resetSpecialMatrixToDefaults}
+                    style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}
+                  >
+                    Reset to defaults
+                  </button>
                 </div>
-                {examsToShow.length === 0 ? (
+                <div style={{ color: '#6b7280', fontSize: 12, marginBottom: 12 }}>
+                  Set per-CO weights for each cycle component. FA1/FA2 = Formative (formerly AL). Cycle 3 uses Model only.
+                  Grand total: <b style={{ color: totalOk ? '#059669' : '#b45309' }}>{Math.round(grandTotal * 100) / 100}</b>
+                  {!totalOk && <span style={{ color: '#b45309', marginLeft: 6, fontSize: 11 }}>(expected 40)</span>}
+                </div>
+                {components.length === 0 ? (
                   <div style={{ color: '#6b7280', fontSize: 12 }}>
                     No exams configured. Go to <b>QP Config → SPECIAL</b> to set up exam patterns first.
                   </div>
                 ) : (
-                  <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: '#f1f5f9' }}>
-                        {examsToShow.map((ex) => (
-                          <th key={ex} style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', minWidth: 80, fontWeight: 700 }}>{ex}</th>
-                        ))}
-                        <th style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#059669' }}>Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        {examsToShow.map((ex) => (
-                          <td key={ex} style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
-                            <input
-                              type="number"
-                              step="0.5"
-                              min="0"
-                              value={spStoredWeights[ex] ?? ''}
-                              onChange={(e) => handleSpecialWeightChange(ex, e.target.value)}
-                              style={{ width: 72, textAlign: 'center' }}
-                            />
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: '#f1f5f9' }}>
+                          <th style={{ border: '1px solid #d1d5db', padding: '6px 12px', textAlign: 'center', fontWeight: 700, minWidth: 60 }}></th>
+                          {components.map((comp) => (
+                            <th key={comp} style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', minWidth: 78, fontWeight: 700 }}>
+                              {SPECIAL_COMPONENT_LABELS[comp] || comp}
+                            </th>
+                          ))}
+                          <th style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#0f766e', background: '#ecfeff' }}>Row Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cos.map((co) => {
+                          const rt = rowTotal(co);
+                          return (
+                            <tr key={co}>
+                              <td style={{ border: '1px solid #d1d5db', padding: '4px 12px', textAlign: 'center', fontWeight: 700, background: '#f9fafb' }}>{co}</td>
+                              {components.map((comp) => {
+                                const v = Number(cfg.co_weights?.[co]?.[comp]) || 0;
+                                return (
+                                  <td key={comp} style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                                    <input
+                                      type="number"
+                                      step="0.5"
+                                      min="0"
+                                      value={v}
+                                      onChange={(e) => handleSpecialMatrixChange(co, comp, e.target.value)}
+                                      style={{ width: 64, textAlign: 'center' }}
+                                    />
+                                  </td>
+                                );
+                              })}
+                              <td style={{ border: '1px solid #d1d5db', padding: '4px 14px', textAlign: 'center', fontWeight: 700, color: '#0f766e', background: '#ecfeff' }}>
+                                {Math.round(rt * 100) / 100}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        <tr style={{ background: '#fefce8' }}>
+                          <td style={{ border: '1px solid #d1d5db', padding: '6px 12px', textAlign: 'center', fontWeight: 700 }}>Col Total</td>
+                          {components.map((comp) => {
+                            const ct = colTotal(comp);
+                            return (
+                              <td key={comp} style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#92400e' }}>
+                                {Math.round(ct * 100) / 100}
+                              </td>
+                            );
+                          })}
+                          <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 800, background: totalOk ? '#dcfce7' : '#fef9c3', color: totalOk ? '#166534' : '#854d0e' }}>
+                            {Math.round(grandTotal * 100) / 100}
                           </td>
-                        ))}
-                        <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: spTotal === 40 ? '#059669' : '#b45309' }}>
-                          {Math.round(spTotal * 100) / 100}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
             );

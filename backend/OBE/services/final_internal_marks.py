@@ -326,6 +326,53 @@ def _get_special_exam_weights():
     return None
 
 
+def _get_special_co_matrix():
+    """Return the per-CO weight matrix for SPECIAL if configured, else None.
+
+    Shape::
+
+        {1: {"SSA1": 2, "CIA1": 2.5, "FORMATIVE1": 0, ...},
+         2: {...},
+         3: {...}}
+
+    CO keys are 1-based ints. Components use canonical uppercase keys
+    matching ``_ALL_SPECIAL_EXAM_KEYS`` from OBE.views.
+    """
+    from OBE.models import ClassTypeWeights
+
+    row = ClassTypeWeights.objects.filter(class_type='SPECIAL').first()
+    im = getattr(row, 'internal_mark_weights', None) if row else None
+    if not (isinstance(im, dict) and im.get('type') == 'special_exam_weights'):
+        return None
+    raw = im.get('co_weights')
+    if not isinstance(raw, dict) or not raw:
+        return None
+    matrix = {}
+    for co_key, comps in raw.items():
+        if not isinstance(comps, dict):
+            continue
+        # Accept "CO1" / "co1" / "1" — normalise to int CO number.
+        s = str(co_key).strip().upper().lstrip('C').lstrip('O')
+        try:
+            co_num = int(s)
+        except (TypeError, ValueError):
+            continue
+        if co_num < 1 or co_num > 5:
+            continue
+        comp_map = {}
+        for comp_key, val in comps.items():
+            try:
+                w = float(val)
+            except (TypeError, ValueError):
+                continue
+            if w == 0:
+                continue
+            comp_map[str(comp_key).strip().upper()] = w
+        if comp_map:
+            matrix[co_num] = comp_map
+    return matrix or None
+
+
 def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=False):
     """Compute Final Internal Mark for SPECIAL class-type using the per-exam
     weight structure (SSA1, SSA2, CIA1, CIA2, MODEL) instead of the 17-slot
@@ -352,12 +399,21 @@ def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
     class_type = 'SPECIAL'
 
+    co_matrix = _get_special_co_matrix()
+
     w_ssa1 = float(exam_weights.get('SSA1', 0))
     w_ssa2 = float(exam_weights.get('SSA2', 0))
     w_cia1 = float(exam_weights.get('CIA1', 0))
     w_cia2 = float(exam_weights.get('CIA2', 0))
     w_model = float(exam_weights.get('MODEL', 0))
-    max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_model   # 40
+    if co_matrix:
+        # Column totals from the matrix become the source of truth (typically 40).
+        max_total = 0.0
+        for comp_map in co_matrix.values():
+            for w in comp_map.values():
+                max_total += float(w or 0)
+    else:
+        max_total = w_ssa1 + w_ssa2 + w_cia1 + w_cia2 + w_model   # 40
 
     if max_total <= 0:
         return None
@@ -454,68 +510,129 @@ def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=
         return _clamp((float(mark) / float(max_mark)) * float(out_of), 0, float(out_of))
 
     # ── Per-CO aggregation ──
-    # Each exam's weight is split equally among the exam's unique COs.
-    # Then each CO portion is: (raw_co / max_co) * per_co_weight
+    # With matrix: each cell matrix[CO][component] is that CO's exact weight share
+    # of the component, and the contribution = (raw_co / max_co_for_component) * weight.
+    # Without matrix (legacy): each exam's weight is split equally among the exam's
+    # unique COs from QP config.
     co_weighted = {c: [] for c in range(1, 6)}
     co_max_w   = {c: 0.0 for c in range(1, 6)}
 
-    # SSA1
-    n_ssa1_cos = len(ssa1_cos)
-    w_per_ssa1 = w_ssa1 / n_ssa1_cos if n_ssa1_cos else 0
-    for co in ssa1_cos:
-        co_max_w[co] += w_per_ssa1
-        v = _scale(ssa1_total, ssa1_max, w_per_ssa1) if ssa1_total is not None else None
-        if v is not None:
-            co_weighted[co].append(v)
+    if co_matrix:
+        from OBE.models import Formative1Mark, Formative2Mark
 
-    # SSA2
-    n_ssa2_cos = len(ssa2_cos)
-    w_per_ssa2 = w_ssa2 / n_ssa2_cos if n_ssa2_cos else 0
-    for co in ssa2_cos:
-        co_max_w[co] += w_per_ssa2
-        v = _scale(ssa2_total, ssa2_max, w_per_ssa2) if ssa2_total is not None else None
-        if v is not None:
-            co_weighted[co].append(v)
+        # Determine which formative components the matrix actually uses, so we
+        # only pay for the queries when they're needed.
+        used_components = set()
+        for comps in co_matrix.values():
+            used_components.update(comps.keys())
 
-    # CIA1
-    cia1_unique_cos = sorted(set(co for q in cia1_questions for co in q['cos']))
-    w_per_cia1 = w_cia1 / len(cia1_unique_cos) if cia1_unique_cos else 0
-    for co in cia1_unique_cos:
-        co_max_w[co] += w_per_cia1
-        d = cia1_co_data.get(co)
-        if d and d[2]:
-            v = _scale(d[0], d[1], w_per_cia1)
+        fa1_raw = fa2_raw = None
+        fa1_max = fa2_max = 0.0
+        if 'FORMATIVE1' in used_components:
+            fa1_raw = _safe_float(_assessment_map(Formative1Mark, 'total', subject.id, [sid], ta_id).get(sid))
+            fa1_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='FORMATIVE1', batch_id=batch_id)
+            fa1_max = sum(float(m) for m in (fa1_pattern.get('marks') or [])) if fa1_pattern else 20.0
+            fa1_max = fa1_max or 20.0
+        if 'FORMATIVE2' in used_components:
+            fa2_raw = _safe_float(_assessment_map(Formative2Mark, 'total', subject.id, [sid], ta_id).get(sid))
+            fa2_pattern = _get_qp_pattern(class_type=class_type, qp_type=qp_type, exam='FORMATIVE2', batch_id=batch_id)
+            fa2_max = sum(float(m) for m in (fa2_pattern.get('marks') or [])) if fa2_pattern else 20.0
+            fa2_max = fa2_max or 20.0
+
+        def _apply(comp_key, raw, raw_max, *, per_co_data=None):
+            """Add per-CO contributions for one component using the matrix.
+
+            ``per_co_data`` (optional): {co_num: (raw_co, max_co, has_data)} when
+            the component already supplies per-CO raw/max (CIA, Model). Otherwise
+            the (raw, raw_max) totals are used proportionally per CO.
+            """
+            for co_num in range(1, 6):
+                w = float(co_matrix.get(co_num, {}).get(comp_key, 0) or 0)
+                if w <= 0:
+                    continue
+                co_max_w[co_num] += w
+                if per_co_data is not None:
+                    d = per_co_data.get(co_num)
+                    if d and d[2] and d[1] and d[1] > 0:
+                        co_weighted[co_num].append(_clamp((float(d[0]) / float(d[1])) * w, 0.0, w))
+                else:
+                    if raw is not None and raw_max and raw_max > 0:
+                        co_weighted[co_num].append(_clamp((float(raw) / float(raw_max)) * w, 0.0, w))
+
+        _apply('SSA1', ssa1_total, ssa1_max)
+        _apply('SSA2', ssa2_total, ssa2_max)
+        _apply('CIA1', None, None, per_co_data=cia1_co_data)
+        _apply('CIA2', None, None, per_co_data=cia2_co_data)
+        _apply('FORMATIVE1', fa1_raw, fa1_max)
+        _apply('FORMATIVE2', fa2_raw, fa2_max)
+        # MODEL has per-CO raw/max already
+        if model_marks:
+            model_data = {}
+            for co_num in range(1, 6):
+                co_key = f'co{co_num}'
+                raw = _safe_float(model_marks.get(co_key))
+                mx = _safe_float((model_marks.get('max') or {}).get(co_key))
+                model_data[co_num] = (raw or 0.0, mx or 0.0, raw is not None)
+            _apply('MODEL', None, None, per_co_data=model_data)
+    else:
+        # ── Legacy: split flat per-exam weight equally among QP-detected COs ──
+        # SSA1
+        n_ssa1_cos = len(ssa1_cos)
+        w_per_ssa1 = w_ssa1 / n_ssa1_cos if n_ssa1_cos else 0
+        for co in ssa1_cos:
+            co_max_w[co] += w_per_ssa1
+            v = _scale(ssa1_total, ssa1_max, w_per_ssa1) if ssa1_total is not None else None
             if v is not None:
                 co_weighted[co].append(v)
 
-    # CIA2
-    cia2_unique_cos = sorted(set(co for q in cia2_questions for co in q['cos']))
-    w_per_cia2 = w_cia2 / len(cia2_unique_cos) if cia2_unique_cos else 0
-    for co in cia2_unique_cos:
-        co_max_w[co] += w_per_cia2
-        d = cia2_co_data.get(co)
-        if d and d[2]:
-            v = _scale(d[0], d[1], w_per_cia2)
+        # SSA2
+        n_ssa2_cos = len(ssa2_cos)
+        w_per_ssa2 = w_ssa2 / n_ssa2_cos if n_ssa2_cos else 0
+        for co in ssa2_cos:
+            co_max_w[co] += w_per_ssa2
+            v = _scale(ssa2_total, ssa2_max, w_per_ssa2) if ssa2_total is not None else None
             if v is not None:
                 co_weighted[co].append(v)
 
-    # MODEL
-    if model_marks:
-        model_cos = sorted(set(
-            int(c) for c in ((model_pattern or {}).get('cos') or []) if _safe_int(c) is not None
-        ))
-        if not model_cos:
-            model_cos = sorted(int(k[2:]) for k in model_marks if k.startswith('co') and k != 'max' and _safe_float(model_marks.get('max', {}).get(k)))
-        n_model_cos = len(model_cos) if model_cos else 1
-        w_per_model = w_model / n_model_cos if n_model_cos else 0
-        for co in model_cos:
-            co_key = f'co{co}'
-            raw = _safe_float(model_marks.get(co_key))
-            mx = _safe_float((model_marks.get('max') or {}).get(co_key))
-            co_max_w[co] += w_per_model
-            v = _scale(raw, mx, w_per_model)
-            if v is not None:
-                co_weighted[co].append(v)
+        # CIA1
+        cia1_unique_cos = sorted(set(co for q in cia1_questions for co in q['cos']))
+        w_per_cia1 = w_cia1 / len(cia1_unique_cos) if cia1_unique_cos else 0
+        for co in cia1_unique_cos:
+            co_max_w[co] += w_per_cia1
+            d = cia1_co_data.get(co)
+            if d and d[2]:
+                v = _scale(d[0], d[1], w_per_cia1)
+                if v is not None:
+                    co_weighted[co].append(v)
+
+        # CIA2
+        cia2_unique_cos = sorted(set(co for q in cia2_questions for co in q['cos']))
+        w_per_cia2 = w_cia2 / len(cia2_unique_cos) if cia2_unique_cos else 0
+        for co in cia2_unique_cos:
+            co_max_w[co] += w_per_cia2
+            d = cia2_co_data.get(co)
+            if d and d[2]:
+                v = _scale(d[0], d[1], w_per_cia2)
+                if v is not None:
+                    co_weighted[co].append(v)
+
+        # MODEL
+        if model_marks:
+            model_cos = sorted(set(
+                int(c) for c in ((model_pattern or {}).get('cos') or []) if _safe_int(c) is not None
+            ))
+            if not model_cos:
+                model_cos = sorted(int(k[2:]) for k in model_marks if k.startswith('co') and k != 'max' and _safe_float(model_marks.get('max', {}).get(k)))
+            n_model_cos = len(model_cos) if model_cos else 1
+            w_per_model = w_model / n_model_cos if n_model_cos else 0
+            for co in model_cos:
+                co_key = f'co{co}'
+                raw = _safe_float(model_marks.get(co_key))
+                mx = _safe_float((model_marks.get('max') or {}).get(co_key))
+                co_max_w[co] += w_per_model
+                v = _scale(raw, mx, w_per_model)
+                if v is not None:
+                    co_weighted[co].append(v)
 
     # ── Totals ──
     co_values = {}
@@ -1482,47 +1599,6 @@ def _compute_foreign_lang_final_total(*, ta, subject, student, ta_id, return_det
     )
 
 
-# ─── TAMIL Class-type Support ──────────────────────────────────────────────────
-# Tamil courses share the same 3-cycle structure as ENGLISH/FOREIGN_LANG but
-# use a separate class-type key so their QP patterns and weights are independent.
-
-TAMIL_DEFAULT_WEIGHTS = {
-    **{k: v for k, v in ENGLISH_DEFAULT_WEIGHTS.items() if k != 'type'},
-    'type': 'tamil_exam_weights',
-}
-
-
-def _get_tamil_exam_weights():
-    """Return tamil_exam_weights dict from ClassTypeWeights, or the
-    built-in default.  Never returns None so callers always get a usable config.
-    """
-    from OBE.models import ClassTypeWeights
-
-    row = ClassTypeWeights.objects.filter(class_type='TAMIL').first()
-    im = getattr(row, 'internal_mark_weights', None) if row else None
-    if isinstance(im, dict) and im.get('type') == 'tamil_exam_weights':
-        return im
-    return TAMIL_DEFAULT_WEIGHTS
-
-
-def _compute_tamil_final_total(*, ta, subject, student, ta_id, return_details=False):
-    """Compute Final Internal Mark for TAMIL class-type.
-
-    Shares the same 3-cycle computation as ENGLISH (SSA1+FA1+CIA1 /
-    SSA2+FA2+CIA2 / Model) but resolves weights and QP patterns under
-    class_type='TAMIL'.
-    """
-    return _compute_english_final_total(
-        ta=ta,
-        subject=subject,
-        student=student,
-        ta_id=ta_id,
-        return_details=return_details,
-        _weight_cfg=_get_tamil_exam_weights(),
-        _class_type='TAMIL',
-    )
-
-
 def _extract_ssa_co_splits_for_ta(subject_id, ta_id, assessment_key, co_keys):
     from OBE.models import AssessmentDraft
 
@@ -1678,7 +1754,14 @@ def _get_model_sheet_data(subject_id, ta_id, class_type):
     ct = _safe_text(class_type).upper()
     if ct in {'TCPL', 'TCPR'}:
         sheet = payload.get('tcplSheet')
-        return sheet if isinstance(sheet, dict) else {}
+        if isinstance(sheet, dict):
+            record_cfg = payload.get('recordMarksForCo5')
+            if isinstance(record_cfg, dict) and not isinstance(sheet.get('recordMarksForCo5'), dict):
+                merged_sheet = dict(sheet)
+                merged_sheet['recordMarksForCo5'] = record_cfg
+                return merged_sheet
+            return sheet
+        return {}
     sheet = payload.get('theorySheet')
     return sheet if isinstance(sheet, dict) else (payload if isinstance(payload, dict) else {})
 
@@ -1819,10 +1902,7 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     qp_type = _resolve_qp_type(ta)
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
 
-    is_qp1_final = (
-        'QP1FINAL' in str(qp_type or '').upper().replace(' ', '') or
-        str(qp_type or '').upper().strip() == 'TAM_THEORY'
-    )
+    is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
     weights = list(QP1FINAL_WEIGHTS) if is_qp1_final else _get_internal_weight_slots(class_type)
     max_total = float(sum(weights))
 
@@ -3632,17 +3712,6 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                 if fl_result is not None:
                     total = fl_result
 
-            # TAMIL: same 3-cycle structure as ENGLISH/FOREIGN_LANG, separate class-type.
-            # Exception: TAM_THEORY uses the theory-like QP1FINAL path (already computed above).
-            if total is None and ta_class_type == 'TAMIL':
-                qp_for_tamil = str(_resolve_qp_type(ta) or '').upper().strip()
-                if qp_for_tamil != 'TAM_THEORY':
-                    tamil_result = _compute_tamil_final_total(
-                        ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
-                    )
-                    if tamil_result is not None:
-                        total = tamil_result
-
             # TCPR: Theory-like but with Review1/Review2 instead of Formatives
             if total is None and ta_class_type == 'TCPR':
                 tcpr_result = _compute_tcpr_final_total(
@@ -3702,7 +3771,7 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
             # TCPL uses the sum of its 21-slot weights (typically 50), others use 40.
             if ta_class_type == 'PROJECT':
                 prbl_max_mark = 100
-            elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG', 'TAMIL'}:
+            elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG'}:
                 prbl_max_mark = 60
             elif ta_class_type == 'TCPL':
                 prbl_max_mark = int(sum(_get_tcpl_weight_slots()))

@@ -480,7 +480,7 @@ const StaffAttendanceUpload: React.FC = () => {
       const response = await apiClient.post(
         `${getApiBase()}/api/staff-attendance/csv-upload/retrieve_essl_data/`,
         payload,
-        { timeout: 300000 }
+        { timeout: 600000 }
       );
 
       setEsslRetrieveResult(response.data);

@@ -2,8 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { normalizeClassType, normalizeObeClassType } from '../../constants/classTypes';
 import { fetchDeptRows, fetchMasters } from '../../services/curriculum';
-import { fetchClassTypeWeights, fetchInternalMarkMapping, upsertClassTypeWeights, upsertInternalMarkMapping } from '../../services/obe';
+import { fetchClassTypeWeights, fetchInternalMarkMapping, fetchSpecialExamConfig, upsertClassTypeWeights, upsertInternalMarkMapping } from '../../services/obe';
 import fetchWithAuth from '../../services/fetchAuth';
+import {
+  DEFAULT_SPECIAL_CO_WISE_CONFIG,
+  SPECIAL_COMPONENT_KEYS,
+  SPECIAL_COMPONENT_LABELS,
+  deriveSpecialColumnTotals,
+  getSpecialCoWiseConfig,
+  type SpecialCoWiseConfig,
+} from '../../utils/specialCoWiseWeights';
 
 type CqiPublishedData = {
   publishedAt?: string;
@@ -22,10 +30,11 @@ export default function InternalMarkPage(): JSX.Element {
   const [mapping, setMapping] = useState<Record<string, any> | null>(null);
   const [classType, setClassType] = useState<string | null>(null);
 
-  // SPECIAL exam-level weights state
-  const SPECIAL_EXAMS = ['SSA1', 'SSA2', 'CIA1', 'CIA2', 'MODEL'] as const;
-  const DEFAULT_SPECIAL_WEIGHTS: Record<string, number> = { SSA1: 10, SSA2: 10, CIA1: 5, CIA2: 5, MODEL: 10 };
-  const [specialWeights, setSpecialWeights] = useState<Record<string, number>>({ ...DEFAULT_SPECIAL_WEIGHTS });
+  // SPECIAL CO-wise matrix state (replaces the legacy flat per-exam editor).
+  const [specialCfg, setSpecialCfg] = useState<SpecialCoWiseConfig>(() =>
+    JSON.parse(JSON.stringify(DEFAULT_SPECIAL_CO_WISE_CONFIG))
+  );
+  const [specialExams, setSpecialExams] = useState<string[]>([]);
   const [specialLoaded, setSpecialLoaded] = useState(false);
 
   // Slider tab state
@@ -133,14 +142,15 @@ export default function InternalMarkPage(): JSX.Element {
     (async () => {
       setLoading(true);
       try {
-        const all = await fetchClassTypeWeights();
+        const [all, exams] = await Promise.all([
+          fetchClassTypeWeights(),
+          fetchSpecialExamConfig().catch(() => [] as string[]),
+        ]);
         if (!mounted) return;
         const sp = all?.SPECIAL;
         const im = sp?.internal_mark_weights;
-        if (im && typeof im === 'object' && (im as any).type === 'special_exam_weights' && (im as any).weights) {
-          const w = (im as any).weights as Record<string, number>;
-          setSpecialWeights({ ...DEFAULT_SPECIAL_WEIGHTS, ...w });
-        }
+        setSpecialCfg(getSpecialCoWiseConfig(im));
+        setSpecialExams(exams || []);
         setSpecialLoaded(true);
       } catch {
         if (mounted) setSpecialLoaded(true);
@@ -150,6 +160,18 @@ export default function InternalMarkPage(): JSX.Element {
     })();
     return () => { mounted = false; };
   }, [isSpecial]);
+
+  const updateSpecialMatrixCell = (coKey: string, comp: string, value: string) => {
+    setSpecialCfg((prev) => {
+      const next = JSON.parse(JSON.stringify(prev)) as SpecialCoWiseConfig;
+      if (!next.co_weights) next.co_weights = {};
+      if (!next.co_weights[coKey]) next.co_weights[coKey] = {};
+      const n = Number(value);
+      next.co_weights[coKey][comp] = Number.isFinite(n) ? n : 0;
+      next.weights = deriveSpecialColumnTotals(next.co_weights);
+      return next;
+    });
+  };
 
   const ensureDefault = () => {
     if (mapping) return normalizeMapping(mapping);
@@ -226,11 +248,10 @@ export default function InternalMarkPage(): JSX.Element {
     setError(null);
     try {
       if (isSpecial) {
-        // Save SPECIAL exam weights to ClassTypeWeights
+        // Save SPECIAL CO-wise matrix to ClassTypeWeights (column totals re-derived).
+        const normalized = getSpecialCoWiseConfig(specialCfg);
         await upsertClassTypeWeights({
-          SPECIAL: {
-            internal_mark_weights: { type: 'special_exam_weights', weights: { ...specialWeights } },
-          },
+          SPECIAL: { internal_mark_weights: normalized },
         });
         try { window.dispatchEvent(new CustomEvent('internal-mark:updated', { detail: { subjectId } })); } catch {}
         navigate(-1);
@@ -249,68 +270,95 @@ export default function InternalMarkPage(): JSX.Element {
 
   if (loading) return <div style={{ padding: 18 }}>Loading…</div>;
 
-  // ── SPECIAL: exam-level weights (SSA1, SSA2, CIA1, CIA2, MODEL) ──────
+  // ── SPECIAL: CO-wise weight matrix (CIA/SSA/FA per cycle + Model) ──────
   if (isSpecial) {
-    const spTotal = SPECIAL_EXAMS.reduce((s, k) => s + (Number(specialWeights[k]) || 0), 0);
+    const cos = specialCfg.cos && specialCfg.cos.length ? specialCfg.cos : ['CO1', 'CO2', 'CO3'];
+    const enabled = new Set(specialExams.map((e) => e.toUpperCase()));
+    const matrixHas = new Set<string>();
+    for (const co of cos) {
+      for (const comp of Object.keys(specialCfg.co_weights?.[co] || {})) matrixHas.add(comp);
+    }
+    const components = [...SPECIAL_COMPONENT_KEYS].filter(
+      (c) => enabled.size === 0 || enabled.has(c) || matrixHas.has(c)
+    );
+    const colTotal = (comp: string) =>
+      cos.reduce((s, co) => s + (Number(specialCfg.co_weights?.[co]?.[comp]) || 0), 0);
+    const rowTotal = (co: string) =>
+      components.reduce((s, comp) => s + (Number(specialCfg.co_weights?.[co]?.[comp]) || 0), 0);
+    const grandTotal = components.reduce((s, comp) => s + colTotal(comp), 0);
+    const totalOk = Math.abs(grandTotal - 40) < 1e-6;
     return (
       <main style={{ padding: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ margin: 0 }}>Internal Mark Weights — {subjectId} (Special)</h2>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="obe-btn" onClick={() => navigate(-1)}>Back</button>
-            <button className="obe-btn obe-btn-primary" onClick={handleSave} disabled={saving}>
+            <button className="obe-btn obe-btn-primary" onClick={handleSave} disabled={saving || !specialLoaded}>
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
         </div>
         <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 16 }}>
-          Special courses use exam-level weights. Each exam is scaled to its configured weight.
-          Total must equal 40.
+          Special (CSD) courses use per-CO weights for each cycle component. FA1/FA2 = Formative.
+          Grand total must equal 40.
         </p>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse' }}>
+          <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr>
-                {SPECIAL_EXAMS.map((e) => (
-                  <th key={e} style={{ border: '1px solid #d1d5db', padding: '10px 18px', background: '#f3f4f6', fontWeight: 700, fontSize: 14 }}>{e}</th>
+              <tr style={{ background: '#f1f5f9' }}>
+                <th style={{ border: '1px solid #d1d5db', padding: '8px 14px', minWidth: 64 }}></th>
+                {components.map((comp) => (
+                  <th key={comp} style={{ border: '1px solid #d1d5db', padding: '8px 14px', textAlign: 'center', minWidth: 80, fontWeight: 700 }}>
+                    {SPECIAL_COMPONENT_LABELS[comp] || comp}
+                  </th>
                 ))}
-                <th style={{ border: '1px solid #d1d5db', padding: '10px 18px', background: '#e0e7ff', fontWeight: 700, fontSize: 14, color: '#1d4ed8' }}>Total</th>
+                <th style={{ border: '1px solid #d1d5db', padding: '8px 14px', textAlign: 'center', background: '#ecfeff', color: '#0f766e', fontWeight: 700 }}>Row Total</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                {SPECIAL_EXAMS.map((e) => (
-                  <td key={e} style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb' }}>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={specialWeights[e] ?? 0}
-                      onChange={(ev) => {
-                        const n = ev.target.value === '' ? 0 : Number(ev.target.value);
-                        setSpecialWeights((prev) => ({ ...prev, [e]: Number.isFinite(n) ? n : 0 }));
-                      }}
-                      style={{ width: 80, padding: 8, fontSize: 14, textAlign: 'center' }}
-                    />
+              {cos.map((co) => {
+                const rt = rowTotal(co);
+                return (
+                  <tr key={co}>
+                    <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', fontWeight: 700, background: '#f9fafb', textAlign: 'center' }}>{co}</td>
+                    {components.map((comp) => {
+                      const v = Number(specialCfg.co_weights?.[co]?.[comp]) || 0;
+                      return (
+                        <td key={comp} style={{ border: '1px solid #d1d5db', padding: '4px 6px', textAlign: 'center' }}>
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            value={v}
+                            onChange={(e) => updateSpecialMatrixCell(co, comp, e.target.value)}
+                            style={{ width: 72, padding: 6, textAlign: 'center' }}
+                          />
+                        </td>
+                      );
+                    })}
+                    <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#0f766e', background: '#ecfeff' }}>
+                      {Math.round(rt * 100) / 100}
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr style={{ background: '#fefce8' }}>
+                <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700 }}>Col Total</td>
+                {components.map((comp) => (
+                  <td key={comp} style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 700, color: '#92400e' }}>
+                    {Math.round(colTotal(comp) * 100) / 100}
                   </td>
                 ))}
-                <td style={{
-                  border: '1px solid #e5e7eb',
-                  padding: '10px 18px',
-                  background: spTotal === 40 ? '#dcfce7' : '#fef9c3',
-                  textAlign: 'center',
-                  fontWeight: 700,
-                  fontSize: 16,
-                  color: spTotal === 40 ? '#166534' : '#854d0e',
-                }}>
-                  {spTotal}
+                <td style={{ border: '1px solid #d1d5db', padding: '6px 14px', textAlign: 'center', fontWeight: 800, background: totalOk ? '#dcfce7' : '#fef9c3', color: totalOk ? '#166534' : '#854d0e' }}>
+                  {Math.round(grandTotal * 100) / 100}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
-        {spTotal !== 40 && (
+        {!totalOk && (
           <div style={{ marginTop: 10, color: '#854d0e', fontSize: 13, background: '#fef9c3', padding: '8px 14px', borderRadius: 6, border: '1px solid #fde047', display: 'inline-block' }}>
-            Total is {spTotal}. Expected: 40.
+            Grand total is {Math.round(grandTotal * 100) / 100}. Expected: 40.
           </div>
         )}
         {error ? <div style={{ color: 'red', marginTop: 12 }}>{error}</div> : null}

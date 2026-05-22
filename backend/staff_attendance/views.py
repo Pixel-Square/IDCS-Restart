@@ -3,10 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
+from django.db import IntegrityError
 from django.utils import timezone
+from django.conf import settings
 from datetime import datetime, timedelta
 import csv
 import io
+import os
+import socket
 
 from .models import (
     AttendanceRecord,
@@ -17,6 +21,7 @@ from .models import (
     DepartmentAttendanceSettings,
     SpecialDepartmentDateAttendanceLimit,
     StaffAttendanceTimeLimitOverride,
+    StaffBiometricPunchLog,
 )
 from .serializers import (
     AttendanceRecordSerializer,
@@ -365,12 +370,272 @@ class CSVUploadViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def essl_settings(self, request):
         """Get eSSL device settings"""
-        return Response({'devices': []})
+        raw_devices = os.getenv('ESSL_DEVICE_IPS', '').strip()
+        device_pairs = [v.strip() for v in raw_devices.split(',') if v.strip()]
+
+        if not device_pairs:
+            default_ip = getattr(settings, 'ESSL_DEVICE_IP', '').strip()
+            default_port = getattr(settings, 'ESSL_DEVICE_PORT', 4370)
+            if default_ip:
+                device_pairs = [f'{default_ip}:{default_port}']
+
+        devices = []
+        probe_timeout = max(1, min(5, int(getattr(settings, 'ESSL_CONNECT_TIMEOUT', 2))))
+        for idx, pair in enumerate(device_pairs, start=1):
+            ip = pair.split(':', 1)[0].strip()
+            port = pair.split(':', 1)[1].strip() if ':' in pair else str(getattr(settings, 'ESSL_DEVICE_PORT', 4370))
+            resolved_port = int(port) if str(port).isdigit() else getattr(settings, 'ESSL_DEVICE_PORT', 4370)
+            is_active = False
+            probe_error = None
+            last_punch_at = None
+            last_staff_id = None
+            last_direction = None
+
+            if ip:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(probe_timeout)
+                try:
+                    sock.connect((ip, resolved_port))
+                    is_active = True
+                except OSError as exc:
+                    probe_error = str(exc)
+                finally:
+                    sock.close()
+            else:
+                probe_error = 'missing ip'
+
+            if ip:
+                last_log = StaffBiometricPunchLog.objects.filter(
+                    device_ip=ip,
+                    device_port=resolved_port,
+                ).order_by('-punch_time', '-id').first()
+                if last_log:
+                    last_punch_at = last_log.punch_time
+                    last_staff_id = last_log.raw_staff_id or last_log.raw_uid
+                    last_direction = last_log.direction
+
+            devices.append({
+                'label': f'Device {idx}',
+                'ip': ip,
+                'port': resolved_port,
+                'last_punch_at': last_punch_at,
+                'last_staff_id': last_staff_id,
+                'last_direction': last_direction,
+                'probe_error': probe_error,
+                'is_active': is_active,
+            })
+
+        return Response({'devices': devices})
 
     @action(detail=False, methods=['post'])
     def retrieve_essl_data(self, request):
         """Retrieve and process eSSL data"""
-        return Response({'success': True, 'message': 'eSSL data retrieval not yet implemented'})
+        raw_date = str(request.data.get('date') or '').strip()
+        year = request.data.get('year')
+        month = request.data.get('month')
+
+        if raw_date:
+            try:
+                start_date = datetime.strptime(raw_date, '%Y-%m-%d').date()
+                end_date = start_date
+            except ValueError:
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if not year or not month:
+                return Response({'error': 'year and month required when date is not provided'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                year = int(year)
+                month = int(month)
+                from calendar import monthrange
+                last_day = monthrange(year, month)[1]
+                start_date = datetime(year, month, 1).date()
+                end_date = datetime(year, month, last_day).date()
+            except Exception:
+                return Response({'error': 'Invalid year/month values'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from zk import ZK  # type: ignore
+        except ImportError:
+            return Response(
+                {'success': False, 'error': 'Missing dependency: pyzk. Install with: pip install pyzk'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        raw_devices = os.getenv('ESSL_DEVICE_IPS', '').strip()
+        device_pairs = [v.strip() for v in raw_devices.split(',') if v.strip()]
+        if not device_pairs:
+            default_ip = getattr(settings, 'ESSL_DEVICE_IP', '').strip()
+            default_port = getattr(settings, 'ESSL_DEVICE_PORT', 4370)
+            if default_ip:
+                device_pairs = [f'{default_ip}:{default_port}']
+
+        if not device_pairs:
+            return Response({'success': False, 'error': 'No eSSL devices configured'}, status=status.HTTP_400_BAD_REQUEST)
+
+        def _normalize_direction(punch_value):
+            if punch_value in (0, '0', 'IN', 'in'):
+                return StaffBiometricPunchLog.Direction.IN
+            if punch_value in (1, '1', 'OUT', 'out'):
+                return StaffBiometricPunchLog.Direction.OUT
+            return StaffBiometricPunchLog.Direction.UNKNOWN
+
+        from .biometric import resolve_staff_user, force_upsert_attendance_for_date
+
+        password = getattr(settings, 'ESSL_DEVICE_PASSWORD', 0)
+        timeout = int(getattr(settings, 'ESSL_CONNECT_TIMEOUT', 8))
+        probe_timeout = max(1, min(5, int(getattr(settings, 'ESSL_CONNECT_TIMEOUT', 2))))
+
+        results = []
+        total_logs_checked = 0
+        matched_logs = 0
+        created_logs = 0
+        mapped_staff_ids = set()
+        grouped_punches = {}
+        updated_pairs = set()
+
+        for idx, pair in enumerate(device_pairs, start=1):
+            ip = pair.split(':', 1)[0].strip()
+            port = pair.split(':', 1)[1].strip() if ':' in pair else str(getattr(settings, 'ESSL_DEVICE_PORT', 4370))
+            resolved_port = int(port) if str(port).isdigit() else getattr(settings, 'ESSL_DEVICE_PORT', 4370)
+
+            device_result = {
+                'device': f'Device {idx}',
+                'success': True,
+                'error': None,
+                'total_logs_checked': 0,
+                'matched_logs': 0,
+                'created_logs': 0,
+                'attendance_updates': 0,
+                'mapped_staff': 0,
+                '_mapped_users': set(),
+                '_user_dates': set(),
+            }
+
+            if not ip:
+                device_result['success'] = False
+                device_result['error'] = 'missing ip'
+                results.append(device_result)
+                continue
+
+            probe_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe_sock.settimeout(probe_timeout)
+            try:
+                probe_sock.connect((ip, resolved_port))
+            except OSError as exc:
+                device_result['success'] = False
+                device_result['error'] = f'inactive device: {exc}'
+                results.append(device_result)
+                continue
+            finally:
+                probe_sock.close()
+
+            conn = None
+            try:
+                zk = ZK(ip, port=resolved_port, timeout=timeout, password=password, force_udp=False, ommit_ping=False)
+                conn = zk.connect()
+                conn.disable_device()
+                logs = conn.get_attendance() or []
+                conn.enable_device()
+
+                device_result['total_logs_checked'] = len(logs)
+                total_logs_checked += len(logs)
+
+                for attendance in logs:
+                    raw_timestamp = getattr(attendance, 'timestamp', None) or getattr(attendance, 'time', None)
+                    if raw_timestamp is None:
+                        continue
+
+                    punch_dt = raw_timestamp
+                    if timezone.is_naive(punch_dt):
+                        punch_dt = timezone.make_aware(punch_dt, timezone.get_current_timezone())
+                    punch_dt = timezone.localtime(punch_dt)
+                    punch_date = punch_dt.date()
+
+                    if punch_date < start_date or punch_date > end_date:
+                        continue
+
+                    device_result['matched_logs'] += 1
+                    matched_logs += 1
+
+                    raw_uid = str(getattr(attendance, 'uid', '') or '')
+                    raw_staff_id = str(
+                        getattr(attendance, 'user_id', '')
+                        or getattr(attendance, 'userid', '')
+                        or ''
+                    )
+                    raw_direction = _normalize_direction(getattr(attendance, 'punch', None) or getattr(attendance, 'status', None))
+
+                    user = resolve_staff_user(raw_staff_id=raw_staff_id, raw_uid=raw_uid)
+                    if user:
+                        mapped_staff_ids.add(user.id)
+                        device_result['_mapped_users'].add(user.id)
+                        device_result['_user_dates'].add((user.id, punch_date))
+                        key = (user.id, punch_date)
+                        if key not in grouped_punches:
+                            grouped_punches[key] = {'user': user, 'punches': []}
+                        grouped_punches[key]['punches'].append(punch_dt)
+
+                    try:
+                        StaffBiometricPunchLog.objects.create(
+                            user=user,
+                            raw_uid=raw_uid,
+                            raw_staff_id=raw_staff_id,
+                            punch_time=punch_dt,
+                            direction=raw_direction,
+                            source='essl_manual_retrieval',
+                            device_ip=ip,
+                            device_port=resolved_port,
+                            payload={
+                                'uid': raw_uid,
+                                'user_id': raw_staff_id,
+                                'punch': getattr(attendance, 'punch', None),
+                                'timestamp': str(punch_dt),
+                            },
+                        )
+                        device_result['created_logs'] += 1
+                        created_logs += 1
+                    except IntegrityError:
+                        pass
+
+                device_result['mapped_staff'] = len(device_result['_mapped_users'])
+
+            except Exception as exc:
+                device_result['success'] = False
+                device_result['error'] = str(exc)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.disconnect()
+                    except Exception:
+                        pass
+
+            results.append(device_result)
+
+        for key, payload in grouped_punches.items():
+            punches_sorted = sorted(payload['punches'])
+            _, changed = force_upsert_attendance_for_date(payload['user'], key[1], punches_sorted)
+            if changed:
+                updated_pairs.add(key)
+
+        for device_result in results:
+            user_dates = device_result.pop('_user_dates', set())
+            device_result.pop('_mapped_users', None)
+            device_result['attendance_updates'] = len(updated_pairs.intersection(user_dates))
+
+        summary = {
+            'total_logs_checked': total_logs_checked,
+            'matched_logs': matched_logs,
+            'created_logs': created_logs,
+            'attendance_updates': len(updated_pairs),
+            'mapped_staff_total': len(mapped_staff_ids),
+        }
+
+        return Response({
+            'success': True,
+            'message': f'Retrieved eSSL data from {start_date.isoformat()} to {end_date.isoformat()}',
+            'summary': summary,
+            'results': results,
+        })
 
 
 class HalfDayRequestViewSet(viewsets.ModelViewSet):
