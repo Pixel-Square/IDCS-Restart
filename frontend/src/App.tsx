@@ -697,7 +697,13 @@ export default function App() {
                 />
                 <Route
                   path="/staff-requests/event-attending"
-                  element={<ProtectedRoute user={user} element={<EventAttendingPage />} />}
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS']}
+                      element={<EventAttendingPage />}
+                    />
+                  }
                 />
                 
                 <Route

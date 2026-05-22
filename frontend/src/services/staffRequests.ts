@@ -74,6 +74,11 @@ export async function reorderSteps(templateId: number, steps: { id: number; step
   return res.data;
 }
 
+export async function resetTemplateAllotment(templateId: number): Promise<any> {
+  const res = await apiClient.post(`${BASE_URL}/templates/${templateId}/reset_allotment/`);
+  return res.data;
+}
+
 // ==================== Staff Requests (All Users) ====================
 
 export async function getMyRequests(status?: 'pending' | 'approved' | 'rejected'): Promise<StaffRequest[]> {

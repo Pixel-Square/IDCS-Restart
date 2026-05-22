@@ -620,7 +620,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
 
   // Event Attending: visible to all staff, HR, and other approvers
-  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PRINCIPAL', 'PS', 'HOD', 'AHOD', 'ADMIN'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
+  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PS', 'HOD', 'AHOD'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
     items.push({ key: 'event_attending', label: 'Event Attending', to: '/staff-requests/event-attending' });
   }
 

@@ -553,6 +553,37 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated()]
         return [IsAuthenticated(), IsAdminOrHR()]
     
+    def _get_primary_role(self, user):
+        """Resolve a stable role for allotment mapping."""
+        try:
+            role_names = []
+            if hasattr(user, 'roles'):
+                role_names.extend(list(user.roles.values_list('name', flat=True)))
+            if hasattr(user, 'user_roles'):
+                role_names.extend(list(user.user_roles.values_list('role__name', flat=True)))
+
+            normalized = []
+            for r in role_names:
+                key = str(r or '').strip().upper()
+                if key and key not in normalized:
+                    normalized.append(key)
+
+            if not normalized:
+                return 'STAFF'
+
+            role_priority = [
+                'HOD', 'IQAC', 'HR', 'PS', 'CFSW', 'EDC', 'COE', 'HAA',
+                'AHOD', 'FACULTY', 'STAFF',
+            ]
+
+            for priority_role in role_priority:
+                if priority_role in normalized:
+                    return priority_role
+
+            return normalized[0]
+        except Exception:
+            return 'STAFF'
+    
     @action(detail=False, methods=['get'])
     def active(self, request):
         """
@@ -620,6 +651,78 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
         # Return updated template
         serializer = self.get_serializer(template)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def reset_allotment(self, request, pk=None):
+        """Reset staff balances for this template based on per-role allotments."""
+        template = self.get_object()
+        leave_policy = getattr(template, 'leave_policy', None) or {}
+        action = str(leave_policy.get('action') or '').strip().lower()
+
+        if action not in ['deduct', 'neutral']:
+            return Response(
+                {'error': 'Allotment reset is supported only for deduct/neutral templates.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allotment = leave_policy.get('allotment_per_role')
+        if not isinstance(allotment, dict) or len(allotment) == 0:
+            return Response(
+                {'error': 'No allotment_per_role configured for this template.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        normalized = {}
+        for k, v in allotment.items():
+            key = str(k or '').strip().upper()
+            if not key:
+                continue
+            try:
+                normalized[key] = float(v)
+            except (TypeError, ValueError):
+                normalized[key] = 0.0
+
+        split_date = _parse_iso_date(leave_policy.get('split_date'))
+        today = timezone.localdate()
+
+        from academics.models import StaffProfile
+
+        User = get_user_model()
+        staff_user_ids = StaffProfile.objects.values_list('user_id', flat=True)
+        staff_users = User.objects.filter(id__in=staff_user_ids).prefetch_related('roles', 'user_roles')
+
+        created_count = 0
+        updated_count = 0
+
+        for user in staff_users:
+            role = self._get_primary_role(user)
+            allocation = float(normalized.get(role, 0.0) or 0.0)
+            if allocation < 0:
+                allocation = 0.0
+
+            if split_date and today < split_date:
+                allocation = round(allocation / 2.0, 2)
+
+            balance_obj, created = StaffLeaveBalance.objects.get_or_create(
+                staff=user,
+                leave_type=template.name,
+                defaults={'balance': allocation},
+            )
+            if created:
+                created_count += 1
+            else:
+                if abs(float(balance_obj.balance or 0.0) - allocation) > 1e-9:
+                    balance_obj.balance = allocation
+                    balance_obj.save(update_fields=['balance', 'updated_at'])
+                    updated_count += 1
+
+        return Response({
+            'template_id': template.id,
+            'template_name': template.name,
+            'created': created_count,
+            'updated': updated_count,
+            'split_applied': bool(split_date and today < split_date),
+        })
     
     @action(detail=False, methods=['post'])
     def filter_for_date(self, request):
@@ -686,7 +789,7 @@ class RequestTemplateViewSet(viewsets.ModelViewSet):
             user=request.user, 
             date=check_date
         ).first()
-        
+
         # For absent dates, show all forms except earn/COL type
         # This allows staff to request late entry, OD, leave, etc. on absent dates
         if attendance and attendance.status == 'absent':
