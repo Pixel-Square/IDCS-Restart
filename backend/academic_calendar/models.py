@@ -259,3 +259,75 @@ class CalendarEventAssignment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.event.title}: {self.start_date} → {self.end_date}"
+
+
+# ── Academic Calendar (date-wise) ───────────────────────────────────────────
+
+class AcademicCalendar(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255)
+    from_date = models.DateField()
+    to_date = models.DateField()
+    academic_year = models.CharField(max_length=16)  # e.g. "2025-26"
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, related_name='academic_calendars',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-from_date', '-created_at']
+        indexes = [
+            models.Index(fields=['from_date']),
+            models.Index(fields=['to_date']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.academic_year})"
+
+
+class AcademicCalendarDay(models.Model):
+    calendar = models.ForeignKey(
+        AcademicCalendar, on_delete=models.CASCADE,
+        related_name='days',
+    )
+    date = models.DateField()
+    day_name = models.CharField(max_length=16)
+    working_days = models.CharField(max_length=64, blank=True)
+    ii_year = models.CharField(max_length=64, blank=True)
+    iii_year = models.CharField(max_length=64, blank=True)
+    iv_year = models.CharField(max_length=64, blank=True)
+    i_year = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ['date']
+        unique_together = [['calendar', 'date']]
+        indexes = [
+            models.Index(fields=['calendar', 'date']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.calendar_id} {self.date}"
+
+
+class AcademicCalendarHoliday(models.Model):
+    calendar = models.ForeignKey(
+        AcademicCalendar, on_delete=models.CASCADE,
+        related_name='holidays',
+    )
+    date = models.DateField()
+    name = models.CharField(max_length=200)
+    source = models.CharField(max_length=32, default='working_days')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['date']
+        unique_together = [['calendar', 'date', 'name']]
+        indexes = [
+            models.Index(fields=['calendar', 'date']),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.date} - {self.name}"

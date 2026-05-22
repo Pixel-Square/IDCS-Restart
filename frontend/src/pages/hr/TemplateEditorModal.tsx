@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, GripVertical } from 'lucide-react';
-import { createTemplate, updateTemplate } from '../../services/staffRequests';
+import { X, Plus, Trash2, GripVertical, RefreshCw } from 'lucide-react';
+import { createTemplate, updateTemplate, resetTemplateAllotment } from '../../services/staffRequests';
 import type {
   RequestTemplate,
   FormField,
@@ -39,6 +39,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [approvalSteps, setApprovalSteps] = useState<Partial<ApprovalStep>[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resettingAllotment, setResettingAllotment] = useState(false);
   const [activeTab, setActiveTab] = useState<'details' | 'fields' | 'workflow' | 'attendance'>('details');
   const [roles, setRoles] = useState<string[]>([]);
   const [rolesLoading, setRolesLoading] = useState(false);
@@ -263,6 +264,27 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     }
   };
 
+  const handleResetAllotment = async () => {
+    if (!template?.id) return;
+
+    const ok = window.confirm(
+      'Reset allotment for all staff for this template? This will overwrite current balances.'
+    );
+    if (!ok) return;
+
+    setResettingAllotment(true);
+    try {
+      const res = await resetTemplateAllotment(template.id);
+      alert(
+        `Allotment reset completed. Updated: ${res?.updated ?? 0}, Created: ${res?.created ?? 0}`
+      );
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Failed to reset allotment');
+    } finally {
+      setResettingAllotment(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
@@ -482,9 +504,22 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                           </div>
 
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Reset Period <span className="text-red-500">*</span>
-                            </label>
+                            <div className="flex items-center justify-between gap-3">
+                              <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Reset Period <span className="text-red-500">*</span>
+                              </label>
+                              {template?.id && (
+                                <button
+                                  type="button"
+                                  onClick={handleResetAllotment}
+                                  disabled={resettingAllotment}
+                                  className="mb-2 inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <RefreshCw size={14} />
+                                  {resettingAllotment ? 'Resetting...' : 'Reset Allotment'}
+                                </button>
+                              )}
+                            </div>
                             <p className="text-xs text-gray-500 mb-2">
                               Define the date range for leave balance reset (e.g., Academic Year: June 1 - May 31).
                               When this period ends, balances will be reset automatically.
@@ -689,9 +724,22 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             </div>
                           ) : (
                             <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Reset Period <span className="text-red-500">*</span>
-                              </label>
+                              <div className="flex items-center justify-between gap-3">
+                                <label className="block text-sm font-medium text-gray-700 mb-2">
+                                  Reset Period <span className="text-red-500">*</span>
+                                </label>
+                                {template?.id && (
+                                  <button
+                                    type="button"
+                                    onClick={handleResetAllotment}
+                                    disabled={resettingAllotment}
+                                    className="mb-2 inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    <RefreshCw size={14} />
+                                    {resettingAllotment ? 'Resetting...' : 'Reset Allotment'}
+                                  </button>
+                                )}
+                              </div>
                               <p className="text-xs text-gray-500 mb-2">
                                 Define semester date range for neutral forms. Balance resets after to date.
                               </p>

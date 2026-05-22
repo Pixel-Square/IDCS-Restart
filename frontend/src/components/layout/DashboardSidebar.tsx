@@ -618,6 +618,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
+
+  // Event Attending: visible to all staff, HR, and other approvers
+  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PS', 'HOD', 'AHOD'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
+    items.push({ key: 'event_attending', label: 'Event Attending', to: '/staff-requests/event-attending' });
+  }
+
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
   if ((canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });

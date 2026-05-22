@@ -3792,6 +3792,31 @@ class AttendanceAssignmentRequestView(APIView):
             return Response({'error': 'Target staff not found or inactive'}, status=404)
         if requested_to == staff_profile:
             return Response({'error': 'Cannot request yourself'}, status=400)
+
+        # Daily attendance requests: only section advisors (or admins) may request.
+        # Also ensure the target staff is in the same department when known.
+        if assignment_type == 'DAILY':
+            perms = get_user_permissions(user)
+            can_override = user.is_superuser or 'analytics.view_all_analytics' in perms or 'analytics.view_department_analytics' in perms
+            is_advisor = SectionAdvisor.objects.filter(
+                advisor=staff_profile,
+                section=section,
+                is_active=True
+            ).exists()
+            if not (is_advisor or can_override):
+                return Response({'error': 'Only section advisors can request daily attendance assignment.'}, status=403)
+
+            requestor_dept = getattr(staff_profile, 'current_department', None) or staff_profile.get_current_department() or getattr(staff_profile, 'department', None)
+            if not requestor_dept:
+                try:
+                    requestor_dept = section.batch.course.department if section.batch and section.batch.course else None
+                    if not requestor_dept and section.batch:
+                        requestor_dept = section.batch.department
+                except Exception:
+                    requestor_dept = None
+            target_dept = getattr(requested_to, 'current_department', None) or requested_to.get_current_department() or getattr(requested_to, 'department', None)
+            if requestor_dept and target_dept and requestor_dept.id != target_dept.id:
+                return Response({'error': 'Target staff must be from your department'}, status=400)
         # Resolve period for PERIOD type
         period_obj = None
         if assignment_type == 'PERIOD':

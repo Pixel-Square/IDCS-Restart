@@ -14,6 +14,9 @@ urlpatterns = [
     path('events/<uuid:event_id>/poster-callback/', api_views.poster_callback, name='academic_calendar_poster_callback'),
     path('hod-colours/', api_views.hod_colours, name='academic_calendar_hod_colours'),
     path('hod-students/', api_views.hod_students, name='academic_calendar_hod_students'),
+    path('calendar/template/', api_views.calendar_template_download, name='academic_calendar_template_download'),
+    path('calendars/', api_views.calendars, name='academic_calendar_calendars'),
+    path('calendars/<uuid:calendar_id>/', api_views.calendar_detail, name='academic_calendar_calendar_detail'),
     path('upload/parse/', api_views.upload_parse, name='academic_calendar_upload_parse'),
     path('upload/import/', api_views.upload_import, name='academic_calendar_upload_import'),
 
