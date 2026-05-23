@@ -4049,17 +4049,23 @@ def faculty_course_co_summary(request, ta_id):
     cqi_entries = cqi_attained.entries if cqi_attained and isinstance(cqi_attained.entries, dict) else {}
 
     # CQI expression evaluation (used for Internal Marks CQI values)
-    def _normalize_cqi_expr(expr: str, allowed_names: set) -> str:
+    def _normalize_cqi_expr(expr: str, vars_map: dict) -> str:
         s = str(expr or '').strip()
         if not s:
             return ''
         # CQI editor token picker can build adjacent token expressions that
         # semantically mean addition.
         s = re.sub(r'\]\s+\[', '] + [', s)
-        # Replace token form [TOKEN] with identifier TOKEN (or 0 if unknown).
+        # Replace token form [TOKEN] with its numeric value (or 0 if unknown).
+        # This avoids Python identifier limitations for tokens containing '-' (e.g. COX-SSA_1-WEIGHT).
         def repl(m):
             key = str(m.group(1) or '').strip().upper()
-            return key if key in allowed_names else '0'
+            try:
+                val = float((vars_map or {}).get(key, 0) or 0)
+            except Exception:
+                val = 0.0
+            # Use a plain numeric literal so ast.parse sees a number.
+            return str(val)
         return re.sub(r'\[([A-Za-z0-9_-]+)\]', repl, s)
 
     def _build_cqi_if_from_clauses(clauses) -> str:
@@ -4078,6 +4084,13 @@ def faculty_course_co_summary(request, ta_id):
             if not isinstance(clause, dict):
                 continue
             token = str(clause.get('token') or '').strip().upper()
+            # RAW clause: token empty => rhs is a full boolean expression.
+            if not token:
+                rhs_raw = str(clause.get('rhs') or '').strip()
+                if rhs_raw:
+                    rhs_raw = re.sub(r'\]\s+\[', '] + [', rhs_raw)
+                    parts.append(f'({rhs_raw})')
+                continue
             if not token:
                 continue
 
@@ -4192,8 +4205,7 @@ def faculty_course_co_summary(request, ta_id):
 
     def _safe_eval_cqi_num(expr: str, vars_map: dict) -> float:
         """Safely evaluate a numeric expression for CQI mapping."""
-        allowed_names = set(str(k).upper() for k in (vars_map or {}).keys())
-        expr_n = _normalize_cqi_expr(expr, allowed_names)
+        expr_n = _normalize_cqi_expr(expr, vars_map)
         if not expr_n:
             return float(vars_map.get('CQI', 0) or 0)
         try:
@@ -4250,8 +4262,7 @@ def faculty_course_co_summary(request, ta_id):
 
     def _safe_eval_cqi_bool(expr: str, vars_map: dict) -> bool:
         """Safely evaluate a boolean expression (comparisons + AND/OR) for CQI conditions."""
-        allowed_names = set(str(k).upper() for k in (vars_map or {}).keys())
-        expr_n = _normalize_cqi_expr(expr, allowed_names)
+        expr_n = _normalize_cqi_expr(expr, vars_map)
         if not expr_n:
             return False
         # Support JS-style and word-style boolean operators from saved configs.
@@ -5175,10 +5186,18 @@ def faculty_course_co_summary(request, ta_id):
                     for _src_exam in exams_data:
                         if _src_exam.get('kind') == 'cqi':
                             continue
-                        exam_code = _normalize_cqi_token_code(_src_exam.get('exam_display_name') or _src_exam.get('exam') or '')
+                        exam_code = _normalize_cqi_token_code(
+                            _src_exam.get('short_name')
+                            or _src_exam.get('name')
+                            or _src_exam.get('exam_display_name')
+                            or _src_exam.get('exam')
+                            or ''
+                        )
                         if selected_exam_codes and exam_code not in selected_exam_codes:
                             continue
                         covered = _src_exam.get('covered_cos') or []
+                        if not covered:
+                            covered = list(range(1, co_count + 1))
                         if co_n_local not in covered:
                             continue
                         try:
@@ -5224,10 +5243,18 @@ def faculty_course_co_summary(request, ta_id):
                         for _src_exam in exams_data:
                             if _src_exam.get('kind') == 'cqi':
                                 continue
-                            exam_code = _normalize_cqi_token_code(_src_exam.get('exam_display_name') or _src_exam.get('exam') or '')
+                            exam_code = _normalize_cqi_token_code(
+                                _src_exam.get('short_name')
+                                or _src_exam.get('name')
+                                or _src_exam.get('exam_display_name')
+                                or _src_exam.get('exam')
+                                or ''
+                            )
                             if selected_exam_codes and exam_code not in selected_exam_codes:
                                 continue
                             covered = _src_exam.get('covered_cos') or []
+                            if not covered:
+                                covered = list(range(1, co_count + 1))
                             if _co_n not in covered:
                                 continue
                             n_cov = len(covered) or 1
@@ -5316,10 +5343,18 @@ def faculty_course_co_summary(request, ta_id):
                     for _src_exam in exams_data:
                         if _src_exam.get('kind') == 'cqi':
                             continue
-                        exam_code = _normalize_cqi_token_code(_src_exam.get('exam_display_name') or _src_exam.get('exam') or '')
+                        exam_code = _normalize_cqi_token_code(
+                            _src_exam.get('short_name')
+                            or _src_exam.get('name')
+                            or _src_exam.get('exam_display_name')
+                            or _src_exam.get('exam')
+                            or ''
+                        )
                         if selected_exam_codes and exam_code not in selected_exam_codes:
                             continue
                         covered = _src_exam.get('covered_cos') or []
+                        if not covered:
+                            covered = list(range(1, co_count + 1))
                         if co_n not in covered:
                             continue
                         n_cov = len(covered) or 1
@@ -5361,7 +5396,13 @@ def faculty_course_co_summary(request, ta_id):
                     for source_exam in exams_data:
                         if source_exam.get('kind') == 'cqi':
                             continue
-                        exam_code = _normalize_cqi_token_code(source_exam.get('exam_display_name') or source_exam.get('exam') or '')
+                        exam_code = _normalize_cqi_token_code(
+                            source_exam.get('short_name')
+                            or source_exam.get('name')
+                            or source_exam.get('exam_display_name')
+                            or source_exam.get('exam')
+                            or ''
+                        )
                         if not exam_code:
                             continue
                         if selected_exam_codes and exam_code not in selected_exam_codes:
@@ -5374,6 +5415,8 @@ def faculty_course_co_summary(request, ta_id):
                         co_weight = float(weighted_marks_map.get(f"{exam_key}_CO{co_n}", 0) or 0) if isinstance(weighted_marks_map, dict) else 0.0
                         # Per-exam CO max must also be in weighted space (== weight contribution ceiling).
                         covered = source_exam.get('covered_cos') or []
+                        if not covered:
+                            covered = list(range(1, co_count + 1))
                         n_cov = len(covered) or 1
                         max_for_co = 0.0
                         if co_n in covered:

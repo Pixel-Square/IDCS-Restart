@@ -855,6 +855,27 @@ function COSummaryTab({
     return round2((weightSum * pct) / 100);
   };
 
+  const isStudentCoTotalAtCqiCap = (student: COStudent, coNum: number, displayCoTotals: number[]): { cap: number; examId: string } | null => {
+    if (view !== 'weighted') return null;
+    if (!hasCqiCap) return null;
+    if (!Number.isFinite(coNum) || coNum < 1 || coNum > co_count) return null;
+    const total = Number(displayCoTotals[coNum - 1] ?? 0) || 0;
+    const cqiExams = exams.filter((ex) => String(ex.kind || 'exam').toLowerCase() === 'cqi');
+    const EPS = 0.01;
+    for (const ex of cqiExams) {
+      const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
+        ? ex.covered_cos
+        : Array.from({ length: co_count }, (_, i) => i + 1);
+      if (!coveredCos.includes(coNum)) continue;
+      const cap = getStudentCqiCapForCo(student, ex.id, coNum);
+      if (cap == null) continue;
+      if (Math.abs(total - cap) <= EPS) {
+        return { cap, examId: ex.id };
+      }
+    }
+    return null;
+  };
+
   const getDisplayedStudentCoTotals = (student: COStudent): number[] => {
     const totals = [...student.co_totals];
     const cqiExams = exams.filter((ex) => String(ex.kind || 'exam').toLowerCase() === 'cqi');
@@ -1199,11 +1220,10 @@ function COSummaryTab({
                           const isSelected = selectedCells.has(cellKey);
                           const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
                           const capValue = view === 'weighted' && isCqiCol && col.co > 0 ? getStudentCqiCapForCo(s, examId, col.co) : null;
-                          const isCqiCapHit = view === 'weighted'
-                            && isCqiCol
-                            && capValue != null
-                            && typeof rawWeightedVal === 'number'
-                            && rawWeightedVal > capValue + 0.001;
+                          const capHitInfo = (isCqiCol && col.co > 0)
+                            ? isStudentCoTotalAtCqiCap(s, col.co, displayCoTotals)
+                            : null;
+                          const isCqiCapHit = Boolean(capHitInfo);
                           cellIndex++;
                           return (
                             <td
@@ -1212,7 +1232,7 @@ function COSummaryTab({
                               onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
                               className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${isCqiCapHit ? 'bg-red-100 text-red-900 ring-1 ring-red-300' : (col.isExamSplit || col.isCombo || isCqiCol ? 'bg-purple-50/50 text-purple-700' : '')} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
-                              title={isCqiCapHit && capValue != null ? `CQI cap: ${formatNumber(capValue)}` : undefined}
+                              title={isCqiCapHit && capHitInfo ? `CQI cap reached: ${formatNumber(capHitInfo.cap)} (CO${col.co})` : (capValue != null ? `CQI cap: ${formatNumber(capValue)}` : undefined)}
                             >
                               {absent ? 'AB' : displayVal === null ? <span className="text-gray-300">-</span> : displayVal}
                             </td>
@@ -1223,6 +1243,7 @@ function COSummaryTab({
                             {displayCoTotals.map((ct, ci) => {
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
+                              const capHitInfo = isStudentCoTotalAtCqiCap(s, ci + 1, displayCoTotals);
                               cellIndex++;
                               return (
                                 <td
@@ -1230,7 +1251,8 @@ function COSummaryTab({
                                   data-cell={cellKey}
                                   onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                                   onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
-                                  className={`px-2 py-1.5 text-center font-semibold text-indigo-700 border-l border-indigo-100 bg-indigo-50/40 tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''}`}
+                                  className={`px-2 py-1.5 text-center font-semibold border-l tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${capHitInfo ? 'bg-red-100 text-red-900 border-red-200 ring-1 ring-red-300' : 'text-indigo-700 border-indigo-100 bg-indigo-50/40'}`}
+                                  title={capHitInfo ? `CQI cap reached: ${formatNumber(capHitInfo.cap)} (CO${ci + 1})` : undefined}
                                 >
                                   {ct > 0 ? formatNumber(ct) : <span className="text-gray-300">-</span>}
                                 </td>
