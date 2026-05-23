@@ -790,9 +790,13 @@ function applyPerConditionCap(
   matchedCond: any,
 ): number {
   if (!Number.isFinite(addRaw) || addRaw <= 0) return 0;
-  // Cap rule: CQI should not push a CO (or overall %) beyond the cap.
-  // In this screen the cap is fixed at THRESHOLD_PERCENT (58%).
-  // If a condition explicitly provides a cap_percent, prefer it.
+  // Cap rule: CQI should not push a CO beyond the admin-defined cap.
+  // IMPORTANT: apply cap ONLY when the matched condition explicitly enables it.
+  // (Yellow conditions with cap unchecked must not be limited.)
+  const capEnabled = matchedCond?.cap_enabled === true;
+  if (!capEnabled) return round2(addRaw);
+
+  // If a condition explicitly provides a cap_percent, prefer it; otherwise fall back to 58%.
   const capPct = Number(matchedCond?.cap_percent);
   const effectiveCapPct = Number.isFinite(capPct) && capPct > 0 ? capPct : THRESHOLD_PERCENT;
   if (!Number.isFinite(effectiveCapPct) || effectiveCapPct <= 0) return round2(addRaw);

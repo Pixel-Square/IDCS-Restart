@@ -5154,6 +5154,40 @@ def faculty_course_co_summary(request, ta_id):
                     for x in (cqi_sub.get('exams', []) if isinstance(cqi_sub, dict) and isinstance(cqi_sub.get('exams'), list) else [])
                     if _normalize_cqi_token_code(x)
                 )
+
+                # IMPORTANT: CQI Entry page computes condition tokens (CO-RAW, TOTAL_CQI)
+                # in InternalMarkPage "weighted space" using only the *considered exams*
+                # (cqi_sub.exams filter; if empty => all non-CQI exams).
+                # To keep colours/conditions identical between CQI Entry and Internal Mark,
+                # build the same per-CO "before" totals from weighted_marks per exam.
+                def _before_cqi_total_for_co_ctx(co_num: int) -> float:
+                    try:
+                        co_n_local = int(co_num)
+                    except Exception:
+                        return 0.0
+                    if co_n_local < 1 or co_n_local > co_count:
+                        return 0.0
+                    wm_map = student_entry.get('weighted_marks') or {}
+                    if not isinstance(wm_map, dict):
+                        return 0.0
+
+                    total_local = 0.0
+                    for _src_exam in exams_data:
+                        if _src_exam.get('kind') == 'cqi':
+                            continue
+                        exam_code = _normalize_cqi_token_code(_src_exam.get('exam_display_name') or _src_exam.get('exam') or '')
+                        if selected_exam_codes and exam_code not in selected_exam_codes:
+                            continue
+                        covered = _src_exam.get('covered_cos') or []
+                        if co_n_local not in covered:
+                            continue
+                        try:
+                            key = f"{_src_exam.get('id')}_CO{co_n_local}"
+                            total_local += float(wm_map.get(key, 0) or 0.0)
+                        except Exception:
+                            pass
+                    return float(total_local or 0.0)
+                
                 local_custom_vars = _normalize_cqi_custom_vars(cqi_sub.get('custom_vars', []) if isinstance(cqi_sub, dict) else [])
                 combined_custom_vars = []
                 seen_custom_codes = set()
@@ -5181,7 +5215,7 @@ def faculty_course_co_summary(request, ta_id):
                 if covered_cos_for_cap:
                     for _co_n in covered_cos_for_cap:
                         try:
-                            before_total_for_cap += float((student_entry.get('co_totals') or [0.0] * co_count)[_co_n - 1] or 0.0)
+                            before_total_for_cap += float(_before_cqi_total_for_co_ctx(_co_n) or 0.0)
                         except Exception:
                             pass
 
@@ -5211,15 +5245,25 @@ def faculty_course_co_summary(request, ta_id):
                             co_max_for_co_cap += float(base_w or 0.0) + float(cia_share or 0.0)
                         total_max_for_cap += co_max_for_co_cap
 
-                remaining_total_add = None
+                # Optional overall cap budget (58%): activate only when we actually
+                # encounter a cap-enabled condition. This prevents non-cap conditions
+                # (e.g. yellow) from being limited.
+                before_pct_for_cap = 0.0
                 try:
                     if total_max_for_cap > 0:
                         before_pct_for_cap = (before_total_for_cap / total_max_for_cap) * 100.0
+                except Exception:
+                    before_pct_for_cap = 0.0
+
+                cap_total_value = None
+                try:
+                    if total_max_for_cap > 0:
                         if before_pct_for_cap < 58.0:
                             cap_total_value = (58.0 / 100.0) * total_max_for_cap
-                            remaining_total_add = max(0.0, cap_total_value - before_total_for_cap)
                 except Exception:
-                    remaining_total_add = None
+                    cap_total_value = None
+
+                remaining_total_add = None
 
                 exam_entry = { 'is_absent': False }
                 total_val = 0.0
@@ -5236,18 +5280,25 @@ def faculty_course_co_summary(request, ta_id):
                     except Exception:
                         cqi_in = 0.0
 
+                    # Condition context MUST match CQI Entry page:
+                    # before-co is computed from considered exams only.
                     before_co = 0.0
                     try:
-                        before_co = float((student_entry.get('co_totals') or [0.0] * co_count)[co_n - 1] or 0.0)
+                        before_co = float(_before_cqi_total_for_co_ctx(co_n) or 0.0)
                     except Exception:
                         before_co = 0.0
 
+                    # Row-level CQI tokens must match CQI Entry page semantics:
+                    # - BEFORE_CQI/AFTER_CQI are the row totals across CQI-covered COs
+                    # - TOTAL_CQI is the row total percentage BEFORE CQI additions
+                    # - CQI-TOTAL-MAX is the max total across CQI-covered COs
                     vars_map = {
                         'CQI': float(cqi_in or 0.0),
                         'X': float(cqi_in or 0.0),
-                        'BEFORE_CQI': float(before_co or 0.0),
-                        'AFTER_CQI': float((before_co or 0.0) + (cqi_in or 0.0)),
-                        'TOTAL_CQI': float((before_total_all or 0.0) + (sum_raw_cqi or 0.0)),
+                        'BEFORE_CQI': float(before_total_for_cap or 0.0),
+                        'AFTER_CQI': float(before_total_for_cap or 0.0),
+                        'TOTAL_CQI': float(before_pct_for_cap or 0.0),
+                        'CQI-TOTAL-MAX': float(total_max_for_cap or 0.0),
                     }
 
                     # New token: BEFORE_CQI_COX is the current CO's pre-CQI raw value.
@@ -5418,6 +5469,20 @@ def faculty_course_co_summary(request, ta_id):
                             if matched_condition_title not in titles:
                                 titles.append(matched_condition_title)
                             student_entry['cqi_satisfied_conditions'] = titles
+
+                            # Per-exam, per-CO matched condition index (1-based).
+                            # Used by InternalMarkPage to decide cap eligibility per cell.
+                            by_exam = student_entry.get('cqi_matched_condition_index_by_exam')
+                            if not isinstance(by_exam, dict):
+                                by_exam = {}
+                            exam_id = str(einfo.get('id') or '')
+                            per_exam = by_exam.get(exam_id)
+                            if not isinstance(per_exam, dict):
+                                per_exam = {}
+                            per_exam[str(co_n)] = int(cond_idx) if str(cond_idx).isdigit() else cond_idx
+                            by_exam[exam_id] = per_exam
+                            student_entry['cqi_matched_condition_index_by_exam'] = by_exam
+
                             student_entry['cqi_announce_target'] = True
                             target_cos = student_entry.get('cqi_announce_target_cos')
                             if not isinstance(target_cos, list):
@@ -5438,24 +5503,34 @@ def faculty_course_co_summary(request, ta_id):
 
                     mapped = round(float(mapped or 0.0), 2)
 
-                    # Cap rule (fixed): CQI should not push a CO beyond 58% of CO-MAX.
-                    # If a condition provides cap_percent, prefer it.
+                    cap_enabled_raw = matched_cond_obj.get('cap_enabled') if isinstance(matched_cond_obj, dict) else False
+                    cap_enabled = (
+                        cap_enabled_raw is True
+                        or cap_enabled_raw == 1
+                        or (isinstance(cap_enabled_raw, str) and cap_enabled_raw.strip().lower() in ('true', '1', 'yes', 'y', 'on'))
+                    )
+
+                    # Cap rule (58% by default): apply ONLY when the matched condition
+                    # has cap_enabled=true. If a condition provides cap_percent, prefer it.
                     try:
-                        cond_cap_pct = None
-                        if isinstance(matched_cond_obj, dict) and matched_cond_obj.get('cap_percent') is not None:
-                            cond_cap_pct = float(matched_cond_obj.get('cap_percent') or 0.0)
-                        effective_cap_pct = cond_cap_pct if cond_cap_pct and cond_cap_pct > 0 else 58.0
-                        co_max_for_cap = float(vars_map.get('CO-MAX') or 0.0)
-                        if effective_cap_pct > 0 and co_max_for_cap > 0:
-                            cap_ceiling = round((effective_cap_pct / 100.0) * co_max_for_cap, 4)
-                            max_add = max(0.0, cap_ceiling - float(before_co or 0.0))
-                            mapped = round(min(mapped, max_add), 2)
+                        if cap_enabled:
+                            cond_cap_pct = None
+                            if isinstance(matched_cond_obj, dict) and matched_cond_obj.get('cap_percent') is not None:
+                                cond_cap_pct = float(matched_cond_obj.get('cap_percent') or 0.0)
+                            effective_cap_pct = cond_cap_pct if cond_cap_pct and cond_cap_pct > 0 else 58.0
+                            co_max_for_cap = float(vars_map.get('CO-MAX') or 0.0)
+                            if effective_cap_pct > 0 and co_max_for_cap > 0:
+                                cap_ceiling = round((effective_cap_pct / 100.0) * co_max_for_cap, 4)
+                                max_add = max(0.0, cap_ceiling - float(before_co or 0.0))
+                                mapped = round(min(mapped, max_add), 2)
                     except Exception:
                         pass
 
-                    # Apply overall remaining budget so total AFTER CQI does not exceed 58%.
-                    if remaining_total_add is not None:
+                    # Optional overall remaining budget (58%): apply only on cap-enabled additions.
+                    if cap_enabled and cap_total_value is not None:
                         try:
+                            if remaining_total_add is None:
+                                remaining_total_add = max(0.0, float(cap_total_value or 0.0) - float(before_total_for_cap or 0.0))
                             mapped = round(min(float(mapped or 0.0), float(remaining_total_add or 0.0)), 2)
                             remaining_total_add = max(0.0, float(remaining_total_add or 0.0) - float(mapped or 0.0))
                         except Exception:
