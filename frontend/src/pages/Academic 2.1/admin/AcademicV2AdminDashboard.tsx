@@ -27,17 +27,17 @@ interface AdminPage {
 
 const adminPages: AdminPage[] = [
   {
-    title: 'Publish Control',
-    path: '/academic-v2/admin/publish-control',
-    description: 'Configure semester due dates and publish settings',
-    icon: <Lock size={32} />,
-    order: 1,
-  },
-  {
     title: 'Cycle Management',
     path: '/academic-v2/admin/cycles',
     description: 'Create and manage academic cycles',
     icon: <RotateCw size={32} />,
+    order: 1,
+  },
+  {
+    title: 'Exam Assignments',
+    path: '/academic-v2/admin/exam-assignments',
+    description: 'Create reusable exam templates with question customization',
+    icon: <Grid3x3 size={32} />,
     order: 2,
   },
   {
@@ -55,9 +55,9 @@ const adminPages: AdminPage[] = [
     order: 4,
   },
   {
-    title: 'Exam Assignments',
-    path: '/academic-v2/admin/exam-assignments',
-    description: 'Create reusable exam templates with question customization',
+    title: 'Weightage',
+    path: '/academic-v2/admin/weightage',
+    description: 'Set CO weight distributions for assigned exams by QP type',
     icon: <Grid3x3 size={32} />,
     order: 5,
   },
@@ -69,24 +69,24 @@ const adminPages: AdminPage[] = [
     order: 6,
   },
   {
-    title: 'Internal Marks',
-    path: '/academic-v2/admin/internal-marks',
-    description: 'View and monitor internal marks across departments',
-    icon: <BarChart2 size={32} />,
+    title: 'Publish Control',
+    path: '/academic-v2/admin/publish-control',
+    description: 'Configure semester due dates and publish settings',
+    icon: <Lock size={32} />,
     order: 7,
-  },
-  {
-    title: 'Weightage',
-    path: '/academic-v2/admin/weightage',
-    description: 'Set CO weight distributions for assigned exams by QP type',
-    icon: <Grid3x3 size={32} />,
-    order: 8,
   },
   {
     title: 'Settings',
     path: '/academic-v2/admin/pass-mark',
     description: 'System-wide configuration — pass mark thresholds and more',
     icon: <Settings size={32} />,
+    order: 8,
+  },
+  {
+    title: 'Internal Marks',
+    path: '/academic-v2/admin/internal-marks',
+    description: 'View and monitor internal marks across departments',
+    icon: <BarChart2 size={32} />,
     order: 9,
   },
   {

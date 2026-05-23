@@ -1425,6 +1425,61 @@ export default function MarkEntryPage() {
 
   /* ────── Render ────── */
   if (loading) {
+    // Check for a custom preloader configured in the admin Settings → Preloader panel
+    const preloaderCfg = (() => {
+      try {
+        const raw = localStorage.getItem('acv2_preloader');
+        return raw ? (JSON.parse(raw) as {
+          enabled: boolean;
+          type: 'gif' | 'mp4';
+          source: 'url' | 'upload';
+          url: string;
+          dataUrl: string;
+          fit: 'cover' | 'contain' | 'center';
+        }) : null;
+      } catch { return null; }
+    })();
+
+    const mediaSrc = preloaderCfg?.source === 'url' ? preloaderCfg?.url : preloaderCfg?.dataUrl;
+
+    if (preloaderCfg?.enabled && mediaSrc) {
+      // Fill the content area (below header pt-20 = 5rem, after sidebar via parent padding)
+      const isCenter = preloaderCfg.fit === 'center';
+      const wrapStyle: React.CSSProperties = isCenter
+        ? { display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', width: '100%', height: '100%' }
+        : { width: '100%', height: '100%' };
+      const mediaStyle: React.CSSProperties = isCenter
+        ? {}
+        : { objectFit: preloaderCfg.fit, width: '100%', height: '100%' };
+
+      return (
+        <div
+          className="w-full overflow-hidden bg-gray-100"
+          style={{ height: 'calc(100vh - 5rem)' }}
+        >
+          <div style={wrapStyle}>
+            {preloaderCfg.type === 'mp4' ? (
+              <video
+                src={mediaSrc}
+                autoPlay
+                loop
+                muted
+                playsInline
+                style={mediaStyle}
+              />
+            ) : (
+              <img
+                src={mediaSrc}
+                alt=""
+                style={mediaStyle}
+              />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Default built-in loader (shown when custom preloader is off or not configured)
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-lg p-8 text-center">

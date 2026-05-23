@@ -5217,9 +5217,10 @@ def faculty_course_co_summary(request, ta_id):
                     seen_custom_codes.add(code)
                     combined_custom_vars.append(cv)
 
-                # Overall cap budget (fixed 58%):
-                # When the student's overall BEFORE total across CQI-covered COs is below 58%,
-                # CQI should only raise them up to 58% overall and never beyond.
+                # CQI threshold tokens (TOTAL_CQI / CQI-TOTAL-MAX):
+                # Used for condition evaluation (e.g. TOTAL_CQI < 58).
+                # NOTE: We intentionally do NOT enforce an overall 58% budget cap across COs;
+                # capping is applied per CO only (when the matched condition has cap_enabled).
                 covered_cos_for_cap = []
                 for _c in (einfo.get('covered_cos') or []):
                     try:
@@ -5272,25 +5273,12 @@ def faculty_course_co_summary(request, ta_id):
                             co_max_for_co_cap += float(base_w or 0.0) + float(cia_share or 0.0)
                         total_max_for_cap += co_max_for_co_cap
 
-                # Optional overall cap budget (58%): activate only when we actually
-                # encounter a cap-enabled condition. This prevents non-cap conditions
-                # (e.g. yellow) from being limited.
                 before_pct_for_cap = 0.0
                 try:
                     if total_max_for_cap > 0:
                         before_pct_for_cap = (before_total_for_cap / total_max_for_cap) * 100.0
                 except Exception:
                     before_pct_for_cap = 0.0
-
-                cap_total_value = None
-                try:
-                    if total_max_for_cap > 0:
-                        if before_pct_for_cap < 58.0:
-                            cap_total_value = (58.0 / 100.0) * total_max_for_cap
-                except Exception:
-                    cap_total_value = None
-
-                remaining_total_add = None
 
                 exam_entry = { 'is_absent': False }
                 total_val = 0.0
@@ -5568,16 +5556,6 @@ def faculty_course_co_summary(request, ta_id):
                                 mapped = round(min(mapped, max_add), 2)
                     except Exception:
                         pass
-
-                    # Optional overall remaining budget (58%): apply only on cap-enabled additions.
-                    if cap_enabled and cap_total_value is not None:
-                        try:
-                            if remaining_total_add is None:
-                                remaining_total_add = max(0.0, float(cap_total_value or 0.0) - float(before_total_for_cap or 0.0))
-                            mapped = round(min(float(mapped or 0.0), float(remaining_total_add or 0.0)), 2)
-                            remaining_total_add = max(0.0, float(remaining_total_add or 0.0) - float(mapped or 0.0))
-                        except Exception:
-                            pass
 
                     exam_entry[f'co{co_n}'] = mapped
                     total_val += mapped

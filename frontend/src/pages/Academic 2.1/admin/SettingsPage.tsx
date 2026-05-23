@@ -4,8 +4,8 @@
  * Add new sections here as the system grows.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Bell, Eye, Save, Settings, ShieldCheck, Tag, Users } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Bell, Eye, Film, Save, Settings, ShieldCheck, Tag, Upload, Users } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 // ─── Android-style Toggle Switch Component ──────────────────────────────────
@@ -897,6 +897,348 @@ function FacultyRequestSection() {
   );
 }
 
+// ─── Preloader Section ───────────────────────────────────────────────────────
+
+const PRELOADER_KEY = 'acv2_preloader';
+
+interface PreloaderCfg {
+  enabled: boolean;
+  type: 'gif' | 'mp4';
+  source: 'url' | 'upload';
+  url: string;
+  dataUrl: string;
+  fit: 'cover' | 'contain' | 'center';
+}
+
+const DEFAULT_PRELOADER_CFG: PreloaderCfg = {
+  enabled: false,
+  type: 'gif',
+  source: 'url',
+  url: '',
+  dataUrl: '',
+  fit: 'contain',
+};
+
+function PreloaderSection() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [cfg, setCfg] = useState<PreloaderCfg>(() => {
+    try {
+      const raw = localStorage.getItem(PRELOADER_KEY);
+      if (raw) return { ...DEFAULT_PRELOADER_CFG, ...JSON.parse(raw) };
+    } catch {}
+    return DEFAULT_PRELOADER_CFG;
+  });
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [uploadWarning, setUploadWarning] = useState<string | null>(null);
+
+  const update = (patch: Partial<PreloaderCfg>) =>
+    setCfg(prev => ({ ...prev, ...patch }));
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadWarning(null);
+
+    // Base64 encoding inflates size by ~33%, so a 3.5 MB file → ~4.65 MB stored.
+    // Hard-block anything above 3.5 MB to avoid silently hitting the 5 MB localStorage limit.
+    const HARD_LIMIT_MB = 3.5;
+    const WARN_LIMIT_MB = 2;
+    const fileMB = file.size / 1024 / 1024;
+
+    if (fileMB > HARD_LIMIT_MB) {
+      setUploadWarning(
+        `File is ${fileMB.toFixed(1)} MB — too large to store (max ${HARD_LIMIT_MB} MB for uploads). ` +
+        `Host the file somewhere and use a URL instead.`,
+      );
+      // reset input and bail — don't load the file into state at all
+      e.target.value = '';
+      return;
+    }
+
+    if (fileMB > WARN_LIMIT_MB) {
+      setUploadWarning(
+        `File is ${fileMB.toFixed(1)} MB — close to browser storage limits. ` +
+        `A URL is more reliable for larger media.`,
+      );
+    }
+
+    const reader = new FileReader();
+    reader.onload = ev => update({ dataUrl: ev.target?.result as string });
+    reader.readAsDataURL(file);
+    // reset input so re-uploading same file triggers onChange
+    e.target.value = '';
+  };
+
+  const handleSave = () => {
+    setSaveError(null);
+    try {
+      localStorage.setItem(PRELOADER_KEY, JSON.stringify(cfg));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      setSaveError('Failed to save — storage quota exceeded. Try using a URL instead of upload.');
+    }
+  };
+
+  const handleClear = () => {
+    localStorage.removeItem(PRELOADER_KEY);
+    setCfg(DEFAULT_PRELOADER_CFG);
+    setSaved(false);
+    setSaveError(null);
+  };
+
+  const mediaSrc = cfg.source === 'url' ? cfg.url : cfg.dataUrl;
+  const hasMedia = Boolean(mediaSrc);
+
+  // Compute object-fit CSS value; 'center' mode uses natural size via flex centering
+  const getObjectFit = (fit: PreloaderCfg['fit']): React.CSSProperties =>
+    fit === 'center'
+      ? {}
+      : { objectFit: fit, width: '100%', height: '100%' };
+
+  const centerWrapStyle: React.CSSProperties = cfg.fit === 'center'
+    ? { display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', width: '100%', height: '100%' }
+    : { width: '100%', height: '100%' };
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
+        Replace the default loading spinner on the <strong>Mark Entry</strong> page with a custom GIF or MP4.
+        Settings are stored in the browser's local storage and apply immediately on the next page load.
+      </div>
+
+      {/* Master toggle */}
+      <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-white px-4 py-4">
+        <div>
+          <div className="text-sm font-semibold text-gray-900">Custom Preloader</div>
+          <div className="text-xs text-gray-500 mt-1">Enable to replace the default spinner with your media.</div>
+        </div>
+        <AndroidSwitch checked={cfg.enabled} onChange={v => update({ enabled: v })} />
+      </div>
+
+      {/* Config panel */}
+      <div className={`space-y-5 transition-opacity ${!cfg.enabled ? 'opacity-40 pointer-events-none select-none' : ''}`}>
+        {/* Type */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-2">Preloader Type</label>
+          <div className="flex gap-3">
+            {(['gif', 'mp4'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => update({ type: t })}
+                className={`flex-1 rounded-lg border-2 py-2.5 text-sm font-semibold transition-colors ${
+                  cfg.type === t
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                {t.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Source */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-2">Source</label>
+          <div className="flex gap-3">
+            {(['url', 'upload'] as const).map(s => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => update({ source: s })}
+                className={`flex-1 rounded-lg border-2 py-2.5 text-sm font-semibold transition-colors ${
+                  cfg.source === s
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                {s === 'url' ? 'URL' : 'Upload File'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* URL or File upload */}
+        {cfg.source === 'url' ? (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {cfg.type === 'gif' ? 'GIF URL' : 'MP4 URL'}
+            </label>
+            <input
+              type="url"
+              value={cfg.url}
+              onChange={e => update({ url: e.target.value })}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder={cfg.type === 'gif' ? 'https://example.com/loader.gif' : 'https://example.com/loader.mp4'}
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Upload {cfg.type === 'gif' ? 'GIF' : 'MP4'} File
+            </label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={cfg.type === 'gif' ? 'image/gif' : 'video/mp4'}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+                Choose file
+              </button>
+              {cfg.dataUrl && (
+                <span className="text-xs text-green-600 font-medium">✓ File loaded</span>
+              )}
+              {cfg.dataUrl && (
+                <button
+                  type="button"
+                  onClick={() => { update({ dataUrl: '' }); setUploadWarning(null); }}
+                  className="text-xs text-red-500 hover:text-red-700"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            {uploadWarning && (
+              <div className={`mt-2 text-xs rounded-lg px-3 py-2 border ${
+                uploadWarning.includes('too large')
+                  ? 'text-red-700 bg-red-50 border-red-200'
+                  : 'text-amber-700 bg-amber-50 border-amber-200'
+              }`}>
+                {uploadWarning.includes('too large') ? '✕' : '⚠'} {uploadWarning}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Fit mode */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-2">Fit to Frame</label>
+          <div className="grid grid-cols-3 gap-3">
+            {([
+              { value: 'cover' as const, label: 'Cover', desc: 'Fill & crop' },
+              { value: 'contain' as const, label: 'Contain', desc: 'Fit fully inside' },
+              { value: 'center' as const, label: 'Center', desc: 'Natural size' },
+            ]).map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => update({ fit: opt.value })}
+                className={`rounded-lg border-2 px-3 py-3 text-left transition-colors ${
+                  cfg.fit === opt.value
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <div className={`text-sm font-semibold ${cfg.fit === opt.value ? 'text-blue-700' : 'text-gray-800'}`}>{opt.label}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Live Preview */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-2">Preview</label>
+          <div
+            className="rounded-xl border-2 border-dashed border-gray-300 overflow-hidden"
+            style={{ height: '300px', background: '#f9fafb' }}
+          >
+            {/* Simulated layout frame */}
+            <div className="h-full flex flex-col">
+              {/* Simulated header bar */}
+              <div className="h-7 bg-gray-200 border-b border-gray-300 shrink-0 flex items-center px-3 gap-2">
+                <div className="w-14 h-2.5 bg-gray-400 rounded" />
+                <div className="flex-1" />
+                <div className="w-6 h-2.5 bg-gray-400 rounded" />
+              </div>
+              {/* Row: sidebar + content */}
+              <div className="flex flex-1 min-h-0">
+                {/* Simulated sidebar */}
+                <div className="w-10 bg-gray-300 border-r border-gray-300 shrink-0 flex flex-col items-center pt-3 gap-2">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="w-5 h-1.5 bg-gray-400 rounded" />
+                  ))}
+                </div>
+                {/* Preloader area */}
+                <div className="flex-1 relative overflow-hidden bg-white">
+                  {hasMedia ? (
+                    <div style={centerWrapStyle}>
+                      {cfg.type === 'mp4' ? (
+                        <video
+                          key={mediaSrc}
+                          src={mediaSrc}
+                          autoPlay
+                          loop
+                          muted
+                          playsInline
+                          style={getObjectFit(cfg.fit)}
+                        />
+                      ) : (
+                        <img
+                          key={mediaSrc}
+                          src={mediaSrc}
+                          alt="Preloader preview"
+                          style={getObjectFit(cfg.fit)}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-300 gap-2">
+                      <Film className="w-10 h-10" />
+                      <span className="text-xs text-gray-400">No media — set a URL or upload a file</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">
+            Grey areas simulate the header and sidebar. The white area shows how the preloader will fill the content frame.
+          </p>
+        </div>
+      </div>
+
+      {saveError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-700">{saveError}</div>
+      )}
+      {saved && (
+        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-700">
+          Saved! The custom preloader will appear on the next Mark Entry page load.
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={handleClear}
+          className="text-sm text-red-500 hover:text-red-700 font-medium"
+        >
+          Clear / Reset to Default
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+        >
+          <Save className="w-4 h-4" />
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings Section Wrapper ─────────────────────────────────────────────────
 
 function SettingsSection({
@@ -927,7 +1269,7 @@ function SettingsSection({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const [active, setActive] = useState<'pass_mark' | 'my_marks' | 'academic_notifications' | 'faculty_request'>('pass_mark');
+  const [active, setActive] = useState<'pass_mark' | 'my_marks' | 'academic_notifications' | 'faculty_request' | 'preloader'>('pass_mark');
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4">
@@ -998,6 +1340,19 @@ export default function SettingsPage() {
               <div className="text-xs text-gray-500 truncate">Request rules and notifications</div>
             </div>
           </button>
+          <button
+            type="button"
+            onClick={() => setActive('preloader')}
+            className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 ${active === 'preloader' ? 'bg-gray-50' : ''}`}
+          >
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Film className="w-4 h-4 text-gray-600" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900">Preloader</div>
+              <div className="text-xs text-gray-500 truncate">Custom loading animation</div>
+            </div>
+          </button>
         </div>
 
         {/* Right content */}
@@ -1039,6 +1394,16 @@ export default function SettingsPage() {
               description="Configure faculty request feature settings, verification requirements, and WhatsApp notifications."
             >
               <FacultyRequestSection />
+            </SettingsSection>
+          )}
+
+          {active === 'preloader' && (
+            <SettingsSection
+              icon={<Film className="w-5 h-5" />}
+              title="Preloader"
+              description="Customise the loading animation shown on the Mark Entry page when exam data is being fetched."
+            >
+              <PreloaderSection />
             </SettingsSection>
           )}
         </div>

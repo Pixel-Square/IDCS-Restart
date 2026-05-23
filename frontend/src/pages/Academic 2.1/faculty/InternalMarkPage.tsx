@@ -79,7 +79,6 @@ interface COStudent {
   co_totals: number[];
   final_mark: number;
   cqi_satisfied_conditions?: string[];
-  cqi_matched_condition_index_by_exam?: Record<string, Record<string, number>>;
 }
 
 interface COSummary {
@@ -682,7 +681,7 @@ function COSummaryTab({
   const round2 = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
   const normalizeExamCode = (value: string) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
   const cqiConditions = Array.isArray(cqiConfig?.conditions) ? cqiConfig.conditions : [];
-  const hasCqiCap = cqiConditions.some((cond) => (cond as any)?.cap_enabled === true);
+  const hasCqiCap = cqiConditions.some((cond) => Boolean(cond?.cap_enabled));
   const cqiConditionByTitle = new Map<string, { title?: string; name?: string; cap_enabled?: boolean; cap_percent?: number }>();
   cqiConditions.forEach((cond, idx) => {
     const keys = [
@@ -737,13 +736,15 @@ function COSummaryTab({
   }, [cqiConfig?.exams, co_count, exams]);
 
   const defaultCqiCapPercent = useMemo(() => {
-    const firstCap = cqiConditions.find((cond) => (cond as any)?.cap_enabled === true);
+    const firstCap = cqiConditions.find((cond) => cond?.cap_enabled);
     const pct = Number(firstCap?.cap_percent ?? 58);
     return Number.isFinite(pct) && pct > 0 ? pct : 58;
   }, [cqiConditions]);
 
-  // Note: cap ceilings vary per student/CO because they depend on which condition matched
-  // (and whether cap is enabled). Do not compute a single header cap value.
+  const cqiCapByCo = useMemo(
+    () => selectedCqiExamWeightByCo.map((weight) => (weight > 0 ? round2((weight * defaultCqiCapPercent) / 100) : 0)),
+    [defaultCqiCapPercent, selectedCqiExamWeightByCo],
+  );
 
   // Build column groups for the table
   type ColDef = { key: string; label: string; sub: string; examIdx: number; co: number; weightNotSet?: boolean; isExamSplit?: boolean; isCombo?: boolean; comboKey?: string };
@@ -761,7 +762,8 @@ function COSummaryTab({
         const isCqi = String(ex.kind || 'exam').toLowerCase() === 'cqi';
         const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
         const notSet = !isCqi && (!w || w <= 0);
-        const sub = isCqi ? (hasCqiCap ? 'CQI (cap by condition)' : 'CQI') : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
+        const cqiCap = isCqi && hasCqiCap ? cqiCapByCo[co - 1] : 0;
+        const sub = isCqi ? (hasCqiCap && cqiCap > 0 ? `cap: ${cqiCap}` : 'CQI') : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
         cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
       }
     }
@@ -823,57 +825,24 @@ function COSummaryTab({
     examGroups.push({ exam: ex, colCount: count });
   });
 
-  const getMatchedCqiConditionIndex = (student: COStudent, examId: string, coNum: number): number | null => {
-    const byExam = student.cqi_matched_condition_index_by_exam;
-    if (!byExam || typeof byExam !== 'object') return null;
-    const perExam = (byExam as any)[String(examId)] as Record<string, number> | undefined;
-    if (!perExam || typeof perExam !== 'object') return null;
-    const raw = (perExam as any)[String(coNum)];
-    const idx = Number(raw);
-    return Number.isFinite(idx) && idx > 0 ? idx : null;
-  };
-
-  const getStudentCqiCapPercent = (student: COStudent, examId: string, coNum: number): number | null => {
-    // Preferred: use backend-provided per-CO matched condition index (1-based).
-    const idx = getMatchedCqiConditionIndex(student, examId, coNum);
-    if (idx != null) {
-      const cond = cqiConditions[idx - 1] as any;
-      if (cond?.cap_enabled === true) {
+  const getStudentCqiCapPercent = (student: COStudent): number | null => {
+    const titles = Array.isArray(student.cqi_satisfied_conditions) ? student.cqi_satisfied_conditions : [];
+    for (const title of titles) {
+      const cond = cqiConditionByTitle.get(String(title || '').trim().toLowerCase());
+      if (cond?.cap_enabled) {
         const pct = Number(cond.cap_percent ?? defaultCqiCapPercent);
         return Number.isFinite(pct) && pct > 0 ? pct : defaultCqiCapPercent;
       }
-      return null;
     }
     return null;
   };
 
-  const getStudentCqiCapForCo = (student: COStudent, examId: string, coNum: number): number | null => {
-    const pct = getStudentCqiCapPercent(student, examId, coNum);
+  const getStudentCqiCapForCo = (student: COStudent, coNum: number): number | null => {
+    const pct = getStudentCqiCapPercent(student);
     if (pct == null) return null;
     const weightSum = selectedCqiExamWeightByCo[coNum - 1] ?? 0;
     if (!(weightSum > 0)) return null;
     return round2((weightSum * pct) / 100);
-  };
-
-  const isStudentCoTotalAtCqiCap = (student: COStudent, coNum: number, displayCoTotals: number[]): { cap: number; examId: string } | null => {
-    if (view !== 'weighted') return null;
-    if (!hasCqiCap) return null;
-    if (!Number.isFinite(coNum) || coNum < 1 || coNum > co_count) return null;
-    const total = Number(displayCoTotals[coNum - 1] ?? 0) || 0;
-    const cqiExams = exams.filter((ex) => String(ex.kind || 'exam').toLowerCase() === 'cqi');
-    const EPS = 0.01;
-    for (const ex of cqiExams) {
-      const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
-        ? ex.covered_cos
-        : Array.from({ length: co_count }, (_, i) => i + 1);
-      if (!coveredCos.includes(coNum)) continue;
-      const cap = getStudentCqiCapForCo(student, ex.id, coNum);
-      if (cap == null) continue;
-      if (Math.abs(total - cap) <= EPS) {
-        return { cap, examId: ex.id };
-      }
-    }
-    return null;
   };
 
   const getDisplayedStudentCoTotals = (student: COStudent): number[] => {
@@ -888,7 +857,7 @@ function COSummaryTab({
         if (coNum < 1 || coNum > co_count) continue;
         const key = `${ex.id}_CO${coNum}`;
         const raw = Number(student.weighted_marks[key] ?? 0) || 0;
-        const cap = getStudentCqiCapForCo(student, ex.id, coNum);
+        const cap = getStudentCqiCapForCo(student, coNum);
         const display = cap != null && raw > cap ? cap : raw;
         const current = Number(totals[coNum - 1] ?? 0) || 0;
         totals[coNum - 1] = round2(current - raw + display);
@@ -935,7 +904,7 @@ function COSummaryTab({
     const weightedVal = s.weighted_marks[col.key] ?? '';
     const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
     if (isCqiCol && col.co > 0 && typeof weightedVal === 'number') {
-      const cap = getStudentCqiCapForCo(s, exams[col.examIdx].id, col.co);
+      const cap = getStudentCqiCapForCo(s, col.co);
       if (cap != null && weightedVal > cap) return cap;
     }
     return weightedVal;
@@ -1119,7 +1088,7 @@ function COSummaryTab({
         {view === 'weighted' && hasCqiCap && (
           <div className="px-4 py-2 border-b bg-amber-50 text-xs text-amber-800 flex flex-wrap items-center gap-2">
             <span className="font-semibold">CQI cap active</span>
-            <span>Cap applies only for cap-enabled conditions (per-condition %).</span>
+            <span>Cap = selected CO weight sum x {defaultCqiCapPercent}%</span>
             <span className="text-amber-600">Capped cells are highlighted.</span>
           </div>
         )}
@@ -1211,7 +1180,6 @@ function COSummaryTab({
                         <td className="px-3 py-1.5 font-mono text-xs sticky left-10 bg-white z-10">{s.reg_no}</td>
                         <td className="px-3 py-1.5 truncate max-w-[160px]">{s.name}</td>
                         {cols.map((col, ci) => {
-                          const rawWeightedVal = view === 'weighted' ? (s.weighted_marks[col.key] ?? '') : '';
                           const val = getCellValue(s, col);
                           const examId = exams[col.examIdx].id;
                           const absent = s.exam_marks[examId]?.is_absent;
@@ -1219,11 +1187,8 @@ function COSummaryTab({
                           const cellKey = getCellKey(si, cellIndex);
                           const isSelected = selectedCells.has(cellKey);
                           const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
-                          const capValue = view === 'weighted' && isCqiCol && col.co > 0 ? getStudentCqiCapForCo(s, examId, col.co) : null;
-                          const capHitInfo = (isCqiCol && col.co > 0)
-                            ? isStudentCoTotalAtCqiCap(s, col.co, displayCoTotals)
-                            : null;
-                          const isCqiCapHit = Boolean(capHitInfo);
+                          const capValue = view === 'weighted' && isCqiCol && col.co > 0 ? getStudentCqiCapForCo(s, col.co) : null;
+                          const isCqiCapHit = view === 'weighted' && isCqiCol && capValue != null && typeof val === 'number' && val >= capValue - 0.001;
                           cellIndex++;
                           return (
                             <td
@@ -1232,7 +1197,7 @@ function COSummaryTab({
                               onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
                               className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${isCqiCapHit ? 'bg-red-100 text-red-900 ring-1 ring-red-300' : (col.isExamSplit || col.isCombo || isCqiCol ? 'bg-purple-50/50 text-purple-700' : '')} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
-                              title={isCqiCapHit && capHitInfo ? `CQI cap reached: ${formatNumber(capHitInfo.cap)} (CO${col.co})` : (capValue != null ? `CQI cap: ${formatNumber(capValue)}` : undefined)}
+                              title={isCqiCapHit && capValue != null ? `CQI cap: ${formatNumber(capValue)}` : undefined}
                             >
                               {absent ? 'AB' : displayVal === null ? <span className="text-gray-300">-</span> : displayVal}
                             </td>
@@ -1243,7 +1208,6 @@ function COSummaryTab({
                             {displayCoTotals.map((ct, ci) => {
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
-                              const capHitInfo = isStudentCoTotalAtCqiCap(s, ci + 1, displayCoTotals);
                               cellIndex++;
                               return (
                                 <td
@@ -1251,8 +1215,7 @@ function COSummaryTab({
                                   data-cell={cellKey}
                                   onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                                   onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
-                                  className={`px-2 py-1.5 text-center font-semibold border-l tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${capHitInfo ? 'bg-red-100 text-red-900 border-red-200 ring-1 ring-red-300' : 'text-indigo-700 border-indigo-100 bg-indigo-50/40'}`}
-                                  title={capHitInfo ? `CQI cap reached: ${formatNumber(capHitInfo.cap)} (CO${ci + 1})` : undefined}
+                                  className={`px-2 py-1.5 text-center font-semibold text-indigo-700 border-l border-indigo-100 bg-indigo-50/40 tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''}`}
                                 >
                                   {ct > 0 ? formatNumber(ct) : <span className="text-gray-300">-</span>}
                                 </td>

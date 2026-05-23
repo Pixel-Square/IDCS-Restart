@@ -24,6 +24,8 @@ type CqiAdminCondition = {
   if: string;
   then: string;
   color?: string;
+  cap_enabled?: boolean;
+  cap_percent?: number;
   // stored by editor UI; evaluator must use it for pinned Before_CQI + AND behavior
   if_clauses?: CqiIfClause[];
 };
@@ -1442,15 +1444,6 @@ export default function CqiEntryPage() {
       let afterValue = beforeValue;
       let delta = 0;
 
-      // Overall cap (fixed 58%): if the student is below threshold overall,
-      // CQI should only raise them up to 58% and never beyond.
-      const capTotalValue = (beforePct < THRESHOLD_PERCENT && beforeMax > 0)
-        ? round2((THRESHOLD_PERCENT / 100) * beforeMax)
-        : null;
-      let remainingTotalAdd = capTotalValue != null
-        ? Math.max(0, round2(capTotalValue - beforeValue))
-        : Infinity;
-
       const appliedAdds: Record<number, number> = {};
       // Apply CQI only for the admin-selected COs shown in this page.
       for (const c of perCoMeta) {
@@ -1463,15 +1456,14 @@ export default function CqiEntryPage() {
         const impact = evaluateCqiImpactWithCap(cqiConfig, ctxBase, Number(input), c.coNum, c.matchedCond);
         const desiredAdd = impact.addRaw;
         if (!Number.isFinite(desiredAdd) || desiredAdd <= 0) continue;
-        const applied = round2(Math.min(desiredAdd, Number.isFinite(remainingTotalAdd) ? remainingTotalAdd : desiredAdd));
+
+        const applied = round2(desiredAdd);
         if (applied > 0) {
           appliedAdds[c.coNum] = applied;
           delta += applied;
           afterValue += applied;
-          if (Number.isFinite(remainingTotalAdd)) remainingTotalAdd = round2(Math.max(0, remainingTotalAdd - applied));
         }
       }
-      if (capTotalValue != null) afterValue = Math.min(afterValue, capTotalValue);
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;
       const afterPct = beforeMax > 0 ? (afterValue / beforeMax) * 100 : 0;
 
@@ -1487,7 +1479,7 @@ export default function CqiEntryPage() {
           ctxAfter['X'] = ctxAfter['CQI'];
           ctxAfter['CO-RAW'] = c.max > 0 ? clamp(afterCoValue, 0, c.max) : afterCoValue;
           syncCurrentCoAliases(ctxAfter, c.coNum);
-          // Override row-level totals so conditions using TOTAL_CQI see the capped overall outcome.
+          // Override row-level totals so conditions using TOTAL_CQI see the current row outcome.
           ctxAfter['AFTER_CQI'] = round2(afterValue);
           ctxAfter['TOTAL_CQI'] = round2(afterPct);
           notAttainedAfter = Boolean(firstMatchedCondition(cqiConfig, ctxAfter, c.coNum));
