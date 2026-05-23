@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowRight, BookOpen, Loader2, UserRound } from 'lucide-react';
+import { AlertCircle, BookOpen, ChevronRight, Loader2, UserRound } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import RequirementsPage from '../../settings/RequirementsPage';
 import MyMarksLayout from './MyMarksLayout';
@@ -173,19 +173,20 @@ export default function CourseListPage() {
                 />
               </div>
 
-              {/* Bottom row: faculty + weight + arrow */}
-              <div className="mt-3 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5 text-sm text-gray-600 min-w-0">
+              {/* Bottom row: faculty + weight + CTA */}
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-gray-600">
                   <UserRound className="h-4 w-4 shrink-0 text-gray-400" />
                   <span className="truncate">{course.faculty_name || 'Faculty not assigned'}</span>
                 </div>
-                <div className="flex shrink-0 items-center gap-4">
-                  <span className="text-xs text-gray-400">
-                    {course.exams_entered} exam{course.exams_entered === 1 ? '' : 's'} entered
-                    {' · '}
-                    {course.obtained_weight.toFixed(1)} / {course.max_weight.toFixed(1)} wt
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="hidden text-xs text-gray-400 sm:inline">
+                    {course.exams_entered} exam{course.exams_entered === 1 ? '' : 's'} · {course.obtained_weight.toFixed(1)}/{course.max_weight.toFixed(1)} wt
                   </span>
-                  <ArrowRight className="h-4 w-4 text-gray-300 transition group-hover:text-indigo-500" />
+                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition group-hover:bg-indigo-700 group-hover:shadow-md">
+                    View Marks
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </span>
                 </div>
               </div>
             </button>

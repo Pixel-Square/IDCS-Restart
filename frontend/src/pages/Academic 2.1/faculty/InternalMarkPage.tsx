@@ -11,6 +11,7 @@ import {
   Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle, Copy,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
+import { exportCOSummaryToExcel, exportCOSummaryToPDF } from './COSummaryExport';
 import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
 import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
@@ -77,6 +78,7 @@ interface COStudent {
   weighted_marks: Record<string, number>;
   co_totals: number[];
   final_mark: number;
+  cqi_satisfied_conditions?: string[];
 }
 
 interface COSummary {
@@ -86,6 +88,10 @@ interface COSummary {
   total_internal_marks: number;
   exams: COExam[];
   students: COStudent[];
+  cqi_config?: {
+    exams?: string[];
+    conditions?: Array<{ title?: string; name?: string; cap_enabled?: boolean; cap_percent?: number }>;
+  } | null;
 }
 
 /* ─── component ─── */
@@ -214,93 +220,7 @@ export default function InternalMarkPage() {
     }
   };
 
-  const exportCOSummaryCSV = () => {
-    if (!orderedCoSummary) return;
-    const { exams, students, co_count } = orderedCoSummary;
-    const isW = coView === 'weighted';
-    const allCos = Array.from({ length: co_count }, (_, i) => i + 1);
 
-    // Build headers - show all COs, not just covered_cos
-    const headers: string[] = ['#', 'Reg No', 'Name'];
-    for (const ex of exams) {
-      if (isW) {
-        for (const co of allCos) {
-          const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
-          headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
-        }
-        if (ex.cia_enabled) {
-          const n = allCos.length || 1;
-          const perCo = !!ex.cia_weight_per_co;
-          for (const co of allCos) {
-            const effectiveW = ex.cia_weight
-              ? (perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100)
-              : 0;
-            const maxSplit = ex.exam_max_marks ? Math.round((ex.exam_max_marks / n) * 100) / 100 : 0;
-            const tag = perCo ? 'Exam×' : 'Exam';
-            headers.push(`${ex.short_name} ${tag}-CO${co} (wt:${effectiveW > 0 ? effectiveW : 'NOT_SET'} /${maxSplit})`);
-          }
-        }
-      } else {
-        for (const co of allCos) headers.push(`${ex.short_name} CO${co} (/${ex.max_per_co})`);
-        if (ex.cia_enabled) {
-          const n = allCos.length || 1;
-          for (const co of allCos) {
-            if (String(ex.kind || 'exam').toLowerCase() === 'cqi') {
-              headers.push(`${ex.short_name}_CO${co} (CQI)`);
-              continue;
-            }
-            const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
-            headers.push(`${ex.short_name}_CO${co} (wt:${w && w > 0 ? w : 'NOT_SET'})`);
-          }
-        }
-        headers.push(`${ex.short_name} Total (/${ex.max_marks})`);
-      }
-    }
-    if (isW) {
-      for (let c = 1; c <= co_count; c++) headers.push(`CO${c} Total`);
-      headers.push(`Final (/${coSummary.total_internal_marks})`);
-    }
-
-    const rows = students.map((s, i) => {
-      const row: (string | number)[] = [i + 1, s.reg_no, s.name];
-      for (const ex of exams) {
-        const em = s.exam_marks[ex.id] || {};
-        if (isW) {
-          for (const co of allCos) row.push(s.weighted_marks[`${ex.id}_CO${co}`] ?? '');
-          if (ex.cia_enabled) {
-            for (const co of allCos) {
-              row.push(s.weighted_marks[`${ex.id}_exam_CO${co}`] ?? '');
-            }
-          }
-        } else {
-          for (const co of allCos) {
-            const v = (em as any)[`co${co}`];
-            row.push(typeof v === 'number' ? v : '');
-          }
-          if (ex.cia_enabled) {
-            const n = allCos.length || 1;
-            const rawExam = (em.exam as number) ?? 0;
-            for (const co of allCos) row.push(Math.round((rawExam / n) * 100) / 100);
-          }
-          row.push(typeof (em as any).total === 'number' ? ((em as any).total as number) : '');
-        }
-      }
-      if (isW) {
-        for (let c = 0; c < co_count; c++) row.push(s.co_totals[c]);
-        row.push(s.final_mark);
-      }
-      return row;
-    });
-
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${coSummary.course_code}_co_summary_${coView}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   /* ─── status helpers ─── */
   const getStatusBadge = (status: string, locked: boolean) => {
@@ -603,10 +523,10 @@ export default function InternalMarkPage() {
         <COSummaryTab
           loading={coLoading}
           data={orderedCoSummary}
+          courseInfo={courseInfo}
           view={coView}
           onChangeView={setCoView}
           onRefresh={loadCOSummary}
-          onExportCSV={exportCOSummaryCSV}
         />
       )}
     </div>
@@ -617,15 +537,39 @@ export default function InternalMarkPage() {
 /* ═══════════ CO Summary Tab Component ═══════════ */
 
 function COSummaryTab({
-  loading, data, view, onChangeView, onRefresh, onExportCSV,
+  loading, data, courseInfo, view, onChangeView, onRefresh,
 }: {
   loading: boolean;
   data: COSummary | null;
+  courseInfo: CourseInfo | null;
   view: 'raw' | 'weighted';
   onChangeView: (v: 'raw' | 'weighted') => void;
   onRefresh: () => void;
-  onExportCSV: () => void;
 }) {
+  const [showExportModal, setShowExportModal] = React.useState(false);
+  const [exporting, setExporting] = React.useState<'excel' | 'pdf' | null>(null);
+
+  const handleExportExcel = () => {
+    if (!data || !courseInfo) return;
+    setExporting('excel');
+    try {
+      exportCOSummaryToExcel(data, view, courseInfo);
+    } finally {
+      setExporting(null);
+      setShowExportModal(false);
+    }
+  };
+
+  const handleExportPDF = async () => {
+    if (!data || !courseInfo) return;
+    setExporting('pdf');
+    try {
+      await exportCOSummaryToPDF(data, view, courseInfo);
+    } finally {
+      setExporting(null);
+      setShowExportModal(false);
+    }
+  };
   const [decimalPlaces, setDecimalPlaces] = React.useState<1 | 2>(2);
   const [selectedCells, setSelectedCells] = React.useState<Set<string>>(new Set());
   const [selectionStart, setSelectionStart] = React.useState<{ row: number; col: number } | null>(null);
@@ -729,10 +673,78 @@ function COSummaryTab({
     };
   }, []);
 
-  if (loading) return <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
-  if (!data) return <div className="p-8 text-center text-gray-400">No data. Click refresh to load.</div>;
+  const exams = data?.exams ?? [];
+  const students = data?.students ?? [];
+  const co_count = data?.co_count ?? 0;
+  const total_internal_marks = data?.total_internal_marks ?? 0;
+  const cqiConfig = data?.cqi_config ?? null;
+  const round2 = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
+  const normalizeExamCode = (value: string) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const cqiConditions = Array.isArray(cqiConfig?.conditions) ? cqiConfig.conditions : [];
+  const hasCqiCap = cqiConditions.some((cond) => Boolean(cond?.cap_enabled));
+  const cqiConditionByTitle = new Map<string, { title?: string; name?: string; cap_enabled?: boolean; cap_percent?: number }>();
+  cqiConditions.forEach((cond, idx) => {
+    const keys = [
+      String(cond?.title || '').trim(),
+      String(cond?.name || '').trim(),
+      `Condition ${idx + 1}`,
+      `CQI Condition ${idx + 1}`,
+    ]
+      .filter(Boolean)
+      .flatMap((value) => {
+        const lower = value.toLowerCase();
+        const suffixMatch = value.match(/(\d+)$/);
+        const aliases = [lower];
+        if (suffixMatch) {
+          const idx = suffixMatch[1];
+          aliases.push(`condition ${idx}`.toLowerCase());
+          aliases.push(`cqi condition ${idx}`.toLowerCase());
+        }
+        return aliases;
+      });
 
-  const { exams, students, co_count, total_internal_marks } = data;
+    keys.forEach((key) => {
+      if (key) cqiConditionByTitle.set(key, cond);
+    });
+  });
+
+  const selectedCqiExamWeightByCo = useMemo(() => {
+    const out = Array.from({ length: co_count }, () => 0);
+    const selectedExamCodes = new Set(
+      Array.isArray(cqiConfig?.exams)
+        ? cqiConfig.exams.map((code) => normalizeExamCode(String(code || ''))).filter(Boolean)
+        : [],
+    );
+
+    exams.forEach((ex) => {
+      if (String(ex.kind || 'exam').toLowerCase() === 'cqi') return;
+      const examCode = normalizeExamCode(ex.short_name || ex.name || '');
+      if (selectedExamCodes.size > 0 && !selectedExamCodes.has(examCode)) return;
+
+      const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
+        ? ex.covered_cos
+        : Object.keys(ex.co_weights || {}).map((k) => Number(k)).filter((n) => Number.isFinite(n));
+
+      for (const coNum of coveredCos) {
+        if (!coNum || coNum < 1 || coNum > co_count) continue;
+        const weight = Number(ex.co_weights?.[String(coNum)] ?? (ex.co_weights as any)?.[coNum] ?? 0) || 0;
+        if (weight > 0) out[coNum - 1] += weight;
+      }
+    });
+
+    return out.map((v) => round2(v));
+  }, [cqiConfig?.exams, co_count, exams]);
+
+  const defaultCqiCapPercent = useMemo(() => {
+    const firstCap = cqiConditions.find((cond) => cond?.cap_enabled);
+    const pct = Number(firstCap?.cap_percent ?? 58);
+    return Number.isFinite(pct) && pct > 0 ? pct : 58;
+  }, [cqiConditions]);
+
+  const cqiCapByCo = useMemo(
+    () => selectedCqiExamWeightByCo.map((weight) => (weight > 0 ? round2((weight * defaultCqiCapPercent) / 100) : 0)),
+    [defaultCqiCapPercent, selectedCqiExamWeightByCo],
+  );
 
   // Build column groups for the table
   type ColDef = { key: string; label: string; sub: string; examIdx: number; co: number; weightNotSet?: boolean; isExamSplit?: boolean; isCombo?: boolean; comboKey?: string };
@@ -750,7 +762,8 @@ function COSummaryTab({
         const isCqi = String(ex.kind || 'exam').toLowerCase() === 'cqi';
         const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
         const notSet = !isCqi && (!w || w <= 0);
-        const sub = isCqi ? 'CQI' : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
+        const cqiCap = isCqi && hasCqiCap ? cqiCapByCo[co - 1] : 0;
+        const sub = isCqi ? (hasCqiCap && cqiCap > 0 ? `cap: ${cqiCap}` : 'CQI') : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
         cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
       }
     }
@@ -812,6 +825,52 @@ function COSummaryTab({
     examGroups.push({ exam: ex, colCount: count });
   });
 
+  const getStudentCqiCapPercent = (student: COStudent): number | null => {
+    const titles = Array.isArray(student.cqi_satisfied_conditions) ? student.cqi_satisfied_conditions : [];
+    for (const title of titles) {
+      const cond = cqiConditionByTitle.get(String(title || '').trim().toLowerCase());
+      if (cond?.cap_enabled) {
+        const pct = Number(cond.cap_percent ?? defaultCqiCapPercent);
+        return Number.isFinite(pct) && pct > 0 ? pct : defaultCqiCapPercent;
+      }
+    }
+    return null;
+  };
+
+  const getStudentCqiCapForCo = (student: COStudent, coNum: number): number | null => {
+    const pct = getStudentCqiCapPercent(student);
+    if (pct == null) return null;
+    const weightSum = selectedCqiExamWeightByCo[coNum - 1] ?? 0;
+    if (!(weightSum > 0)) return null;
+    return round2((weightSum * pct) / 100);
+  };
+
+  const getDisplayedStudentCoTotals = (student: COStudent): number[] => {
+    const totals = [...student.co_totals];
+    const cqiExams = exams.filter((ex) => String(ex.kind || 'exam').toLowerCase() === 'cqi');
+
+    for (const ex of cqiExams) {
+      const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
+        ? ex.covered_cos
+        : Array.from({ length: co_count }, (_, i) => i + 1);
+      for (const coNum of coveredCos) {
+        if (coNum < 1 || coNum > co_count) continue;
+        const key = `${ex.id}_CO${coNum}`;
+        const raw = Number(student.weighted_marks[key] ?? 0) || 0;
+        const cap = getStudentCqiCapForCo(student, coNum);
+        const display = cap != null && raw > cap ? cap : raw;
+        const current = Number(totals[coNum - 1] ?? 0) || 0;
+        totals[coNum - 1] = round2(current - raw + display);
+      }
+    }
+
+    return totals.map((v) => round2(v));
+  };
+
+  const getDisplayedFinalMark = (student: COStudent): number => {
+    return round2(getDisplayedStudentCoTotals(student).reduce((sum, value) => sum + value, 0));
+  };
+
   const getCellValue = (s: COStudent, col: ColDef): string | number => {
     if (view === 'raw') {
       if (col.co === 0) {
@@ -842,7 +901,13 @@ function COSummaryTab({
       // Exam split column (weighted) - fetched from backend weighted_marks
       return s.weighted_marks[col.key] ?? '';
     }
-    return s.weighted_marks[col.key] ?? '';
+    const weightedVal = s.weighted_marks[col.key] ?? '';
+    const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
+    if (isCqiCol && col.co > 0 && typeof weightedVal === 'number') {
+      const cap = getStudentCqiCapForCo(s, col.co);
+      if (cap != null && weightedVal > cap) return cap;
+    }
+    return weightedVal;
   };
 
   // Compute per-column averages (exclude absent students, skip empty/zero values)
@@ -860,7 +925,7 @@ function COSummaryTab({
 
   const coTotalAverages: (number | null)[] = view === 'weighted'
     ? Array.from({ length: co_count }, (_, i) => {
-        const vals = students.map(s => s.co_totals[i]).filter(v => typeof v === 'number' && v > 0) as number[];
+        const vals = students.map((s) => getDisplayedStudentCoTotals(s)[i]).filter(v => typeof v === 'number' && v > 0) as number[];
         if (!vals.length) return null;
         return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
       })
@@ -868,11 +933,14 @@ function COSummaryTab({
 
   const finalAverage: number | null = view === 'weighted'
     ? (() => {
-        const vals = students.map(s => s.final_mark).filter(v => typeof v === 'number' && v > 0) as number[];
+        const vals = students.map((s) => getDisplayedFinalMark(s)).filter(v => typeof v === 'number' && v > 0) as number[];
         if (!vals.length) return null;
         return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
       })()
     : null;
+
+  if (loading) return <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
+  if (!data) return <div className="p-8 text-center text-gray-400">No data. Click refresh to load.</div>;
 
   return (
     <div className="space-y-3">
@@ -907,9 +975,53 @@ function COSummaryTab({
           </button>
         </div>
 
-        <button onClick={onExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
-          <Download className="w-3.5 h-3.5" /> Export CSV
+        <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
+          <Download className="w-3.5 h-3.5" /> Export
         </button>
+
+        {/* Export format modal */}
+        {showExportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white rounded-xl shadow-2xl p-6 w-80">
+              <h3 className="text-lg font-bold text-gray-900 mb-1">Export CO Summary</h3>
+              <p className="text-sm text-gray-500 mb-5">Choose export format for <span className="font-medium">{view === 'weighted' ? 'Weighted' : 'Raw'} Marks</span></p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={handleExportExcel}
+                  disabled={!!exporting}
+                  className="flex flex-col items-center gap-2 p-4 border-2 border-green-300 rounded-xl hover:bg-green-50 disabled:opacity-50 transition-colors"
+                >
+                  <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                    <span className="text-green-700 font-bold text-sm">XLS</span>
+                  </div>
+                  <span className="text-sm font-semibold text-green-800">
+                    {exporting === 'excel' ? 'Exporting…' : 'Excel'}
+                  </span>
+                  <span className="text-[11px] text-gray-400 text-center">Styled with colours &amp; headers</span>
+                </button>
+                <button
+                  onClick={handleExportPDF}
+                  disabled={!!exporting}
+                  className="flex flex-col items-center gap-2 p-4 border-2 border-red-300 rounded-xl hover:bg-red-50 disabled:opacity-50 transition-colors"
+                >
+                  <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center">
+                    <span className="text-red-700 font-bold text-sm">PDF</span>
+                  </div>
+                  <span className="text-sm font-semibold text-red-800">
+                    {exporting === 'pdf' ? 'Generating…' : 'PDF'}
+                  </span>
+                  <span className="text-[11px] text-gray-400 text-center">Banner, details &amp; styled table</span>
+                </button>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="mt-4 w-full py-2 text-sm text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <button onClick={onRefresh} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50">
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </button>
@@ -973,6 +1085,13 @@ function COSummaryTab({
 
       {/* Table */}
       <div className="bg-white rounded-lg shadow border overflow-hidden">
+        {view === 'weighted' && hasCqiCap && (
+          <div className="px-4 py-2 border-b bg-amber-50 text-xs text-amber-800 flex flex-wrap items-center gap-2">
+            <span className="font-semibold">CQI cap active</span>
+            <span>Cap = selected CO weight sum x {defaultCqiCapPercent}%</span>
+            <span className="text-amber-600">Capped cells are highlighted.</span>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table ref={tableRef} className="min-w-full text-sm divide-y divide-gray-200">
             {/* Header row 1: exam names spanning columns */}
@@ -992,7 +1111,9 @@ function COSummaryTab({
                       <span>Max: {exam.max_marks}</span>
                       <span>&middot;</span>
                       {String(exam.kind || 'exam').toLowerCase() === 'cqi' ? (
-                        <span className="bg-purple-100 text-purple-800 px-1 rounded">CQI</span>
+                        <span className="bg-purple-100 text-purple-800 px-1 rounded">
+                          {view === 'weighted' && hasCqiCap ? 'CQI cap' : 'CQI'}
+                        </span>
                       ) : exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
                         exam.covered_cos.map(co => {
                           const wVal = Number(exam.co_weights[String(co)] ?? 0);
@@ -1050,6 +1171,8 @@ function COSummaryTab({
                 <>
                   {students.map((s, si) => {
                     const isAbsentAny = Object.values(s.exam_marks).some(em => em.is_absent);
+                    const displayCoTotals = view === 'weighted' ? getDisplayedStudentCoTotals(s) : s.co_totals;
+                    const displayFinalMark = view === 'weighted' ? getDisplayedFinalMark(s) : s.final_mark;
                     let cellIndex = 3; // Start after row number, reg no, name
                     return (
                       <tr key={si} className={`${isAbsentAny ? 'bg-yellow-50/40' : ''} hover:bg-blue-50/30`}>
@@ -1063,15 +1186,18 @@ function COSummaryTab({
                           const displayVal = typeof val === 'number' ? formatNumber(val) : (val === '' ? null : val);
                           const cellKey = getCellKey(si, cellIndex);
                           const isSelected = selectedCells.has(cellKey);
-                          cellIndex++;
                           const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
+                          const capValue = view === 'weighted' && isCqiCol && col.co > 0 ? getStudentCqiCapForCo(s, col.co) : null;
+                          const isCqiCapHit = view === 'weighted' && isCqiCol && capValue != null && typeof val === 'number' && val >= capValue - 0.001;
+                          cellIndex++;
                           return (
                             <td
                               key={ci}
                               data-cell={cellKey}
                               onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
-                              className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${col.isExamSplit || col.isCombo || isCqiCol ? 'bg-purple-50/50 text-purple-700' : ''} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
+                              className={`px-2 py-1.5 text-center tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''} ${col.co === 0 ? 'font-semibold bg-gray-50/60' : ''} ${isCqiCapHit ? 'bg-red-100 text-red-900 ring-1 ring-red-300' : (col.isExamSplit || col.isCombo || isCqiCol ? 'bg-purple-50/50 text-purple-700' : '')} ${ci === 0 || exams[col.examIdx].id !== exams[cols[ci - 1]?.examIdx]?.id ? 'border-l border-gray-200' : ''} ${absent ? 'text-red-400 italic' : ''}`}
+                              title={isCqiCapHit && capValue != null ? `CQI cap: ${formatNumber(capValue)}` : undefined}
                             >
                               {absent ? 'AB' : displayVal === null ? <span className="text-gray-300">-</span> : displayVal}
                             </td>
@@ -1079,7 +1205,7 @@ function COSummaryTab({
                         })}
                         {view === 'weighted' && (
                           <>
-                            {s.co_totals.map((ct, ci) => {
+                            {displayCoTotals.map((ct, ci) => {
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
                               cellIndex++;
@@ -1101,7 +1227,7 @@ function COSummaryTab({
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex)}
                               className={`px-3 py-1.5 text-center font-bold border-l border-gray-200 bg-green-50/40 tabular-nums cursor-cell select-none transition-colors ${selectedCells.has(getCellKey(si, cellIndex)) ? 'bg-blue-200' : ''}`}
                             >
-                              {s.final_mark > 0 ? formatNumber(s.final_mark) : <span className="text-gray-300">-</span>}
+                              {displayFinalMark > 0 ? formatNumber(displayFinalMark) : <span className="text-gray-300">-</span>}
                             </td>
                             <td
                               data-cell={getCellKey(si, cellIndex + 1)}
@@ -1109,7 +1235,7 @@ function COSummaryTab({
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex + 1)}
                               className={`px-3 py-1.5 text-center font-bold border-l border-purple-200 bg-purple-50/40 tabular-nums text-purple-700 cursor-cell select-none transition-colors ${selectedCells.has(getCellKey(si, cellIndex + 1)) ? 'bg-blue-200' : ''}`}
                             >
-                              {s.final_mark > 0 ? formatNumber((s.final_mark / total_internal_marks) * 100) : <span className="text-gray-300">-</span>}
+                              {displayFinalMark > 0 ? formatNumber((displayFinalMark / total_internal_marks) * 100) : <span className="text-gray-300">-</span>}
                             </td>
                           </>
                         )}

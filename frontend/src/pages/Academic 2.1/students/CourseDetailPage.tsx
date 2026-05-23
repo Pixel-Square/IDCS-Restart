@@ -209,27 +209,37 @@ export default function CourseDetailPage() {
         </div>
       ) : (
         <>
-          {/* ── Mobile: horizontal cycle pills ── */}
-          <div className="mb-4 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-            {cycles.map((c, i) => (
-              <button
-                key={c.cycle_id}
-                type="button"
-                onClick={() => setActiveCycle(i)}
-                className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
-                  i === activeCycle
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {c.cycle_name}
-                {c.entered_weight_pct !== null && (
-                  <span className={`ml-2 text-xs font-bold ${i === activeCycle ? 'text-indigo-200' : 'text-gray-400'}`}>
-                    {Math.round(c.entered_weight_pct)}%
-                  </span>
-                )}
-              </button>
-            ))}
+          {/* ── Mobile: cycle selector as card strip ── */}
+          <div className="mb-4 lg:hidden">
+            <div className="flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory">
+              {cycles.map((c, i) => {
+                const active = i === activeCycle;
+                const pct = c.entered_weight_pct;
+                const scoreColor = pct === null ? 'text-gray-300' : pct >= 75 ? 'text-emerald-500' : pct >= 50 ? 'text-amber-500' : 'text-rose-500';
+                return (
+                  <button
+                    key={c.cycle_id}
+                    type="button"
+                    onClick={() => setActiveCycle(i)}
+                    className={`snap-start shrink-0 rounded-xl border-2 px-4 py-3 text-left transition-all min-w-[110px] ${
+                      active
+                        ? 'border-indigo-500 bg-gradient-to-br from-indigo-600 to-indigo-700 shadow-md'
+                        : 'border-gray-200 bg-white hover:border-indigo-300 hover:shadow-sm'
+                    }`}
+                  >
+                    <p className={`text-[11px] font-semibold uppercase tracking-wide ${active ? 'text-indigo-200' : 'text-gray-400'}`}>
+                      {c.cycle_name}
+                    </p>
+                    <p className={`mt-0.5 text-2xl font-black leading-tight ${active ? 'text-white' : scoreColor}`}>
+                      {pct !== null ? `${Math.round(pct)}%` : '—'}
+                    </p>
+                    <p className={`mt-1 text-[10px] ${active ? 'text-indigo-300' : 'text-gray-400'}`}>
+                      {c.entered_exam_count} exam{c.entered_exam_count === 1 ? '' : 's'}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* ── Layout: desktop sidebar + content ── */}

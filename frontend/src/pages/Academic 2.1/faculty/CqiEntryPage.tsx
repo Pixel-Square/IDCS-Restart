@@ -74,6 +74,37 @@ type CqiDraftResponse = { draft: null | { co_numbers: number[]; threshold_percen
 type CqiPublishedResponse = { published: null | { co_numbers: number[]; entries: Record<string, Record<string, number | null>>; published_at?: string | null; published_by?: number | null; }; };
 
 const THRESHOLD_PERCENT = 58;
+const CQI_CACHE_PREFIX = 'academic_v2_cqi_entries_v1';
+
+function getCqiCacheKeys(examId?: string | null, taId?: string | null) {
+  return Array.from(new Set([
+    examId ? `${CQI_CACHE_PREFIX}:exam:${examId}` : '',
+    taId ? `${CQI_CACHE_PREFIX}:ta:${taId}` : '',
+  ].filter(Boolean)));
+}
+
+function readCqiCache(examId?: string | null, taId?: string | null): CqiEntries | null {
+  if (typeof window === 'undefined') return null;
+  for (const key of getCqiCacheKeys(examId, taId)) {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as CqiEntries;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function writeCqiCache(entries: CqiEntries, examId?: string | null, taId?: string | null) {
+  if (typeof window === 'undefined') return;
+  const payload = JSON.stringify(entries || {});
+  for (const key of getCqiCacheKeys(examId, taId)) {
+    window.localStorage.setItem(key, payload);
+  }
+}
 
 function normalizeExamCode(input: string) {
   return String(input || '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -752,6 +783,68 @@ function evaluateCqiImpact(
   return { addRaw, notAttainedBefore: true, notAttainedAfter };
 }
 
+function applyPerConditionCap(
+  addRaw: number,
+  beforeCoValue: number,
+  coMaxValue: number,
+  matchedCond: any,
+): number {
+  if (!Number.isFinite(addRaw) || addRaw <= 0) return 0;
+  // Cap rule: CQI should not push a CO (or overall %) beyond the cap.
+  // In this screen the cap is fixed at THRESHOLD_PERCENT (58%).
+  // If a condition explicitly provides a cap_percent, prefer it.
+  const capPct = Number(matchedCond?.cap_percent);
+  const effectiveCapPct = Number.isFinite(capPct) && capPct > 0 ? capPct : THRESHOLD_PERCENT;
+  if (!Number.isFinite(effectiveCapPct) || effectiveCapPct <= 0) return round2(addRaw);
+  if (!Number.isFinite(coMaxValue) || coMaxValue <= 0) return round2(addRaw);
+
+  const capCeiling = (effectiveCapPct / 100) * coMaxValue;
+  const maxAdd = Math.max(0, capCeiling - (Number(beforeCoValue) || 0));
+  return round2(Math.min(addRaw, maxAdd));
+}
+
+function evaluateCqiImpactWithCap(
+  cfg: CqiAdminConfig,
+  ctxBase: Record<string, number>,
+  cqiInput: number | null,
+  coNum: number,
+  matchedCondHint?: any,
+): { addRaw: number; notAttainedBefore: boolean; notAttainedAfter: boolean } {
+  const matchedBefore = matchedCondHint ?? firstMatchedCondition(cfg, ctxBase, coNum);
+  const notAttainedBefore = Boolean(matchedBefore);
+  if (!matchedBefore) return { addRaw: 0, notAttainedBefore: false, notAttainedAfter: false };
+
+  const outcomeExpr = String(matchedBefore.then || '').trim() || String(cfg.else_formula || '').trim() || '[CQI]';
+  if (!outcomeExpr) return { addRaw: 0, notAttainedBefore: true, notAttainedAfter: true };
+
+  const beforeCoValue = Number(ctxBase['CO-RAW'] ?? 0) || 0;
+  const coMaxValue = Number(ctxBase['CO-MAX'] ?? 0) || 0;
+
+  const out = evaluateCqiOutcome(outcomeExpr, ctxBase, cqiInput, coNum);
+  let addRaw = out.addRaw;
+  let ctxAfter = out.ctxAfter;
+
+  const capped = applyPerConditionCap(addRaw, beforeCoValue, coMaxValue, matchedBefore);
+  if (capped !== addRaw) {
+    addRaw = capped;
+    const afterCoValue = round2(beforeCoValue + addRaw);
+    ctxAfter = { ...ctxBase };
+    ctxAfter['CQI'] = cqiInput != null && Number.isFinite(cqiInput) ? Number(cqiInput) : 0;
+    ctxAfter['X'] = ctxAfter['CQI'];
+    ctxAfter['CO-RAW'] = round2(coMaxValue > 0 ? clamp(afterCoValue, 0, coMaxValue) : afterCoValue);
+    syncCurrentCoAliases(ctxAfter, coNum);
+
+    const beforeTotal = Number(ctxBase['BEFORE_CQI_COX'] ?? ctxBase['CO-RAW'] ?? 0) || 0;
+    const totalMax = Number(ctxBase['CQI-TOTAL-MAX'] ?? 0) || 0;
+    const afterTotal = round2(beforeTotal + addRaw);
+    ctxAfter['AFTER_CQI'] = afterTotal;
+    ctxAfter['TOTAL_CQI'] = round2(totalMax > 0 ? (afterTotal / totalMax) * 100 : Number(ctxBase['TOTAL_CQI'] ?? 0) || 0);
+  }
+
+  const notAttainedAfter = Boolean(firstMatchedCondition(cfg, ctxAfter, coNum));
+  return { addRaw, notAttainedBefore: true, notAttainedAfter };
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CqiEntryPage() {
   const { courseId: courseIdParam, examId } = useParams<{ courseId?: string; examId?: string }>();
@@ -768,7 +861,7 @@ export default function CqiEntryPage() {
   const [publishControlInfo, setPublishControlInfo] = useState<any | null>(null);
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: number | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
-  const [entries, setEntries] = useState<CqiEntries>({});
+  const [entries, setEntries] = useState<CqiEntries>(() => readCqiCache(examId ?? null, courseIdParam ?? null) || {});
   const [dirty, setDirty] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [announcementNotif, setAnnouncementNotif] = useState<{ studentCount: number; timestamp: number } | null>(null);
@@ -981,9 +1074,23 @@ export default function CqiEntryPage() {
           });
         }
       } catch { /* ignore */ }
-      if (pubJson?.published) { setEntries((pubJson.published.entries as any) || {}); setDirty(false); }
-      else if (draftJson?.draft?.entries) { setEntries(draftJson.draft.entries); setDirty(false); }
-      else { setEntries({}); setDirty(false); }
+      const cachedEntries = readCqiCache(examId ?? null, effectiveTaId ?? null);
+      if (pubJson?.published?.entries) {
+        const nextEntries = (pubJson.published.entries as any) || {};
+        setEntries(nextEntries);
+        writeCqiCache(nextEntries, examId ?? null, effectiveTaId ?? null);
+        setDirty(false);
+      } else if (draftJson?.draft?.entries) {
+        setEntries(draftJson.draft.entries);
+        writeCqiCache(draftJson.draft.entries, examId ?? null, effectiveTaId ?? null);
+        setDirty(false);
+      } else if (cachedEntries) {
+        setEntries(cachedEntries);
+        setDirty(false);
+      } else {
+        setEntries({});
+        setDirty(false);
+      }
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to load CQI page' }); }
     finally { setLoading(false); }
   };
@@ -1005,6 +1112,7 @@ export default function CqiEntryPage() {
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Draft save failed'); }
       const data = await res.json().catch(() => ({}));
       setDraftLog({ updated_at: (data as any)?.updated_at ?? null, updated_by: (data as any)?.updated_by ?? null });
+      writeCqiCache(nextEntries ?? entries, examId ?? null, effectiveTaId ?? null);
       setDirty(false);
     } catch (e: any) { console.error(e); setMessage({ type: 'error', text: e?.message || 'Failed to save draft' }); }
     finally { setSaving(false); }
@@ -1018,12 +1126,15 @@ export default function CqiEntryPage() {
       await saveDraft(entries);
 
       if (examId) {
-        const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${effectiveTaId}/cqi-publish/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries, co_numbers: displayCoNumbers }),
         });
         if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
         const data = await res.json().catch(() => ({}));
         setPublishedLog({ published_at: (data as any)?.published_at ?? null });
+        writeCqiCache(entries, examId ?? null, effectiveTaId ?? null);
         try {
           const exRes = await fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
           if (exRes.ok) {
@@ -1039,6 +1150,7 @@ export default function CqiEntryPage() {
         if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error((err as any)?.detail || 'Publish failed'); }
         const data = await res.json().catch(() => ({}));
         setPublishedLog({ published_at: (data as any)?.published_at ?? null });
+        writeCqiCache(entries, examId ?? null, effectiveTaId ?? null);
         if ((data as any)?.publish_control) setPublishControlInfo((data as any).publish_control);
       }
 
@@ -1225,7 +1337,12 @@ export default function CqiEntryPage() {
   const setEntry = (studentId: string, coKey: string, raw: string) => {
     if (tableBlocked) return;
     const val = parseEntryNumber(raw);
-    setEntries((prev) => { const next = { ...prev }; next[studentId] = { ...(next[studentId] || {}), [coKey]: val }; return next; });
+    setEntries((prev) => {
+      const next = { ...prev };
+      next[studentId] = { ...(next[studentId] || {}), [coKey]: val };
+      writeCqiCache(next, examId ?? null, taId ?? courseIdParam ?? null);
+      return next;
+    });
     setDirty(true);
   };
 
@@ -1320,6 +1437,17 @@ export default function CqiEntryPage() {
         : '';
       let afterValue = beforeValue;
       let delta = 0;
+
+      // Overall cap (fixed 58%): if the student is below threshold overall,
+      // CQI should only raise them up to 58% and never beyond.
+      const capTotalValue = (beforePct < THRESHOLD_PERCENT && beforeMax > 0)
+        ? round2((THRESHOLD_PERCENT / 100) * beforeMax)
+        : null;
+      let remainingTotalAdd = capTotalValue != null
+        ? Math.max(0, round2(capTotalValue - beforeValue))
+        : Infinity;
+
+      const appliedAdds: Record<number, number> = {};
       // Apply CQI only for the admin-selected COs shown in this page.
       for (const c of perCoMeta) {
         if (!c.max || c.max <= 0) continue;
@@ -1328,28 +1456,49 @@ export default function CqiEntryPage() {
         if (!hasCqiConfig || !cqiConfig) continue;
         if (!c.notAttainedBefore || !c.matchedCond) continue;
         const ctxBase = c.ctxBase;
-        const impact = evaluateCqiImpact(cqiConfig, ctxBase, Number(input), c.coNum);
-        let addRaw = impact.addRaw;
-        // Apply per-condition cap: if admin set cap_enabled on the matched condition,
-        // clamp so the CO total won't exceed cap_percent% of CO-MAX.
-        if (Number.isFinite(addRaw) && addRaw > 0) {
-          const condCap = c.matchedCond as any;
-          if (condCap?.cap_enabled && Number.isFinite(Number(condCap?.cap_percent)) && Number(condCap.cap_percent) > 0 && c.max > 0) {
-            const capValue = (Number(condCap.cap_percent) / 100) * c.max;
-            const maxAdd = Math.max(0, capValue - c.value);
-            addRaw = round2(Math.min(addRaw, maxAdd));
-          }
+        const impact = evaluateCqiImpactWithCap(cqiConfig, ctxBase, Number(input), c.coNum, c.matchedCond);
+        const desiredAdd = impact.addRaw;
+        if (!Number.isFinite(desiredAdd) || desiredAdd <= 0) continue;
+        const applied = round2(Math.min(desiredAdd, Number.isFinite(remainingTotalAdd) ? remainingTotalAdd : desiredAdd));
+        if (applied > 0) {
+          appliedAdds[c.coNum] = applied;
+          delta += applied;
+          afterValue += applied;
+          if (Number.isFinite(remainingTotalAdd)) remainingTotalAdd = round2(Math.max(0, remainingTotalAdd - applied));
         }
-        if (Number.isFinite(addRaw) && addRaw > 0) { delta += addRaw; afterValue += addRaw; }
       }
+      if (capTotalValue != null) afterValue = Math.min(afterValue, capTotalValue);
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;
       const afterPct = beforeMax > 0 ? (afterValue / beforeMax) * 100 : 0;
+
+      const perCoUi = perCoMeta.map((c) => {
+        const appliedAdd = Number(appliedAdds[c.coNum] ?? 0) || 0;
+        const input = entries?.[studentId]?.[`co${c.coNum}`] ?? null;
+
+        let notAttainedAfter = c.notAttainedBefore;
+        if (hasCqiConfig && cqiConfig && input != null && c.notAttainedBefore && c.matchedCond) {
+          const ctxAfter = { ...c.ctxBase };
+          const afterCoValue = round2((Number(ctxAfter['CO-RAW'] ?? c.value) || 0) + appliedAdd);
+          ctxAfter['CQI'] = Number(input) || 0;
+          ctxAfter['X'] = ctxAfter['CQI'];
+          ctxAfter['CO-RAW'] = c.max > 0 ? clamp(afterCoValue, 0, c.max) : afterCoValue;
+          syncCurrentCoAliases(ctxAfter, c.coNum);
+          // Override row-level totals so conditions using TOTAL_CQI see the capped overall outcome.
+          ctxAfter['AFTER_CQI'] = round2(afterValue);
+          ctxAfter['TOTAL_CQI'] = round2(afterPct);
+          notAttainedAfter = Boolean(firstMatchedCondition(cqiConfig, ctxAfter, c.coNum));
+        }
+
+        const { ctxBase, matchedCond, ...rest } = c as any;
+        return { ...rest, input, appliedAdd: round2(appliedAdd), notAttainedAfter };
+      });
+
       return {
         idx,
         studentId,
         regNo: s.reg_no,
         name: s.name,
-        perCo: perCoMeta.map(({ ctxBase, matchedCond, ...rest }) => rest),
+        perCo: perCoUi,
         perCoMeta,
         beforeValue,
         beforeMax,
@@ -1423,10 +1572,19 @@ export default function CqiEntryPage() {
               )}
             </div>
             <p className="text-gray-500">{coSummary.course_code} — {coSummary.course_name}</p>
-            <p className="text-xs text-gray-400 mt-1">
-              Draft: {draftLog?.updated_at ? new Date(draftLog.updated_at).toLocaleString() : 'never'}
-              {' • '}Published: {publishedLog?.published_at ? new Date(publishedLog.published_at).toLocaleString() : 'never'}
-            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${draftLog?.updated_at ? 'bg-slate-100 text-slate-700' : 'bg-slate-50 text-slate-400'}`}>
+                Last draft: {draftLog?.updated_at ? new Date(draftLog.updated_at).toLocaleString() : 'never'}
+              </span>
+              <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${publishedLog?.published_at ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                {publishedLog?.published_at ? 'Published' : 'Not published'}
+              </span>
+              {publishedLog?.published_at && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium bg-emerald-50 text-emerald-600">
+                  {new Date(publishedLog.published_at).toLocaleString()}
+                </span>
+              )}
+            </div>
             {publishControlInfo?.meta && (
               <p className="text-xs text-gray-400 mt-1">
                 Publish window: {String((publishControlInfo as any)?.meta?.window_state || 'UNKNOWN')} {(publishControlInfo as any)?.meta?.due_at ? `• Due: ${new Date((publishControlInfo as any).meta.due_at).toLocaleString()}` : ''}
@@ -1858,6 +2016,7 @@ export default function CqiEntryPage() {
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase min-w-[220px]">Name</th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[110px]">BEFORE CQI</th>
                 <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[120px]">TOTAL</th>
+                <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[120px]">AFTER CQI</th>
                 {displayCoNumbers.map((coNum) => (
                   <th key={coNum} className="px-3 py-3 text-center text-xs font-semibold text-gray-700 min-w-[170px]">CO{coNum}</th>
                 ))}
@@ -1919,9 +2078,22 @@ export default function CqiEntryPage() {
                     <td className="px-3 py-2 text-center font-bold">
                       <div
                         className="inline-flex min-w-[96px] flex-col rounded-2xl border border-slate-200 px-3 py-2 shadow-sm"
+                      >
+                        <div className="text-gray-900 text-sm font-extrabold">{round2(r.beforePct)}%</div>
+                        <div className="text-xs text-gray-500 mt-1">{round2(r.beforeValue)}</div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-center font-bold">
+                      <div
+                        className="inline-flex min-w-[96px] flex-col rounded-2xl border border-slate-200 px-3 py-2 shadow-sm"
                         style={r.totalHighlightColor ? { backgroundColor: r.totalHighlightColor } : undefined}
                       >
                         <div className="text-gray-900 text-sm font-extrabold">{round2(r.afterPct)}%</div>
+                        {(() => {
+                          const d = round2(r.afterPct - r.beforePct);
+                          if (!Number.isFinite(d) || d <= 0) return null;
+                          return <div className="text-xs font-semibold text-emerald-700 mt-0.5">+{d}%</div>;
+                        })()}
                         <div className="text-xs text-gray-500 mt-1">{round2(r.afterValue)}</div>
                       </div>
                     </td>
@@ -1936,6 +2108,7 @@ export default function CqiEntryPage() {
                       const notAttainedBefore = Boolean(cMeta?.notAttainedBefore);
                       const matchedCond = (cMeta?.matchedCond as any) || null;
                       const matchedColor = String(cMeta?.matchedColor || '').trim();
+                      const ctxBase = (cMeta?.ctxBase as Record<string, number> | undefined) || undefined;
                       const contrastColor = matchedColor ? getContrastColor(matchedColor) : null;
 
                       /**
@@ -1945,35 +2118,15 @@ export default function CqiEntryPage() {
                        */
                       const allowInput = !tableBlocked && hasCqiConfig && cqiConfig && notAttainedBefore && !!matchedCond;
 
-                      const ctxBase = buildContext(
-                        r.coTotals,
-                        coMaxByCoSelected,
-                        0,
-                        c.coNum,
-                        consideredExams,
-                        r.examMarks,
-                        r.weightedMarks,
-                        cqiConfig?.custom_vars,
-                        { beforeValue: r.beforeValue, beforePct: r.beforePct, afterValue: r.afterValue, afterPct: r.afterPct, beforeMax: r.beforeMax },
-                      );
-                      // Apply derived variables so conditions using them work correctly
-                      applyDerivedVariables(ctxBase, cqiConfig?.derived_variables, c.coNum);
-
-                      let addRaw = 0;
-                      let notAttainedAfter = notAttainedBefore;
-                      if (hasInput && hasCqiConfig && cqiConfig && allowInput) {
-                        const impact = evaluateCqiImpact(cqiConfig, ctxBase, input, c.coNum);
-                        addRaw = impact.addRaw;
-                        notAttainedAfter = impact.notAttainedAfter;
-                      }
-
+                      const addRaw = Number((c as any)?.appliedAdd ?? 0) || 0;
+                      const notAttainedAfter = Boolean((c as any)?.notAttainedAfter);
                       const isCqiAttained = notAttainedBefore && hasInput && !notAttainedAfter;
                       const cellTone = !hasCqiConfig
                         ? 'border-amber-200 bg-amber-50'
                         : (!notAttainedBefore ? 'border-green-200 bg-green-50' : (matchedColor ? '' : (allowInput ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white')));
 
                       const debugBlock = (() => {
-                        if (!debugOpen || !hasCqiConfig || !cqiConfig) return null;
+                        if (!debugOpen || !hasCqiConfig || !cqiConfig || !ctxBase) return null;
                         const conds = Array.isArray(cqiConfig.conditions) ? cqiConfig.conditions : [];
                         const condEvaluations = conds
                           .filter((x) => hasConditionMatcher(x))
