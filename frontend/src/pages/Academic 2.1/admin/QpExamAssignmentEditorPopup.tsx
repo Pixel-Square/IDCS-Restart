@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, X, Settings2, GripVertical, Copy, ClipboardPaste, Check, AlertTriangle, Save, Trash2, Edit3 } from 'lucide-react';
 import QpCqiEditorPopup from './QpCqiEditorPopup';
 
@@ -74,6 +74,24 @@ interface ExamAssignment {
   pass_mark?: number | null;
 }
 
+interface MarkManagerCOConfig {
+  enabled: boolean;
+  num_items: number;
+  max_marks: number;
+}
+
+interface MarkManagerConfig {
+  enabled: boolean;
+  mode: 'admin_define' | 'user_define';
+  cia_enabled: boolean;
+  cia_max_marks: number;
+  cia_label?: string;
+  item_name?: string;
+  whole_number: boolean;
+  arrow_keys: boolean;
+  cos: Record<number, MarkManagerCOConfig>;
+}
+
 type CqiVar = { code: string; label: string; token: string; kind?: 'base' | 'custom' };
 
 type CycleOption = {
@@ -102,6 +120,8 @@ type Props = {
   onUpdateRow: (idx: number, field: keyof QuestionDef, value: unknown) => void;
   onOpenQuestionSettings: (idx: number) => void;
   onReplaceRows: (rows: QuestionDef[]) => void;
+  markManager: MarkManagerConfig;
+  onMarkManagerChange: (mm: MarkManagerConfig) => void;
 
   // CQI embedding support
   cqiVariables: CqiVar[];
@@ -138,6 +158,43 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
   if (!props.open || !props.selectedExamAssignmentItem) return null;
 
   const exam = props.selectedExamAssignmentItem.exam;
+  const markManager = props.markManager;
+
+  const updateMarkManager = (updater: (prev: MarkManagerConfig) => MarkManagerConfig) => {
+    const next = updater(markManager);
+    props.onMarkManagerChange(next);
+    setLocalEditing(true);
+  };
+
+  // Generate rows from mark manager config (simple generator similar to admin page)
+  const markManagerToRows = (cfg: MarkManagerConfig): QuestionDef[] => {
+    const rows: QuestionDef[] = [];
+    const examTitle = String(cfg.cia_label || '').trim() || 'Exam';
+    const commonItemName = String(cfg.item_name || '').trim() || 'Item';
+    if (cfg.cia_enabled && cfg.cia_max_marks > 0) {
+      rows.push({ title: examTitle, max_marks: cfg.cia_max_marks, btl_level: null, co_number: null, enabled: true, special_split: false, special_split_sources: [] });
+    }
+    const coNums = Object.keys(cfg.cos).map(Number).sort((a, b) => a - b);
+    for (const coNum of coNums) {
+      const coCfg = cfg.cos[coNum];
+      if (!coCfg.enabled) continue;
+      const numItems = coCfg.num_items || 1;
+      const perItem = numItems > 0 ? Math.round((coCfg.max_marks / numItems) * 100) / 100 : coCfg.max_marks;
+      for (let i = 0; i < numItems; i++) {
+        rows.push({ title: `CO${coNum} - ${commonItemName} ${i + 1}`, max_marks: perItem, btl_level: null, co_number: coNum, enabled: true, special_split: false, special_split_sources: [] });
+      }
+    }
+    return rows;
+  };
+
+  // When mark manager is toggled on in admin_define mode, replace rows
+  useEffect(() => {
+    if (markManager.enabled && markManager.mode === 'admin_define') {
+      const rows = markManagerToRows(markManager);
+      props.onReplaceRows(rows);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markManager]);
   const isCurrentlyEditing = localEditing;
   const isCqi = String(exam.exam || exam.exam_display_name || '').toUpperCase().startsWith('CQI') || exam.kind === 'cqi';
   const totalMarks = props.localRows.filter(r => r.enabled).reduce((s, r) => s + (Number(r.max_marks) || 0), 0);
@@ -342,6 +399,124 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
                   >
                     <Plus className="w-3.5 h-3.5" /> Add Row
                   </button>
+                )}
+              </div>
+
+              {/* Mark Manager Toggle */}
+              <div className="p-3 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={markManager.enabled}
+                        disabled={!isCurrentlyEditing}
+                        onChange={e => updateMarkManager(prev => ({ ...prev, enabled: e.target.checked }))}
+                        className="w-4 h-4 accent-teal-600"
+                      />
+                      <Settings2 className="w-4 h-4 text-gray-500" />
+                      <span className="text-sm font-semibold text-gray-700">Mark Manager</span>
+                    </label>
+                    {markManager.enabled && (
+                      <span className="text-xs px-2 py-0.5 bg-teal-100 text-teal-700 rounded font-medium">Compact Lab Layout</span>
+                    )}
+                  </div>
+                </div>
+
+                {markManager.enabled && (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none ${markManager.mode === 'admin_define' ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
+                        <input type="radio" name="mm_mode_popup" checked={markManager.mode === 'admin_define'} disabled={!isCurrentlyEditing} onChange={() => updateMarkManager(prev => ({ ...prev, mode: 'admin_define' }))} className="accent-teal-600" />
+                        <div><span className="text-sm font-semibold">Admin Define</span><div className="text-xs text-gray-500">Admin configures COs, items & marks here</div></div>
+                      </label>
+                      <label className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer select-none ${markManager.mode === 'user_define' ? 'bg-blue-50 border-blue-300' : 'hover:bg-gray-50'}`}>
+                        <input type="radio" name="mm_mode_popup" checked={markManager.mode === 'user_define'} disabled={!isCurrentlyEditing} onChange={() => updateMarkManager(prev => ({ ...prev, mode: 'user_define' }))} className="accent-blue-600" />
+                        <div><span className="text-sm font-semibold">User Define</span><div className="text-xs text-gray-500">Faculty configures before mark entry</div></div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 px-3 py-2 border rounded-lg">
+                        <input type="checkbox" checked={markManager.whole_number} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, whole_number: e.target.checked }))} className="w-4 h-4 accent-amber-600" />
+                        <div><span className="text-sm font-medium">Whole Number</span><div className="text-xs text-gray-500">No decimals allowed in mark entry</div></div>
+                      </label>
+                      <label className="flex items-center gap-2 px-3 py-2 border rounded-lg">
+                        <input type="checkbox" checked={markManager.arrow_keys} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, arrow_keys: e.target.checked }))} className="w-4 h-4 accent-indigo-600" />
+                        <div><span className="text-sm font-medium">Arrow Keys Inc/Dec</span><div className="text-xs text-gray-500">Up/Down arrows change value; unchecked = navigate cells</div></div>
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="border rounded-lg p-3 bg-gray-50">
+                        <label className="block text-xs text-gray-500 mb-1">Exam name</label>
+                        <input
+                          type="text"
+                          value={markManager.cia_label || ''}
+                          disabled={!isCurrentlyEditing}
+                          onChange={e => updateMarkManager(prev => ({ ...prev, cia_label: e.target.value }))}
+                          className="w-full px-2 py-1.5 border rounded text-sm"
+                          placeholder="Exam"
+                        />
+                        <p className="text-[11px] text-gray-400 mt-1">Used as the generated title for the Exam row.</p>
+                      </div>
+                      <div className="border rounded-lg p-3 bg-gray-50">
+                        <label className="block text-xs text-gray-500 mb-1">Common item name</label>
+                        <input
+                          type="text"
+                          value={markManager.item_name || ''}
+                          disabled={!isCurrentlyEditing}
+                          onChange={e => updateMarkManager(prev => ({ ...prev, item_name: e.target.value }))}
+                          className="w-full px-2 py-1.5 border rounded text-sm"
+                          placeholder="Item"
+                        />
+                        <p className="text-[11px] text-gray-400 mt-1">Example: "Experiment" gives titles like CO1 - Experiment 1.</p>
+                      </div>
+                    </div>
+
+                    {markManager.mode === 'user_define' && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">Faculty will see the Mark Manager setup when they open this exam for mark entry. They can select COs, set number of items and max marks, then confirm to generate the question table.</div>
+                    )}
+
+                    {markManager.mode === 'admin_define' && (
+                      <div className="mt-2">
+                        <div className="flex flex-wrap items-center gap-3 mb-3">
+                          {[1,2,3,4,5].map(co => (
+                            <label key={co} className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer ${markManager.cos[co]?.enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
+                              <input type="checkbox" checked={markManager.cos[co]?.enabled || false} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cos: { ...prev.cos, [co]: { ...prev.cos[co], enabled: e.target.checked } } }))} className="w-4 h-4 accent-teal-600" />
+                              <span className="text-sm font-medium">CO-{co}</span>
+                            </label>
+                          ))}
+                          <label className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer ${markManager.cia_enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
+                            <input type="checkbox" checked={markManager.cia_enabled} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cia_enabled: e.target.checked }))} className="w-4 h-4 accent-teal-600" />
+                            <span className="text-sm font-medium">Exam</span>
+                          </label>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-4">
+                          {markManager.cia_enabled && (
+                            <div className="border rounded-lg p-3 bg-gray-50">
+                              <label className="block text-xs text-gray-500 mb-1">Exam Max marks</label>
+                              <input type="number" min={0} value={markManager.cia_max_marks} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cia_max_marks: Number(e.target.value) || 0 }))} className="w-full px-2 py-1.5 border rounded text-sm" />
+                            </div>
+                          )}
+                          {[1,2,3,4,5].filter(co => markManager.cos[co]?.enabled).map(co => (
+                            <div key={co} className="border rounded-lg p-3 bg-gray-50">
+                              <div className="text-sm font-semibold mb-2">CO-{co}</div>
+                              <label className="block text-xs text-gray-500">No. of items</label>
+                              <input type="number" min={1} value={markManager.cos[co].num_items} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cos: { ...prev.cos, [co]: { ...prev.cos[co], num_items: Number(e.target.value) || 1 } } }))} className="w-full px-2 py-1.5 border rounded text-sm mb-2" />
+                              <label className="block text-xs text-gray-500">Max marks</label>
+                              <input type="number" min={0} value={markManager.cos[co].max_marks} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cos: { ...prev.cos, [co]: { ...prev.cos[co], max_marks: Number(e.target.value) || 0 } } }))} className="w-full px-2 py-1.5 border rounded text-sm" />
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="mt-3 flex items-center gap-4 text-sm">
+                          <span className={`font-medium px-2 py-0.5 rounded ${totalMarks > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>Total: {markManager.cia_enabled ? markManager.cia_max_marks + Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks, 0) : Object.values(markManager.cos).filter(c => c.enabled).reduce((s, c) => s + c.max_marks, 0)} marks</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 

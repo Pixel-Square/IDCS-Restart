@@ -234,6 +234,12 @@ export default function MarkEntryPage() {
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Always-current refs for auto-save (avoid stale closures in debounced timeout)
+  const studentsRef = useRef<Student[]>([]);
+  useEffect(() => { studentsRef.current = students; }, [students]);
+  const questionBtlsRef = useRef<Record<string, number | null>>({});
+  useEffect(() => { questionBtlsRef.current = questionBtls; }, [questionBtls]);
+
   // Request Edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editModalView, setEditModalView] = useState<'reason' | 'sending' | 'track'>('reason');
@@ -616,11 +622,7 @@ export default function MarkEntryPage() {
       const examPromise = fetchWithAuth(`/api/academic-v2/exams/${examId}/`);
       const marksPromise = fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`);
 
-      // Force loading to stop after 2 seconds max
-      const loadingTimeout = setTimeout(() => setLoading(false), 2000);
-
       const examRes = await examPromise;
-      clearTimeout(loadingTimeout);
       if (!examRes.ok) throw new Error('Failed to load exam');
       const examData = await examRes.json();
       // Normalise qp_pattern: if empty object or missing questions, set null
@@ -720,7 +722,10 @@ export default function MarkEntryPage() {
     autoSaveTimeoutRef.current = setTimeout(async () => {
       setAutoSaveStatus('saving');
       try {
-        const marksData = students.map(s => ({
+        // Use refs so we always save the latest data, not the stale closure value.
+        const latestStudents = studentsRef.current;
+        const latestBtls = questionBtlsRef.current;
+        const marksData = latestStudents.map(s => ({
           student_id: s.id,
           mark: s.mark,
           co_marks: s.co_marks,
@@ -729,7 +734,7 @@ export default function MarkEntryPage() {
         const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ marks: marksData, question_btls: questionBtls, publish: false }),
+          body: JSON.stringify({ marks: marksData, question_btls: latestBtls, publish: false }),
         });
         if (!response.ok) throw new Error('Auto-save failed');
         
@@ -737,6 +742,16 @@ export default function MarkEntryPage() {
         setHasChanges(false);
         const now = new Date().toLocaleString();
         setLastSaved(now);
+
+        // Update the session cache so maybeRefresh reloads fresh data (not stale server data).
+        if (examInfoRef.current) {
+          writeMarkEntryCache({
+            ts: Date.now(),
+            examInfo: examInfoRef.current,
+            students: latestStudents,
+            questionBtls: latestBtls,
+          });
+        }
         
         // Show saved state for 2 seconds then revert to idle
         setAutoSaveStatus('saved');
@@ -881,8 +896,22 @@ export default function MarkEntryPage() {
     const text = e.clipboardData?.getData('text/plain') || '';
     if (!text) return;
 
-    // Only intercept grid-like paste (tabs/newlines). Let normal paste work otherwise.
-    if (!text.includes('\t') && !text.includes('\n') && !text.includes('\r')) return;
+    // Single-value paste (no tab/newline) → replace the cell content directly.
+    // Without this, the browser inserts at cursor position instead of replacing.
+    if (!text.includes('\t') && !text.includes('\n') && !text.includes('\r')) {
+      e.preventDefault();
+      const trimmed = text.trim();
+      if (opts.fieldType === 'question' && opts.qId) {
+        const cellKey = `${opts.studentId}:question:${opts.qId}`;
+        setEditingCell({ key: cellKey, value: trimmed });
+        updateQuestionMark(opts.studentId, opts.qId, trimmed);
+      } else if (opts.fieldType === 'mark') {
+        const cellKey = `${opts.studentId}:mark`;
+        setEditingCell({ key: cellKey, value: trimmed });
+        updateMark(opts.studentId, trimmed);
+      }
+      return;
+    }
 
     e.preventDefault();
     applyPasteGrid({

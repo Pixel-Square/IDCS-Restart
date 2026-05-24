@@ -449,6 +449,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
   }
 
+  // Staff: Academic 2.1 faculty pages
+  if (flags.is_staff && permsLower.includes('academic_v2.page.staff') && !items.some((item) => item.key === 'academic_v2')) {
+    items.push({ key: 'academic_v2', label: 'Academic 2.1', to: '/academic-v2/courses' });
+  }
+
   // Staff assigned subjects page
   if (flags.is_staff && (permsLower.includes('academics.view_assigned_subjects') || rolesUpper.includes('HOD'))) {
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });

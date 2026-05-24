@@ -63,6 +63,17 @@ type ExamMarksState = {
   isMarkManager: boolean;
 };
 
+/** Cached info about a mark-manager exam (fetched from /exams/:id/ when MM is detected) */
+interface MMExamCache {
+  mmEnabled: boolean;
+  mmCiaEnabled: boolean;
+  mmCoveredCos: number;    // count of enabled COs in the mark manager config
+  mmExamQsCount: number;   // number of exam/CIA questions (= mmCoveredCos if cia_enabled, else 0)
+  mmSingleItemMax: number; // max_marks for one item (from mark_manager.cos[x].max_marks)
+  mmExamMaxTotal: number;  // cia_max_marks * mmCoveredCos  (0 if !cia_enabled)
+  mmItemsMaxTotal: number; // num_items * singleItemMax * mmCoveredCos
+}
+
 /* ─── Helpers ─── */
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
@@ -76,8 +87,10 @@ function computeTotal(marks: Record<string, number | null>, cols: SheetExamCol[]
 }
 
 function detectMarkManager(students: StudentMark[]): boolean {
+  // Mark manager exams store marks with question IDs like "q0", "q1", etc.
   for (const s of students) {
-    if (Object.keys(s.co_marks || {}).some((k) => /^co\d+$/i.test(k))) return true;
+    const keys = Object.keys(s.co_marks || {});
+    if (keys.length > 0 && keys.some((k) => /^q\d+$/i.test(k))) return true;
   }
   return false;
 }
@@ -132,6 +145,7 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
   const [acadYear, setAcadYear]         = useState('');
 
   const [examMarksMap, setExamMarksMap] = useState<Record<string, ExamMarksState>>({});
+  const [examInfoMap, setExamInfoMap]   = useState<Record<string, MMExamCache>>({});
   const [selectedCycleKey, setSelectedCycleKey] = useState<string | null>(null);
   const [activeView, setActiveView]     = useState<ViewKey>('sheet');
   const [refreshTick, setRefreshTick]   = useState(0);
@@ -241,10 +255,40 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed'))))
         .then((data) => {
           const students: StudentMark[] = Array.isArray(data?.students) ? data.students : [];
+          const isMM = detectMarkManager(students);
           setExamMarksMap((prev) => ({
             ...prev,
-            [ex.id]: { loading: false, error: null, students, isMarkManager: detectMarkManager(students) },
+            [ex.id]: { loading: false, error: null, students, isMarkManager: isMM },
           }));
+          // For mark-manager exams, fetch exam info to get question/CO structure for split columns
+          if (isMM) {
+            fetchWithAuth(`/api/academic-v2/exams/${ex.id}/`)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((info) => {
+                const mm = info?.mark_manager;
+                if (!mm?.enabled) return;
+                const coveredCos = Object.values(mm.cos || {}).filter((c: any) => c.enabled).length;
+                const examQsCount = mm.cia_enabled ? coveredCos : 0;
+                const sampleCo: any = Object.values(mm.cos || {}).find((c: any) => c.enabled) || Object.values(mm.cos || {})[0];
+                const singleItemMax = Number(sampleCo?.max_marks) || 1;
+                const numItems = Number(sampleCo?.num_items) || 1;
+                const examMaxTotal = mm.cia_enabled ? (Number(mm.cia_max_marks) || 0) * coveredCos : 0;
+                const itemsMaxTotal = numItems * singleItemMax * coveredCos;
+                setExamInfoMap((prev) => ({
+                  ...prev,
+                  [ex.id]: {
+                    mmEnabled: true,
+                    mmCiaEnabled: !!mm.cia_enabled,
+                    mmCoveredCos: coveredCos,
+                    mmExamQsCount: examQsCount,
+                    mmSingleItemMax: singleItemMax,
+                    mmExamMaxTotal: examMaxTotal,
+                    mmItemsMaxTotal: itemsMaxTotal,
+                  },
+                }));
+              })
+              .catch(() => {});
+          }
         })
         .catch((err: any) => {
           setExamMarksMap((prev) => ({
@@ -258,14 +302,45 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
   /* ── Build sheet data ── */
   const sheetCols = useMemo<SheetExamCol[]>(
     () =>
-      activeCycleExams.map((ex) => ({
-        examId: ex.id,
-        examName: ex.name,
-        maxMarks: ex.max_marks,
-        weight: ex.weight,
-        isMarkManager: examMarksMap[ex.id]?.isMarkManager ?? false,
-      })),
-    [activeCycleExams, examMarksMap],
+      activeCycleExams.flatMap((ex) => {
+        const mmInfo = examInfoMap[ex.id];
+        if (mmInfo?.mmEnabled) {
+          // Split mark-manager exam into Exam + Items Avg columns
+          const grandMax = (mmInfo.mmExamMaxTotal + mmInfo.mmItemsMaxTotal) || ex.max_marks;
+          const cols: SheetExamCol[] = [];
+          if (mmInfo.mmCiaEnabled && mmInfo.mmExamMaxTotal > 0) {
+            const examWeight = grandMax > 0
+              ? Math.round(ex.weight * (mmInfo.mmExamMaxTotal / grandMax) * 100) / 100
+              : ex.weight / 2;
+            cols.push({
+              examId: `${ex.id}__exam`,
+              examName: `${ex.name} (Exam)`,
+              maxMarks: mmInfo.mmExamMaxTotal,
+              weight: examWeight,
+              isMarkManager: true,
+            });
+          }
+          const itemsWeight = grandMax > 0
+            ? Math.round(ex.weight * (mmInfo.mmItemsMaxTotal / grandMax) * 100) / 100
+            : (mmInfo.mmCiaEnabled ? ex.weight / 2 : ex.weight);
+          cols.push({
+            examId: `${ex.id}__items`,
+            examName: `${ex.name} (Items Avg)`,
+            maxMarks: mmInfo.mmSingleItemMax,
+            weight: itemsWeight,
+            isMarkManager: true,
+          });
+          return cols;
+        }
+        return [{
+          examId: ex.id,
+          examName: ex.name,
+          maxMarks: ex.max_marks,
+          weight: ex.weight,
+          isMarkManager: examMarksMap[ex.id]?.isMarkManager ?? false,
+        }];
+      }),
+    [activeCycleExams, examMarksMap, examInfoMap],
   );
 
   const allStudents = useMemo<StudentMark[]>(() => {
@@ -286,13 +361,38 @@ export default function ResultAnalysisPage({ courseId }: Props): JSX.Element {
         const marks: Record<string, number | null> = {};
         for (const ex of activeCycleExams) {
           const state = examMarksMap[ex.id];
-          if (!state) { marks[ex.id] = null; continue; }
-          const sm = state.students.find((st) => st.id === s.id);
-          marks[ex.id] = sm?.is_absent ? null : sm?.mark ?? null;
+          const mmInfo = examInfoMap[ex.id];
+          if (mmInfo?.mmEnabled) {
+            // Mark-manager exam: split into exam component + items average
+            const sm = state?.students.find((st) => st.id === s.id);
+            const absent = sm?.is_absent ?? !sm;
+            if (absent) {
+              if (mmInfo.mmCiaEnabled) marks[`${ex.id}__exam`] = null;
+              marks[`${ex.id}__items`] = null;
+            } else {
+              const coMarks = sm!.co_marks || {};
+              const qKeys = Object.keys(coMarks)
+                .filter((k) => /^q\d+$/i.test(k))
+                .sort((a, b) => parseInt(a.slice(1)) - parseInt(b.slice(1)));
+              if (mmInfo.mmCiaEnabled && mmInfo.mmExamQsCount > 0) {
+                const examKeys = qKeys.slice(0, mmInfo.mmExamQsCount);
+                marks[`${ex.id}__exam`] = examKeys.reduce((acc, k) => acc + (Number(coMarks[k]) || 0), 0);
+              }
+              const itemKeys = qKeys.slice(mmInfo.mmExamQsCount);
+              const itemsSum = itemKeys.reduce((acc, k) => acc + (Number(coMarks[k]) || 0), 0);
+              marks[`${ex.id}__items`] = itemKeys.length > 0
+                ? Math.round((itemsSum / itemKeys.length) * 100) / 100
+                : null;
+            }
+          } else {
+            if (!state) { marks[ex.id] = null; continue; }
+            const sm = state.students.find((st) => st.id === s.id);
+            marks[ex.id] = sm?.is_absent ? null : sm?.mark ?? null;
+          }
         }
         return { studentId: s.id, regNo: s.roll_number, name: s.name, marks, total100: computeTotal(marks, sheetCols) };
       }),
-    [allStudents, activeCycleExams, examMarksMap, sheetCols],
+    [allStudents, activeCycleExams, examMarksMap, sheetCols, examInfoMap],
   );
 
   const cycleTotals = useMemo(

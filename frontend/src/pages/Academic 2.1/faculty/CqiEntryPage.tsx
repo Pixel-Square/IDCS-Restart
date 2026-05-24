@@ -79,10 +79,10 @@ const THRESHOLD_PERCENT = 58;
 const CQI_CACHE_PREFIX = 'academic_v2_cqi_entries_v1';
 
 function getCqiCacheKeys(examId?: string | null, taId?: string | null) {
-  return Array.from(new Set([
-    examId ? `${CQI_CACHE_PREFIX}:exam:${examId}` : '',
-    taId ? `${CQI_CACHE_PREFIX}:ta:${taId}` : '',
-  ].filter(Boolean)));
+  // When examId is provided use ONLY the exam-scoped key so that two different
+  // CQI exams under the same course cannot share / pollute each other's cache.
+  if (examId) return [`${CQI_CACHE_PREFIX}:exam:${examId}`];
+  return taId ? [`${CQI_CACHE_PREFIX}:ta:${taId}`] : [];
 }
 
 function readCqiCache(examId?: string | null, taId?: string | null): CqiEntries | null {
@@ -373,6 +373,9 @@ function buildContext(
   ctx['CO-RAW'] = curRaw;
   ctx['CO-WEIGHT'] = round2(curMax > 0 ? (curRaw / curMax) * 100 : 0);
   ctx['CO-MAX'] = round2(curMax);
+  // Aggregate max weight for the current CO from the checked exam assignments in the CQI config.
+  // coMaxByCo is already pre-filtered to considered exams (coMaxByCoSelected), so this is a direct alias.
+  ctx['COX-EXAMS-MAX-WEIGHT'] = round2(curMax);
   // Aliases for the "current" CO
   ctx['CO-TOTAL-RAW'] = ctx['CO-RAW'];
   ctx['CO-TOTAL-WEIGHT'] = ctx['CO-WEIGHT'];
@@ -977,17 +980,20 @@ export default function CqiEntryPage() {
     const out = Array.from({ length: n }, () => 0);
 
     for (const ex of consideredExams || []) {
-      const covered = Array.isArray(ex.covered_cos) ? ex.covered_cos : [];
-      if (!covered.length) continue;
+      // Mirror InternalMarkPage selectedCqiExamWeightByCo: fall back to co_weights keys when covered_cos is empty
+      const coveredFromList = Array.isArray(ex.covered_cos) && ex.covered_cos.length > 0
+        ? ex.covered_cos
+        : Object.keys(ex.co_weights || {}).map((k) => Number(k)).filter((v) => Number.isFinite(v) && v >= 1 && v <= n);
+      if (!coveredFromList.length) continue;
 
-      const nCovered = covered.length || 1;
+      const nCovered = coveredFromList.length || 1;
 
       // InternalMarkPage CO cells use CO-wise "y" that is already in the weighted-space
       // that matches `weighted_marks[${examId}_CO${co}]` rollups.
       // Therefore for CQI denominator we must sum the same effective CO weights directly,
       // without rescaling by course outOf/internal total.
-      for (let i = 0; i < covered.length; i++) {
-        const coNum = covered[i];
+      for (let i = 0; i < coveredFromList.length; i++) {
+        const coNum = coveredFromList[i];
         if (!coNum || coNum < 1 || coNum > n) continue;
 
         const base =
@@ -1004,6 +1010,10 @@ export default function CqiEntryPage() {
   const loadAll = async () => {
     try {
       setLoading(true); setMessage(null);
+      // Clear stale exam-specific state so a previously loaded CQI's config and
+      // entries are never shown while the new exam is still being fetched.
+      setActiveCqiConfig(null);
+      setCoSummary(null);
 
       let effectiveTaId = courseIdParam ?? taId;
 
@@ -1462,6 +1472,21 @@ export default function CqiEntryPage() {
           appliedAdds[c.coNum] = applied;
           delta += applied;
           afterValue += applied;
+        }
+      }
+      // Apply an overall total cap when any matched condition has cap_enabled.
+      // Per-CO caps (applyPerConditionCap) prevent each individual CO from exceeding capPct% of
+      // its own max, but COs that were ALREADY above cap still contribute their full (pre-CQI)
+      // value to the total — so afterValue can still exceed capPct% × beforeMax.
+      // The total cap ensures the displayed AFTER CQI value never exceeds the cap ceiling.
+      const anyCapCond = perCoMeta.find((c: any) => c.matchedCond?.cap_enabled === true);
+      if (anyCapCond && beforeMax > 0) {
+        const _capPct = Number((anyCapCond as any).matchedCond?.cap_percent);
+        const _effectiveCapPct = Number.isFinite(_capPct) && _capPct > 0 ? _capPct : THRESHOLD_PERCENT;
+        const totalCapCeiling = round2((_effectiveCapPct / 100) * beforeMax);
+        if (afterValue > totalCapCeiling) {
+          afterValue = totalCapCeiling;
+          delta = round2(afterValue - beforeValue);
         }
       }
       afterValue = Number.isFinite(afterValue) ? clamp(afterValue, 0, beforeMax || afterValue) : beforeValue;

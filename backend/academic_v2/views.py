@@ -2574,6 +2574,26 @@ def faculty_course_info(request, ta_id):
         getattr(ea, 'created_at', None) or timezone.now(),
     ))
 
+    # Deduplicate: keep only the first exam assignment per normalised display name.
+    # Stale records can exist with slightly different exam codes (e.g. "CQI2" vs "CQI 2")
+    # due to earlier sync runs that used different code normalisation.  Prefer records
+    # that have marks entered so progress is not lost.
+    exam_assignments.sort(key=lambda ea: (
+        ct_index.get(norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or ''), 10**9),
+        # Put records with marks first so we keep the one with data when deduping
+        -len((ea.draft_data or {}).get('marks', {})) if isinstance(ea.draft_data, dict) else 0,
+        getattr(ea, 'created_at', None) or timezone.now(),
+    ))
+    _seen_ea_display = set()
+    _deduped_assignments = []
+    for _ea in exam_assignments:
+        _dk = norm_exam_key(_ea.exam_display_name or _ea.exam)
+        if _dk in _seen_ea_display:
+            continue
+        _seen_ea_display.add(_dk)
+        _deduped_assignments.append(_ea)
+    exam_assignments = _deduped_assignments
+
     for ea in exam_assignments:
         ea_weight = float(ea.weight) if ea.weight else 0
         ea_key = norm_exam_key(ea.exam_display_name or ea.exam)
@@ -3161,6 +3181,49 @@ def faculty_exam_info(request, exam_id):
             if mm and isinstance(mm, dict) and mm.get('enabled'):
                 mark_manager = mm
 
+    # Resolve CQI config for THIS specific exam assignment (not just first CQI).
+    # Look up the AcV2CqiExam whose exam_code or exam_display_name matches ea.exam / ea.exam_display_name.
+    cqi_config_for_exam = None
+    try:
+        from .models import AcV2CqiExam
+        _ea_exam_key = (ea.exam_display_name or ea.exam or '').strip().lower()
+        _ea_qp_type = ''
+        try:
+            _ea_qp_type = (ea.section.course.question_paper_type or '').strip()
+        except Exception:
+            _ea_qp_type = (ea.qp_type or '').strip()
+        _ea_ct = None
+        try:
+            _ea_ct = ea.section.course.class_type
+        except Exception:
+            pass
+        if _ea_exam_key and _ea_ct:
+            _cqi_qs = AcV2CqiExam.objects.filter(class_type=_ea_ct, is_active=True)
+            if _ea_qp_type:
+                _cqi_qs = _cqi_qs.filter(qp_type_code__iexact=_ea_qp_type)
+            _matched_cqi = None
+            for _cqi_row in _cqi_qs.order_by('order', 'created_at'):
+                _row_key_code = (_cqi_row.exam_code or '').strip().lower()
+                _row_key_disp = (_cqi_row.exam_display_name or '').strip().lower()
+                if _ea_exam_key in (_row_key_code, _row_key_disp):
+                    _matched_cqi = _cqi_row
+                    break
+            if _matched_cqi is not None:
+                cqi_config_for_exam = {
+                    'name': str(_matched_cqi.cqi_name or ''),
+                    'code': str(_matched_cqi.cqi_code or ''),
+                    'cos': _matched_cqi.cos if isinstance(_matched_cqi.cos, list) else [],
+                    'exams': _matched_cqi.considered_exams if isinstance(_matched_cqi.considered_exams, list) else [],
+                    'custom_vars': _matched_cqi.custom_vars if isinstance(_matched_cqi.custom_vars, list) else [],
+                    'derived_variables': _matched_cqi.derived_variables if isinstance(_matched_cqi.derived_variables, list) else [],
+                    'co_value_expr': str(_matched_cqi.co_value_expr or ''),
+                    'formula': str(_matched_cqi.formula or ''),
+                    'conditions': _matched_cqi.conditions if isinstance(_matched_cqi.conditions, list) else [],
+                    'else_formula': str(_matched_cqi.else_formula or ''),
+                }
+    except Exception:
+        cqi_config_for_exam = None
+
     return Response({
         'id': str(ea.id),
         'name': ea.exam_display_name or ea.exam or ea.qp_type or '',
@@ -3191,6 +3254,7 @@ def faculty_exam_info(request, exam_id):
         'qp_pattern': qp_pattern_response,
         'question_btls': question_btls,
         'mark_manager': mark_manager,
+        'cqi_config': cqi_config_for_exam,
     })
 
 
@@ -3674,10 +3738,10 @@ def faculty_exam_confirm_mark_manager(request, exam_id):
     else:
         ea = get_object_or_404(ea_qs, id=exam_id, section__faculty_user=request.user)
 
-    if ea.status in ('PUBLISHED', 'APPROVED'):
-        # Allow re-configuration if there's an active edit window (approved edit request)
-        if not ea.edit_window_until or timezone.now() >= ea.edit_window_until:
-            return Response({'detail': 'Exam is locked'}, status=400)
+    # Use the same editability check as mark saving — respects publish control settings,
+    # open_from gating, edit windows, and draft/published status uniformly.
+    if not _has_admin_bypass_access(request.user) and not ea.is_editable():
+        return Response({'detail': 'Exam is locked'}, status=400)
 
     config = request.data.get('mark_manager')
     if not config or not isinstance(config, dict):
@@ -4037,6 +4101,23 @@ def faculty_course_co_summary(request, ta_id):
             ct_index.get(norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or ''), 10**9),
             getattr(ea, 'created_at', None) or timezone.now(),
         ))
+
+    # Deduplicate exam_assignments by normalised display name (same as faculty_course_info).
+    # Prefer records with marks entered so progress is not lost.
+    exam_assignments.sort(key=lambda ea: (
+        ct_index.get(norm_exam_key(getattr(ea, 'exam_display_name', '') or getattr(ea, 'exam', '') or ''), 10**9),
+        -len((ea.draft_data or {}).get('marks', {})) if isinstance(ea.draft_data, dict) else 0,
+        getattr(ea, 'created_at', None) or timezone.now(),
+    ))
+    _co_sum_seen_keys = set()
+    _co_sum_deduped = []
+    for _co_sum_ea in exam_assignments:
+        _co_sum_dk = norm_exam_key(_co_sum_ea.exam_display_name or _co_sum_ea.exam)
+        if _co_sum_dk in _co_sum_seen_keys:
+            continue
+        _co_sum_seen_keys.add(_co_sum_dk)
+        _co_sum_deduped.append(_co_sum_ea)
+    exam_assignments = _co_sum_deduped
 
     exams_data = []
     exam_map = {}  # exam_id -> exam info
@@ -4743,18 +4824,10 @@ def faculty_course_co_summary(request, ta_id):
             internal['_qp_special_split_sources'] = qp_special_split_sources if isinstance(qp_special_split_sources, list) else []
         exam_map[str(ea.id)] = {**exam_info, **internal}
 
-    # If the CQI configuration CO-set changed after marks were saved, do not
-    # reuse the old CQI snapshot entries for the new CQI setup.
-    if cqi_attained and first_cqi_sub is not None and isinstance(first_cqi_sub, dict):
-        try:
-            cfg_cos = first_cqi_sub.get('cos', [])
-            cfg_cos_norm = sorted(int(x) for x in (cfg_cos or []) if str(x).isdigit())
-            saved_cos = getattr(cqi_attained, 'co_numbers', None)
-            saved_cos_norm = sorted(int(x) for x in (saved_cos or []) if str(x).isdigit())
-            if cfg_cos_norm != saved_cos_norm:
-                cqi_entries = {}
-        except Exception:
-            pass
+    # NOTE: The CO-mismatch check that used to wipe cqi_entries here has been removed.
+    # With multiple CQI exams (CQI 1 = CO1,CO2 and CQI 2 = CO3,CO4,CO5), entries are
+    # merged per-CO on publish, and co_numbers now represents the union of all published
+    # CQI COs. Wiping all entries based on a single CQI's CO-set is incorrect.
 
     # Get all active students in the academic section
     student_assignments = (
@@ -5362,6 +5435,10 @@ def faculty_course_co_summary(request, ta_id):
                     vars_map['CO-RAW'] = float(before_co or 0.0)
                     vars_map['CO-TOTAL-RAW'] = vars_map['CO-RAW']
                     vars_map['CO-MAX'] = round(co_max_for_co, 4)
+                    # COX-EXAMS-MAX-WEIGHT = same as CO-MAX: total max weight for the current
+                    # CO across the checked exam assignments in the CQI config.
+                    # Matches the frontend CqiEntryPage value (ctx['COX-EXAMS-MAX-WEIGHT']).
+                    vars_map['COX-EXAMS-MAX-WEIGHT'] = round(co_max_for_co, 4)
                     if co_max_for_co > 0:
                         _pct = round((float(before_co or 0.0) / co_max_for_co) * 100, 4)
                     else:
@@ -6008,17 +6085,40 @@ def faculty_course_cqi_publish(request, ta_id: int):
         return Response({'detail': 'Missing entries (save a draft first or send entries).'}, status=status.HTTP_400_BAD_REQUEST)
 
     user_id = getattr(getattr(request, 'user', None), 'id', None)
-    obj, _created = AcV2CqiAttained.objects.update_or_create(
+
+    # Get or create the attained record, then merge entries per-CO.
+    # This preserves entries from other CQI exams (e.g. CQI 1's CO1/CO2 must not be
+    # wiped when CQI 2 (CO3/CO4/CO5) is published, and vice-versa).
+    obj, _created = AcV2CqiAttained.objects.get_or_create(
         teaching_assignment=ta,
         defaults={
-            'entries': entries,
-            'co_numbers': co_numbers or [],
+            'entries': {},
+            'co_numbers': [],
             'published_by': user_id,
-            # On (re-)publish, clear the edit window so the record is relocked
             'edit_window_until': None,
             'has_pending_edit_request': False,
         },
     )
+
+    # Merge new entries into existing at per-student, per-CO level so that
+    # publishing CQI 2 doesn't overwrite CQI 1 entries for the same students.
+    merged_entries = dict(obj.entries) if isinstance(obj.entries, dict) else {}
+    for _sid, _co_updates in entries.items():
+        if isinstance(_co_updates, dict):
+            _student_entry = dict(merged_entries.get(_sid) or {})
+            _student_entry.update(_co_updates)
+            merged_entries[_sid] = _student_entry
+
+    # co_numbers = union of existing + new (so both CQI 1 and CQI 2 COs are tracked)
+    _existing_co_nums = set(obj.co_numbers or [])
+    _existing_co_nums.update(co_numbers or [])
+
+    obj.entries = merged_entries
+    obj.co_numbers = sorted(_existing_co_nums)
+    obj.published_by = user_id
+    obj.edit_window_until = None
+    obj.has_pending_edit_request = False
+    obj.save(update_fields=['entries', 'co_numbers', 'published_by', 'edit_window_until', 'has_pending_edit_request'])
 
     try:
         for acv2_section in ta.acv2_sections.select_related('course__class_type').all():

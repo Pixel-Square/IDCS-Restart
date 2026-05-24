@@ -678,6 +678,29 @@ function COSummaryTab({
   const co_count = data?.co_count ?? 0;
   const total_internal_marks = data?.total_internal_marks ?? 0;
   const cqiConfig = data?.cqi_config ?? null;
+
+  // Compute actual total weight from exam co_weights (may differ from class_type total_internal_marks)
+  const computedTotalWeight = useMemo(() => {
+    let total = 0;
+    for (const ex of exams) {
+      if (String(ex.kind || 'exam').toLowerCase() === 'cqi') continue;
+      const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
+        ? ex.covered_cos
+        : Array.from({ length: co_count }, (_, i) => i + 1);
+      for (const coNum of coveredCos) {
+        const w = Number(ex.co_weights?.[String(coNum)] ?? (ex.co_weights as any)?.[coNum] ?? 0) || 0;
+        total += w;
+      }
+      if (ex.cia_enabled && ex.cia_weight && ex.cia_weight > 0) {
+        const n = ex.covered_cos?.length || 1;
+        const perCo = !!ex.cia_weight_per_co;
+        const effectiveW = perCo ? ex.cia_weight : Math.round((ex.cia_weight / n) * 100) / 100;
+        for (let i = 0; i < n; i++) total += effectiveW;
+      }
+    }
+    const rounded = Math.round(total * 100) / 100;
+    return rounded > 0 ? rounded : total_internal_marks;
+  }, [exams, co_count, total_internal_marks]);
   const round2 = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
   const normalizeExamCode = (value: string) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
   const cqiConditions = Array.isArray(cqiConfig?.conditions) ? cqiConfig.conditions : [];
@@ -1088,8 +1111,7 @@ function COSummaryTab({
         {view === 'weighted' && hasCqiCap && (
           <div className="px-4 py-2 border-b bg-amber-50 text-xs text-amber-800 flex flex-wrap items-center gap-2">
             <span className="font-semibold">CQI cap active</span>
-            <span>Cap = selected CO weight sum x {defaultCqiCapPercent}%</span>
-            <span className="text-amber-600">Capped cells are highlighted.</span>
+            <span className="text-amber-600">Cells where the CQI cap limit was reached are highlighted in red. Cap applies only to students who satisfy the cap condition.</span>
           </div>
         )}
         <div className="overflow-x-auto">
@@ -1111,9 +1133,7 @@ function COSummaryTab({
                       <span>Max: {exam.max_marks}</span>
                       <span>&middot;</span>
                       {String(exam.kind || 'exam').toLowerCase() === 'cqi' ? (
-                        <span className="bg-purple-100 text-purple-800 px-1 rounded">
-                          {view === 'weighted' && hasCqiCap ? 'CQI cap' : 'CQI'}
-                        </span>
+                        <span className="bg-purple-100 text-purple-800 px-1 rounded">CQI</span>
                       ) : exam.co_weights && Object.keys(exam.co_weights).length > 0 ? (
                         exam.covered_cos.map(co => {
                           const wVal = Number(exam.co_weights[String(co)] ?? 0);
@@ -1143,7 +1163,7 @@ function COSummaryTab({
                       </th>
                     ))}
                     <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-gray-900 border-l border-gray-300 bg-green-50 min-w-[70px]">
-                      Final<br />/{total_internal_marks}
+                      Final<br />/{computedTotalWeight}
                     </th>
                     <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-purple-900 border-l border-purple-300 bg-purple-50 min-w-[70px]">
                       Total<br />/100
@@ -1208,6 +1228,21 @@ function COSummaryTab({
                             {displayCoTotals.map((ct, ci) => {
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
+                              const coNum = ci + 1;
+                              // Red highlight if any CQI cap was hit for this CO for this student.
+                              const isCoTotalCapped = view === 'weighted' && (() => {
+                                const cqiExamsForCo = exams.filter((ex) =>
+                                  String(ex.kind || 'exam').toLowerCase() === 'cqi' &&
+                                  ex.covered_cos.includes(coNum)
+                                );
+                                for (const ex of cqiExamsForCo) {
+                                  const key = `${ex.id}_CO${coNum}`;
+                                  const raw = Number(s.weighted_marks[key] ?? 0) || 0;
+                                  const cap = getStudentCqiCapForCo(s, coNum);
+                                  if (cap != null && raw > cap - 0.001) return true;
+                                }
+                                return false;
+                              })();
                               cellIndex++;
                               return (
                                 <td
@@ -1215,7 +1250,12 @@ function COSummaryTab({
                                   data-cell={cellKey}
                                   onMouseDown={(e) => handleCellMouseDown(si, cellIndex - 1, e)}
                                   onMouseEnter={() => handleCellMouseEnter(si, cellIndex - 1)}
-                                  className={`px-2 py-1.5 text-center font-semibold text-indigo-700 border-l border-indigo-100 bg-indigo-50/40 tabular-nums cursor-cell select-none transition-colors ${isSelected ? 'bg-blue-200' : ''}`}
+                                  className={`px-2 py-1.5 text-center font-semibold border-l border-indigo-100 tabular-nums cursor-cell select-none transition-colors ${
+                                    isSelected ? 'bg-blue-200' :
+                                    isCoTotalCapped ? 'bg-red-100 text-red-900 ring-1 ring-red-300' :
+                                    'text-indigo-700 bg-indigo-50/40'
+                                  }`}
+                                  title={isCoTotalCapped ? 'CO total includes a capped CQI value' : undefined}
                                 >
                                   {ct > 0 ? formatNumber(ct) : <span className="text-gray-300">-</span>}
                                 </td>
@@ -1235,7 +1275,7 @@ function COSummaryTab({
                               onMouseEnter={() => handleCellMouseEnter(si, cellIndex + 1)}
                               className={`px-3 py-1.5 text-center font-bold border-l border-purple-200 bg-purple-50/40 tabular-nums text-purple-700 cursor-cell select-none transition-colors ${selectedCells.has(getCellKey(si, cellIndex + 1)) ? 'bg-blue-200' : ''}`}
                             >
-                              {displayFinalMark > 0 ? formatNumber((displayFinalMark / total_internal_marks) * 100) : <span className="text-gray-300">-</span>}
+                              {displayFinalMark > 0 ? formatNumber((displayFinalMark / computedTotalWeight) * 100) : <span className="text-gray-300">-</span>}
                             </td>
                           </>
                         )}
@@ -1294,7 +1334,7 @@ function COSummaryTab({
                           onMouseEnter={() => handleCellMouseEnter(students.length, 3 + cols.length + co_count + 1)}
                           className={`px-3 py-2 text-center tabular-nums font-bold border-l border-purple-300 bg-purple-100 text-purple-800 text-xs select-none transition-colors ${selectedCells.has(getCellKey(students.length, 3 + cols.length + co_count + 1)) ? 'bg-blue-200' : ''}`}
                         >
-                          {finalAverage != null ? formatNumber((finalAverage / total_internal_marks) * 100) : <span className="text-gray-300">-</span>}
+                          {finalAverage != null ? formatNumber((finalAverage / computedTotalWeight) * 100) : <span className="text-gray-300">-</span>}
                         </td>
                       </>
                     )}

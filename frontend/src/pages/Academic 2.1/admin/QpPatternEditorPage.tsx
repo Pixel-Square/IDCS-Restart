@@ -36,6 +36,8 @@ interface MarkManagerConfig {
   mode: 'admin_define' | 'user_define';
   cia_enabled: boolean;
   cia_max_marks: number;
+  cia_label?: string;
+  item_name?: string;
   whole_number: boolean;
   arrow_keys: boolean;
   cos: Record<number, MarkManagerCOConfig>;
@@ -182,9 +184,11 @@ const coLabel = (co: number | number[] | null): string => {
 /** Generate question rows from Mark Manager CO config */
 function markManagerToRows(config: MarkManagerConfig): QuestionDef[] {
   const rows: QuestionDef[] = [];
+  const examTitle = String(config.cia_label || '').trim() || 'Exam';
+  const commonItemName = String(config.item_name || '').trim() || 'Item';
   if (config.cia_enabled && config.cia_max_marks > 0) {
     rows.push({
-      title: 'Exam',
+      title: examTitle,
       max_marks: config.cia_max_marks,
       btl_level: null,
       co_number: null,
@@ -200,7 +204,7 @@ function markManagerToRows(config: MarkManagerConfig): QuestionDef[] {
     const perItemMarks = numItems > 0 ? Math.round((coCfg.max_marks / numItems) * 100) / 100 : coCfg.max_marks;
     for (let i = 0; i < numItems; i++) {
       rows.push({
-        title: `CO${coNum} - Item ${i + 1}`,
+        title: `CO${coNum} - ${commonItemName} ${i + 1}`,
         max_marks: perItemMarks,
         btl_level: null,
         co_number: coNum,
@@ -222,6 +226,8 @@ function getDefaultMarkManager(): MarkManagerConfig {
     mode: 'admin_define',
     cia_enabled: false,
     cia_max_marks: 30,
+    cia_label: 'Exam',
+    item_name: 'Item',
     whole_number: false,
     arrow_keys: true,
     cos,
@@ -344,7 +350,7 @@ interface DbCqiOperator {
   order: number;
 }
 
-const CQI_TOKEN_SECTION_ORDER = ['custom', 'cqi', 'co_raw', 'co_weight', 'mm_avg', 'exam'] as const;
+const CQI_TOKEN_SECTION_ORDER = ['custom', 'cqi', 'co_raw', 'co_weight', 'mm_avg', 'exam', 'totals'] as const;
 type CqiTokenSectionKey = typeof CQI_TOKEN_SECTION_ORDER[number];
 
 const CQI_TOKEN_SECTION_META: Record<CqiTokenSectionKey, {
@@ -389,6 +395,12 @@ const CQI_TOKEN_SECTION_META: Record<CqiTokenSectionKey, {
     headerClass: 'bg-rose-100 text-rose-700',
     panelClass: 'border-rose-200 bg-rose-50/50',
   },
+  totals: {
+    title: 'Totals',
+    description: 'Aggregate totals derived from the checked exam assignments in the CQI configuration.',
+    headerClass: 'bg-violet-100 text-violet-700',
+    panelClass: 'border-violet-200 bg-violet-50/50',
+  },
 };
 
 function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] {
@@ -420,6 +432,9 @@ function generateCqiVariables(exams: ExamAssignment[], maxCo: number): CqiVar[] 
   // COx placeholders (do not generate numbered CO tokens in picker)
   push('COX-TOTAL-RAW', 'CO(x) total (raw) — placeholder for current CO');
   push('COX-TOTAL-WEIGHT', 'CO(x) total (weighted %) — placeholder for current CO');
+
+  // Totals — aggregate from checked exam assignments
+  push('COX-EXAMS-MAX-WEIGHT', 'CO(x) total max weight from checked exam assignments in CQI config');
 
   // Per-exam variables (CO→EXAM format only: [COX-EXAMCODE-OBT])
   for (const ex of exams) {
@@ -469,6 +484,7 @@ function getCqiTokenSection(variable: CqiVar): CqiTokenSectionKey {
   if (code === 'CQI' || code === 'X' || code === 'BEFORE_CQI_COX' || code === 'AFTER_CQI' || code === 'TOTAL_CQI') return 'cqi';
   if (/-EXAM-(OBT|WEIGHT)$/.test(code)) return 'exam';
   if (/-AVG$/.test(code)) return 'mm_avg';
+  if (code === 'COX-EXAMS-MAX-WEIGHT') return 'totals';
   if (/(^|-)WEIGHT$/.test(code) || /-WEIGHT$/.test(code)) return 'co_weight';
   return 'co_raw';
 }
@@ -1280,6 +1296,17 @@ export default function QpPatternEditorPage() {
       };
     }
 
+    // Totals section: COX-EXAMS-MAX-WEIGHT
+    if (c === 'COX-EXAMS-MAX-WEIGHT') {
+      return {
+        group: 'TOTAL',
+        badge: 'MAX WT',
+        badgeClass: 'bg-violet-100 text-violet-700',
+        rowClass: 'bg-violet-50',
+        tokenClass: 'text-violet-800 font-semibold',
+      };
+    }
+
     return {
       group: 'VAR',
       badge: 'VAR',
@@ -1773,6 +1800,8 @@ export default function QpPatternEditorPage() {
           mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
           cia_enabled: !!mm.cia_enabled,
           cia_max_marks: mm.cia_max_marks ?? 30,
+          cia_label: String(mm.cia_label || '').trim() || 'Exam',
+          item_name: String(mm.item_name || '').trim() || 'Item',
           whole_number: !!mm.whole_number,
           arrow_keys: mm.arrow_keys !== false,
           cos: {},
@@ -1805,6 +1834,8 @@ export default function QpPatternEditorPage() {
           mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
           cia_enabled: !!mm.cia_enabled,
           cia_max_marks: mm.cia_max_marks ?? 30,
+          cia_label: String(mm.cia_label || '').trim() || 'Exam',
+          item_name: String(mm.item_name || '').trim() || 'Item',
           whole_number: !!mm.whole_number,
           arrow_keys: mm.arrow_keys !== false,
           cos: {},
@@ -1859,6 +1890,8 @@ export default function QpPatternEditorPage() {
           mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
           cia_enabled: !!mm.cia_enabled,
           cia_max_marks: mm.cia_max_marks ?? 30,
+          cia_label: String(mm.cia_label || '').trim() || 'Exam',
+          item_name: String(mm.item_name || '').trim() || 'Item',
           whole_number: !!mm.whole_number,
           arrow_keys: mm.arrow_keys !== false,
           cos: {},
@@ -1885,6 +1918,8 @@ export default function QpPatternEditorPage() {
             mode: mm.mode === 'user_define' ? 'user_define' : 'admin_define',
             cia_enabled: !!mm.cia_enabled,
             cia_max_marks: mm.cia_max_marks ?? 30,
+            cia_label: String(mm.cia_label || '').trim() || 'Exam',
+            item_name: String(mm.item_name || '').trim() || 'Item',
             whole_number: !!mm.whole_number,
             arrow_keys: mm.arrow_keys !== false,
             cos: {},
@@ -2920,6 +2955,8 @@ export default function QpPatternEditorPage() {
           onUpdateRow={updateRow}
           onOpenQuestionSettings={openQuestionSettings}
           onReplaceRows={(rows) => { setLocalRows(rows); markDirty(); }}
+          markManager={markManager}
+          onMarkManagerChange={(mm) => { setMarkManager(mm); markDirty(); }}
           cqiVariables={cqiVariables}
           groupedCqiVariables={groupedCqiVariables}
           tokenMeta={tokenMeta as any}
