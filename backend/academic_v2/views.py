@@ -5620,6 +5620,7 @@ def faculty_course_co_summary(request, ta_id):
 
                     # Cap rule (58% by default): apply ONLY when the matched condition
                     # has cap_enabled=true. If a condition provides cap_percent, prefer it.
+                    _cqi_cap_hit = False
                     try:
                         if cap_enabled:
                             cond_cap_pct = None
@@ -5630,9 +5631,24 @@ def faculty_course_co_summary(request, ta_id):
                             if effective_cap_pct > 0 and co_max_for_cap > 0:
                                 cap_ceiling = round((effective_cap_pct / 100.0) * co_max_for_cap, 4)
                                 max_add = max(0.0, cap_ceiling - float(before_co or 0.0))
+                                uncapped = mapped
                                 mapped = round(min(mapped, max_add), 2)
+                                if uncapped > max_add + 0.001:
+                                    _cqi_cap_hit = True
                     except Exception:
                         pass
+
+                    # Track which COs had the cap actually applied for this student.
+                    if _cqi_cap_hit:
+                        try:
+                            capped_cos = student_entry.get('cqi_capped_cos')
+                            if not isinstance(capped_cos, list):
+                                capped_cos = []
+                            if co_n not in capped_cos:
+                                capped_cos.append(co_n)
+                            student_entry['cqi_capped_cos'] = capped_cos
+                        except Exception:
+                            pass
 
                     exam_entry[f'co{co_n}'] = mapped
                     total_val += mapped

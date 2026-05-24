@@ -79,6 +79,8 @@ interface COStudent {
   co_totals: number[];
   final_mark: number;
   cqi_satisfied_conditions?: string[];
+  /** CO numbers (1-based) where the CQI cap was actually applied for this student. */
+  cqi_capped_cos?: number[];
 }
 
 interface COSummary {
@@ -1208,7 +1210,11 @@ function COSummaryTab({
                           const isSelected = selectedCells.has(cellKey);
                           const isCqiCol = String(exams[col.examIdx].kind || 'exam').toLowerCase() === 'cqi';
                           const capValue = view === 'weighted' && isCqiCol && col.co > 0 ? getStudentCqiCapForCo(s, col.co) : null;
-                          const isCqiCapHit = view === 'weighted' && isCqiCol && capValue != null && typeof val === 'number' && val >= capValue - 0.001;
+                          // Use the authoritative cqi_capped_cos flag from the backend (the frontend
+                          // weight comparison is unreliable because the backend cap is on the *addition*
+                          // only, not the full CO weight sum).
+                          const isCqiCapHit = view === 'weighted' && isCqiCol && col.co > 0 &&
+                            Array.isArray(s.cqi_capped_cos) && s.cqi_capped_cos.includes(col.co);
                           cellIndex++;
                           return (
                             <td
@@ -1229,20 +1235,9 @@ function COSummaryTab({
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
                               const coNum = ci + 1;
-                              // Red highlight if any CQI cap was hit for this CO for this student.
-                              const isCoTotalCapped = view === 'weighted' && (() => {
-                                const cqiExamsForCo = exams.filter((ex) =>
-                                  String(ex.kind || 'exam').toLowerCase() === 'cqi' &&
-                                  ex.covered_cos.includes(coNum)
-                                );
-                                for (const ex of cqiExamsForCo) {
-                                  const key = `${ex.id}_CO${coNum}`;
-                                  const raw = Number(s.weighted_marks[key] ?? 0) || 0;
-                                  const cap = getStudentCqiCapForCo(s, coNum);
-                                  if (cap != null && raw > cap - 0.001) return true;
-                                }
-                                return false;
-                              })();
+                              // Red if the backend flagged this CO as capped for this student.
+                              const isCoTotalCapped = view === 'weighted' &&
+                                Array.isArray(s.cqi_capped_cos) && s.cqi_capped_cos.includes(coNum);
                               cellIndex++;
                               return (
                                 <td
