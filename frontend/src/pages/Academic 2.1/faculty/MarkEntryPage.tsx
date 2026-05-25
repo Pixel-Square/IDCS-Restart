@@ -585,6 +585,9 @@ export default function MarkEntryPage() {
   const [emptyCellKeys, setEmptyCellKeys] = useState<Set<string>>(new Set());
   const [emptyCellCount, setEmptyCellCount] = useState(0);
   const pendingEmptyCellKeysRef = useRef<Set<string>>(new Set());
+  // Set to true after "Close & Fix" is chosen — prevents auto-refresh until the faculty
+  // starts a new publish attempt. Cleared in confirmPublish().
+  const suppressAutoRefreshAfterWarningRef = useRef(false);
 
   // Fetch publish settings once on mount
   useEffect(() => {
@@ -894,10 +897,15 @@ export default function MarkEntryPage() {
 
   // If user navigates away/back (or tab loses focus) after publish popup,
   // refresh safely when returning (only when there are no local unsaved changes).
+  // IMPORTANT: suppress refresh while the publish modal is open (showPublishConfirm)
+  // and also after "Close & Fix" is chosen (suppressAutoRefreshAfterWarningRef) so that
+  // a background server auto-publish (due-date) does not falsely show the table as locked.
   useEffect(() => {
     const maybeRefresh = () => {
       if (document.visibilityState !== 'visible') return;
       if (hasChanges) return;
+      if (showPublishConfirm) return; // don't refresh while publish modal is open
+      if (suppressAutoRefreshAfterWarningRef.current) return; // don't refresh after "Close & Fix"
       if (!examId) return;
       loadDataRef.current?.().catch(() => undefined);
     };
@@ -907,7 +915,7 @@ export default function MarkEntryPage() {
       window.removeEventListener('focus', maybeRefresh);
       document.removeEventListener('visibilitychange', maybeRefresh);
     };
-  }, [examId, hasChanges]);
+  }, [examId, hasChanges, showPublishConfirm]);
 
   const loadData = async () => {
     try {
@@ -1326,6 +1334,12 @@ export default function MarkEntryPage() {
       window.clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
     }
+    if (keepHighlights) {
+      // Faculty chose "Close & Fix" — the publish was NOT completed. Suppress any
+      // background auto-refresh so a server-side auto-publish (due-date) doesn't
+      // falsely show the table as locked while the faculty is still filling cells.
+      suppressAutoRefreshAfterWarningRef.current = true;
+    }
     if (refreshAfterClose) {
       await loadData();
     }
@@ -1401,6 +1415,8 @@ export default function MarkEntryPage() {
   };
 
   const confirmPublish = async () => {
+    // A new publish attempt clears the "Close & Fix" auto-refresh suppression guard.
+    suppressAutoRefreshAfterWarningRef.current = false;
     // Always compute empty cell keys so table highlights are ready
     const hasQLocal = questions.length > 0;
     const emptyKeys = new Set<string>();
