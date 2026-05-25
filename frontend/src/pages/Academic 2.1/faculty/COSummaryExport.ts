@@ -9,6 +9,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import logoUrl from '../../../assets/idcs-logo.png';
+import * as XLSXStyle from 'xlsx-js-style';
 
 /* ─── shared types (mirrors InternalMarkPage) ─── */
 export interface ExportCOExam {
@@ -59,6 +60,7 @@ export interface ExportCourseInfo {
   student_count: number;
   class_type: { id: string; name: string; total_internal_marks: number };
   qp_type: string | null;
+  faculty_name?: string;
 }
 
 /* ─── helpers ─── */
@@ -732,4 +734,307 @@ export async function exportCOSummaryToPDF(
   /* ── Save ── */
   const filename = `${data.course_code}_co_summary_${view}.pdf`;
   doc.save(filename);
+}
+
+/* ════════════════════════════════════════════════════════
+   INTERNAL MARKS EXCEL  (.xlsx — xlsx-js-style, 2 sheets)
+   Sheet 1: Full Summary (per-exam CO marks + FIM Before/After CQI)
+   Sheet 2: Internal Marks (Reg No, Name, /100)
+   ════════════════════════════════════════════════════════ */
+
+type XCell = XLSXStyle.CellObject & { s?: Record<string, unknown> };
+
+function mkStyle(
+  bg: string,
+  fg: string,
+  bold: boolean,
+  sz: number,
+  halign: string,
+  wrapText: boolean,
+  borderColor: string,
+  patternType = 'solid',
+) {
+  const border = {
+    left:   { style: 'thin', color: { rgb: borderColor } },
+    right:  { style: 'thin', color: { rgb: borderColor } },
+    top:    { style: 'thin', color: { rgb: borderColor } },
+    bottom: { style: 'thin', color: { rgb: borderColor } },
+  };
+  return {
+    font:      { bold, sz, color: { rgb: fg }, name: 'Calibri' },
+    fill:      bg ? { patternType, fgColor: { rgb: bg } } : undefined,
+    alignment: { horizontal: halign, vertical: 'center', wrapText },
+    border,
+  };
+}
+
+const S = {
+  col:   mkStyle('1E3A8A', 'FFFFFF', true,  13, 'center', true,  'CBD5E1'),
+  title: mkStyle('3730A3', 'FFFFFF', true,  11, 'center', false, 'CBD5E1'),
+  info:  mkStyle('F8FAFC', '1E293B', false, 9,  'center', true,  'CBD5E1'),
+  grp:   mkStyle('1D4ED8', 'FFFFFF', true,  9,  'center', true,  '93C5FD'),
+  sub:   mkStyle('DBEAFE', '1E3A8A', true,  8,  'center', false, '93C5FD'),
+  co:    mkStyle('DBEAFE', '1E3A8A', true,  8,  'center', false, '93C5FD'),
+  fb:    mkStyle('065F46', 'FFFFFF', true,  9,  'center', true,  '6EE7B7'),
+  fa:    mkStyle('4338CA', 'FFFFFF', true,  9,  'center', true,  'A5B4FC'),
+  num:   mkStyle('',       '000000', false, 9,  'center', false, 'D1D5DB'),
+  str:   mkStyle('',       '000000', false, 9,  'left',   false, 'D1D5DB'),
+  ab:    mkStyle('FEF2F2', 'B91C1C', true,  9,  'center', false, 'FECACA'),
+};
+
+function cell(v: string | number | null | undefined, s: Record<string, unknown>): XCell {
+  if (v === null || v === undefined || v === '') return { v: '', t: 's', s };
+  if (typeof v === 'number') return { v, t: 'n', s };
+  return { v: String(v), t: 's', s };
+}
+
+function buildSheet(
+  rows: (XCell | null)[][],
+  merges: XLSXStyle.Range[],
+): XLSXStyle.WorkSheet {
+  const ws: XLSXStyle.WorkSheet = {};
+  let maxR = 0, maxC = 0;
+  rows.forEach((row, r) => {
+    row.forEach((cellObj, c) => {
+      if (!cellObj) return;
+      const ref = XLSXStyle.utils.encode_cell({ r, c });
+      ws[ref] = cellObj as XLSXStyle.CellObject;
+      if (r > maxR) maxR = r;
+      if (c > maxC) maxC = c;
+    });
+  });
+  ws['!ref'] = XLSXStyle.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+  ws['!merges'] = merges;
+  return ws;
+}
+
+export function exportInternalMarksExcel(
+  data: ExportCOSummary,
+  courseInfo: ExportCourseInfo,
+) {
+  const { exams, students, co_count, total_internal_marks } = data;
+
+  const isLabExam = (ex: ExportCOExam) =>
+    String(ex.kind || '').toLowerCase() === 'lab' ||
+    /lab/i.test(ex.short_name || ex.name || '');
+
+  const isCqiExam = (ex: ExportCOExam) =>
+    String(ex.kind || 'exam').toLowerCase() === 'cqi';
+
+  const nonCqiExams = exams.filter((ex) => !isCqiExam(ex));
+  const coNums = Array.from({ length: co_count }, (_, i) => i + 1);
+
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+
+  // Per-exam: only CO columns with at least one non-zero, non-absent value
+  const examActiveCOs = new Map<string, number[]>();
+  for (const ex of nonCqiExams) {
+    if (!isLabExam(ex)) {
+      const active = coNums.filter((co) =>
+        students.some((s) => {
+          const em = (s.exam_marks[ex.id] || {}) as Record<string, number | boolean>;
+          if ((em as any).is_absent) return false;
+          const v = (em as any)[`co${co}`];
+          return typeof v === 'number' && v !== 0;
+        }),
+      );
+      examActiveCOs.set(ex.id, active.length > 0 ? active : coNums);
+    }
+  }
+
+  const examColCount = (ex: ExportCOExam) => {
+    if (isLabExam(ex)) return 1;
+    return (examActiveCOs.get(ex.id) || coNums).length + 1; // active COs + Total
+  };
+  const totalExamCols = nonCqiExams.reduce((s, ex) => s + examColCount(ex), 0);
+  const fimCols = co_count + 2; // CO1..N + /TIM + /100
+  const totalCols = 3 + totalExamCols + fimCols * 2;
+  const dtStr = new Date().toLocaleDateString('en-IN');
+
+  const infoStr =
+    `${courseInfo.course_code} - ${courseInfo.course_name} | ` +
+    `${courseInfo.class_name} ${courseInfo.section} | ` +
+    `Sem ${courseInfo.semester} | ${courseInfo.department}` +
+    (courseInfo.faculty_name ? ` | Faculty: ${courseInfo.faculty_name}` : '') +
+    ` | Generated: ${dtStr}`;
+
+  /* ══════════════════════════════════════════════════════
+     Sheet 1 — Full Summary
+     ══════════════════════════════════════════════════════ */
+  const sumData: (XCell | null)[][] = [];
+  const sumMerges: XLSXStyle.Range[] = [];
+
+  const merge = (merges: XLSXStyle.Range[], r: number, cs: number, ce: number) => {
+    if (ce > cs) merges.push({ s: { r, c: cs }, e: { r, c: ce } });
+  };
+
+  // Row 0 – college name
+  const row0: (XCell | null)[] = [cell(COLLEGE_NAME, S.col)];
+  for (let i = 1; i < totalCols; i++) row0.push(cell('', S.col));
+  merge(sumMerges, 0, 0, totalCols - 1);
+  sumData.push(row0);
+
+  // Row 1 – sheet title
+  const row1: (XCell | null)[] = [cell('INTERNAL MARKS — FULL SUMMARY', S.title)];
+  for (let i = 1; i < totalCols; i++) row1.push(cell('', S.title));
+  merge(sumMerges, 1, 0, totalCols - 1);
+  sumData.push(row1);
+
+  // Row 2 – info
+  const row2: (XCell | null)[] = [cell(infoStr, S.info)];
+  for (let i = 1; i < totalCols; i++) row2.push(cell('', S.info));
+  merge(sumMerges, 2, 0, totalCols - 1);
+  sumData.push(row2);
+
+  // Row 3 – spacer
+  sumData.push([]);
+
+  // Row 4 – exam group headers
+  const row4: (XCell | null)[] = [];
+  row4.push(cell('S.No', S.grp));
+  row4.push(cell("Student's Name", S.grp));
+  row4.push(cell('Register Number', S.grp));
+  let col4 = 3;
+  for (const ex of nonCqiExams) {
+    const span = examColCount(ex);
+    row4.push(cell(ex.name || ex.short_name || 'Exam', S.grp));
+    for (let i = 1; i < span; i++) row4.push(cell('', S.grp));
+    merge(sumMerges, 4, col4, col4 + span - 1);
+    col4 += span;
+  }
+  row4.push(cell('FIM (Before CQI)', S.fb));
+  for (let i = 1; i < fimCols; i++) row4.push(cell('', S.fb));
+  merge(sumMerges, 4, col4, col4 + fimCols - 1);
+  col4 += fimCols;
+  row4.push(cell('FIM (After CQI)', S.fa));
+  for (let i = 1; i < fimCols; i++) row4.push(cell('', S.fa));
+  merge(sumMerges, 4, col4, col4 + fimCols - 1);
+  sumData.push(row4);
+
+  // Row 5 – sub-headers
+  const row5: (XCell | null)[] = [];
+  row5.push(cell('', S.sub));
+  row5.push(cell('', S.sub));
+  row5.push(cell('', S.sub));
+  for (const ex of nonCqiExams) {
+    if (isLabExam(ex)) {
+      row5.push(cell('Total', S.sub));
+    } else {
+      const exCOs = examActiveCOs.get(ex.id) || coNums;
+      for (const co of exCOs) row5.push(cell(`CO${co}`, S.co));
+      row5.push(cell('Total', S.sub));
+    }
+  }
+  for (const co of coNums) row5.push(cell(`CO${co}`, S.co));
+  row5.push(cell(`/${total_internal_marks}`, S.sub));
+  row5.push(cell('/100', S.sub));
+  for (const co of coNums) row5.push(cell(`CO${co}`, S.co));
+  row5.push(cell(`/${total_internal_marks}`, S.sub));
+  row5.push(cell('/100', S.sub));
+  sumData.push(row5);
+
+  // Data rows
+  students.forEach((s, idx) => {
+    const em = s.exam_marks || {};
+    const rowN: (XCell | null)[] = [];
+    rowN.push(cell(idx + 1, S.num));
+    rowN.push(cell(s.name || '', S.str));
+    rowN.push(cell(s.reg_no || '', S.str));
+
+    for (const ex of nonCqiExams) {
+      const examEM = (em[ex.id] || {}) as Record<string, number | boolean>;
+      const absent = (examEM as any).is_absent as boolean;
+      if (isLabExam(ex)) {
+        const tot = absent ? null : ((examEM as any).total as number | null | undefined) ?? null;
+        rowN.push(absent ? cell('AB', S.ab) : cell(tot ?? '', S.num));
+      } else {
+        const exCOs = examActiveCOs.get(ex.id) || coNums;
+        for (const co of exCOs) {
+          const v = absent ? null : ((examEM as any)[`co${co}`] as number | null | undefined) ?? null;
+          rowN.push(absent ? cell('AB', S.ab) : cell(v ?? '', S.num));
+        }
+        const tot = absent ? null : ((examEM as any).total as number | null | undefined) ?? null;
+        rowN.push(absent ? cell('AB', S.ab) : cell(tot ?? '', S.num));
+      }
+    }
+
+    // FIM Before CQI
+    const fimBefore = coNums.map((co) =>
+      nonCqiExams.reduce((sum, ex) => sum + (s.weighted_marks[`${ex.id}_CO${co}`] || 0), 0),
+    );
+    const before50 = r2(fimBefore.reduce((a, b) => a + b, 0));
+    const before100 = total_internal_marks > 0
+      ? Math.round((before50 / total_internal_marks) * 100) : 0;
+    for (const co of coNums) rowN.push(cell(r2(fimBefore[co - 1]), S.num));
+    rowN.push(cell(before50, S.num));
+    rowN.push(cell(before100, S.num));
+
+    // FIM After CQI
+    const after50 = r2(s.final_mark || 0);
+    const after100 = total_internal_marks > 0
+      ? Math.round((after50 / total_internal_marks) * 100) : 0;
+    for (const co of coNums) rowN.push(cell(r2(s.co_totals[co - 1] || 0), S.num));
+    rowN.push(cell(after50, S.num));
+    rowN.push(cell(after100, S.num));
+
+    sumData.push(rowN);
+  });
+
+  /* ══════════════════════════════════════════════════════
+     Sheet 2 — Internal Marks
+     ══════════════════════════════════════════════════════ */
+  const imCols = 4;
+  const imData: (XCell | null)[][] = [];
+  const imMerges: XLSXStyle.Range[] = [];
+
+  const imInfoStr =
+    `${courseInfo.course_code} - ${courseInfo.course_name} | ` +
+    `${courseInfo.class_name} ${courseInfo.section} | Sem ${courseInfo.semester} | ${courseInfo.department}` +
+    (courseInfo.faculty_name ? ` | Faculty: ${courseInfo.faculty_name}` : '');
+
+  const imMergeRow = (r: number) => merge(imMerges, r, 0, imCols - 1);
+
+  const imRow0 = [cell(COLLEGE_NAME, S.col), ...Array(imCols - 1).fill(cell('', S.col))];
+  imMergeRow(0); imData.push(imRow0);
+
+  const imRow1 = [cell('INTERNAL MARKS', S.title), ...Array(imCols - 1).fill(cell('', S.title))];
+  imMergeRow(1); imData.push(imRow1);
+
+  const imRow2 = [cell(imInfoStr, S.info), ...Array(imCols - 1).fill(cell('', S.info))];
+  imMergeRow(2); imData.push(imRow2);
+
+  imData.push([]); // spacer
+
+  imData.push([
+    cell('S.No', S.grp),
+    cell('Register Number', S.grp),
+    cell("Student's Name", S.grp),
+    cell('Internal Marks (/100)', S.grp),
+  ]);
+
+  students.forEach((s, idx) => {
+    const after50 = r2(s.final_mark || 0);
+    const after100 = total_internal_marks > 0
+      ? Math.round((after50 / total_internal_marks) * 100) : 0;
+    imData.push([
+      cell(idx + 1, S.num),
+      cell(s.reg_no || '', S.str),
+      cell(s.name || '', S.str),
+      cell(after100, S.num),
+    ]);
+  });
+
+  /* ─── Assemble & download ─── */
+  const wb = XLSXStyle.utils.book_new();
+  XLSXStyle.utils.book_append_sheet(wb, buildSheet(sumData, sumMerges), 'Full Summary');
+  XLSXStyle.utils.book_append_sheet(wb, buildSheet(imData, imMerges), 'Internal Marks');
+
+  const wbout = XLSXStyle.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${data.course_code}_internal_marks_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

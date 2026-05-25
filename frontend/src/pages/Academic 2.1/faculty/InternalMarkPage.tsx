@@ -11,7 +11,7 @@ import {
   Edit2, Lock, RefreshCw, FileText, Download, BarChart3, AlertTriangle, Copy,
 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
-import { exportCOSummaryToExcel, exportCOSummaryToPDF } from './COSummaryExport';
+import { exportCOSummaryToExcel, exportCOSummaryToPDF, exportInternalMarksExcel } from './COSummaryExport';
 import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
 import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
@@ -47,6 +47,7 @@ interface CourseInfo {
   is_elective: boolean;
   class_type: { id: string; name: string; total_internal_marks: number };
   qp_type: string | null;
+  faculty_name?: string;
   setup_status: { class_type_assigned: boolean; qp_type_assigned: boolean };
   exams: ExamMark[];
 }
@@ -111,6 +112,21 @@ export default function InternalMarkPage() {
   const [coLoading, setCoLoading] = useState(false);
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
   const [coView, setCoView] = useState<'raw' | 'weighted'>('raw');
+
+  // Internal marks export dropdown
+  const [showImExport, setShowImExport] = useState(false);
+  const [imExporting, setImExporting] = useState(false);
+  const imExportRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showImExport) return;
+    const handler = (e: MouseEvent) => {
+      if (imExportRef.current && !imExportRef.current.contains(e.target as Node))
+        setShowImExport(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showImExport]);
 
   // Reset notices popup
   const [resetNotices, setResetNotices] = useState<ResetNotice[]>([]);
@@ -222,6 +238,48 @@ export default function InternalMarkPage() {
     }
   };
 
+  const handleImExcel = async () => {
+    setShowImExport(false);
+    if (!courseInfo) return;
+    setImExporting(true);
+    try {
+      let summary = coSummary;
+      if (!summary) {
+        const r = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`);
+        if (!r.ok) throw new Error('Failed to load CO summary');
+        summary = await r.json();
+        setCoSummary(summary);
+      }
+      if (!summary) return;
+      exportInternalMarksExcel(summary, courseInfo);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to export Internal Marks Excel' });
+    } finally {
+      setImExporting(false);
+    }
+  };
+
+  const handleImPDF = async () => {
+    setShowImExport(false);
+    if (!courseInfo) return;
+    setImExporting(true);
+    try {
+      let summary = coSummary;
+      if (!summary) {
+        const r = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`);
+        if (!r.ok) throw new Error('Failed to load CO summary');
+        summary = await r.json();
+        setCoSummary(summary);
+      }
+      if (!summary) return;
+      await exportCOSummaryToPDF(summary, 'weighted', courseInfo);
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to export Internal Marks PDF' });
+    } finally {
+      setImExporting(false);
+    }
+  };
+
 
 
   /* ─── status helpers ─── */
@@ -290,6 +348,28 @@ export default function InternalMarkPage() {
           <button onClick={exportReport} className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm">
             <Download className="w-4 h-4" /> Export Report
           </button>
+          {/* Internal Marks export dropdown */}
+          <div className="relative" ref={imExportRef}>
+            <button
+              onClick={() => setShowImExport((v) => !v)}
+              disabled={imExporting}
+              className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 text-sm disabled:opacity-50"
+            >
+              <FileText className="w-4 h-4" />
+              {imExporting ? 'Exporting…' : 'Internal Marks'}
+              <svg className="w-3 h-3 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
+            {showImExport && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-white border rounded-lg shadow-lg z-20">
+                <button onClick={handleImExcel} className="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-50 rounded-t-lg">
+                  <Download className="w-4 h-4 text-green-600" /> Excel
+                </button>
+                <button onClick={handleImPDF} className="flex items-center gap-2 w-full px-4 py-2 text-sm hover:bg-gray-50 rounded-b-lg border-t">
+                  <FileText className="w-4 h-4 text-red-600" /> PDF
+                </button>
+              </div>
+            )}
+          </div>
           <button onClick={() => { loadData(); if (tab === 'co') loadCOSummary(); }} className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg">
             <RefreshCw className="w-5 h-5" />
           </button>
@@ -390,7 +470,7 @@ export default function InternalMarkPage() {
       {/* ─── Tab: Dashboard ─── */}
       {tab === 'dashboard' && courseInfo && (
         <div className="bg-white rounded-lg shadow p-4">
-          <FacultyCourseDashboard courseInfo={courseInfo} />
+          <FacultyCourseDashboard courseInfo={courseInfo} taId={courseId ? Number(courseId) : undefined} />
         </div>
       )}
 

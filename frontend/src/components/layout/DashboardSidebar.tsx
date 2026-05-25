@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2 } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -81,6 +81,8 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   // Academic 2.1
   academic_v2: BookOpen,
   academic_v2_admin: Layout,
+  // Visual Admin
+  visual_admin_dashboard: BarChart3,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -622,6 +624,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
   if ((canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
+  }
+
+  // Visual Admin entries
+  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN');
+  if (isVisualAdmin && !items.some((item) => item.key === 'visual_admin_dashboard')) {
+    items.push({ key: 'visual_admin_dashboard', label: 'Visual Admin', to: '/visual-admin' });
   }
 
   // Add Token Raise for all users at the end (no permission check needed)

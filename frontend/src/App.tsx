@@ -116,6 +116,10 @@ import FilePreviewPage from './pages/lms/FilePreviewPage';
 
 // Academic 2.1 - Lazy load pages for code splitting
 const AcV2AdminDashboard = React.lazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'));
+
+// Visual Admin
+const VisualAdminDashboard = React.lazy(() => import('./pages/visual_admin/VisualAdminDashboard'));
+const VisualAdminURLsPage = React.lazy(() => import('./pages/visual_admin/VisualAdminURLsPage'));
 const AcV2PublishControlPage = React.lazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'));
 const AcV2CycleManagementPage = React.lazy(() => import('./pages/Academic 2.1/admin/CycleManagementPage'));
 const AcV2ClassTypeEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'));
@@ -1059,6 +1063,35 @@ export default function App() {
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2PassMarkSettingsPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                {/* ── Visual Admin Routes ─────────────────────────────── */}
+                <Route
+                  path="/visual-admin"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['VISUAL_ADMIN']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <VisualAdminDashboard />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/visual-admin/urls"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['VISUAL_ADMIN']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <VisualAdminURLsPage />
                         </React.Suspense>
                       }
                     />

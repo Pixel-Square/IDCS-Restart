@@ -28,6 +28,7 @@ from .models import (
     AcV2CqiToken,
     AcV2CqiOperator,
     AcV2CqiEditRequest,
+    AcV2PublishSetting,
 )
 
 
@@ -777,3 +778,15 @@ class AcV2CqiOperatorSerializer(serializers.ModelSerializer):
         fields = ['id', 'code', 'symbol', 'label', 'order', 'is_active']
         read_only_fields = ['id']
 
+
+
+class AcV2PublishSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcV2PublishSetting
+        fields = [
+            'id', 'key',
+            'must_fill_all_cells',
+            'publish_progress_duration',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'key', 'created_at', 'updated_at']

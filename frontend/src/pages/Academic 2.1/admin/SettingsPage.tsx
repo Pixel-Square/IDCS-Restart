@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Bell, Eye, Film, Save, Settings, ShieldCheck, Tag, Upload, Users } from 'lucide-react';
+import { Bell, Eye, Film, Save, Send, Settings, ShieldCheck, Tag, Upload, Users } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 // ─── Android-style Toggle Switch Component ──────────────────────────────────
@@ -899,6 +899,139 @@ function FacultyRequestSection() {
 
 // ─── Preloader Section ───────────────────────────────────────────────────────
 
+// ─── Publish Section ────────────────────────────────────────────────────────
+
+interface PublishSetting {
+  id: string;
+  must_fill_all_cells: boolean;
+  publish_progress_duration: number;
+  updated_at: string;
+}
+
+function PublishSection() {
+  const [setting, setSetting] = useState<PublishSetting | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [mustFill, setMustFill] = useState(false);
+  const [duration, setDuration] = useState(4);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchWithAuth('/api/academic-v2/admin/publish-settings/');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: PublishSetting = await res.json();
+      setSetting(data);
+      setMustFill(Boolean(data.must_fill_all_cells));
+      setDuration(Math.max(1, Math.min(30, Number(data.publish_progress_duration) || 4)));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load publish settings');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async () => {
+    if (duration < 1 || duration > 30) { setError('Duration must be between 1 and 30 seconds'); return; }
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await fetchWithAuth('/api/academic-v2/admin/publish-settings/', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ must_fill_all_cells: mustFill, publish_progress_duration: duration }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: PublishSetting = await res.json();
+      setSetting(data);
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save publish settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="py-6 text-sm text-gray-400">Loading…</div>;
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
+        Configure how mark publishing works for faculty — validation rules and UI timing.
+      </div>
+
+      {/* Sub-section: Faculty must fill all cells */}
+      <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+        <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+          <div className="w-1 h-4 rounded bg-blue-500" />
+          Faculty must fill all cells
+        </div>
+        <p className="text-xs text-gray-500">
+          When enabled, the Publish button will check for any empty mark cells (non-absent students).
+          If empty cells are found, a warning popup is shown with row and cell counts. Clicking OK
+          highlights those cells in red inside the mark entry table.
+        </p>
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+          <div>
+            <div className="text-sm font-medium text-gray-800">Require all cells filled before publish</div>
+            <div className="text-xs text-gray-500">Faculty will see a warning popup if any cell is empty</div>
+          </div>
+          <AndroidSwitch checked={mustFill} onChange={setMustFill} disabled={saving} />
+        </div>
+      </div>
+
+      {/* Sub-section: Progress duration */}
+      <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+        <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+          <div className="w-1 h-4 rounded bg-emerald-500" />
+          Publish progress duration
+        </div>
+        <p className="text-xs text-gray-500">
+          The number of seconds the "Publishing In Progress" animation plays before showing the success screen.
+          The actual API call runs concurrently; the screen waits for whichever finishes last.
+        </p>
+        <div className="flex items-center gap-4">
+          <input
+            type="number"
+            value={duration}
+            min={1}
+            max={30}
+            onChange={e => setDuration(Math.max(1, Math.min(30, Number(e.target.value) || 4)))}
+            disabled={saving}
+            className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          />
+          <span className="text-sm text-gray-500">seconds (1–30)</span>
+        </div>
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-700">{error}</div>}
+      {success && <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-700">Saved successfully!</div>}
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-gray-500">
+          {setting?.updated_at && `Last saved: ${new Date(setting.updated_at).toLocaleString('en-IN')}`}
+        </p>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving…' : 'Save Publish Settings'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 const PRELOADER_KEY = 'acv2_preloader';
 
 interface PreloaderCfg {
@@ -1269,7 +1402,7 @@ function SettingsSection({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const [active, setActive] = useState<'pass_mark' | 'my_marks' | 'academic_notifications' | 'faculty_request' | 'preloader'>('pass_mark');
+  const [active, setActive] = useState<'pass_mark' | 'my_marks' | 'academic_notifications' | 'faculty_request' | 'preloader' | 'publish'>('pass_mark');
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4">
@@ -1353,6 +1486,19 @@ export default function SettingsPage() {
               <div className="text-xs text-gray-500 truncate">Custom loading animation</div>
             </div>
           </button>
+          <button
+            type="button"
+            onClick={() => setActive('publish')}
+            className={`w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-gray-50 ${active === 'publish' ? 'bg-gray-50' : ''}`}
+          >
+            <div className="p-2 bg-gray-100 rounded-lg">
+              <Send className="w-4 h-4 text-gray-600" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900">Publish</div>
+              <div className="text-xs text-gray-500 truncate">Cell validation &amp; progress timing</div>
+            </div>
+          </button>
         </div>
 
         {/* Right content */}
@@ -1404,6 +1550,16 @@ export default function SettingsPage() {
               description="Customise the loading animation shown on the Mark Entry page when exam data is being fetched."
             >
               <PreloaderSection />
+            </SettingsSection>
+          )}
+
+          {active === 'publish' && (
+            <SettingsSection
+              icon={<Send className="w-5 h-5" />}
+              title="Publish"
+              description="Control faculty publish behaviour — require all cells to be filled and set the publish progress animation duration."
+            >
+              <PublishSection />
             </SettingsSection>
           )}
         </div>

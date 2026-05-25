@@ -1,5 +1,7 @@
-import React, { useMemo } from 'react';
-import { AlertTriangle, ExternalLink } from 'lucide-react';
+import React, { useMemo, useEffect, useState } from 'react';
+import { AlertTriangle, ExternalLink, PhoneCall } from 'lucide-react';
+import { fetchVAMyLink, fetchVAUsers, type VAMyLink, type VAUser } from '../../../services/visualAdmin';
+import { getApiBase } from '../../../services/apiBase';
 
 interface CourseInfoLike {
   id: string | number;
@@ -39,7 +41,26 @@ function buildPowerBiFilter(table: string, fields: { courseCode: string; section
   return clauses.join(' and ');
 }
 
-export default function FacultyCourseDashboard({ courseInfo }: { courseInfo: CourseInfoLike }) {
+export default function FacultyCourseDashboard({
+  courseInfo,
+  taId,
+}: {
+  courseInfo: CourseInfoLike;
+  taId?: number;
+}) {
+  // Visual Admin link takes priority over env-based URL
+  const [vaLink, setVaLink] = useState<VAMyLink | null>(null);
+  const [vaLoading, setVaLoading] = useState(!!taId);
+  const [contactPopupOpen, setContactPopupOpen] = useState(false);
+
+  useEffect(() => {
+    if (!taId) { setVaLoading(false); return; }
+    fetchVAMyLink(taId)
+      .then(setVaLink)
+      .catch(() => setVaLink({ url: '', source: 'none' }))
+      .finally(() => setVaLoading(false));
+  }, [taId]);
+
   const baseEmbedUrl = (import.meta.env as any).VITE_POWERBI_EMBED_URL as string | undefined;
   const filterTable = ((import.meta.env as any).VITE_POWERBI_FILTER_TABLE as string | undefined) || 'course_dashboard';
   const fieldCourseCode = ((import.meta.env as any).VITE_POWERBI_FILTER_COURSE_CODE_FIELD as string | undefined) || 'course_code';
@@ -112,6 +133,68 @@ export default function FacultyCourseDashboard({ courseInfo }: { courseInfo: Cou
     courseInfo,
   ]);
 
+  if (vaLoading) {
+    return (
+      <div className="bg-white rounded-lg border shadow-sm p-8 text-center text-gray-400 animate-pulse">
+        Loading dashboard…
+      </div>
+    );
+  }
+
+  // VA link configured → use it directly (no env filters applied)
+  if (vaLink && vaLink.url) {
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-gray-600">
+            Power BI dashboard for {courseInfo.course_code} | Section {courseInfo.section}
+          </div>
+          <a
+            href={vaLink.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-blue-700 hover:text-blue-800"
+          >
+            Open in Power BI <ExternalLink className="w-4 h-4" />
+          </a>
+        </div>
+        <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+          <iframe
+            title="Faculty Course Power BI Dashboard"
+            src={vaLink.url}
+            className="w-full h-[78vh]"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // VA link was checked but none configured → show "contact visual admin"
+  if (taId && vaLink && vaLink.source === 'none') {
+    return (
+      <div className="bg-white rounded-lg border shadow-sm p-10 text-center">
+        <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center mx-auto mb-4">
+          <PhoneCall size={28} className="text-orange-500" />
+        </div>
+        <h3 className="text-lg font-semibold text-gray-800 mb-2">Dashboard Not Configured</h3>
+        <p className="text-gray-500 text-sm mb-6 max-w-sm mx-auto">
+          Your Power BI dashboard link has not been set up yet. Please contact the Visual Admin incharge.
+        </p>
+        <button
+          onClick={() => setContactPopupOpen(true)}
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+        >
+          <PhoneCall size={16} />
+          Contact Visual Admin
+        </button>
+        {contactPopupOpen && (
+          <VisualAdminContactPopup onClose={() => setContactPopupOpen(false)} />
+        )}
+      </div>
+    );
+  }
+
   if (!resolvedEmbedUrl) {
     return (
       <div className="bg-white rounded-lg border shadow-sm p-8 text-center text-gray-500">
@@ -158,6 +241,106 @@ export default function FacultyCourseDashboard({ courseInfo }: { courseInfo: Cou
           allowFullScreen
         />
       </div>
+    </div>
+  );
+}
+
+/* ──────────────── Visual Admin Contact Popup ──────────────── */
+
+function VisualAdminContactPopup({ onClose }: { onClose: () => void }) {
+  const [users, setUsers] = useState<VAUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<VAUser | null>(null);
+  const API_BASE = getApiBase();
+
+  useEffect(() => {
+    fetchVAUsers()
+      .then(setUsers)
+      .catch(() => setUsers([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const resolveImage = (path: string) => {
+    if (!path) return '';
+    if (path.startsWith('http')) return path;
+    return `${API_BASE}/media/${path.replace(/^\/+/, '')}`;
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-800">Visual Admin Incharges</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+        <div className="p-5">
+          {loading ? (
+            <p className="text-center text-gray-400 text-sm py-6 animate-pulse">Loading…</p>
+          ) : users.length === 0 ? (
+            <p className="text-center text-gray-500 text-sm py-6">No Visual Admin contacts found.</p>
+          ) : (
+            <div className="space-y-2">
+              {users.map((u) => (
+                <div key={u.id} className="flex items-center justify-between p-3 rounded-xl border border-gray-100 hover:bg-gray-50">
+                  <div className="flex items-center gap-3">
+                    {u.profile_image ? (
+                      <img src={resolveImage(u.profile_image)} alt={u.name} className="w-9 h-9 rounded-full object-cover border" />
+                    ) : (
+                      <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm">
+                        {u.name.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{u.name}</p>
+                      <p className="text-xs text-gray-400">{u.department || u.email}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setSelected(u)}
+                    className="text-xs text-indigo-600 hover:underline font-medium"
+                  >
+                    View Profile
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {selected && (
+        <div className="fixed inset-0 bg-black/40 z-60 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setSelected(null)} className="float-right text-gray-400 hover:text-gray-600 text-xl">×</button>
+            <div className="flex items-start gap-4 mt-1">
+              {selected.profile_image ? (
+                <img src={resolveImage(selected.profile_image)} alt={selected.name} className="w-16 h-16 rounded-xl object-cover border" />
+              ) : (
+                <div className="w-16 h-16 rounded-xl bg-indigo-100 flex items-center justify-center text-2xl font-bold text-indigo-600">
+                  {selected.name.charAt(0)}
+                </div>
+              )}
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{selected.name}</h3>
+                {selected.designation && <p className="text-sm text-indigo-600">{selected.designation}</p>}
+                {selected.department && <p className="text-sm text-gray-500">{selected.department}</p>}
+                <p className="text-sm text-gray-500 mt-1">{selected.email}</p>
+                <div className="flex flex-wrap gap-1.5 mt-3">
+                  {selected.roles.map((r) => (
+                    <span key={r} className="px-2 py-0.5 text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full">{r}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

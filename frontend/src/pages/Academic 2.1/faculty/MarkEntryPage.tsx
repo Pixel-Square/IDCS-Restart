@@ -197,6 +197,309 @@ function BypassPinnedBar({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Publishing progress panel — animated deterministic progress bar
+// ---------------------------------------------------------------------------
+function PublishProgressPanel({ duration, totalCells, emptyCellCount }: {
+  duration: number;
+  totalCells: number;
+  emptyCellCount: number;
+}) {
+  const [progress, setProgress] = React.useState(0);
+  const [stepIdx, setStepIdx] = React.useState(0);
+  const [cellCount, setCellCount] = React.useState(0);
+  const steps = ['Saving draft', 'Validating entries', 'Publishing records', 'Locking'];
+  const stepDurationMs = (duration * 1000) / steps.length;
+
+  React.useEffect(() => {
+    const raf = requestAnimationFrame(() => setProgress(100));
+    const timers = steps.map((_, i) => {
+      if (i === 0) return null;
+      return setTimeout(() => setStepIdx(i), stepDurationMs * i);
+    });
+    return () => { cancelAnimationFrame(raf); timers.forEach(t => t && clearTimeout(t)); };
+  }, [duration]);
+
+  // Animate cell counter during "Validating entries" step
+  React.useEffect(() => {
+    if (stepIdx !== 1) {
+      if (stepIdx > 1) setCellCount(emptyCellCount > 0 ? emptyCellCount : totalCells);
+      return;
+    }
+    const target = emptyCellCount > 0 ? emptyCellCount : totalCells;
+    if (target === 0) return;
+    setCellCount(0);
+    const start = Date.now();
+    const iv = setInterval(() => {
+      const pct = Math.min((Date.now() - start) / (stepDurationMs * 0.8), 1);
+      setCellCount(Math.round(pct * target));
+      if (pct >= 1) clearInterval(iv);
+    }, 20);
+    return () => clearInterval(iv);
+  }, [stepIdx, emptyCellCount, totalCells, stepDurationMs]);
+
+  const isValidating = stepIdx === 1;
+  const hasEmpty = emptyCellCount > 0;
+
+  return (
+    <div className="p-10 md:p-12 flex flex-col items-center justify-center gap-8 animate-in fade-in duration-500">
+      <div className="space-y-1 text-center">
+        <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight">Publishing In Progress</h3>
+        <div className="h-6 flex items-center justify-center">
+          {isValidating ? (
+            hasEmpty
+              ? <p className="text-sm font-semibold text-red-600 tabular-nums">Found {cellCount} empty {cellCount === 1 ? 'cell' : 'cells'} &mdash; treated as 0</p>
+              : totalCells > 0
+                ? <p className="text-sm font-semibold text-emerald-700 tabular-nums">Checked {cellCount.toLocaleString()} / {totalCells.toLocaleString()} cells&hellip;</p>
+                : <p className="text-sm text-slate-500">Validating entries&hellip;</p>
+          ) : (
+            <p className="text-sm text-slate-500">{steps[stepIdx]}&hellip;</p>
+          )}
+        </div>
+      </div>
+
+      {/* Step dots */}
+      <div className="flex items-center gap-3">
+        {steps.map((s, i) => (
+          <React.Fragment key={s}>
+            <div className="flex flex-col items-center gap-1.5">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-500 ${
+                i > stepIdx ? 'bg-slate-200'
+                : i === 1 && i === stepIdx && hasEmpty ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.45)]'
+                : 'bg-emerald-600 shadow-[0_0_10px_rgba(5,150,105,0.45)]'
+              }`}>
+                {i < stepIdx && (
+                  <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                  </svg>
+                )}
+                {i === stepIdx && <div className={`w-2 h-2 rounded-full animate-pulse ${i === 1 && hasEmpty ? 'bg-red-100' : 'bg-white'}`} />}
+              </div>
+              <span className={`text-[10px] font-semibold transition-colors duration-300 ${
+                i > stepIdx ? 'text-slate-400'
+                : i === 1 && hasEmpty ? 'text-red-500'
+                : 'text-emerald-700'
+              }`}>{s}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`h-0.5 w-8 mb-4 transition-all duration-500 ${i < stepIdx ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* Progress bar — turns red during validating step if empty cells found */}
+      <div className="w-full max-w-sm">
+        <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+          <div
+            className={`h-full rounded-full ${isValidating && hasEmpty ? 'bg-gradient-to-r from-red-500 to-rose-400' : 'bg-gradient-to-r from-emerald-600 to-teal-500'}`}
+            style={{ width: `${progress}%`, transition: `width ${duration}s cubic-bezier(0.4,0,0.2,1)` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Published success panel — horizontal compact card with improved animation
+// ---------------------------------------------------------------------------
+function PublishSuccessPanel({ onClose, studentCount, marksCount }: {
+  onClose: () => void;
+  studentCount: number;
+  marksCount: number;
+}) {
+  const [reveal, setReveal] = React.useState(false);
+  const [dispStudents, setDispStudents] = React.useState(0);
+  const [dispMarks, setDispMarks] = React.useState(0);
+
+  React.useEffect(() => {
+    const t1 = setTimeout(() => setReveal(true), 820);
+    const t2 = setTimeout(() => {
+      const STEPS = 30; const DUR = 700; let i = 0;
+      const iv = setInterval(() => {
+        i++;
+        const pct = i / STEPS;
+        setDispStudents(Math.round(pct * studentCount));
+        setDispMarks(Math.round(pct * marksCount));
+        if (i >= STEPS) clearInterval(iv);
+      }, DUR / STEPS);
+    }, 1000);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [studentCount, marksCount]);
+
+  // 6 burst lines radiating outward after checkmark
+  const burstAngles = [0, 60, 120, 180, 240, 300];
+
+  return (
+    <div className="relative overflow-hidden">
+      <div className="h-1 bg-gradient-to-r from-emerald-400 via-emerald-500 to-teal-400" />
+      <div className="px-8 py-7 flex items-center gap-7">
+
+        {/* Animated checkmark — spring bounce in */}
+        <div
+          className="relative shrink-0"
+          style={{ animation: 'successBounce 0.55s cubic-bezier(0.34,1.56,0.64,1) 0.08s both' }}
+        >
+          <div
+            className="absolute inset-0 -m-5 rounded-full bg-emerald-100/40"
+            style={{ animation: 'haloPulse 2.8s ease-in-out 1.2s infinite' }}
+          />
+          <svg viewBox="0 0 84 84" className="w-20 h-20 relative z-10" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* Soft glow ring */}
+            <circle cx="42" cy="42" r="40" fill="none" stroke="#a7f3d0" strokeWidth="1.5"
+              style={{ animation: 'outerRingReveal 0.5s ease 0.45s both' }}
+            />
+            {/* Fill bg */}
+            <circle cx="42" cy="42" r="35" fill="#ecfdf5" />
+            {/* Animated stroke circle — draws in */}
+            <circle cx="42" cy="42" r="35" stroke="#059669" strokeWidth="4.5" fill="none"
+              strokeDasharray="220" strokeDashoffset="220"
+              style={{ animation: 'circleReveal 0.42s cubic-bezier(0.4,0,0.2,1) 0.08s forwards' }}
+            />
+            {/* Checkmark — snaps in fast after circle */}
+            <path d="M25 43l13 13 22-24" stroke="#059669" strokeWidth="5.5"
+              strokeLinecap="round" strokeLinejoin="round"
+              strokeDasharray="55" strokeDashoffset="55"
+              style={{ animation: 'checkSnap 0.28s cubic-bezier(0.22,0.61,0.36,1) 0.47s forwards' }}
+            />
+            {/* Burst lines — 6 short lines radiating outward */}
+            {burstAngles.map((deg, i) => {
+              const rad = deg * Math.PI / 180;
+              const x1 = 42 + Math.cos(rad) * 37;
+              const y1 = 42 + Math.sin(rad) * 37;
+              const x2 = 42 + Math.cos(rad) * 44;
+              const y2 = 42 + Math.sin(rad) * 44;
+              return (
+                <line key={deg} x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="#34d399" strokeWidth="2.5" strokeLinecap="round"
+                  style={{ animation: `burstLine 0.38s cubic-bezier(0.22,0.61,0.36,1) ${0.76 + i * 0.04}s both` }}
+                />
+              );
+            })}
+            <style>{`
+              @keyframes circleReveal   { to { stroke-dashoffset: 0; } }
+              @keyframes checkSnap      { to { stroke-dashoffset: 0; } }
+              @keyframes outerRingReveal { from { opacity: 0; } to { opacity: 1; } }
+              @keyframes burstLine      { from { opacity: 0; stroke-dasharray: 0 9; } to { opacity: 1; stroke-dasharray: 7 9; } }
+              @keyframes successBounce  { from { transform: scale(0.35); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+              @keyframes haloPulse      { 0%,100% { opacity:.35; transform:scale(1); } 50% { opacity:.08; transform:scale(1.22); } }
+            `}</style>
+          </svg>
+        </div>
+
+        {/* Text block */}
+        <div
+          className="flex-1 min-w-0"
+          style={{ opacity: reveal ? 1 : 0, transform: reveal ? 'translateY(0)' : 'translateY(10px)', transition: 'opacity 0.4s ease, transform 0.4s ease' }}
+        >
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-100 border border-emerald-200/80 rounded-full mb-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+            <span className="text-[10px] font-black tracking-[0.2em] text-emerald-700 uppercase">Published</span>
+          </div>
+          <h3 className="text-xl font-black text-slate-900 tracking-tight leading-tight">Marks Submitted</h3>
+          <p className="text-sm text-slate-400 mt-0.5 leading-snug">Records finalized &amp; locked. Edits require a formal request.</p>
+          {studentCount > 0 && (
+            <p className="text-[11px] text-slate-300 mt-2 tabular-nums">
+              {dispStudents} students &middot; {dispMarks} marks saved
+            </p>
+          )}
+        </div>
+
+        {/* Close button */}
+        <div
+          className="shrink-0"
+          style={{ opacity: reveal ? 1 : 0, transition: 'opacity 0.4s ease 0.12s' }}
+        >
+          <button
+            onClick={onClose}
+            className="px-6 py-2.5 text-sm font-bold text-white bg-gradient-to-r from-emerald-700 to-emerald-600 rounded-xl hover:from-emerald-800 hover:to-emerald-700 shadow-[0_6px_18px_-5px_rgba(5,150,105,0.65)] hover:scale-[1.03] active:scale-[0.98] transition-all duration-150 whitespace-nowrap"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Post-publish warning panel — shown after animation if empty cells exist
+// ---------------------------------------------------------------------------
+function PublishWarningPanel({ emptyCellCount, mustFillAllCells, onClose, onContinue }: {
+  emptyCellCount: number;
+  mustFillAllCells: boolean;
+  onClose: () => void;
+  onContinue: () => void;
+}) {
+  const [reveal, setReveal] = React.useState(false);
+  React.useEffect(() => { const t = setTimeout(() => setReveal(true), 80); return () => clearTimeout(t); }, []);
+
+  return (
+    <div className="relative overflow-hidden animate-in fade-in duration-300">
+      <div className="h-1.5 bg-gradient-to-r from-amber-500 via-orange-500 to-red-500" />
+
+      <div className="px-8 pt-8 pb-5 space-y-5"
+        style={{ opacity: reveal ? 1 : 0, transform: reveal ? 'translateY(0)' : 'translateY(6px)', transition: 'opacity 0.35s ease, transform 0.35s ease' }}
+      >
+        {/* Header */}
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center shrink-0 shadow-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+          </div>
+          <div className="space-y-0.5">
+            <p className="text-[11px] font-black tracking-[0.18em] text-red-500 uppercase">Validation Result</p>
+            <h3 className="text-xl font-black text-slate-900">Empty Cells Detected</h3>
+          </div>
+        </div>
+
+        {/* Count badge */}
+        <div className="flex items-center gap-4 px-5 py-4 rounded-2xl bg-red-50 border border-red-100">
+          <span className="text-4xl font-black text-red-600 tabular-nums leading-none">{emptyCellCount}</span>
+          <div>
+            <p className="text-sm font-bold text-red-700">
+              empty {emptyCellCount === 1 ? 'cell' : 'cells'} found
+            </p>
+            <p className="text-xs text-red-400 mt-0.5">Highlighted in red in the mark entry table</p>
+          </div>
+        </div>
+
+        {/* Info message */}
+        {mustFillAllCells ? (
+          <p className="text-sm text-slate-500 leading-relaxed">
+            <span className="font-semibold text-slate-700">Fill all cells is enabled.</span> Please close this dialog, fill the highlighted cells in the table, then publish again.
+          </p>
+        ) : (
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Empty cells will be saved as <span className="font-semibold text-slate-700">zero (0)</span>. You can close and fill them first, or continue publishing now.
+          </p>
+        )}
+      </div>
+
+      <div className="px-8 py-5 bg-slate-50 border-t border-slate-200 flex items-center gap-3"
+        style={{ justifyContent: mustFillAllCells ? 'flex-end' : 'space-between' }}
+      >
+        <button
+          onClick={onClose}
+          className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors"
+        >
+          ← Close &amp; Fix
+        </button>
+        {!mustFillAllCells && (
+          <button
+            onClick={onContinue}
+            className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-amber-600 to-orange-600 rounded-xl hover:from-amber-700 hover:to-orange-700 transition-colors shadow-[0_8px_20px_-8px_rgba(217,119,6,0.6)]"
+          >
+            Continue with {emptyCellCount} empty {emptyCellCount === 1 ? 'cell' : 'cells'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function MarkEntryPage() {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
@@ -263,7 +566,7 @@ export default function MarkEntryPage() {
 
   // Publish Confirmation states
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
-  const [publishStatus, setPublishStatus] = useState<'idle' | 'loading' | 'success'>('idle');
+  const [publishStatus, setPublishStatus] = useState<'idle' | 'loading' | 'post_warning' | 'success'>('idle');
   const [sealImageUrl, setSealImageUrl] = useState<string | null>(null);
   const [showSealStamp, setShowSealStamp] = useState(true);
   const [sealAnimationEnabled, setSealAnimationEnabled] = useState(false);
@@ -271,6 +574,30 @@ export default function MarkEntryPage() {
   const [publishCountdown, setPublishCountdown] = useState<number | null>(null);
   const sealHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
+
+  // Publish settings (fetched from admin)
+  const [mustFillAllCells, setMustFillAllCells] = useState(false);
+  const [publishProgressDuration, setPublishProgressDuration] = useState(4);
+
+  // Empty-cell warning state
+  const [showEmptyCellsWarning, setShowEmptyCellsWarning] = useState(false);
+  const [emptyCellsInfo, setEmptyCellsInfo] = useState<{ rowCount: number; totalEmpty: number } | null>(null);
+  const [emptyCellKeys, setEmptyCellKeys] = useState<Set<string>>(new Set());
+  const [emptyCellCount, setEmptyCellCount] = useState(0);
+  const pendingEmptyCellKeysRef = useRef<Set<string>>(new Set());
+
+  // Fetch publish settings once on mount
+  useEffect(() => {
+    fetchWithAuth('/api/academic-v2/admin/publish-settings/')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setMustFillAllCells(Boolean(d.must_fill_all_cells));
+          setPublishProgressDuration(Math.max(1, Math.min(30, Number(d.publish_progress_duration) || 4)));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const examInfoRef = useRef<ExamInfo | null>(null);
   useEffect(() => {
@@ -985,11 +1312,16 @@ export default function MarkEntryPage() {
     setPublishStatus('idle');
   };
 
-  const closePublishModal = async (refreshAfterClose: boolean) => {
+  const closePublishModal = async (refreshAfterClose: boolean, keepHighlights = false) => {
     setShowPublishConfirm(false);
     setPublishStatus('idle');
     setPublishCountdown(null);
     setShowSealStamp(true);
+    if (!keepHighlights) {
+      setEmptyCellKeys(new Set());
+      setEmptyCellCount(0);
+    }
+    setEmptyCellsInfo(null);
     if (countdownIntervalRef.current) {
       window.clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
@@ -999,44 +1331,64 @@ export default function MarkEntryPage() {
     }
   };
 
-  const confirmPublish = async () => {
-    setPublishStatus('loading');
+  // Calls the publish API and transitions to success.
+  const callPublishAPI = async () => {
+    const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || err.error || 'Publish failed');
+    }
+    await loadData();
+    setPublishCountdown(null);
+    if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+    setShowSealStamp(Boolean(sealAnimationEnabled));
+    setPublishStatus('success');
+  };
+
+  // Called from the "Continue with empty cells" button in the warning panel.
+  const continuePublish = async () => {
     setPublishing(true);
     try {
-      // Ensure the currently focused input is committed before saving/publishing.
-      commitActiveCellValue();
+      await callPublishAPI();
+    } catch (e) {
+      setPublishStatus('idle');
+      setShowPublishConfirm(false);
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to publish' });
+    } finally {
+      setPublishing(false);
+    }
+  };
 
-      // Cancel any pending autosave to avoid request races.
+  const doPublish = async (emptyCellsFound: number) => {
+    setPublishStatus('loading');
+    setPublishing(true);
+    const DURATION_MS = publishProgressDuration * 1000;
+    const startTime = Date.now();
+    try {
+      commitActiveCellValue();
       if (autoSaveTimeoutRef.current) {
         clearTimeout(autoSaveTimeoutRef.current);
         autoSaveTimeoutRef.current = null;
         setAutoSaveStatus('idle');
       }
-
-      // Always do a final save before publish (even if hasChanges was auto-reset).
+      // Save draft marks
       await saveMarks(false);
-      
-      const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || err.error || 'Publish failed');
+      // Wait for animation to complete
+      const elapsed = Date.now() - startTime;
+      const remaining = DURATION_MS - elapsed;
+      if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
+      // After animation: gate on empty cells
+      if (emptyCellsFound > 0) {
+        // Show warning panel instead of publishing
+        setPublishStatus('post_warning');
+        return;
       }
-
-      // Refresh the page data immediately so the newly published marks stay visible.
-      await loadData();
-
-      // Show success immediately (no forced delays / countdown).
-      setPublishCountdown(null);
-      if (countdownIntervalRef.current) {
-        window.clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-      setShowSealStamp(Boolean(sealAnimationEnabled));
-      setPublishStatus('success');
+      // No empty cells — publish immediately
+      await callPublishAPI();
     } catch (e) {
       setPublishStatus('idle');
       setShowPublishConfirm(false);
@@ -1046,6 +1398,27 @@ export default function MarkEntryPage() {
     } finally {
       setPublishing(false);
     }
+  };
+
+  const confirmPublish = async () => {
+    // Always compute empty cell keys so table highlights are ready
+    const hasQLocal = questions.length > 0;
+    const emptyKeys = new Set<string>();
+    students.forEach(s => {
+      if (s.is_absent) return;
+      if (hasQLocal) {
+        questions.forEach(q => {
+          if (s.co_marks[q.id] === null || s.co_marks[q.id] === undefined)
+            emptyKeys.add(`${s.id}:question:${q.id}`);
+        });
+      } else {
+        if (s.mark === null || s.mark === undefined) emptyKeys.add(`${s.id}:mark`);
+      }
+    });
+    const count = emptyKeys.size;
+    setEmptyCellCount(count);
+    setEmptyCellKeys(emptyKeys);
+    await doPublish(count);
   };
 
   /* ────── Actions ────── */
@@ -1806,8 +2179,10 @@ export default function MarkEntryPage() {
 
       {/* Publish Confirmation Modal */}
       {showPublishConfirm && (
-        <div className="fixed inset-0 z-[60] bg-slate-950/55 flex items-center justify-center p-4 backdrop-blur-[2px] transition-opacity duration-500">
-          <div className={`w-full max-w-xl bg-white/95 rounded-3xl shadow-[0_24px_80px_-20px_rgba(15,23,42,0.55)] border border-slate-200/80 transform transition-all duration-500 animate-in zoom-in-95 overflow-hidden ${publishStatus === 'success' ? 'scale-[1.01]' : ''} ${showSealStamp && publishStatus === 'success' ? 'modal-screen-shake' : ''}`}>
+        <div className={`fixed inset-0 z-[60] flex items-center justify-center p-4 backdrop-blur-[2px] transition-colors duration-700 ${publishStatus === 'success' ? 'bg-slate-950/40' : 'bg-slate-950/55'}`}>
+          {/* Green top shade — visible only on success */}
+          <div className={`absolute inset-x-0 top-0 h-80 bg-gradient-to-b from-emerald-500/28 to-transparent pointer-events-none transition-opacity duration-700 ${publishStatus === 'success' ? 'opacity-100' : 'opacity-0'}`} />
+          <div className={`relative z-10 w-full max-w-xl bg-white rounded-3xl shadow-[0_24px_80px_-20px_rgba(15,23,42,0.55)] border border-slate-200/80 transform transition-all duration-500 animate-in zoom-in-95 overflow-hidden ${publishStatus === 'success' ? 'scale-[1.01]' : ''} ${showSealStamp && publishStatus === 'success' ? 'modal-screen-shake' : ''}`}>
             {publishStatus === 'idle' && (
               <>
                 <div className="h-1.5 bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500"></div>
@@ -1848,55 +2223,33 @@ export default function MarkEntryPage() {
                     Confirm Publish
                   </button>
                 </div>
+
               </>
             )}
             
             {publishStatus === 'loading' && (
-              <div className="p-10 md:p-12 text-center space-y-8 flex flex-col items-center justify-center py-16 animate-in fade-in duration-500">
-                <div className="relative w-24 h-24">
-                  <div className="absolute inset-0 border-[6px] border-emerald-100 rounded-full"></div>
-                  <div className="absolute inset-0 border-[6px] border-emerald-700 rounded-full border-t-transparent animate-[spin_1.15s_linear_infinite]"></div>
-                  <div className="absolute inset-5 rounded-full bg-emerald-700/10 flex items-center justify-center">
-                    <Send className="w-6 h-6 text-emerald-700" />
-                  </div>
-                </div>
+              <PublishProgressPanel
+                duration={publishProgressDuration}
+                totalCells={students.filter(s => !s.is_absent).length * (hasQ ? questions.length : 1)}
+                emptyCellCount={emptyCellCount}
+              />
+            )}
 
-                <div className="space-y-3 max-w-md">
-                  <h3 className="text-3xl font-extrabold text-slate-900 tracking-tight">Publishing In Progress</h3>
-                  <p className="text-sm font-medium text-slate-600">Validating entries, syncing records, and applying final lock controls.</p>
-                </div>
-
-                <div className="w-full max-w-md h-2 rounded-full bg-slate-200 overflow-hidden">
-                  <div className="h-full w-2/3 bg-gradient-to-r from-emerald-700 via-emerald-500 to-teal-500 animate-[pulse_1.2s_ease-in-out_infinite]"></div>
-                </div>
-              </div>
+            {publishStatus === 'post_warning' && (
+              <PublishWarningPanel
+                emptyCellCount={emptyCellCount}
+                mustFillAllCells={mustFillAllCells}
+                onClose={() => closePublishModal(false, true)}
+                onContinue={continuePublish}
+              />
             )}
             
             {publishStatus === 'success' && (
-              <div className="p-6 md:p-8 bg-slate-50">
-                <div className="mx-auto max-w-lg rounded-2xl border border-emerald-200 bg-white shadow-xl p-5 md:p-6">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-                      <CheckCircle className="h-6 w-6" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Published</div>
-                      <h3 className="mt-1 text-xl font-bold text-slate-900">Marks published successfully</h3>
-                      <p className="mt-1 text-sm text-slate-600">Records are synced and the latest status is visible on this page.</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => closePublishModal(false)}
-                      className="px-4 py-2 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-100"
-                    >
-                      Done
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <PublishSuccessPanel
+                onClose={() => closePublishModal(false)}
+                studentCount={students.filter(s => !s.is_absent).length}
+                marksCount={students.filter(s => !s.is_absent).length * (hasQ ? questions.length : 1)}
+              />
             )}
           </div>
         </div>
@@ -2533,8 +2886,9 @@ export default function MarkEntryPage() {
                     const displayValue = editingCell?.key === cellKey ? editingCell.value : (student.co_marks[q.id] ?? '');
                     const selected = isCellInSelection(index, qIdx);
                     const btlNotSelected = q.btl_level === null && !questionBtls[q.id];
+                    const isEmptyHighlight = emptyCellKeys.has(cellKey);
                     return (
-                      <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''} ${btlNotSelected ? 'bg-amber-50/40' : ''}`}>
+                      <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''} ${btlNotSelected ? 'bg-amber-50/40' : ''} ${isEmptyHighlight ? 'bg-red-50/60' : ''}`}>
                         <div className="relative group w-full">
                           <input
                             type="number"
@@ -2569,7 +2923,7 @@ export default function MarkEntryPage() {
                               btlNotSelected
                                 ? 'disabled:bg-amber-50 border-amber-200 cursor-not-allowed'
                                 : 'disabled:bg-gray-100'
-                            } ${selected ? 'ring-2 ring-blue-400' : ''}`}
+                            } ${selected ? 'ring-2 ring-blue-400' : ''} ${isEmptyHighlight && !selected ? 'border-red-400 ring-1 ring-inset ring-red-400' : ''}`}
                             title={btlNotSelected ? 'Select BTL level in the column header first' : undefined}
                           />
                           {btlNotSelected && (

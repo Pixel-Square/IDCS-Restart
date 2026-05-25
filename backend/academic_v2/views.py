@@ -32,6 +32,7 @@ from .models import (
     AcV2CqiOperator,
     AcV2MyMarksSetting,
     AcV2AcademicNotificationSetting,
+    AcV2PublishSetting,
 )
 from .serializers import (
     AcV2SemesterConfigSerializer,
@@ -53,6 +54,7 @@ from .serializers import (
     AcV2AcademicNotificationSettingSerializer,
     AcV2CqiTokenSerializer,
     AcV2CqiOperatorSerializer,
+    AcV2PublishSettingSerializer,
 )
 from .models import AcV2PassMarkSetting
 
@@ -321,6 +323,24 @@ def admin_my_marks_settings(request):
         return Response(AcV2MyMarksSettingSerializer(obj).data)
 
     serializer = AcV2MyMarksSettingSerializer(obj, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def admin_publish_settings(request):
+    """Get or update Publish settings (singleton). GET is open to all auth users."""
+    obj, _ = AcV2PublishSetting.objects.get_or_create(
+        key='DEFAULT',
+        defaults={'must_fill_all_cells': False, 'publish_progress_duration': 4},
+    )
+    if request.method == 'GET':
+        return Response(AcV2PublishSettingSerializer(obj).data)
+    if not _has_admin_bypass_access(request.user):
+        return Response({'detail': 'Permission denied'}, status=403)
+    serializer = AcV2PublishSettingSerializer(obj, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
     return Response(serializer.data)
@@ -2896,6 +2916,12 @@ def faculty_course_info(request, ta_id):
         dept_name = (getattr(sec.managing_department, 'short_name', '')
                      or getattr(sec.managing_department, 'name', ''))
 
+    faculty_display_name = ''
+    try:
+        faculty_display_name = ta.staff.user.get_full_name() or str(ta.staff.user)
+    except Exception:
+        pass
+
     return Response({
         'id': str(ta.id),
         'course_code': course_code,
@@ -2908,6 +2934,7 @@ def faculty_course_info(request, ta_id):
         'is_elective': bool(ta.elective_subject_id),
         'class_type': class_type_info,
         'qp_type': qp_type_code or None,
+        'faculty_name': faculty_display_name,
         'setup_status': {
             'class_type_assigned': bool(acv2_ct),
             # Preserve whether curriculum/elective explicitly has qp_type configured

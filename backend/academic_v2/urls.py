@@ -46,6 +46,7 @@ from .views import (
     admin_pass_mark_settings,
     admin_my_marks_settings,
     admin_academic_notification_settings,
+    admin_publish_settings,
     student_my_marks_config,
     student_my_courses,
     student_my_course_detail,
@@ -114,6 +115,7 @@ urlpatterns = [
     path('admin/pass-mark-settings/', admin_pass_mark_settings, name='admin-pass-mark-settings'),
     path('admin/my-marks-settings/', admin_my_marks_settings, name='admin-my-marks-settings'),
     path('admin/academic-notification-settings/', admin_academic_notification_settings, name='admin-academic-notification-settings'),
+    path('admin/publish-settings/', admin_publish_settings, name='admin-publish-settings'),
     path('student/my-marks-config/', student_my_marks_config, name='student-my-marks-config'),
     path('student/my-courses/', student_my_courses, name='student-my-courses'),
     path('student/my-courses/<int:ta_id>/', student_my_course_detail, name='student-my-course-detail'),
@@ -133,4 +135,28 @@ urlpatterns = [
     path('admin/bypass/<uuid:session_id>/share/', bypass_create_share_link, name='bypass-create-share'),
     path('admin/bypass/share/<str:token>/', bypass_validate_share, name='bypass-validate-share'),
     path('admin/bypass/<uuid:session_id>/detail/', bypass_session_detail, name='bypass-session-detail'),
+]
+
+# Visual Admin URL management
+from .visual_admin_views import (
+    VisualAdminStaffListView,
+    VisualAdminStaffLinkView,
+    VisualAdminUsersView,
+    FacultyVisualAdminLinkView,
+    VisualAdminDashboardStatsView,
+)
+
+urlpatterns += [
+    path('visual-admin/staff/', VisualAdminStaffListView.as_view(), name='visual-admin-staff-list'),
+    path('visual-admin/staff/<str:staff_id>/', VisualAdminStaffLinkView.as_view(), name='visual-admin-staff-link'),
+    path('visual-admin/users/', VisualAdminUsersView.as_view(), name='visual-admin-users'),
+    path('visual-admin/my-link/<int:ta_id>/', FacultyVisualAdminLinkView.as_view(), name='faculty-visual-admin-link'),
+    path('visual-admin/dashboard-stats/', VisualAdminDashboardStatsView.as_view(), name='visual-admin-dashboard-stats'),
+]
+
+from .visual_admin_views import visual_admin_export, visual_admin_import
+
+urlpatterns += [
+    path('visual-admin/export/', visual_admin_export, name='visual-admin-export'),
+    path('visual-admin/import/', visual_admin_import, name='visual-admin-import'),
 ]

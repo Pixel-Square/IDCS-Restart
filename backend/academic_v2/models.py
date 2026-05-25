@@ -2145,3 +2145,104 @@ class AcV2BypassLog(models.Model):
 
     def __str__(self):
         return f"[{self.action}] {self.description[:60]}"
+
+
+# ============================================================================
+# VISUAL ADMIN - Power BI Link Management
+# ============================================================================
+
+class VisualAdminStaffLink(models.Model):
+    """
+    Stores the Power BI URL configuration for a staff member.
+    - overall_url: a single URL used for all courses (when use_course_urls=False)
+    - use_course_urls: if True, per-course URLs from VisualAdminCourseLink are used
+    """
+    staff = models.OneToOneField(
+        'academics.StaffProfile',
+        on_delete=models.CASCADE,
+        related_name='visual_admin_link',
+    )
+    overall_url = models.TextField(blank=True, default='')
+    use_course_urls = models.BooleanField(
+        default=False,
+        help_text='If True, per-course links are used instead of the overall URL.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='visual_admin_staff_link_updates',
+    )
+
+    class Meta:
+        db_table = 'visual_admin_staff_link'
+        verbose_name = 'Visual Admin Staff Link'
+        verbose_name_plural = 'Visual Admin Staff Links'
+
+    def __str__(self):
+        return f"VisualAdminStaffLink({self.staff})"
+
+
+class VisualAdminCourseLink(models.Model):
+    """
+    Per-course Power BI URL for a staff member's teaching assignment.
+    Only used when VisualAdminStaffLink.use_course_urls is True.
+    """
+    staff_link = models.ForeignKey(
+        VisualAdminStaffLink,
+        on_delete=models.CASCADE,
+        related_name='course_links',
+    )
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        related_name='visual_admin_course_links',
+        null=True, blank=True,
+    )
+    url = models.TextField(blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'visual_admin_course_link'
+        verbose_name = 'Visual Admin Course Link'
+        verbose_name_plural = 'Visual Admin Course Links'
+        unique_together = ('staff_link', 'teaching_assignment')
+
+    def __str__(self):
+        return f"VisualAdminCourseLink({self.staff_link.staff} - TA#{self.teaching_assignment_id})"
+
+
+# ============================================================================
+# PUBLISH SETTINGS
+# ============================================================================
+
+
+class AcV2PublishSetting(models.Model):
+    """Singleton settings for the Mark Entry publish workflow."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=40, default='DEFAULT', unique=True)
+
+    # If enabled, faculty cannot publish unless every non-absent student cell is filled.
+    must_fill_all_cells = models.BooleanField(
+        default=False,
+        help_text='Block publish if any non-absent student has an empty mark cell.',
+    )
+
+    # How many seconds the "Publishing In Progress" animation plays in the UI.
+    publish_progress_duration = models.PositiveSmallIntegerField(
+        default=4,
+        help_text='Seconds the publish progress animation plays (1–30).',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_publish_setting'
+        verbose_name = 'Publish Setting'
+        verbose_name_plural = 'Publish Settings'
+
+    def __str__(self):
+        return f"PublishSetting(must_fill={self.must_fill_all_cells}, duration={self.publish_progress_duration}s)"
