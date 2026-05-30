@@ -2460,19 +2460,31 @@ def faculty_course_info(request, ta_id):
                 break
 
     # ClassType exam_assignments filtered to this qp_type (normalized)
+    # These configs are the single source of truth for what faculty should see.
     ct_ea_configs = []
     if acv2_ct and acv2_ct.exam_assignments:
         qp_norm = (qp_type_code or '').strip().lower()
         for ea in acv2_ct.exam_assignments:
+            if not isinstance(ea, dict):
+                continue
+            if ea.get('enabled', True) is False:
+                continue
             ea_qp = (ea.get('qp_type', '') or '').strip().lower()
             if not qp_norm or ea_qp == qp_norm:
                 ct_ea_configs.append(ea)
 
+        # Enforce saved order if provided
+        ct_ea_configs.sort(key=lambda x: (
+            (x.get('order') if isinstance(x.get('order'), int) else 10**9),
+            str(x.get('exam_display_name') or x.get('exam') or ''),
+        ))
+
     # If the class type has no configs for the course qp_type, derive the exam list
-    # from QP patterns (class_type + qp_type). We still read weights from
-    # ClassType.exam_assignments by matching exam_display_name.
+    # from QP patterns (class_type + qp_type). IMPORTANT: Do not derive when a
+    # ClassType config exists, otherwise removed/stale test patterns can reappear
+    # in faculty pages.
     derived_ea_configs = []
-    if acv2_ct and qp_type_code:
+    if acv2_ct and qp_type_code and len(ct_ea_configs) == 0:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
             qp_type__iexact=qp_type_code,
@@ -3928,12 +3940,21 @@ def faculty_course_co_summary(request, ta_id):
     if class_type and class_type.exam_assignments:
         qp_norm = (qp_type_code or '').strip().lower()
         for ea_conf in class_type.exam_assignments:
+            if not isinstance(ea_conf, dict):
+                continue
+            if ea_conf.get('enabled', True) is False:
+                continue
             ea_qp = (ea_conf.get('qp_type', '') or '').strip().lower()
             if not qp_norm or ea_qp == qp_norm:
                 ct_ea_configs.append(ea_conf)
 
+        ct_ea_configs.sort(key=lambda x: (
+            (x.get('order') if isinstance(x.get('order'), int) else 10**9),
+            str(x.get('exam_display_name') or x.get('exam') or ''),
+        ))
+
     derived_ea_configs = []
-    if class_type and qp_type_code:
+    if class_type and qp_type_code and len(ct_ea_configs) == 0:
         patterns_qs = AcV2QpPattern.objects.filter(
             is_active=True,
             qp_type__iexact=qp_type_code,
