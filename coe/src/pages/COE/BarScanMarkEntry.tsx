@@ -16,6 +16,8 @@ type StudentDetails = {
   status: string;
   dummy_number: string | null;
   qp_type: QpType;
+  class_type?: string;
+  course_type?: string;
   semester?: string;
 };
 
@@ -90,6 +92,7 @@ interface BarScanMarkEntryProps {
   embeddedRegNo?: string;
   embeddedName?: string;
   embeddedQpType?: string;
+  embeddedClassType?: string;
   embeddedDept?: string;
   embeddedSem?: string;
   embeddedDummy?: string;
@@ -110,6 +113,7 @@ export default function BarScanMarkEntry({
   embeddedRegNo,
   embeddedName,
   embeddedQpType,
+  embeddedClassType,
   embeddedDept,
   embeddedSem,
   embeddedDummy,
@@ -123,6 +127,7 @@ export default function BarScanMarkEntry({
   const queryDummy = embeddedDummy || searchParams.get('dummy_number');
   const queryDept = embeddedDept || searchParams.get('dept');
   const querySem = embeddedSem || searchParams.get('sem');
+  const queryClassType = embeddedClassType || searchParams.get('class_type') || searchParams.get('course_type');
   const storedQpType = queryDummy ? readStoredMarkQpType(queryDummy) : null;
   const queryQpType = storedQpType || embeddedQpType || searchParams.get('qp_type');
 
@@ -211,6 +216,7 @@ export default function BarScanMarkEntry({
           status: 'Active',
           dummy_number: queryDummy || code,
           qp_type: qpType,
+         class_type: queryClassType || undefined,
           semester: querySem || '-',
        });
        loadSavedMarks(queryDummy || code);
@@ -241,6 +247,7 @@ export default function BarScanMarkEntry({
                 status: 'Unknown',
                 dummy_number: lookupCode,
                 qp_type: fallbackQp,
+                class_type: queryClassType || undefined,
                 semester: '-',
              });
           }
@@ -272,6 +279,8 @@ export default function BarScanMarkEntry({
           status: data.status,
           dummy_number: finalDummy,
           qp_type: qpType,
+          class_type: queryClassType || data.class_type || data.course_type,
+          course_type: data.course_type,
           semester: querySem || '-',
         });
         loadSavedMarks(finalDummy);
@@ -290,6 +299,7 @@ export default function BarScanMarkEntry({
               status: 'Network Error',
               dummy_number: code,
               qp_type: fallbackQp,
+              class_type: queryClassType || undefined,
               semester: '-',
            });
         }
@@ -495,10 +505,14 @@ export default function BarScanMarkEntry({
       {!loading && !error && student ? (
         <>
           <div className="rounded-xl border border-gray-200 bg-white p-6 mb-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-6 text-sm">
               <div>
                 <span className="block text-gray-500 mb-1">Dummy Number</span>
                 <span className="font-mono text-lg font-bold text-blue-700">{student.dummy_number || '-'}</span>
+              </div>
+              <div>
+                <span className="block text-gray-500 mb-1">Course Type</span>
+                <span className="font-semibold text-gray-900">{student.class_type || student.course_type || '-'}</span>
               </div>
               <div>
                 <span className="block text-gray-500 mb-1">QP Type</span>

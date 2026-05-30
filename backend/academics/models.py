@@ -2,6 +2,7 @@ from django.db import models
 from django.db.models import Q
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -740,7 +741,19 @@ class StaffProfile(models.Model):
     )
     staff_id = models.CharField(max_length=64, unique=True, db_index=True)
     # Internal ID used for internal shuffling/identity mapping workflows.
-    internal_id = models.CharField(max_length=16, unique=True, db_index=True, null=True, blank=True)
+    internal_id = models.CharField(
+        max_length=6,
+        unique=True,
+        db_index=True,
+        null=True,
+        blank=True,
+        validators=[
+            RegexValidator(
+                regex=r'^\d{6}$',
+                message='Internal ID must be exactly 6 digits (numeric only).',
+            )
+        ],
+    )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
     status = models.CharField(max_length=16, choices=STAFF_STATUS_CHOICES, default='ACTIVE')
@@ -804,10 +817,10 @@ class StaffProfile(models.Model):
 
     @classmethod
     def generate_unique_internal_id(cls):
-        """Generate a unique 7-character uppercase alphanumeric internal ID."""
-        alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-        for _ in range(200):
-            candidate = ''.join(secrets.choice(alphabet) for _ in range(7))
+        """Generate a unique 6-digit numeric internal ID."""
+        for _ in range(500):
+            # 000001 - 999999 (always 6 digits)
+            candidate = f"{secrets.randbelow(999_999) + 1:06d}"
             if not cls.objects.filter(internal_id=candidate).exists():
                 return candidate
         raise ValidationError({'internal_id': 'Unable to generate a unique internal ID. Please try again.'})

@@ -1,6 +1,10 @@
 from collections import defaultdict
+import json
+import time
 
+from django.core.cache import cache
 from django.db.models import Q
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -20,6 +24,11 @@ FEATURE_PERMISSION_MAP = {
     'circulars': 'coe.manage.circulars',
     'academic_calendar': 'coe.manage.calendar',
 }
+
+# Fallback cache for local/dev environments where shared cache backends
+# are configured but unavailable (e.g., Redis down with IGNORE_EXCEPTIONS=True).
+_LOCAL_STUDENTS_MAP_CACHE: dict[str, tuple[float, dict]] = {}
+_LOCAL_STUDENTS_MAP_BYTES_CACHE: dict[str, tuple[float, bytes]] = {}
 
 
 def _normalize_department_label(raw_values: list[str]) -> str | None:
@@ -184,7 +193,9 @@ class CoePortalContextView(APIView):
 
     def get(self, request):
         user = request.user
-        permission_codes = {str(p or '').strip().lower() for p in get_user_permissions(user)}
+        permission_codes: set[str] = set()
+        if not getattr(user, 'is_superuser', False) and not _is_coe_login(user):
+            permission_codes = {str(p or '').strip().lower() for p in get_user_permissions(user)}
 
         if not _has_portal_access(user, permission_codes):
             return Response({'detail': 'You do not have access to the COE portal.'}, status=status.HTTP_403_FORBIDDEN)
@@ -382,6 +393,7 @@ class CoeArrearStudentDetailView(APIView):
 
 class CoeStudentsCourseMapView(APIView):
     permission_classes = (IsAuthenticated,)
+    CACHE_TTL_SECONDS = 90
 
     def get(self, request):
         user = request.user
@@ -410,6 +422,36 @@ class CoeStudentsCourseMapView(APIView):
                 return Response({'detail': 'Invalid semester. Use SEM1..SEM8.'}, status=status.HTTP_400_BAD_REQUEST)
             if sem_number < 1 or sem_number > 8:
                 return Response({'detail': 'Semester must be between SEM1 and SEM8.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cache_key = f"coe:students-map:v2:dept={department_filter}:sem={sem_number or 'ALL'}"
+        cache_key_bytes = f"{cache_key}:bytes"
+
+        cached_bytes = cache.get(cache_key_bytes)
+        if cached_bytes is not None:
+            return HttpResponse(cached_bytes, content_type='application/json')
+
+        local_cached_bytes = _LOCAL_STUDENTS_MAP_BYTES_CACHE.get(cache_key)
+        if local_cached_bytes:
+            expires_at, payload_bytes = local_cached_bytes
+            if expires_at > time.time():
+                return HttpResponse(payload_bytes, content_type='application/json')
+            _LOCAL_STUDENTS_MAP_BYTES_CACHE.pop(cache_key, None)
+
+        cached_payload = cache.get(cache_key)
+        if cached_payload is not None:
+            payload_bytes = json.dumps(cached_payload, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+            cache.set(cache_key_bytes, payload_bytes, timeout=self.CACHE_TTL_SECONDS)
+            _LOCAL_STUDENTS_MAP_BYTES_CACHE[cache_key] = (time.time() + self.CACHE_TTL_SECONDS, payload_bytes)
+            return HttpResponse(payload_bytes, content_type='application/json')
+
+        local_cached = _LOCAL_STUDENTS_MAP_CACHE.get(cache_key)
+        if local_cached:
+            expires_at, payload = local_cached
+            if expires_at > time.time():
+                payload_bytes = json.dumps(payload, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+                _LOCAL_STUDENTS_MAP_BYTES_CACHE[cache_key] = (time.time() + self.CACHE_TTL_SECONDS, payload_bytes)
+                return HttpResponse(payload_bytes, content_type='application/json')
+            _LOCAL_STUDENTS_MAP_CACHE.pop(cache_key, None)
 
         from academics.models import TeachingAssignment, StudentSectionAssignment
         from .models import CoeExamDummy
@@ -454,10 +496,7 @@ class CoeStudentsCourseMapView(APIView):
                     dept = None
             if not dept:
                 return None
-            short = str(getattr(dept, 'short_name', '') or '').strip().upper()
-            code = str(getattr(dept, 'code', '') or '').strip().upper()
-            name = str(getattr(dept, 'name', '') or '').strip().upper()
-            return _normalize_department_label([short, code, name])
+            return _department_label_from_obj(dept)
 
         def _resolve_semester(ta):
             try:
@@ -515,15 +554,103 @@ class CoeStudentsCourseMapView(APIView):
             dept = getattr(sp, 'home_department', None)
             if not dept:
                 return None
-            return _normalize_department_label([
-                str(getattr(dept, 'short_name', '') or '').strip().upper(),
-                str(getattr(dept, 'code', '') or '').strip().upper(),
-                str(getattr(dept, 'name', '') or '').strip().upper(),
+            return _department_label_from_obj(dept)
+
+        ta_rows = list(ta_qs)
+        ta_section_ids = {getattr(ta, 'section_id', None) for ta in ta_rows if getattr(ta, 'section_id', None)}
+        elective_subject_ids = {getattr(ta, 'elective_subject_id', None) for ta in ta_rows if getattr(ta, 'elective_subject_id', None)}
+
+        from academics.models import Section
+        from curriculum.models import CurriculumDepartment
+
+        section_qs = Section.objects.all().select_related('batch', 'batch__course', 'batch__course__department', 'semester')
+        if sem_number is not None:
+            section_qs = section_qs.filter(semester__number=sem_number)
+        section_rows = list(section_qs)
+
+        section_ids = set(ta_section_ids)
+        section_ids.update(getattr(sec, 'id', None) for sec in section_rows if getattr(sec, 'id', None))
+
+        section_students_map: dict[int, list] = defaultdict(list)
+        if section_ids:
+            assignments = (
+                StudentSectionAssignment.objects.filter(
+                    section_id__in=section_ids,
+                    end_date__isnull=True,
+                )
+                .exclude(student__status__in=['INACTIVE', 'DEBAR'])
+                .select_related('student__user', 'student__home_department')
+            )
+            for assignment in assignments:
+                if getattr(assignment, 'student', None) is not None:
+                    section_students_map[getattr(assignment, 'section_id')].append(assignment.student)
+
+        elective_students_all: dict[int, list] = defaultdict(list)
+        elective_students_by_year: dict[tuple[int, int], list] = defaultdict(list)
+        elective_year_has_rows: set[tuple[int, int]] = set()
+        if elective_subject_ids:
+            choice_qs = (
+                ElectiveChoice.objects.filter(
+                    elective_subject_id__in=elective_subject_ids,
+                    is_active=True,
+                )
+                .exclude(student__isnull=True)
+                .select_related('student__user', 'student__home_department')
+            )
+            for choice in choice_qs:
+                student = getattr(choice, 'student', None)
+                es_id = getattr(choice, 'elective_subject_id', None)
+                ay_id = getattr(choice, 'academic_year_id', None)
+                if student is None or es_id is None:
+                    continue
+                elective_students_all[es_id].append(student)
+                if ay_id is not None:
+                    key = (es_id, ay_id)
+                    elective_year_has_rows.add(key)
+                    elective_students_by_year[key].append(student)
+
+        mandatory_courses_by_dept_sem: dict[tuple[int, int], list] = defaultdict(list)
+        dept_sem_pairs = {
+            (getattr(getattr(getattr(sec, 'batch', None), 'course', None), 'department_id', None), getattr(sec, 'semester_id', None))
+            for sec in section_rows
+            if getattr(getattr(getattr(sec, 'batch', None), 'course', None), 'department_id', None) and getattr(sec, 'semester_id', None)
+        }
+        if dept_sem_pairs:
+            dept_ids = {dept_id for dept_id, _ in dept_sem_pairs}
+            sem_ids = {sem_id for _, sem_id in dept_sem_pairs}
+            mandatory_qs = CurriculumDepartment.objects.filter(
+                is_elective=False,
+                department_id__in=dept_ids,
+                semester_id__in=sem_ids,
+            )
+            for row in mandatory_qs:
+                key = (getattr(row, 'department_id', None), getattr(row, 'semester_id', None))
+                if key in dept_sem_pairs:
+                    mandatory_courses_by_dept_sem[key].append(row)
+
+        department_label_cache: dict[object, str | None] = {}
+
+        def _department_label_from_obj(dept_obj):
+            if not dept_obj:
+                return None
+            cache_key = getattr(dept_obj, 'id', None) or (
+                str(getattr(dept_obj, 'short_name', '') or '').strip().upper(),
+                str(getattr(dept_obj, 'code', '') or '').strip().upper(),
+                str(getattr(dept_obj, 'name', '') or '').strip().upper(),
+            )
+            if cache_key in department_label_cache:
+                return department_label_cache[cache_key]
+            label = _normalize_department_label([
+                str(getattr(dept_obj, 'short_name', '') or '').strip().upper(),
+                str(getattr(dept_obj, 'code', '') or '').strip().upper(),
+                str(getattr(dept_obj, 'name', '') or '').strip().upper(),
             ])
+            department_label_cache[cache_key] = label
+            return label
 
         dept_course_map = defaultdict(dict)
 
-        for ta in ta_qs:
+        for ta in ta_rows:
             dept_name = _resolve_department(ta)
             if not dept_name:
                 continue
@@ -550,27 +677,21 @@ class CoeStudentsCourseMapView(APIView):
             course_entry = dept_course_map[dept_name][course_key]
 
             students_for_ta = []
+            elective_subject_id = getattr(ta, 'elective_subject_id', None)
+            ta_academic_year_id = getattr(ta, 'academic_year_id', None)
+
             # For elective courses, roster must come from ElectiveChoice mapping,
             # not from full section roster.
-            if getattr(ta, 'elective_subject_id', None):
-                eqs = ElectiveChoice.objects.filter(
-                    elective_subject_id=getattr(ta, 'elective_subject_id', None),
-                    is_active=True,
-                ).exclude(student__isnull=True).select_related('student__user')
-                if getattr(ta, 'academic_year_id', None):
-                    eqs_ay = eqs.filter(academic_year_id=getattr(ta, 'academic_year_id', None))
-                    if eqs_ay.exists():
-                        eqs = eqs_ay
-                students_for_ta = [c.student for c in eqs if getattr(c, 'student', None) is not None]
+            if elective_subject_id:
+                if ta_academic_year_id is not None and (elective_subject_id, ta_academic_year_id) in elective_year_has_rows:
+                    students_for_ta = elective_students_by_year.get((elective_subject_id, ta_academic_year_id), [])
+                else:
+                    students_for_ta = elective_students_all.get(elective_subject_id, [])
 
             # Fallback to section roster for non-elective courses
             # (or elective rows with no active ElectiveChoice data).
             if not students_for_ta and getattr(ta, 'section_id', None):
-                assign_qs = StudentSectionAssignment.objects.filter(
-                    section=ta.section,
-                    end_date__isnull=True,
-                ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
-                students_for_ta = [a.student for a in assign_qs]
+                students_for_ta = section_students_map.get(getattr(ta, 'section_id'), [])
 
             for sp in students_for_ta:
                 sid = getattr(sp, 'id', None)
@@ -587,14 +708,7 @@ class CoeStudentsCourseMapView(APIView):
                 }
 
         # Include students from sections that lack a TeachingAssignment but have mandatory Curriculum courses
-        from academics.models import Section
-        from curriculum.models import CurriculumDepartment
-        
-        section_qs = Section.objects.all().select_related('batch', 'batch__course', 'batch__course__department', 'semester')
-        if sem_number is not None:
-            section_qs = section_qs.filter(semester__number=sem_number)
-            
-        for sec in section_qs:
+        for sec in section_rows:
             if not getattr(sec, 'batch_id', None) or not getattr(sec, 'semester_id', None):
                 continue
                 
@@ -605,31 +719,18 @@ class CoeStudentsCourseMapView(APIView):
             if not dept_obj:
                 continue
                 
-            short = str(getattr(dept_obj, 'short_name', '') or '').strip().upper()
-            code_ = str(getattr(dept_obj, 'code', '') or '').strip().upper()
-            name_ = str(getattr(dept_obj, 'name', '') or '').strip().upper()
-            dept_name = _normalize_department_label([short, code_, name_])
+            dept_name = _department_label_from_obj(dept_obj)
             if not dept_name:
                 continue
 
             if department_filter != 'ALL' and dept_name != department_filter:
                 continue
 
-            assign_qs = StudentSectionAssignment.objects.filter(
-                section=sec,
-                end_date__isnull=True,
-            ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user')
-            
-            if not assign_qs.exists():
+            students_for_sec = section_students_map.get(getattr(sec, 'id', None), [])
+            if not students_for_sec:
                 continue
-                
-            students_for_sec = [a.student for a in assign_qs]
-            
-            mandatory_courses = CurriculumDepartment.objects.filter(
-                department=dept_obj,
-                semester=sec.semester,
-                is_elective=False
-            )
+
+            mandatory_courses = mandatory_courses_by_dept_sem.get((getattr(dept_obj, 'id', None), getattr(sec, 'semester_id', None)), [])
             
             for mc in mandatory_courses:
                 course_code = str(getattr(mc, 'course_code', '') or '').strip()
@@ -770,11 +871,15 @@ class CoeStudentsCourseMapView(APIView):
                     }
                 )
 
-        return Response(
-            {
-                'department_filter': department_filter,
-                'semester_filter': f'SEM{sem_number}' if sem_number is not None else None,
-                'departments': departments_out,
-                'saved_dummies': saved_dummies_out,
-            }
-        )
+        response_payload = {
+            'department_filter': department_filter,
+            'semester_filter': f'SEM{sem_number}' if sem_number is not None else None,
+            'departments': departments_out,
+            'saved_dummies': saved_dummies_out,
+        }
+        payload_bytes = json.dumps(response_payload, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+        cache.set(cache_key, response_payload, timeout=self.CACHE_TTL_SECONDS)
+        cache.set(cache_key_bytes, payload_bytes, timeout=self.CACHE_TTL_SECONDS)
+        _LOCAL_STUDENTS_MAP_CACHE[cache_key] = (time.time() + self.CACHE_TTL_SECONDS, response_payload)
+        _LOCAL_STUDENTS_MAP_BYTES_CACHE[cache_key] = (time.time() + self.CACHE_TTL_SECONDS, payload_bytes)
+        return HttpResponse(payload_bytes, content_type='application/json')

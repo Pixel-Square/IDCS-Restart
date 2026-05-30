@@ -33,8 +33,7 @@ export default function CoePortalPage({ user }: Props) {
         setContext(data);
       } catch (err) {
         if (!mounted) return;
-        const message = err instanceof Error ? err.message : 'Failed to load COE portal context.';
-        setError(message);
+        setError('Unable to load COE portal data right now. Please try again.');
       } finally {
         // eslint-disable-next-line no-unsafe-finally
         if (!mounted) return;

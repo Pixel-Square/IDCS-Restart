@@ -45,7 +45,7 @@ export default function RegistrationSettings() {
     setError(null);
     try {
       const res = await fetchWithAuth('/api/academics/ext-staff-form/settings/');
-      if (!res.ok) throw new Error('Failed to load settings');
+      if (!res.ok) throw new Error('Unable to load settings');
       const data = await res.json();
       setSettings(data);
       
@@ -59,7 +59,7 @@ export default function RegistrationSettings() {
         setQrCodeDataUrl(qr);
       }
     } catch (e: any) {
-      setError(e?.message || 'Error loading settings');
+      setError('Unable to load settings right now. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -93,7 +93,7 @@ export default function RegistrationSettings() {
       setSuccess('Settings saved successfully!');
       setTimeout(() => setSuccess(null), 3000);
     } catch (e: any) {
-      setError(e?.message || 'Error saving settings');
+      setError('Unable to save settings right now. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -116,7 +116,7 @@ export default function RegistrationSettings() {
       const data = await res.json();
       setSettings(data);
     } catch (e: any) {
-      setError(e?.message || 'Error updating settings');
+      setError('Unable to update settings right now. Please try again.');
       setSettings({ ...settings, is_accepting_responses: !newValue });
     }
   };
@@ -200,7 +200,7 @@ export default function RegistrationSettings() {
     return (
       <div className="rounded-2xl border border-[#d9b7ac] bg-white/95 p-6 shadow-[0_20px_45px_-30px_rgba(111,29,52,0.55)]">
         <div className="text-center py-12 text-red-600">
-          Failed to load form settings. Please try again.
+          Unable to load form settings right now. Please try again.
         </div>
       </div>
     );

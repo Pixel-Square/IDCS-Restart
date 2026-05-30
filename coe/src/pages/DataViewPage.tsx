@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, Loader2, Database } from 'lucide-react';
-import fetchWithAuth from '../services/fetchAuth';
-import { fetchCoeStudentsMap, CoeStudentsMapResponse } from '../services/coe';
+import { fetchCoeStudentsMap, CoeStudentsMapResponse, fetchCoeFilterOptions } from '../services/coe';
 
 type Department = {
   code: string;
@@ -31,22 +30,22 @@ export default function DataViewPage() {
     setLoading(true);
     setError(null);
     try {
-      // Fetch departments
-      const deptRes = await fetchWithAuth('/api/academics/departments/');
-      if (!deptRes.ok) throw new Error('Failed to fetch departments');
-      const deptData = await deptRes.json();
-      setDepartments(deptData || []);
-      if (deptData && deptData.length > 0) {
-        setSelectedDept(deptData[0].code);
-      }
+      const options = await fetchCoeFilterOptions();
 
-      // Fetch semesters
-      const semRes = await fetchWithAuth('/api/academics/semesters/');
-      if (!semRes.ok) throw new Error('Failed to fetch semesters');
-      const semData = await semRes.json();
-      setSemesters(semData || []);
-      if (semData && semData.length > 0) {
-        setSelectedSem(semData[0].name);
+      const nextDepartments = options.departments
+        .filter((d) => d !== 'ALL')
+        .map((d) => ({ code: d, name: d }));
+      const nextSemesters = options.semesters
+        .map((s) => ({ name: s }));
+
+      setDepartments(nextDepartments);
+      setSemesters(nextSemesters);
+
+      if (nextDepartments.length > 0) {
+        setSelectedDept(nextDepartments[0].code);
+      }
+      if (nextSemesters.length > 0) {
+        setSelectedSem(nextSemesters[0].name);
       }
     } catch (err) {
       setError(`Error fetching data: ${err instanceof Error ? err.message : 'Unknown error'}`);

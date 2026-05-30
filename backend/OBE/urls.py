@@ -140,4 +140,26 @@ urlpatterns = [
     path('progress', views.obe_progress_overview),
     # IQAC main: lightweight department list with stats for progress drill-down
     path('progress/departments', views.obe_progress_departments),
+    
+    # Course Question Bank APIs
+    path('question-bank/list/<str:course_code>', views.list_course_questions),
+    path('question-bank/create', views.create_course_question),
+    path('question-bank/<int:question_id>/update', views.update_course_question),
+    path('question-bank/<int:question_id>/delete', views.delete_course_question),
+    path('question-bank/<str:course_code>/finalize', views.finalize_course_questions),
+    path('question-bank/<str:course_code>/unfinalize', views.unfinalize_course_questions),
+    path('question-bank/<str:course_code>/logs', views.get_question_bank_logs),
+    
+    # Question Bank Types
+    path('question-bank-types', views.list_question_bank_types),
+    path('question-bank-types/save', views.upsert_question_bank_type),
+    path('question-bank-types/<int:type_id>/delete', views.delete_question_bank_type),
+    
+    # Course Question Bank Type Mappings
+    path('course-question-bank-type/<str:course_code>', views.get_course_question_bank_type),
+    path('course-question-bank-type/<str:course_code>/save', views.set_course_question_bank_type),
+
+    # Question Bank Deadline & Mandatory COs
+    path('question-bank-deadline/<str:course_code>', views.get_course_qb_deadline),
+    path('question-bank-deadline/<str:course_code>/save', views.set_course_qb_deadline),
 ]

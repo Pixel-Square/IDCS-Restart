@@ -408,6 +408,34 @@ SECURE_HSTS_PRELOAD = os.getenv('SECURE_HSTS_PRELOAD', '0' if DEBUG else '1') ==
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = os.getenv('SECURE_REFERRER_POLICY', 'strict-origin-when-cross-origin')
 
+# Local DX guard: when using Django's HTTP-only runserver, force HTTP-friendly
+# security flags even if DEBUG=0 in .env.
+if RUNNING_RUNSERVER:
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
+
+if RUNNING_RUNSERVER:
+    LOGGING = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'handlers': {
+            'console': {
+                'class': 'logging.StreamHandler',
+            },
+        },
+        'loggers': {
+            'django.server': {
+                'handlers': ['console'],
+                'level': 'CRITICAL',
+                'propagate': False,
+            },
+        },
+    }
+
 # Optional: restrict which account may publish marks via the web UI/backend.
 # Set to a username or email (string). If empty/None publishing remains unrestricted
 # (aside from existing permission checks). Example: 'iqac.user@example.com'

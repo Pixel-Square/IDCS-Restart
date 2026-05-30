@@ -3,12 +3,13 @@ import { useLocation } from 'react-router-dom';
 import OBEPage from './obe/OBEPage';
 import OBEMasterPage from './obe/OBEMasterPage';
 import OBEDueDatesPage from './obe/OBEDueDatesPage';
+import QuestionBankPage from './QuestionBankPage';
 
 export default function AcademicPage(): JSX.Element {
   const location = useLocation();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const initialTab = (params.get('tab') as 'obe' | 'obe_master' | 'due_dates') || 'obe';
-  const [tab, setTab] = useState<'obe' | 'obe_master' | 'due_dates'>(initialTab);
+  const initialTab = (params.get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank') || 'obe';
+  const [tab, setTab] = useState<'obe' | 'obe_master' | 'due_dates' | 'question_bank'>(initialTab);
 
   // decide which tabs to show based on permissions exposed via window.__APP_ME__ if available
   const perms = (window as any).__APP_ME__?.permissions || (window as any).__ME__?.permissions || [];
@@ -18,6 +19,7 @@ export default function AcademicPage(): JSX.Element {
   const tabs = useMemo(() => {
     const out: Array<{ key: string; label: string }> = [];
     out.push({ key: 'obe', label: 'OBE' });
+    out.push({ key: 'question_bank', label: 'Question Bank' });
     if (canObeMaster) {
       out.push({ key: 'obe_master', label: 'OBE Master' });
       out.push({ key: 'due_dates', label: 'OBE: Due Dates' });
@@ -32,7 +34,7 @@ export default function AcademicPage(): JSX.Element {
 
   useEffect(() => {
     // respond to URL changes (e.g. /academic?tab=obe_master)
-    const p = new URLSearchParams(location.search).get('tab') as 'obe' | 'obe_master' | 'due_dates' | null;
+    const p = new URLSearchParams(location.search).get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank' | null;
     if (p && tabs.some((t) => t.key === p) && p !== tab) setTab(p);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
@@ -67,7 +69,94 @@ export default function AcademicPage(): JSX.Element {
         {tab === 'obe' && <OBEPage />}
         {tab === 'obe_master' && canObeMaster && <OBEMasterPage />}
         {tab === 'due_dates' && canObeMaster && <OBEDueDatesPage />}
+        {tab === 'question_bank' && <QuestionBankPageWrapper />}
       </div>
     </main>
+  );
+}
+
+// Wrapper component to handle course code resolution for Question Bank
+function QuestionBankPageWrapper(): JSX.Element {
+  const [assignedCourses, setAssignedCourses] = useState<Array<{ code: string; name: string }>>([]);
+  const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadAssignedCourses();
+  }, []);
+
+  async function loadAssignedCourses() {
+    try {
+      const { fetchWithAuth } = await import('../services/fetchAuth');
+      const res = await fetchWithAuth('/api/academics/staff/assigned-subjects/');
+      if (res.ok) {
+        const data = await res.json();
+        const courses = (data.results || [])
+          .map((item: any) => ({
+            code: item.subject_code || '',
+            name: item.subject_name || '',
+          }))
+          .filter((c: any) => c.code)
+          .sort((a: any, b: any) => a.code.localeCompare(b.code));
+        setAssignedCourses(courses);
+        if (courses.length > 0) {
+          setSelectedCourse(courses[0].code);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load assigned courses', e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loading) {
+    return <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>Loading...</div>;
+  }
+
+  if (assignedCourses.length === 0) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
+        No courses assigned. Contact your HOD to assign courses.
+      </div>
+    );
+  }
+
+  if (!selectedCourse) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
+        No course selected.
+      </div>
+    );
+  }
+
+  const course = assignedCourses.find((c) => c.code === selectedCourse);
+
+  return (
+    <div>
+      <div style={{ marginBottom: '16px' }}>
+        <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
+          Select Course
+        </label>
+        <select
+          value={selectedCourse}
+          onChange={(e) => setSelectedCourse(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '10px',
+            border: '1px solid #d1d5db',
+            borderRadius: '6px',
+            fontSize: '14px',
+          }}
+        >
+          {assignedCourses.map((c) => (
+            <option key={c.code} value={c.code}>
+              {c.code} - {c.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {course && <QuestionBankPage courseCode={course.code} courseName={course.name} />}
+    </div>
   );
 }

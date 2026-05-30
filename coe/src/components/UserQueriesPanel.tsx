@@ -43,7 +43,7 @@ export default function UserQueriesPanel({ user }: { user?: UserLike | null }) {
       const data = await fetchMyQueries();
       setQueries(data);
     } catch {
-      setError('Failed to load tokens. Please try again.');
+      setError('Unable to load tokens right now. Please refresh in a moment.');
     } finally {
       setLoading(false);
     }
@@ -83,7 +83,7 @@ export default function UserQueriesPanel({ user }: { user?: UserLike | null }) {
       await loadQueries();
       window.setTimeout(() => setSuccess(''), 3000);
     } catch {
-      setError('Failed to raise token. Please try again.');
+      setError('Unable to raise token right now. Please try again shortly.');
     } finally {
       setSubmitting(false);
     }

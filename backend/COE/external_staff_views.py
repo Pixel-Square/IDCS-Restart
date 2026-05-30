@@ -24,19 +24,99 @@ class ExternalStaffSerializer(serializers.ModelSerializer):
         fields = ['id', 'staff_id', 'first_name', 'last_name', 'email', 'department_name', 'login_code', 'status']
 
 
+def _apply_strict_filter(staff_qs, strict: bool):
+    if not strict:
+        return staff_qs
+    # Exclude known placeholder records in strict mode.
+    return staff_qs.exclude(user__email__iendswith='@example.com').exclude(user__email__exact='')
+
+
+def _admin_source_queryset():
+    # Match admin proxy queryset first: status='EXTERNAL' (exact).
+    exact_qs = StaffProfile.objects.filter(status='EXTERNAL').select_related('user', 'department')
+    if exact_qs.exists():
+        return exact_qs
+
+    # Fallback to case-insensitive match.
+    ci_qs = StaffProfile.objects.filter(status__iexact='EXTERNAL').select_related('user', 'department')
+    if ci_qs.exists():
+        return ci_qs
+
+    # Last fallback for dirty status values like "External Faculty".
+    return StaffProfile.objects.filter(status__icontains='EXTERNAL').select_related('user', 'department')
+
+
+def _serialize_external_staff(staff_qs, strict: bool):
+    staff_qs = _apply_strict_filter(staff_qs, strict).order_by('staff_id')
+    serializer = ExternalStaffSerializer(staff_qs, many=True)
+    return serializer.data
+
+
 def _serialize_local_external_staff(strict: bool):
     staff = StaffProfile.objects.filter(status__iexact='EXTERNAL').select_related('user', 'department')
-    if strict:
-        # Return only valid external records from DB, excluding placeholder/demo entries.
-        staff = staff.exclude(user__email__iendswith='@example.com').exclude(user__email__exact='')
-    staff = staff.order_by('staff_id')
-    serializer = ExternalStaffSerializer(staff, many=True)
-    return serializer.data
+    return _serialize_external_staff(staff, strict)
+
+
+def _serialize_admin_source_staff(strict: bool):
+    return _serialize_external_staff(_admin_source_queryset(), strict)
 
 class ExternalStaffListView(APIView):
     def get(self, request):
         strict = str(request.query_params.get('strict', '1')).lower() in ('1', 'true', 'yes')
         return Response(_serialize_local_external_staff(strict))
+
+
+class ExternalStaffAdminSourceView(APIView):
+    """Expose the same source used by the admin External Staff proxy list."""
+
+    def get(self, request):
+        strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
+        return Response(_serialize_admin_source_staff(strict))
+
+
+class ExternalStaffAcademicsProfilesView(APIView):
+    """Expose academics ExtStaffProfile rows in the same shape as external staff API."""
+
+    def get(self, request):
+        strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
+        try:
+            from academics.models import ExtStaffProfile as AcademicExtStaffProfile
+        except Exception:
+            return Response([])
+
+        rows = AcademicExtStaffProfile.objects.select_related('user').order_by('-created_at')
+        results = []
+        for row in rows:
+            user = getattr(row, 'user', None)
+            first_name = ''
+            last_name = ''
+            if user is not None:
+                first_name = getattr(user, 'first_name', '') or ''
+                last_name = getattr(user, 'last_name', '') or ''
+
+            if not (first_name or last_name):
+                full_name = (getattr(user, 'get_full_name', lambda: '')() if user else '') or getattr(user, 'username', '') if user else ''
+                parts = [p for p in str(full_name).split(' ') if p]
+                if parts:
+                    first_name = ' '.join(parts[:-1]) if len(parts) > 1 else parts[0]
+                    last_name = parts[-1] if len(parts) > 1 else ''
+
+            email = getattr(user, 'email', '') if user else ''
+            if strict and (not email or str(email).lower().endswith('@example.com')):
+                continue
+
+            results.append({
+                'id': row.id,
+                'staff_id': str(getattr(row, 'faculty_id', '') or (getattr(user, 'username', '') if user else '') or row.id),
+                'first_name': first_name,
+                'last_name': last_name,
+                'email': email,
+                'department_name': str(getattr(row, 'department', '') or 'General'),
+                'login_code': str(getattr(row, 'ext_uid', '') or ''),
+                'status': 'ACTIVE' if getattr(row, 'is_active', False) else 'INACTIVE',
+            })
+
+        return Response(results)
 
 
 class ExternalStaffDbMirrorView(APIView):
@@ -69,9 +149,7 @@ class ExternalStaffDbMirrorView(APIView):
 class AssignExternalCodesView(APIView):
     def post(self, request):
         strict = str(request.query_params.get('strict', '1')).lower() in ('1', 'true', 'yes')
-        staff_list = StaffProfile.objects.filter(status__iexact='EXTERNAL')
-        if strict:
-            staff_list = staff_list.exclude(user__email__iendswith='@example.com').exclude(user__email__exact='')
+        staff_list = _apply_strict_filter(_admin_source_queryset(), strict)
         updated_count = 0
         
         with transaction.atomic():

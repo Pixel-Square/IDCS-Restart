@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { jsPDF } from 'jspdf';
 
-import { fetchCoeStudentsMap } from '../../services/coe';
+import { fetchCoeStudentsMap, fetchCoeFilterOptions } from '../../services/coe';
 import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { getAttendanceFilterKey, getAttendanceSessionKey, readAttendanceStatusMap, writeAttendanceStatus, readAttendanceLock, writeAttendanceLock, hydrateAttendanceStore } from './attendanceStore';
 import { readTTScheduleMap, hydrateTtScheduleStore } from './ttScheduleStore';
@@ -40,7 +40,7 @@ async function imageUrlToDataUrl(url: string): Promise<string> {
       if (typeof reader.result === 'string') resolve(reader.result);
       else reject(new Error('Failed to read image as data URL.'));
     };
-    reader.onerror = () => reject(new Error('Failed to load image.'));
+    reader.onerror = () => reject(new Error('Unable to load image.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -101,55 +101,16 @@ export default function AttendancePage() {
 
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-          setDepartment('ALL');
-        } else {
-          console.warn('Failed to fetch departments, using defaults');
-          setDepartments(['ALL']);
-        }
+        setDepartments(options.departments);
+        setSemesters(options.semesters);
+        setDepartment(options.departments[0] || 'ALL');
+        setSemester(options.semesters[0] || 'SEM1');
       } catch (err) {
         if (active) console.warn('Error fetching departments:', err);
       } finally {
         if (active) setLoadingDeps(false);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Fetch semesters on mount
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      try {
-        const res = await fetchWithAuth('/api/academics/semesters/');
-        if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const sems = data.results || data || [];
-          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
-          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
-          setSemester(semNames[0] || 'SEM1');
-        } else {
-          console.warn('Failed to fetch semesters, using defaults');
-          setSemesters(['SEM1']);
-        }
-      } catch (err) {
-        if (active) console.warn('Error fetching semesters:', err);
       }
     })();
 
@@ -257,8 +218,7 @@ export default function AttendancePage() {
         setSearchRegNo('');
       } catch (err) {
         if (!active) return;
-        const message = err instanceof Error ? err.message : 'Failed to load attendance students.';
-        setError(message);
+        setError('Unable to load attendance data right now. Please try again.');
       } finally {
         // eslint-disable-next-line no-unsafe-finally
         if (!active) return;

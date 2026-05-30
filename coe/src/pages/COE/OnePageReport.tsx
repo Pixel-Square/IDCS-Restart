@@ -109,7 +109,7 @@ async function imageUrlToDataUrl(url: string): Promise<string> {
       if (typeof reader.result === 'string') resolve(reader.result);
       else reject(new Error('Failed to read image as data URL.'));
     };
-    reader.onerror = () => reject(new Error('Failed to load logo image.'));
+    reader.onerror = () => reject(new Error('Unable to load logo image.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -316,8 +316,7 @@ export default function OnePageReport() {
       }
       setError('Bundle not found. Check the scanned/entered bundle number.');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to search bundle.';
-      setError(message);
+      setError('Unable to search this bundle right now. Please try again.');
     } finally {
       setSearching(false);
     }
@@ -536,8 +535,7 @@ export default function OnePageReport() {
       setPreviewFileName(getBundlePdfFileName(bundle));
       setPreviewUrl(nextPreviewUrl);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to generate PDF preview.';
-      setPreviewError(message);
+      setPreviewError('Unable to generate PDF preview right now. Please try again.');
     } finally {
       setPreviewLoading(false);
     }

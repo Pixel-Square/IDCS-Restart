@@ -54,7 +54,7 @@ export async function getSemesterStartSequence(department: string, targetSemeste
     if (result.status === 'fulfilled') {
       startSequence += result.value;
     } else {
-      console.error('Failed to fetch stats for sequence calculation', result.reason);
+      console.error('Unable to fetch stats for sequence calculation', result.reason);
     }
   });
   
