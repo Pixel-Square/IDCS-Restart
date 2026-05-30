@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { fetchCoeStudentsMap } from '../../services/coe';
+import { fetchCoeStudentsMap, fetchCoeFilterOptions } from '../../services/coe';
 import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import { readTTScheduleMap } from './ttScheduleStore';
 import { kvHydrate, kvSave } from '../../utils/coeKvStore';
@@ -112,7 +112,7 @@ async function lookupFaculty(code: string): Promise<StaffInfo | null> {
 
   try {
     const res = await fetchWithAuth('/api/academics/all-staff/');
-    if (!res.ok) throw new Error('Failed to fetch staff list');
+    if (!res.ok) throw new Error('Unable to load staff list');
     const data = await res.json();
     const results: any[] = data.results || data || [];
 
@@ -160,23 +160,12 @@ export default function AssigningPage() {
 
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-          setDepartment('ALL');
-        } else {
-          console.warn('Failed to fetch departments, using defaults');
-          setDepartments(['ALL']);
-        }
+        setDepartments(options.departments);
+        setSemesters(options.semesters);
+        setDepartment(options.departments[0] || 'ALL');
+        setSemester(options.semesters[0] || 'SEM1');
       } catch (err) {
         if (active) console.warn('Error fetching departments:', err);
       } finally {
@@ -206,34 +195,6 @@ export default function AssigningPage() {
     };
 
     void syncExistingAssignments();
-  }, []);
-
-  // Fetch semesters on mount
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      try {
-        const res = await fetchWithAuth('/api/academics/semesters/');
-        if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const sems = data.results || data || [];
-          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
-          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
-          setSemester(semNames[0] || 'SEM1');
-        } else {
-          console.warn('Failed to fetch semesters, using defaults');
-          setSemesters(['SEM1']);
-        }
-      } catch (err) {
-        if (active) console.warn('Error fetching semesters:', err);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
   }, []);
 
   const filterKey = useMemo(() => `${department}::${semester}`, [department, semester]);
@@ -377,7 +338,7 @@ export default function AssigningPage() {
         setAssignments(newAssignments);
       } catch (err) {
         if (!active) return;
-        setError(err instanceof Error ? err.message : 'Failed to load courses.');
+        setError('Unable to load courses right now. Please try again.');
       } finally {
         if (active) setLoading(false);
       }

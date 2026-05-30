@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CoeCourseStudent, fetchCoeStudentsMap } from '../../services/coe';
+import { CoeCourseStudent, fetchCoeStudentsMap, fetchCoeFilterOptions } from '../../services/coe';
 import { getCourseKey, fetchCourseSelectionMapFromApi } from './courseSelectionStorage';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
@@ -144,55 +144,16 @@ export default function BundleAllocation() {
 
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-          setDepartment('ALL');
-        } else {
-          console.warn('Failed to fetch departments, using defaults');
-          setDepartments(['ALL']);
-        }
+        setDepartments(options.departments);
+        setSemesters(options.semesters);
+        setDepartment(options.departments[0] || 'ALL');
+        setSemester(options.semesters[0] || 'SEM1');
       } catch (err) {
         if (active) console.warn('Error fetching departments:', err);
       } finally {
         if (active) setLoadingDeps(false);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  // Fetch semesters on mount
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      try {
-        const res = await fetchWithAuth('/api/academics/semesters/');
-        if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const sems = data.results || data || [];
-          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
-          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
-          setSemester(semNames[0] || 'SEM1');
-        } else {
-          console.warn('Failed to fetch semesters, using defaults');
-          setSemesters(['SEM1']);
-        }
-      } catch (err) {
-        if (active) console.warn('Error fetching semesters:', err);
       }
     })();
 
@@ -344,8 +305,7 @@ export default function BundleAllocation() {
         setCourses(shuffledCourses);
       } catch (err) {
         if (!active) return;
-        const message = err instanceof Error ? err.message : 'Failed to load shuffled list.';
-        setError(message);
+        setError('Unable to load bundle data right now. Please try again.');
         setCourses([]);
       } finally {
         // eslint-disable-next-line no-unsafe-finally

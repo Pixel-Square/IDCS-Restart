@@ -173,14 +173,14 @@ export default function ExtStaffRegisterPage() {
           if (res.status === 404) {
             setError('Form not found. Please check the link and try again.');
           } else {
-            throw new Error('Failed to load form');
+            throw new Error('Unable to load form');
           }
           return;
         }
         const data = await res.json();
         setFormData(data);
       } catch (e: any) {
-        setError(e?.message || 'Error loading form');
+        setError('Unable to load the form right now. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -406,7 +406,7 @@ export default function ExtStaffRegisterPage() {
       setResult(data);
       setStep('success');
     } catch (e: any) {
-      setError(e?.message || 'Network error. Please check your connection and try again.');
+      setError('Unable to submit right now. Please check your connection and try again.');
     } finally {
       setSubmitting(false);
     }

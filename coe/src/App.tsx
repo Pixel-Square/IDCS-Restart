@@ -22,6 +22,7 @@ import AdminRequestsPage from './pages/AdminRequestsPage';
 import ExternalManagementPage from './pages/COE/ExternalManagementPage';
 import AdditionalPage from './pages/COE/AdditionalPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import FinalResultPage from './pages/COE/FinalResultPage';
 import DataViewPage from './pages/DataViewPage';
 import FinalResult from './pages/COE/FinalResult';
 import Download from './pages/COE/Download';
@@ -79,6 +80,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/bundle-allocation', label: 'Bundles' },
     { to: '/coe/assigning', label: 'Assigning' },
     { to: '/coe/external-management', label: 'External Management' },
+    { to: '/coe/final-result', label: 'Final Result' },
     { to: '/coe/bar-scan', label: 'Bar Scan' },
     { to: '/coe/one-page-report', label: 'One Page Report' },
     { to: '/coe/final-result', label: 'Final Result' },
@@ -307,6 +309,7 @@ export default function App() {
         <Route path="/coe/bundle-allocation" element={<RequireAuth><BundleAllocation /></RequireAuth>} />
         <Route path="/coe/assigning" element={<RequireAuth><AssigningPage /></RequireAuth>} />
         <Route path="/coe/external-management" element={<RequireAuth><ExternalManagementPage /></RequireAuth>} />
+        <Route path="/coe/final-result" element={<RequireAuth><FinalResultPage /></RequireAuth>} />
         <Route path="/coe/external" element={<RequireAuth><Navigate to="/coe/external-management" replace /></RequireAuth>} />
         <Route path="/coe/external-data" element={<RequireAuth><Navigate to="/coe/external-management" replace /></RequireAuth>} />
         <Route path="/coe/bundle-barcodes" element={<RequireAuth><BundleBarcodeView /></RequireAuth>} />
@@ -318,7 +321,6 @@ export default function App() {
         <Route path="/coe/result-check" element={<RequireAuth><ResultCheck /></RequireAuth>} />
         <Route path="/coe/download" element={<RequireAuth><Download /></RequireAuth>} />
         <Route path="/coe/external-users" element={<RequireAuth><ExternalManagement /></RequireAuth>} />
-        <Route path="/coe/external-management" element={<Navigate to="/coe/external-users" replace />} />
         <Route path="/coe/registration-settings" element={<RequireAuth><RegistrationSettings /></RequireAuth>} />
         <Route path="/ext-register/:formCode" element={<ExtStaffRegisterPage />} />
         <Route path="*" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />} />

@@ -8,8 +8,9 @@ import AcademicControllerCQIPage from './AcademicControllerCQIPage';
 import AcademicControllerActiveLearningPage from './AcademicControllerActiveLearningPage';
 import AcademicControllerPublishPage from './AcademicControllerPublishPage';
 import AcademicControllerInternalMarksPage from './AcademicControllerInternalMarksPage';
+import IQACQuestionBankPage from './IQACQuestionBankPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'internal_marks' | 'weights' | 'active_learning' | 'qp' | 'cqi' | 'publish';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'internal_marks' | 'weights' | 'active_learning' | 'qp' | 'cqi' | 'question_bank' | 'publish';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -31,6 +32,7 @@ export default function AcademicControllerPage(): JSX.Element {
     { key: 'active_learning', label: 'Active Learning Mapping' },
     { key: 'due_dates', label: 'OBE Due Dates' },
     { key: 'courses', label: 'Courses' },
+    { key: 'question_bank', label: 'Question Bank' },
     { key: 'internal_marks', label: 'Internal marks' },
     { key: 'qp', label: 'QP' },
     { key: 'cqi', label: 'CQI Editor' },
@@ -74,6 +76,7 @@ export default function AcademicControllerPage(): JSX.Element {
         {tab === 'active_learning' && <AcademicControllerActiveLearningPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
+        {tab === 'question_bank' && <IQACQuestionBankPage />}
         {tab === 'internal_marks' && <AcademicControllerInternalMarksPage />}
         {tab === 'qp' && <AcademicControllerQPPage />}
         {tab === 'cqi' && <AcademicControllerCQIPage />}

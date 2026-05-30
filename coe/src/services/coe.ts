@@ -47,6 +47,14 @@ export type CoeSavedDummyMapItem = {
   qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 };
 
+export type CoeFilterOptions = {
+  departments: string[];
+  semesters: string[];
+  source: 'academics' | 'coe-map' | 'mixed' | 'fallback';
+};
+
+const ALL_SEMESTERS: string[] = ['SEM1', 'SEM2', 'SEM3', 'SEM4', 'SEM5', 'SEM6', 'SEM7', 'SEM8'];
+
 export type CoeArrearRecord = {
   id: number;
   batch: string;
@@ -71,18 +79,155 @@ export async function fetchCoePortalContext(): Promise<CoePortalContext> {
 }
 
 export async function fetchCoeStudentsMap(params: { department: string; semester: string }): Promise<CoeStudentsMapResponse> {
-  const qp = new URLSearchParams();
-  qp.set('department', params.department);
-  qp.set('semester', params.semester);
+  const rawSemester = String(params.semester || '').trim();
+  const normalized = normalizeSemesterLabel(rawSemester);
 
-  const res = await fetchWithAuth(`/api/coe/students-map/?${qp.toString()}`);
+  const semesterCandidates = uniqueStrings([
+    rawSemester,
+    normalized || '',
+    normalized ? normalized.replace('SEM', '') : '',
+  ]);
 
-  if (!res.ok) {
+  let lastError = '';
+
+  for (const semesterCandidate of semesterCandidates) {
+    const qp = new URLSearchParams();
+    qp.set('department', params.department);
+    qp.set('semester', semesterCandidate);
+
+    const res = await fetchWithAuth(`/api/coe/students-map/?${qp.toString()}`);
+    if (res.ok) {
+      return res.json();
+    }
+
     const text = await res.text();
-    throw new Error(`COE students map fetch failed: ${res.status} ${text}`);
+    lastError = `COE students map fetch failed: ${res.status} ${text}`;
+
+    // Try alternate semester formats when backend rejects one representation.
+    if (res.status === 400 || res.status === 404) {
+      continue;
+    }
   }
 
-  return res.json();
+  throw new Error(lastError || 'COE students map fetch failed.');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const cleaned = values.map((v) => String(v || '').trim()).filter(Boolean);
+  return Array.from(new Set(cleaned));
+}
+
+function normalizeSemesterLabel(value: string): string | null {
+  const raw = String(value || '').trim().toUpperCase();
+  if (!raw) return null;
+
+  let token = raw;
+  if (token.startsWith('SEM')) {
+    token = token.replace('SEM', '').trim();
+  }
+
+  const parsed = Number.parseInt(token, 10);
+  if (Number.isNaN(parsed) || parsed < 1 || parsed > 8) return null;
+  return `SEM${parsed}`;
+}
+
+async function fetchDepartmentsFromAcademics(): Promise<string[]> {
+  const res = await fetchWithAuth('/api/academics/departments/');
+  if (!res.ok) return [];
+  const data = await res.json();
+  const rows = data?.results || data || [];
+  const names = rows
+    .map((d: any) => {
+      const label = d?.short_name || d?.code || d?.name || d;
+      return label ? String(label).trim().toUpperCase() : '';
+    })
+    .filter(Boolean);
+  return uniqueStrings(names);
+}
+
+async function fetchSemestersFromAcademics(): Promise<string[]> {
+  const res = await fetchWithAuth('/api/academics/semesters/');
+  if (!res.ok) return [];
+  const data = await res.json();
+  const rows = data?.results || data || [];
+  const names = rows
+    .map((s: any) => s?.name || s?.code || s)
+    .filter(Boolean)
+    .map((s: any) => normalizeSemesterLabel(String(s)) || String(s).trim());
+  return uniqueStrings(names);
+}
+
+async function fetchOptionsFromCoeMap(): Promise<{ departments: string[]; semesters: string[] }> {
+  const departments = new Set<string>();
+  const semesters = new Set<string>();
+  const semCandidates = ALL_SEMESTERS;
+
+  for (const sem of semCandidates) {
+    try {
+      const res = await fetchCoeStudentsMap({ department: 'ALL', semester: sem });
+      const deptBlocks = Array.isArray(res?.departments) ? res.departments : [];
+      if (deptBlocks.length > 0) {
+        semesters.add(normalizeSemesterLabel(sem) || sem);
+      }
+      deptBlocks.forEach((block) => {
+        const dept = String(block?.department || '').trim().toUpperCase();
+        if (dept) departments.add(dept);
+      });
+    } catch {
+      // Ignore failed probes and continue.
+    }
+  }
+
+  return {
+    departments: Array.from(departments),
+    semesters: Array.from(semesters),
+  };
+}
+
+export async function fetchCoeFilterOptions(): Promise<CoeFilterOptions> {
+  let departments: string[] = [];
+  let semesters: string[] = [];
+
+  try {
+    departments = await fetchDepartmentsFromAcademics();
+  } catch {
+    departments = [];
+  }
+
+  try {
+    semesters = await fetchSemestersFromAcademics();
+  } catch {
+    semesters = [];
+  }
+
+  const usedAcademicsDepartments = departments.length > 0;
+  const usedAcademicsSemesters = semesters.length > 0;
+
+  if (departments.length === 0 || semesters.length === 0) {
+    const coeMapOptions = await fetchOptionsFromCoeMap();
+    if (departments.length === 0) {
+      departments = coeMapOptions.departments;
+    }
+    if (semesters.length === 0) {
+      semesters = coeMapOptions.semesters;
+    }
+  }
+
+  const normalizedDepartments = departments.length > 0 ? ['ALL', ...uniqueStrings(departments)] : ['ALL'];
+  const normalizedSemesters = ALL_SEMESTERS;
+
+  let source: CoeFilterOptions['source'] = 'fallback';
+  if (usedAcademicsDepartments && usedAcademicsSemesters) {
+    source = 'academics';
+  } else if (normalizedDepartments.length > 1 || normalizedSemesters.length > 0) {
+    source = usedAcademicsDepartments || usedAcademicsSemesters ? 'mixed' : 'coe-map';
+  }
+
+  return {
+    departments: normalizedDepartments,
+    semesters: normalizedSemesters,
+    source,
+  };
 }
 
 export async function saveCoeStudentDummies(payload: { records: { reg_no: string; dummy: string; semester: string; qp_type: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' }[]; password: string }) {
@@ -238,7 +383,117 @@ export type ExternalStaffProfile = {
   login_code: string | null;
 };
 
+export type ExternalStaffFetchResult = {
+  rows: ExternalStaffProfile[];
+  source: 'coe-admin-source' | 'coe-academics-profiles' | 'coe-db-mirror' | 'coe-local' | 'ext-staff-profiles' | 'all-staff' | 'none';
+  note?: string;
+};
+
+function mapExtProfileRows(data: any[]): ExternalStaffProfile[] {
+  return data.map((row: any) => {
+    const fullName = String(row?.full_name || row?.username || '').trim();
+    const parts = fullName ? fullName.split(/\s+/) : [];
+    const first = parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || '');
+    const last = parts.length > 1 ? (parts[parts.length - 1] || '') : '';
+    return {
+      id: Number(row?.id ?? 0),
+      staff_id: String(row?.faculty_id || row?.username || row?.id || ''),
+      first_name: first,
+      last_name: last,
+      email: String(row?.email || ''),
+      department_name: String(row?.department || 'General'),
+      login_code: String(row?.ext_uid || ''),
+      status: row?.is_active ? 'ACTIVE' : 'INACTIVE',
+    };
+  });
+}
+
+function mapAllStaffRows(data: any[]): ExternalStaffProfile[] {
+  const rows = data.map((row: any) => ({
+    id: Number(row?.id ?? 0),
+    staff_id: String(row?.staff_id || row?.internal_id || row?.id || ''),
+    first_name: String(row?.user?.first_name || '').trim(),
+    last_name: String(row?.user?.last_name || '').trim(),
+    email: String(row?.user?.email || ''),
+    department_name: String(row?.current_department?.name || row?.current_department?.short_name || 'General'),
+    login_code: '',
+    status: String(row?.status || ''),
+  }));
+
+  const externalOnly = rows.filter((r) => String(r.status || '').toUpperCase() === 'EXTERNAL');
+  return externalOnly.length > 0 ? externalOnly : rows;
+}
+
+export async function fetchExternalStaffWithSource(): Promise<ExternalStaffFetchResult> {
+  const coeEndpoints: Array<{ endpoint: string; source: ExternalStaffFetchResult['source'] }> = [
+    { endpoint: '/api/coe/external-staff/admin-source/?strict=0', source: 'coe-admin-source' },
+    { endpoint: '/api/coe/external-staff/academics-profiles/?strict=0', source: 'coe-academics-profiles' },
+    { endpoint: '/api/coe/external-staff/db-mirror/?strict=0', source: 'coe-db-mirror' },
+    { endpoint: '/api/coe/external-staff/?strict=0', source: 'coe-local' },
+  ];
+
+  let hadSuccessfulCoeResponse = false;
+  let lastErrorMessage = '';
+
+  for (const item of coeEndpoints) {
+    try {
+      const res = await fetchWithAuth(item.endpoint);
+      if (!res.ok) {
+        lastErrorMessage = `Failed to fetch external staff (${res.status})`;
+        continue;
+      }
+
+      hadSuccessfulCoeResponse = true;
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return { rows: data as ExternalStaffProfile[], source: item.source };
+      }
+    } catch (err: any) {
+      lastErrorMessage = err?.message || 'Failed to fetch external staff';
+    }
+  }
+
+  try {
+    const res = await fetchWithAuth('/api/academics/ext-staff-profiles/');
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return { rows: mapExtProfileRows(data), source: 'ext-staff-profiles' };
+      }
+    }
+  } catch (err: any) {
+    if (!hadSuccessfulCoeResponse) {
+      lastErrorMessage = err?.message || lastErrorMessage || 'Failed to fetch external staff';
+    }
+  }
+
+  // Last practical fallback: staff master list. If EXTERNAL rows exist, show those; otherwise show all.
+  try {
+    const res = await fetchWithAuth('/api/academics/all-staff/');
+    if (res.ok) {
+      const data = await res.json();
+      const rows = Array.isArray(data?.results) ? mapAllStaffRows(data.results) : [];
+      if (rows.length > 0) {
+        return {
+          rows,
+          source: 'all-staff',
+          note: 'Showing staff master data because external-only datasets are empty.',
+        };
+      }
+    }
+  } catch {
+    // No-op: handled below.
+  }
+
+  if (hadSuccessfulCoeResponse) {
+    return { rows: [], source: 'none', note: 'COE external staff datasets are reachable but empty.' };
+  }
+
+  throw new Error(lastErrorMessage || 'Failed to fetch external staff');
+}
+
 export async function fetchExternalStaff(): Promise<ExternalStaffProfile[]> {
+<<<<<<< HEAD
   const res = await fetchWithAuth('/api/coe/external-staff/');
   if (!res.ok) {
     const text = await res.text();
@@ -258,6 +513,10 @@ export async function assignExternalCodes(): Promise<{ message: string; assigned
     throw new Error(`Failed to assign external codes: ${res.status} ${text}`);
   }
   return res.json();
+=======
+  const result = await fetchExternalStaffWithSource();
+  return result.rows;
+>>>>>>> 0803e45 (Questionbank)
 }
 
 /* ── COE Student Marks (bulk) ─────────────────────────── */

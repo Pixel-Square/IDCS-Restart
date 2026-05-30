@@ -52,6 +52,17 @@ interface ExtStaffProfile {
   created_at: string;
 }
 
+interface ExternalStaffDataRow {
+  id: number;
+  staff_id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  department_name: string;
+  login_code: string;
+  status: string;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
@@ -86,8 +97,10 @@ function CopyButton({ text }: { text: string }) {
 export default function ExternalManagement() {
   const [availableUsers, setAvailableUsers] = useState<AvailableUser[]>([]);
   const [profiles, setProfiles] = useState<ExtStaffProfile[]>([]);
+  const [externalStaffRows, setExternalStaffRows] = useState<ExternalStaffDataRow[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
+  const [loadingExternalStaff, setLoadingExternalStaff] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [profileSearch, setProfileSearch] = useState('');
@@ -120,10 +133,10 @@ export default function ExternalManagement() {
     setLoadingUsers(true);
     try {
       const res = await fetchWithAuth('/api/academics/ext-staff-profiles/available-users/');
-      if (!res.ok) throw new Error('Failed to load users');
+      if (!res.ok) throw new Error('Unable to load users');
       setAvailableUsers(await res.json());
     } catch (e: any) {
-      setError(e?.message || 'Error loading users');
+      setError('Unable to load users right now. Please try again.');
     } finally {
       setLoadingUsers(false);
     }
@@ -133,19 +146,35 @@ export default function ExternalManagement() {
     setLoadingProfiles(true);
     try {
       const res = await fetchWithAuth('/api/academics/ext-staff-profiles/');
-      if (!res.ok) throw new Error('Failed to load profiles');
+      if (!res.ok) throw new Error('Unable to load profiles');
       setProfiles(await res.json());
     } catch (e: any) {
-      setError(e?.message || 'Error loading profiles');
+      setError('Unable to load profiles right now. Please try again.');
     } finally {
       setLoadingProfiles(false);
+    }
+  }, []);
+
+  const loadExternalStaffRows = useCallback(async () => {
+    setLoadingExternalStaff(true);
+    try {
+      const res = await fetchWithAuth('/api/coe/external-staff/db-mirror/?strict=0');
+      if (!res.ok) throw new Error('Unable to load external staff data');
+      const data = await res.json();
+      setExternalStaffRows(Array.isArray(data) ? (data as ExternalStaffDataRow[]) : []);
+    } catch (e: any) {
+      setError('Unable to load external staff data right now. Please try again.');
+      setExternalStaffRows([]);
+    } finally {
+      setLoadingExternalStaff(false);
     }
   }, []);
 
   useEffect(() => {
     void loadAvailableUsers();
     void loadProfiles();
-  }, [loadAvailableUsers, loadProfiles]);
+    void loadExternalStaffRows();
+  }, [loadAvailableUsers, loadProfiles, loadExternalStaffRows]);
 
   // ── Add user to Ext Staff table ────────────────────────────────────────────
 
@@ -169,7 +198,7 @@ export default function ExternalManagement() {
       await loadAvailableUsers();
       await loadProfiles();
     } catch (e: any) {
-      setError(e?.message || 'Error adding user');
+      setError('Unable to add user right now. Please try again.');
     } finally {
       setAddingUserId(null);
     }
@@ -194,7 +223,7 @@ export default function ExternalManagement() {
       await loadAvailableUsers();
       await loadProfiles();
     } catch (e: any) {
-      setError(e?.message || 'Error deleting profile');
+      setError('Unable to delete profile right now. Please try again.');
     } finally {
       setDeletingId(null);
     }
@@ -219,7 +248,7 @@ export default function ExternalManagement() {
       await loadAvailableUsers();
       await loadProfiles();
     } catch (e: any) {
-      setError(e?.message || 'Error deleting profiles');
+      setError('Unable to delete selected profiles right now. Please try again.');
     } finally {
       setBulkDeleting(false);
     }
@@ -496,7 +525,7 @@ export default function ExternalManagement() {
               <span style={{ marginLeft: 6, fontWeight: 600, color: '#6b7280' }}>({filteredUsers.length})</span>
             </div>
             <button
-              onClick={() => { void loadAvailableUsers(); void loadProfiles(); }}
+              onClick={() => { void loadAvailableUsers(); void loadProfiles(); void loadExternalStaffRows(); }}
               title="Refresh"
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 2 }}
             >
@@ -825,6 +854,100 @@ export default function ExternalManagement() {
           <div style={{ marginTop: 10, fontSize: 11, color: '#9ca3af' }}>
             Tip: Drag a user from the left panel and drop onto the table to add them.
           </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 22, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+        <div
+          style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid #f3f4f6',
+            background: '#f9fafb',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <div style={{ fontWeight: 800, fontSize: 13, color: '#111827' }}>
+            External Staff Data
+            <span style={{ marginLeft: 6, fontWeight: 600, color: '#6b7280' }}>({externalStaffRows.length})</span>
+          </div>
+          <button
+            onClick={() => void loadExternalStaffRows()}
+            title="Refresh external staff data"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 2 }}
+          >
+            <RefreshCw size={14} />
+          </button>
+        </div>
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: '#f3f4f6' }}>
+                {['Staff ID', 'Name', 'Department', 'Email', 'Login Code', 'Status'].map((h) => (
+                  <th
+                    key={h}
+                    style={{
+                      padding: '8px 10px',
+                      textAlign: 'left',
+                      fontWeight: 800,
+                      fontSize: 11,
+                      color: '#374151',
+                      borderBottom: '1px solid #e5e7eb',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {loadingExternalStaff ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 18, textAlign: 'center', color: '#9ca3af' }}>
+                    Loading external staff data...
+                  </td>
+                </tr>
+              ) : externalStaffRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: 18, textAlign: 'center', color: '#9ca3af' }}>
+                    No external staff records found.
+                  </td>
+                </tr>
+              ) : (
+                externalStaffRows.map((row, idx) => (
+                  <tr key={`${row.id}-${row.staff_id}`} style={{ background: idx % 2 === 1 ? '#f9fafb' : '#fff' }}>
+                    <td style={{ padding: '8px 10px', color: '#111827', fontWeight: 700, whiteSpace: 'nowrap' }}>{row.staff_id || '—'}</td>
+                    <td style={{ padding: '8px 10px', color: '#374151', whiteSpace: 'nowrap' }}>
+                      {[row.first_name, row.last_name].filter(Boolean).join(' ') || '—'}
+                    </td>
+                    <td style={{ padding: '8px 10px', color: '#6b7280' }}>{row.department_name || '—'}</td>
+                    <td style={{ padding: '8px 10px', color: '#6b7280', whiteSpace: 'nowrap' }}>{row.email || '—'}</td>
+                    <td style={{ padding: '8px 10px' }}>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          background: row.login_code ? '#e0e7ff' : '#f3f4f6',
+                          color: row.login_code ? '#3730a3' : '#6b7280',
+                          fontFamily: 'monospace',
+                        }}
+                      >
+                        {row.login_code || 'NOT ASSIGNED'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '8px 10px', color: '#6b7280', textTransform: 'uppercase' }}>{row.status || '—'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

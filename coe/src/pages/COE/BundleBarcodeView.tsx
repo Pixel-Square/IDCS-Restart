@@ -270,7 +270,7 @@ export default function BundleBarcodeView() {
         setBundles(allBundles);
       } catch (err) {
         if (!active) return;
-        setError(err instanceof Error ? err.message : 'Failed to load bundles');
+        setError('Unable to load bundles right now. Please try again.');
         setBundles([]);
       } finally {
         // eslint-disable-next-line no-unsafe-finally

@@ -13,6 +13,8 @@ import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
 import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
 import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
+import IQACQuestionBankLogsPage from './pages/iqac/IQACQuestionBankLogsPage';
+import IQACQuestionBankPage from './pages/iqac/IQACQuestionBankPage';
 import InternalMarkPage from './pages/iqac/InternalMarkPage';
 import OBERequestsPage from './pages/obe/OBERequestsPage';
 import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
@@ -508,6 +510,14 @@ export default function App() {
                   path="/iqac/academic-controller/course/:courseCode/marks/:taId"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
                 />
+                  <Route
+                    path="/iqac/academic-controller/course/:courseCode/question-bank"
+                    element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<IQACQuestionBankPageWrapper />} />}
+                  />
+                  <Route
+                    path="/iqac/academic-controller/course/:courseCode/question-bank-logs"
+                    element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<IQACQuestionBankLogsPage />} />}
+                  />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<InternalMarkPage />} />}
@@ -1120,6 +1130,10 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function IQACQuestionBankPageWrapper() {
+  return <IQACQuestionBankPage />;
 }
 
 function COTargetPageWrapper() {

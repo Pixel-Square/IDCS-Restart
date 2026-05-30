@@ -9,13 +9,14 @@ import CQIPage from './CQIPage';
 import LCAPage from './lca/LCAPage';
 import InternalMarkCoursePage from './InternalMarkCoursePage';
 import ResultAnalysisPage from './obe/ResultAnalysisPage';
+import QuestionBankPage from './QuestionBankPage';
 import { fetchMyTeachingAssignments } from '../services/obe';
 import { fetchDeptRows, fetchElectives, fetchQpTypes, type QuestionPaperTypeItem } from '../services/curriculum';
 import { fetchSpecialCourseEnabledAssessments } from '../services/obe';
 import { normalizeClassType } from '../constants/classTypes';
 import '../styles/obe-theme.css';
 
-type TabKey = 'marks' | 'lca_instructions' | 'internal_mark' | 'result_analysis';
+type TabKey = 'marks' | 'lca_instructions' | 'internal_mark' | 'result_analysis' | 'question_bank';
 
 export default function CourseOBEPage(): JSX.Element {
   const { code } = useParams<{ code: string }>();
@@ -80,6 +81,7 @@ export default function CourseOBEPage(): JSX.Element {
     if (path.includes('/lca/instructions') || path.includes('/lca_instructions')) setActiveTab('lca_instructions');
     // legacy URLs: keep working but route through LCA Instructions
     else if (path.includes('/lca') || path.includes('/cdap') || path.includes('/articulation')) setActiveTab('lca_instructions');
+    else if (path.includes('/question_bank') || path.includes('/question-bank')) setActiveTab('question_bank');
     else if (path.includes('/marks')) setActiveTab('marks');
     else if (path.includes('/internal_mark') || path.includes('/internal-mark')) setActiveTab('internal_mark');
     else if (path.includes('/result_analysis') || path.includes('/result-analysis') || path.includes('/result')) setActiveTab('result_analysis');
@@ -337,6 +339,7 @@ export default function CourseOBEPage(): JSX.Element {
               { key: 'marks', label: 'Mark Entry' },
               { key: 'internal_mark', label: 'Internal Mark' },
               { key: 'result_analysis', label: 'Result Analysis' },
+              { key: 'question_bank', label: 'Question Bank' },
             ].map((t) => {
               const isActive = activeTab === (t.key as TabKey);
               return (
@@ -377,6 +380,9 @@ export default function CourseOBEPage(): JSX.Element {
             )}
             {activeTab === 'result_analysis' && (
               <ResultAnalysisPage courseId={courseId} classType={courseClassType} enabledAssessments={courseEnabledAssessments} />
+            )}
+            {activeTab === 'question_bank' && (
+              <QuestionBankPage courseCode={courseId} courseName={courseName || ''} />
             )}
           </div>
         </div>
