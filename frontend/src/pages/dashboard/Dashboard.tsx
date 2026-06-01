@@ -6,12 +6,21 @@ import SwapRequestPopup from '../../components/SwapRequestPopup';
 import AttendanceRequestPopup from '../../components/AttendanceRequestPopup';
 import { getCachedMe } from '../../services/auth';
 import { fetchNotifications, type UserNotification } from '../../services/proposalService';
+import { fetchAllQueries } from '../../services/queries';
 import { X } from 'lucide-react';
 
 export default function DashboardPage() {
   const [user, setUser] = React.useState<any>(null);
   const [semesterAlerts, setSemesterAlerts] = React.useState<UserNotification[]>([]);
   const [activeAlertIndex, setActiveAlertIndex] = React.useState(0);
+  const [todayQueriesCount, setTodayQueriesCount] = React.useState(0);
+  const [sentQueriesCount, setSentQueriesCount] = React.useState(0);
+  const [showQueryReminder, setShowQueryReminder] = React.useState(false);
+
+  const canManageQueries = React.useMemo(() => {
+    const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+    return permissions.map((p: any) => String(p || '').toLowerCase()).includes('queries.manage');
+  }, [user]);
 
   const isHrUser = React.useMemo(() => {
     const roles = Array.isArray(user?.roles) ? user.roles : [];
@@ -69,6 +78,46 @@ export default function DashboardPage() {
     };
   }, [isHrUser]);
 
+  React.useEffect(() => {
+    if (!canManageQueries) {
+      setTodayQueriesCount(0);
+      setShowQueryReminder(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadQueryReminder = async () => {
+      try {
+        const data = await fetchAllQueries('SENT');
+        if (cancelled) return;
+        const now = new Date();
+        const count = (data.queries || []).filter((query) => {
+          const created = new Date(query.created_at || '');
+          return (
+            created.getFullYear() === now.getFullYear() &&
+            created.getMonth() === now.getMonth() &&
+            created.getDate() === now.getDate()
+          );
+        }).length;
+        setTodayQueriesCount(count);
+        setSentQueriesCount(Number(data.filtered_count ?? data.queries?.length ?? 0));
+        setShowQueryReminder(true);
+      } catch {
+        if (!cancelled) {
+          setTodayQueriesCount(0);
+          setSentQueriesCount(0);
+          setShowQueryReminder(true);
+        }
+      }
+    };
+
+    loadQueryReminder();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageQueries]);
+
   const closeCurrentAlert = React.useCallback(() => {
     setSemesterAlerts((prev) => {
       if (prev.length <= 1) {
@@ -120,6 +169,34 @@ export default function DashboardPage() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {canManageQueries && showQueryReminder && (
+        <div className="fixed bottom-6 right-6 z-[70] w-full max-w-sm rounded-2xl border border-red-400 bg-red-50/90 shadow-2xl backdrop-blur-sm">
+          <div className="flex items-start justify-between gap-3 px-5 py-4">
+            <div>
+              <p className="text-sm font-semibold text-red-900">Daily Query Reminder</p>
+              <p className="mt-1 text-sm text-red-800">
+                {todayQueriesCount === 1
+                  ? '1 query arrived today. Please review it in All Tokens (Admin).'
+                  : `${todayQueriesCount} queries arrived today. Please review them in All Tokens (Admin).`}
+              </p>
+              <p className="mt-2 text-sm text-red-800">
+                Sent tokens count: <span className="font-semibold text-red-900">{sentQueriesCount}</span>
+              </p>
+              <p className="mt-2 text-xs text-red-700/80">This reminder appears on every login for query-managing admins.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowQueryReminder(false)}
+              className="rounded-md p-1 text-red-700 hover:bg-red-100"
+              aria-label="Close reminder"
+              title="Close"
+            >
+              <X size={18} />
+            </button>
           </div>
         </div>
       )}

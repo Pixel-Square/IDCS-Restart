@@ -39,6 +39,7 @@ export type DeptRow = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string | null;
+  category?: string;
   // Note: Backend uses different field names for QP type:
   // - CurriculumMaster.qp_type (legacy)
   // - CurriculumDepartment.question_paper_type (current)
@@ -96,6 +97,26 @@ import { getApiBase } from './apiBase';
 
 const API_BASE = getApiBase();
 
+let semesterIdCache: Map<number, number> | null = null;
+
+async function getSemesterIdByNumber(semesterNumber: number | null | undefined): Promise<number | null> {
+  const semNum = Number(semesterNumber);
+  if (!semNum || Number.isNaN(semNum)) return null;
+  if (semesterIdCache && semesterIdCache.has(semNum)) {
+    return semesterIdCache.get(semNum) || null;
+  }
+  const res = await fetchWithAuth('/api/academics/semesters/');
+  if (!res.ok) return null;
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data.results || []);
+  semesterIdCache = new Map(
+    list
+      .filter((s: any) => s && typeof s.number === 'number' && typeof s.id === 'number')
+      .map((s: any) => [Number(s.number), Number(s.id)])
+  );
+  return semesterIdCache.get(semNum) || null;
+}
+
 export async function fetchBatchYears(): Promise<BatchYear[]> {
   const res = await fetchWithAuth('/api/academics/batch-years/');
   if (!res.ok) throw new Error('Failed to fetch batch years');
@@ -119,7 +140,20 @@ export async function deleteCurriculumDepartment(id: number) {
   const res = await fetchWithAuth(`/api/curriculum/department/${id}/`, {
     method: 'DELETE',
   });
-  if (!res.ok) throw new Error('Failed to delete department curriculum');
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || 'Failed to delete department curriculum');
+  }
+}
+
+export async function deleteMaster(id: number) {
+  const res = await fetchWithAuth(`/api/curriculum/master/${id}/`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || 'Failed to delete master curriculum');
+  }
 }
 
 export type ElectivePollSubject = {
@@ -572,16 +606,25 @@ export async function propagateDeptRow(
   targetBatchIds: number[]
 ): Promise<{ success: number[]; errors: string[] }> {
   const results: { success: number[]; errors: string[] } = { success: [], errors: [] };
+  const semesterId = await getSemesterIdByNumber(row.semester);
+  if (!semesterId) {
+    return {
+      success: [],
+      errors: ['Unable to resolve semester id. Refresh and try again.'],
+    };
+  }
   for (const batchId of targetBatchIds) {
     const payload: Record<string, any> = {
       master: row.master,
       department_id: row.department?.id,
       regulation: row.regulation,
-      semester: row.semester,
+      semester_id: semesterId,
       batch_id: batchId,
       course_code: row.course_code,
       course_name: row.course_name,
+      category: row.category,
       class_type: row.class_type,
+      is_elective: row.is_elective,
       l: row.l, t: row.t, p: row.p, s: row.s, c: row.c,
       internal_mark: row.internal_mark,
       external_mark: row.external_mark,

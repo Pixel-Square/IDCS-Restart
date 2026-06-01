@@ -462,6 +462,7 @@ class ElectivePollSerializer(serializers.ModelSerializer):
                         poll=poll,
                         elective_subject_id=es_id,
                         seats=sub_data.get('seats'),
-                        staff_id=sub_data.get('staff_id')
+                        staff_id=sub_data.get('staff_id'),
+                        is_active=False
                     )
             return poll

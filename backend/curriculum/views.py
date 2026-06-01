@@ -745,10 +745,19 @@ class ElectivePollDetailView(APIView):
         poll = self.get_object(pk)
         if not poll:
             return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        raw_active = request.data.get('is_active') if isinstance(request.data, dict) else None
+        has_active = raw_active is not None
+        desired_active = None
+        if has_active:
+            desired_active = str(raw_active).strip().lower() in {'1', 'true', 'yes', 'y'}
         serializer = ElectivePollSerializer(poll, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
+            with transaction.atomic():
+                serializer.save()
+                if has_active:
+                    ElectivePollSubject.objects.filter(poll=poll).update(is_active=desired_active)
+            poll.refresh_from_db()
+            return Response(ElectivePollSerializer(poll).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
@@ -813,6 +822,19 @@ class ElectivePollSubjectStatusView(APIView):
             if 'course_code' in payload or 'course_name' in payload:
                 es.save(update_fields=['course_code', 'course_name', 'updated_at'])
             poll_subject.save(update_fields=['is_active', 'seats'])
+
+        # Keep poll status in sync with subject status.
+        if 'is_active' in payload:
+            poll = poll_subject.poll
+            if poll_subject.is_active:
+                if not poll.is_active:
+                    poll.is_active = True
+                    poll.save(update_fields=['is_active'])
+            else:
+                has_active = ElectivePollSubject.objects.filter(poll=poll, is_active=True).exists()
+                if not has_active and poll.is_active:
+                    poll.is_active = False
+                    poll.save(update_fields=['is_active'])
 
         return Response(ElectivePollSubjectSerializer(poll_subject).data)
 
@@ -1002,8 +1024,7 @@ class HodElectivePollStatusView(APIView):
             group_map.setdefault(dept_id, set()).add(group_id)
 
         polls = list(
-            ElectivePoll.objects.filter(is_active=True)
-            .select_related('batch_year', 'department_group')
+            ElectivePoll.objects.select_related('batch_year', 'department_group')
             .order_by('-created_at')
         )
 

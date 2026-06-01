@@ -7,6 +7,7 @@ import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
 import { fetchCurriculumPendingCount } from '../../services/curriculum';
+import { fetchAllQueries } from '../../services/queries';
 
   const ICON_MAP: Record<string, any> = {
   profile: User,
@@ -92,6 +93,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const [pendingAttendanceReqCount, setPendingAttendanceReqCount] = useState<number>(0);
   const [pendingCurriculumCount, setPendingCurriculumCount] = useState<number>(0);
   const [unreadAnnouncementsCount, setUnreadAnnouncementsCount] = useState<number>(0);
+  const [sentQueriesCount, setSentQueriesCount] = useState<number>(0);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [applicationsNav, setApplicationsNav] = useState<ApplicationsNavResponse | null>(null);
 
@@ -103,6 +105,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   const perms = (data?.permissions || []).map((p) => String(p || '').toLowerCase());
   const canObeMasterManage = perms.includes('obe.master.manage');
+  const canManageQueries = perms.includes('queries.manage');
 
   const canViewAnnouncements = perms.includes('announcements.view_announcement_page');
   const isStaff = data?.flags?.is_staff || false;
@@ -299,6 +302,33 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       window.clearInterval(interval);
     };
   }, [canViewAnnouncements]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchSentQueries = async () => {
+      if (!canManageQueries) {
+        setSentQueriesCount(0);
+        return;
+      }
+
+      try {
+        const data = await fetchAllQueries('SENT');
+        if (!mounted) return;
+        setSentQueriesCount(Number(data.filtered_count ?? data.queries?.length ?? 0));
+      } catch {
+        if (!mounted) return;
+        setSentQueriesCount(0);
+      }
+    };
+
+    fetchSentQueries();
+    const interval = window.setInterval(fetchSentQueries, 30_000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [canManageQueries]);
   // auto-expand RFReader when on /iqac/rf-reader routes
   useEffect(() => {
     if (loc.pathname.startsWith('/iqac/rf-reader')) {
@@ -702,25 +732,27 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                     onClick={(e) => {
                       if (isHodGroup) {
                         e.preventDefault();
-                        setExpanded((p) => ({ ...p, hod_event_management: !p.hod_event_management }));
+                        setExpanded({ hod_event_management: !expanded.hod_event_management });
                         return;
                       }
                       if (isHaaGroup) {
                         e.preventDefault();
-                        setExpanded((p) => ({ ...p, haa_event_management: !p.haa_event_management }));
+                        setExpanded({ haa_event_management: !expanded.haa_event_management });
                         return;
                       }
                       if (isFacultyGroup) {
                         e.preventDefault();
-                        setExpanded((p) => ({ ...p, faculty_directory: !p.faculty_directory }));
+                        setExpanded({ faculty_directory: !expanded.faculty_directory });
                         return;
                       }
                       // preserve mobile toggle behaviour
                       if (window.innerWidth < 1024) toggle();
+                      // collapse any open dropdowns when navigating to another top-level item
+                      setExpanded({});
                       // toggle submenu expansion for specific groups
-                      if (i.key === 'academic') setExpanded((p) => ({ ...p, academic: !p.academic }));
-                      if (i.key === 'academic_controller') setExpanded((p) => ({ ...p, academic_controller: !p.academic_controller }));
-                      if (i.key === 'rf_reader') setExpanded((p) => ({ ...p, rf_reader: !p.rf_reader }));
+                      if (i.key === 'academic') setExpanded({ academic: !expanded.academic });
+                      if (i.key === 'academic_controller') setExpanded({ academic_controller: !expanded.academic_controller });
+                      if (i.key === 'rf_reader') setExpanded({ rf_reader: !expanded.rf_reader });
                     }}
                   >
                     <Icon className={`flex-shrink-0 ${collapsed ? 'lg:w-5 lg:h-5' : 'w-6 h-6'}`} />
@@ -740,6 +772,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       ) : null}
                       {i.key === 'announcements' && unreadAnnouncementsCount > 0 ? (
                         <span className="ml-2 inline-flex items-center justify-center w-2.5 h-2.5 rounded-full bg-blue-500" title="Unread announcements" />
+                      ) : null}
+                      {i.key === 'queries' && canManageQueries && sentQueriesCount > 0 ? (
+                        <span className="ml-2 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-2 text-[11px] font-semibold rounded-full bg-red-600 text-white">
+                          {sentQueriesCount > 99 ? '99+' : sentQueriesCount}
+                        </span>
                       ) : null}
                     </span>
                     {isGroup && !collapsed && (
