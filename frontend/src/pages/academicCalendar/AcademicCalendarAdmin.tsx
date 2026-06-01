@@ -8,8 +8,10 @@ import fetchWithAuth from '../../services/fetchAuth'
 const TEMPLATE_DROPDOWN_VALUES = [
   'Placement training',
   'L1',
+  'F1',
   'CIA 1',
   'L2',
+  'F2',
   'CIA 2',
   'Model',
   'CQI',
