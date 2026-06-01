@@ -22,6 +22,7 @@ import {
   fetchPublishedSsa1,
   fetchPublishedSsa2,
   fetchTeachingAssignmentEnabledAssessmentsInfo,
+  fetchFinalInternalMarksForTa,
   TeachingAssignmentItem,
 } from '../services/obe';
 import { fetchAssessmentMasterConfig } from '../services/cdapDb';
@@ -56,7 +57,14 @@ import {
   getInternalMarkWeightSlotsForCo,
 } from '../utils/internalMarkWeights';
 
-type Props = { courseId: string; enabledAssessments?: string[] | null; classType?: string | null; questionPaperType?: string | null };
+type Props = {
+  courseId: string;
+  enabledAssessments?: string[] | null;
+  classType?: string | null;
+  questionPaperType?: string | null;
+  teachingAssignmentsOverride?: TeachingAssignmentItem[];
+  fixedTeachingAssignmentId?: number | null;
+};
 
 type Student = {
   id: number;
@@ -614,7 +622,14 @@ function splitLegacyTcplCombinedWeight(total: unknown): [number, number] {
   return [lab, ciaExam];
 }
 
-export default function InternalMarkCoursePage({ courseId, enabledAssessments, classType: classTypeProp, questionPaperType: qpTypeProp }: Props): JSX.Element {
+export default function InternalMarkCoursePage({
+  courseId,
+  enabledAssessments,
+  classType: classTypeProp,
+  questionPaperType: qpTypeProp,
+  teachingAssignmentsOverride,
+  fixedTeachingAssignmentId,
+}: Props): JSX.Element {
   const [assignmentEnabledAssessments, setAssignmentEnabledAssessments] = useState<string[] | null | undefined>(undefined);
   const effectiveEnabledAssessments = useMemo(
     () => (assignmentEnabledAssessments === undefined ? enabledAssessments : assignmentEnabledAssessments),
@@ -628,6 +643,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const [tas, setTas] = useState<TeachingAssignmentItem[]>([]);
   const [selectedTaId, setSelectedTaId] = useState<number | null>(null);
   const [taError, setTaError] = useState<string | null>(null);
+
+  const isTaFixed = useMemo(() => {
+    const n = fixedTeachingAssignmentId == null ? NaN : Number(fixedTeachingAssignmentId);
+    return Number.isFinite(n);
+  }, [fixedTeachingAssignmentId]);
 
   const [classType, setClassType] = useState<string | null>(null);
   const effectiveClassType = useMemo(() => {
@@ -645,10 +665,31 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const isPrbl = useMemo(() => rawClassType === 'PRBL', [rawClassType]);
 
   const qpTypeNorm = useMemo(() => String(qpTypeProp ?? '').trim().toUpperCase(), [qpTypeProp]);
+  const isTheoryPmblQp2 = useMemo(() => {
+    const qp = qpTypeNorm.replace(/\s+/g, '');
+    return rawClassType === 'THEORY_PMBL' && /(^|[^A-Z0-9])QP2([^A-Z0-9]|$)/.test(qp);
+  }, [rawClassType, qpTypeNorm]);
   const isQp1Final = useMemo(
-    () => effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm),
+    () =>
+      (effectiveClassType === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeNorm)) ||
+      (effectiveClassType === 'TAMIL' && qpTypeNorm.replace(/\s/g, '') === 'TAM_THEORY'),
     [effectiveClassType, qpTypeNorm],
   );
+
+  // Theory QP1/QP2/PMBL extended Model CQI: CO1/CO2 carry forward the
+  // CIA1 page's resulting bonus (C1CQI) into the Model page's base, and the
+  // Model page's own CQI mark is applied on top (capped at 58% of the Model
+  // max).  The flat merged `entries[co1/co2]` value is the CIA1 page's RAW
+  // CQI mark — applying that against the Model max double-counts.  Use the
+  // per-page entries from cqiPublished.pages to compute C1CQI + Model bonus
+  // separately, matching the staff Model CQI page's behavior.
+  const isTheoryExtendedModel = useMemo(() => {
+    if (effectiveClassType !== 'THEORY' && effectiveClassType !== 'THEORY_PMBL') return false;
+    const qp = qpTypeNorm.replace(/\s+/g, '');
+    if (/QP1FINAL/.test(qp)) return false;
+    if (!/(^|[^A-Z0-9])(QP1|QP2|PMBL)([^A-Z0-9]|$)/.test(qp)) return false;
+    return true;
+  }, [effectiveClassType, qpTypeNorm]);
 
   useEffect(() => {
     if (effectiveClassType !== 'LAB' || selectedTaId == null) {
@@ -724,8 +765,36 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
   const [reloadCounter, setReloadCounter] = useState(0);
 
   const [cqiPublished, setCqiPublished] = useState<CqiPublishedSnapshot | null>(null);
+  const [canonicalFimRows, setCanonicalFimRows] = useState<Record<string, { total_40: number | null; max_40: number | null }> | null>(null);
   const [cqiGlobalCfg, setCqiGlobalCfg] = useState<{ divider: number; multiplier: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'actual' | 'after-cqi'>('after-cqi');
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (!courseId || selectedTaId == null || !isTheoryPmblQp2) {
+        if (mounted) setCanonicalFimRows(null);
+        return;
+      }
+      try {
+        const res = await fetchFinalInternalMarksForTa(String(courseId), Number(selectedTaId));
+        if (!mounted) return;
+        const rows = res?.rows && typeof res.rows === 'object' ? res.rows : {};
+        const mapped: Record<string, { total_40: number | null; max_40: number | null }> = {};
+        Object.entries(rows).forEach(([sid, row]) => {
+          const t40 = row && Number.isFinite(Number((row as any).total_40)) ? Number((row as any).total_40) : null;
+          const m40 = row && Number.isFinite(Number((row as any).max_40)) ? Number((row as any).max_40) : null;
+          mapped[String(sid)] = { total_40: t40, max_40: m40 };
+        });
+        setCanonicalFimRows(mapped);
+      } catch {
+        if (mounted) setCanonicalFimRows(null);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [courseId, selectedTaId, isTheoryPmblQp2, cqiPublished?.publishedAt]);
 
   useEffect(() => {
     let mounted = true;
@@ -789,7 +858,11 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
     };
     window.addEventListener('obe:published', handler as any);
-    return () => window.removeEventListener('obe:published', handler as any);
+    window.addEventListener('obe:reset', handler as any);
+    return () => {
+      window.removeEventListener('obe:published', handler as any);
+      window.removeEventListener('obe:reset', handler as any);
+    };
   }, [courseId]);
 
   useEffect(() => {
@@ -810,10 +883,28 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
     let mounted = true;
     (async () => {
       try {
+        const overrideList = Array.isArray(teachingAssignmentsOverride) ? teachingAssignmentsOverride : null;
+        if (overrideList && overrideList.length) {
+          const filteredOverride = overrideList.filter((a) => String((a as any)?.subject_code || '') === String(courseId));
+          const finalOverride = filteredOverride.length ? filteredOverride : overrideList;
+          if (!mounted) return;
+          setTas(finalOverride);
+
+          const fixed = fixedTeachingAssignmentId == null ? null : Number(fixedTeachingAssignmentId);
+          const fixedOk = fixed != null && Number.isFinite(fixed) && finalOverride.some((t) => Number(t.id) === Number(fixed));
+          const stored = lsGet<number>(`internalMark_selectedTa_${courseId}`);
+          const storedOk = typeof stored === 'number' && finalOverride.some((t) => Number(t.id) === Number(stored));
+          const initial = (fixedOk ? fixed : storedOk ? stored : finalOverride[0]?.id) ?? null;
+
+          setSelectedTaId(initial);
+          setTaError(null);
+          return;
+        }
+
         const all = await fetchMyTeachingAssignments();
         if (!mounted) return;
         let filtered = (all || []).filter((a) => String(a.subject_code) === String(courseId));
-        
+
         // If user doesn't have a TA for this subject, try to fetch from server
         if (filtered.length === 0) {
           try {
@@ -827,10 +918,15 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             console.warn('Server TA list fetch failed:', err);
           }
         }
-        
+
         setTas(filtered);
+
+        const fixed = fixedTeachingAssignmentId == null ? null : Number(fixedTeachingAssignmentId);
+        const fixedOk = fixed != null && Number.isFinite(fixed) && filtered.some((t) => Number(t.id) === Number(fixed));
         const stored = lsGet<number>(`internalMark_selectedTa_${courseId}`);
-        const initial = (typeof stored === 'number' && filtered.some((f) => f.id === stored) ? stored : filtered[0]?.id) ?? null;
+        const storedOk = typeof stored === 'number' && filtered.some((t) => Number(t.id) === Number(stored));
+        const initial = (fixedOk ? fixed : storedOk ? stored : filtered[0]?.id) ?? null;
+
         setSelectedTaId(initial);
         setTaError(null);
       } catch (e: any) {
@@ -840,8 +936,10 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         setTaError(e?.message || 'Failed to load teaching assignments');
       }
     })();
-    return () => { mounted = false; };
-  }, [courseId]);
+    return () => {
+      mounted = false;
+    };
+  }, [courseId, teachingAssignmentsOverride, fixedTeachingAssignmentId]);
 
   useEffect(() => {
     if (!courseId || selectedTaId == null) return;
@@ -1088,7 +1186,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         // Preload IQAC QP patterns (CIA entry uses these to override question maxima/count).
         // Internal Marks must match the same question definitions, especially when drafts exist
         // (draft snapshots don't store `questions`).
-        const qpForPattern = ct === 'THEORY' ? (qpTypeNorm || null) : null;
+        const qpForPattern = (ct === 'THEORY' || ct === 'TAMIL') ? (qpTypeNorm || null) : null;
         const fetchPattern = async (exam: 'CIA1' | 'CIA2'): Promise<IqacPattern | null> => {
           if (!ct) return null;
           let best: IqacPattern | null = null;
@@ -1420,7 +1518,7 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           // Fall back to the model payload's qpType if available.
           const modelQpType = qpTypeNorm || modelQpTypeRaw || null;
           const modelClass = String((ct || '')).toUpperCase();
-          const shouldSendQpType = modelClass === 'THEORY' || modelClass === 'ENGLISH' || modelClass === 'FOREIGN_LANG';
+          const shouldSendQpType = modelClass === 'THEORY' || modelClass === 'TAMIL' || modelClass === 'ENGLISH' || modelClass === 'FOREIGN_LANG';
           const modelPatternRes: any = await fetchIqacQpPattern({
             class_type: modelClass,
             question_paper_type: shouldSendQpType ? modelQpType : null,
@@ -1568,7 +1666,6 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
   const THRESHOLD_PERCENT = 58;
   const CQI_BELOW_RATE = 0.6;
-  const CQI_ABOVE_RATE = 0.15;
 
   const displayCols = useMemo(() => {
     const labels = Array.isArray((effMapping as any)?.labels) ? ((effMapping as any).labels as string[]) : [];
@@ -1681,8 +1778,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       const add = Math.min(rawAdd, maxAllowed);
       return Number.isFinite(add) && add > 0 ? add : 0;
     } else {
-      const add = inp * CQI_ABOVE_RATE;
-      return Number.isFinite(add) && add > 0 ? add : 0;
+      // CO already attained (>= threshold) — no CQI addition regardless of input
+      return 0;
     }
   };
 
@@ -2149,10 +2246,18 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
             const tMax = (modelQuestionMaxByCo as any)[ck] || 0;
             const tRaw = theoryRawCo[ck] || 0;
             if (i === 5) {
-              const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
-              const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
-              const recordWeighted = recordContribution;
-              sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+              if (!modelRecordCfg?.enabled) {
+                // Record disabled: normalize combined (theory + lab-share) over
+                // (theoryMax + 6) and scale to CO5 total weight 7.
+                const combinedRaw = tRaw + labShare;
+                const combinedMax = tMax + TCPL_LAB_SHARE_MAX;
+                sums[ck] = combinedMax > 0 ? (combinedRaw / combinedMax) * TCPL_CO_TOTAL_W[ck] : 0;
+              } else {
+                const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
+                const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
+                const recordWeighted = recordContribution;
+                sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+              }
             } else {
               // CO1..CO4 (TCPL): compute on total allocated CO mark in model exam.
               // theory max per CO = 20, lab share max per CO = 6, total = 26.
@@ -2921,10 +3026,17 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
 
           let fixedCo = 0;
           if (i === 4) {
-            const theoryPart = tMax > 0 ? clamp((tRaw / tMax) * THEORY_W[i], 0, THEORY_W[i]) : 0;
-            const labPart = labRaw != null ? clamp((labShare / labShareMax) * 1, 0, 1) : 0;
-            const recPart = recordEnabled && recordNorm != null ? clamp(recordNorm * 2, 0, 2) : 0;
-            fixedCo = theoryPart + labPart + recPart;
+            if (!recordEnabled) {
+              // Record disabled: combined normalization (theory + lab-share) / (theoryMax + 6) * 7
+              const combinedMax = tMax + labShareMax;
+              const combinedRaw = tRaw + labShare;
+              fixedCo = combinedMax > 0 ? clamp((combinedRaw / combinedMax) * CO_TOTAL_W[i], 0, CO_TOTAL_W[i]) : 0;
+            } else {
+              const theoryPart = tMax > 0 ? clamp((tRaw / tMax) * THEORY_W[i], 0, THEORY_W[i]) : 0;
+              const labPart = labRaw != null ? clamp((labShare / labShareMax) * 1, 0, 1) : 0;
+              const recPart = recordNorm != null ? clamp(recordNorm * 2, 0, 2) : 0;
+              fixedCo = theoryPart + labPart + recPart;
+            }
           } else {
             // CO1..CO4 (TCPL): normalize combined (theory + lab-share) out of total 26,
             // then scale to the final model weight 3.
@@ -3246,9 +3358,111 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       });
     }
 
+    // ── CQI per-page entries (cia1 / model) for Theory extended Model ──
+    // The flat `entries` dict merges per-CO values by ownership (CIA1 owns
+    // CO1/CO2 because it has the smaller set), so reading
+    // `entries[sid][co1]` returns the CIA1 page's RAW CQI mark.  Applying
+    // that against the Model max double-counts the CQI bonus.  Instead, we
+    // need CIA1's mark separately (for C1CQI) and Model's mark separately
+    // (for the Model bonus).
+    const pages = Array.isArray((cqiPublished as any)?.pages) ? ((cqiPublished as any).pages as any[]) : [];
+    const normalizePageCos = (page: any): number[] => {
+      const arr = Array.isArray(page?.coNumbers) ? page.coNumbers : [];
+      return arr
+        .map((n: any) => Number(n))
+        .filter((n: number) => Number.isFinite(n) && n > 0)
+        .map((n: number) => Math.trunc(n));
+    };
+    const pageTimestamp = (page: any): number => {
+      const raw = page?.publishedAt;
+      if (!raw) return 0;
+      const ts = new Date(String(raw)).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    };
+    const pickPageForAssessmentCo = (assessmentType: string, coNum: number): any | null => {
+      const want = String(assessmentType || '').trim().toLowerCase();
+      const candidates = pages
+        .filter((p) => {
+          if (String(p?.assessmentType || '').trim().toLowerCase() !== want) return false;
+          if (!(p && typeof p.entries === 'object')) return false;
+          const cos = normalizePageCos(p);
+          return cos.includes(coNum);
+        })
+        .sort((a, b) => {
+          const aLen = normalizePageCos(a).length;
+          const bLen = normalizePageCos(b).length;
+          if (aLen !== bLen) return aLen - bLen;
+          return pageTimestamp(b) - pageTimestamp(a);
+        });
+      return candidates[0] || null;
+    };
+    const getPageCoMark = (assessmentType: string, coNum: number, studentId: number | string): number | null => {
+      const page = pickPageForAssessmentCo(assessmentType, coNum);
+      if (!page || !(page && typeof page.entries === 'object')) return null;
+      const row = (page.entries as any)?.[studentId] || (page.entries as any)?.[String(studentId)] || {};
+      const raw = row?.[`co${coNum}`];
+      if (raw == null) return null;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n;
+    };
+    const labelsArr = Array.isArray((effMapping as any)?.labels) ? ((effMapping as any).labels as string[]) : [];
+    const weightsArr = Array.isArray((effMapping as any)?.weights) ? ((effMapping as any).weights as any[]) : [];
+
+    // For a merged CO column, split its component slots into CIA1 cycle
+    // (SSA+CIA+FA — anything that isn't an ME column) vs ME.  Returns the
+    // CIA1-cycle weight sum and the CIA1-cycle base value sum.  This lets
+    // us replicate the staff Model CQI page's C1CQI formula:
+    //   C1CQI = clamp(0.6 * cia1Mark, 0, cia1Max*0.58 − cia1Base)
+    const getCia1ColInfo = (col: { indices: number[] }, rowCells: any[]): { cia1Max: number; cia1Base: number } => {
+      let cia1Max = 0;
+      let cia1Base = 0;
+      for (const idx of col.indices) {
+        const lab = String(labelsArr[idx] || '').toUpperCase();
+        const w = Number(weightsArr[idx] ?? 0) || 0;
+        const isMe = /^ME[\s\-_]?CO/.test(lab) || /^ME$/.test(lab) || lab.startsWith('ME-');
+        if (!isMe) {
+          cia1Max += w;
+          const v = rowCells?.[idx];
+          if (typeof v === 'number' && Number.isFinite(v)) cia1Base += v;
+        }
+      }
+      return { cia1Max: round2(cia1Max), cia1Base: round2(cia1Base) };
+    };
+
     return computedRows.map((r: any) => {
-      const studentEntry: any = (entries as any)?.[r.id] || {};
-      
+      const studentEntry: any = (entries as any)?.[r.id] || (entries as any)?.[String(r.id)] || {};
+
+      // Compute the per-CO add for ONE merged column.  For Theory extended
+      // Model CO1/CO2, this is C1CQI + Model bonus.  For every other case
+      // it's the legacy single-input compute, preserving prior behaviour.
+      const computePerCoAdd = (
+        col: { isMerged: boolean; co?: number; indices: number[]; weight: number },
+        base: number,
+      ): number => {
+        const coMax = Number(col.weight) || 0;
+        if (coMax <= 0) return 0;
+        const coNum = Number(col.co);
+        if (isTheoryExtendedModel && (coNum === 1 || coNum === 2)) {
+          const { cia1Max, cia1Base } = getCia1ColInfo(col, r.cells);
+          let c1cqi = 0;
+          const cia1Mark = getPageCoMark('cia1', coNum, r.id);
+          if (cia1Mark != null && Number.isFinite(cia1Mark) && cia1Mark > 0 && cia1Max > 0) {
+            const rawAdd = cia1Mark * CQI_BELOW_RATE;
+            const room = Math.max(0, (cia1Max * THRESHOLD_PERCENT) / 100 - cia1Base);
+            c1cqi = Math.max(0, Math.min(rawAdd, room));
+          }
+          const modelMark = getPageCoMark('model', coNum, r.id);
+          let modelAdd = 0;
+          if (modelMark != null && Number.isFinite(modelMark) && modelMark > 0) {
+            modelAdd = computeCqiAdd({ coValue: base + c1cqi, coMax, input: modelMark });
+          }
+          return c1cqi + modelAdd;
+        }
+        const input = studentEntry?.[`co${coNum}`];
+        return computeCqiAdd({ coValue: base, coMax, input: input == null ? null : Number(input) });
+      };
+
       let cqiAddedRaw = 0;
       let baseTotalRaw = 0;
       let hasBaseData = false;
@@ -3269,15 +3483,9 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         for (const col of displayCols) {
           if (col.isMerged && col.co != null) {
             const base = getDisplayValue(r.cells, col);
-            if (base != null && Number.isFinite(base)) {
-              if (publishedCoSet.has(Number(col.co))) {
-                const coMax = Number(col.weight) || 0;
-                const input = studentEntry?.[`co${col.co}`];
-                if (coMax > 0) {
-                  const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
-                  if (add > 0) cqiAddedRaw += add;
-                }
-              }
+            if (base != null && Number.isFinite(base) && publishedCoSet.has(Number(col.co))) {
+              const add = computePerCoAdd(col, Number(base));
+              if (add > 0) cqiAddedRaw += add;
             }
           }
         }
@@ -3290,9 +3498,8 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
         if (activeTab === 'after-cqi' && col.isMerged && col.co != null && publishedCoSet.has(Number(col.co))) {
           const base = val;
           const coMax = Number(col.weight) || 0;
-          const input = studentEntry?.[`co${col.co}`];
           if (base != null && Number.isFinite(base) && coMax > 0) {
-            const add = computeCqiAdd({ coValue: Number(base), coMax, input: input == null ? null : Number(input) });
+            const add = computePerCoAdd(col, Number(base));
             if (add > 0) {
               val = clamp(round2(Number(base) + add), 0, coMax);
             }
@@ -3309,7 +3516,19 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
       }
       if (effTotal != null) effTotal = clamp(effTotal, 0, maxTotal);
       const effPct = effTotal != null && maxTotal ? Math.round((effTotal / maxTotal) * scaledMax) : r.pct;
-      return { ...r, colVals, effTotal, effPct };
+
+      let outTotal = effTotal;
+      let outPct = effPct;
+      if (activeTab === 'after-cqi' && isTheoryPmblQp2 && canonicalFimRows) {
+        const canonical = canonicalFimRows[String(r.id)] || canonicalFimRows[String((r as any).student_id ?? '')] || null;
+        const canonicalTotal = canonical && canonical.total_40 != null ? Number(canonical.total_40) : null;
+        if (canonicalTotal != null && Number.isFinite(canonicalTotal)) {
+          outTotal = clamp(round2(canonicalTotal), 0, maxTotal);
+          outPct = maxTotal > 0 ? Math.round((outTotal / maxTotal) * scaledMax) : null;
+        }
+      }
+
+      return { ...r, colVals, effTotal: outTotal, effPct: outPct };
     });
   };
 
@@ -3541,7 +3760,12 @@ export default function InternalMarkCoursePage({ courseId, enabledAssessments, c
           </button>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <span style={{ color: '#374151', fontWeight: 700 }}>Section</span>
-            <select value={selectedTaId ?? ''} onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)} style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}>
+            <select
+              value={selectedTaId ?? ''}
+              onChange={(e) => setSelectedTaId(e.target.value ? Number(e.target.value) : null)}
+              disabled={isTaFixed}
+              style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}
+            >
               <option value="" disabled>—</option>
               {tas.map((t) => {
                 const dept = (t as any).department;

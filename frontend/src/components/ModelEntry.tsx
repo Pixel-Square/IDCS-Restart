@@ -203,6 +203,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
   const isSpecial = normalizedClassType === 'SPECIAL';
+  const isTamil = normalizedClassType === 'TAMIL';
   const isEnglishLike = isEnglishOrForeignLangClassType(normalizedClassType);
 
   const {
@@ -338,7 +339,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       // Pass through any non-empty QP code so DB-managed types work.
       // Use empty string only for null/non-THEORY contexts (qpForApi null-coalesces it).
       const qpKey = String(normalizedQpType || '').trim();
-      const qpForApi = classKey === 'THEORY' ? (qpKey ? qpKey : null) : null;
+      const qpForApi = (classKey === 'THEORY' || classKey === 'TAMIL') ? (qpKey ? qpKey : null) : null;
 
       setIqacPatternLoading(true);
       setIqacPatternError(null);
@@ -858,14 +859,12 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
 
         let labNum = 0;
         let coCount = theoryCoCount;
-        let cosRow = theoryCosRow;
         let coMaxRow = theoryCoMaxRow;
 
         if (isTcplLike) {
           const lv = (row as any).lab ?? '';
           labNum = typeof lv === 'number' && Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : 0;
           coCount = tcplCoCount;
-          cosRow = tcplCosRow;
           coMaxRow = tcplCoMaxRow;
         }
 
@@ -1174,7 +1173,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const theoryQuestions = useMemo<QuestionDef[]>(() => {
     // Prefer IQAC-configured QP pattern if present.
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
-    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial)) {
+    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial || isTamil)) {
       return marks.map((max, i) => ({
         key: `q${i + 1}`,
         label: `Q${i + 1}`,
@@ -1200,7 +1199,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       { key: 'q15', label: 'Q15', max: 14 },
       { key: 'q16', label: 'Q16', max: 10 },
     ];
-  }, [iqacPattern, isTheory, isSpecial]);
+  }, [iqacPattern, isTheory, isSpecial, isTamil]);
 
   const theoryTotalMax = useMemo(() => theoryQuestions.reduce((sum, q) => sum + q.max, 0), [theoryQuestions]);
 
@@ -1219,12 +1218,12 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const theoryCosRow = useMemo(() => {
     const defaultRow = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5];
     const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-    if ((isTheory || isSpecial) && Array.isArray(cos) && cos.length === theoryQuestions.length) {
+    if ((isTheory || isSpecial || isTamil) && Array.isArray(cos) && cos.length === theoryQuestions.length) {
       return cos.map((v: any) => extractModelCos(v));
     }
     if (theoryQuestions.length === defaultRow.length) return defaultRow.map(v => [v]);
     return Array.from({ length: theoryQuestions.length }, (_, i) => [defaultRow[i % defaultRow.length]]);
-  }, [iqacPattern, isTheory, isSpecial, theoryQuestions.length]);
+  }, [iqacPattern, isTheory, isSpecial, isTamil, theoryQuestions.length]);
 
   // Derived from actual COs used so unused CO columns are hidden automatically.
   const theoryCoCount = useMemo(() => {
@@ -1281,7 +1280,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const [theoryQuestionBtl, setTheoryQuestionBtl] = useState<Record<string, BtlValue>>(defaultTheoryQuestionBtl);
 
   useEffect(() => {
-    if (!isTheory && !isSpecial) return;
+    if (!isTheory && !isSpecial && !isTamil) return;
     const stored = lsGet<Record<string, BtlValue>>(theoryQuestionBtlStorageKey);
     if (stored && typeof stored === 'object') {
       setTheoryQuestionBtl({
@@ -1291,7 +1290,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     } else {
       setTheoryQuestionBtl(defaultTheoryQuestionBtl);
     }
-  }, [isTheory, isSpecial, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
+  }, [isTheory, isSpecial, isTamil, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
 
   const setTheoryBtl = (qKey: string, value: BtlValue) => {
     setTheoryQuestionBtl((prev) => {
@@ -1493,7 +1492,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       return out;
     });
 
-    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : String(normalizedClassType || 'THEORY');
     downloadCsv(`${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.csv`, rows);
   };
 
@@ -1533,7 +1532,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'MODEL');
 
-    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : String(normalizedClassType || 'THEORY');
     const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.xlsx`;
     (XLSX as any).writeFile(wb, filename);
   };
@@ -2409,12 +2408,12 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           >
           {!isTcplLike ? (
             <>
-              {isTheory || isSpecial ? (
+              {isTheory || isSpecial || isTamil ? (
                 <>
                   <thead>
                     <tr>
                       <th style={cellTh} colSpan={theoryColSpan}>
-                        MODEL ({isSpecial ? 'SPECIAL' : 'THEORY'} Header Template)
+                        MODEL ({isSpecial ? 'SPECIAL' : isTamil ? 'TAMIL' : 'THEORY'} Header Template)
                       </th>
                     </tr>
 

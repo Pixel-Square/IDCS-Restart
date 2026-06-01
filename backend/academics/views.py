@@ -561,6 +561,13 @@ class TeachingAssignmentStudentsView(APIView):
             )
             if getattr(ta, 'academic_year_id', None):
                 batch_filter_qs = batch_filter_qs.filter(academic_year_id=ta.academic_year_id)
+            # Scope by section when the TA has one — prevents cross-section
+            # leakage for staff who teach the same subject across multiple sections
+            # (e.g., CSD staff handling the same course for A-AI&ML and B-AI&DS).
+            if getattr(ta, 'section_id', None):
+                batch_filter_qs = batch_filter_qs.filter(
+                    Q(section_id=ta.section_id) | Q(section__isnull=True)
+                )
             # For elective TAs (no curriculum_row), match by creator's elective TA overlap
             # For regular TAs, match by curriculum_row
             if getattr(ta, 'curriculum_row_id', None):
@@ -739,7 +746,8 @@ def _ms_add_co_breakdown_sheets(wb, ta, subject, student_list):
     class_type = _resolve_class_type(ta)
     qp_type = _resolve_qp_type(ta)
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
-    is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+    qp_type_key = str(qp_type or '').upper().replace(' ', '')
+    is_qp1_final = ('QP1FINAL' in qp_type_key) or (class_type == 'TAMIL' and qp_type_key == 'TAM_THEORY')
     is_english_like = class_type in ('ENGLISH', 'FOREIGN_LANG')
 
     def _v(x):
@@ -1247,7 +1255,8 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
     class_type = str(_resolve_class_type(ta) or '').upper()
     is_project_course = class_type == 'PROJECT'
     qp_type_raw = _resolve_qp_type(ta)
-    is_qp1_final = 'QP1FINAL' in str(qp_type_raw or '').upper().replace(' ', '')
+    qp_type_key = str(qp_type_raw or '').upper().replace(' ', '')
+    is_qp1_final = ('QP1FINAL' in qp_type_key) or (class_type == 'TAMIL' and qp_type_key == 'TAM_THEORY')
     scaled_max = 60.0 if is_qp1_final else 100.0
 
     if recompute:
@@ -3061,6 +3070,185 @@ def _ms_disambiguated_filename(ta, meta, seen):
     return candidate
 
 
+def _build_camu_mark_rows_for_ta(ta, *, actor_user_id=None, recompute=True):
+    """Return Camu Excel rows + meta for a TeachingAssignment.
+
+    rows: list of dicts with keys reg_no (str), name (str), mark (int|None).
+    meta: dict with course_code, course_name, section_name, batch_name,
+          dept_name, regulation, semester, student_count.
+
+    The 'mark' equals the faculty Internal Mark page Export value (effPct):
+        round((effTotal / maxTotal) * scaledMax)
+    Backed by the canonical per-class-type compute_*_final_total functions'
+    'total_100' field, which uses ROUND_HALF_UP — matching JavaScript Math.round
+    for the non-negative marks produced here. CQI and 58% cap are already
+    applied by those compute functions.
+
+    Raises ValueError when course or students cannot be resolved.
+    """
+    from OBE.models import FinalInternalMark
+    from OBE.services.final_internal_marks import (
+        _resolve_class_type,
+        _resolve_subject_for_ta,
+        _students_for_ta,
+        _compute_weighted_final_total_theory_like,
+        _compute_english_final_total,
+        _compute_foreign_lang_final_total,
+        _compute_prbl_final_total,
+        _compute_tcpr_final_total,
+        _compute_project_final_total,
+        _compute_lab_final_total,
+        _compute_tcpl_final_total,
+        recompute_final_internal_marks,
+    )
+    from .models import Subject as _SubjectModel
+
+    ta_id = ta.id
+    course_code, course_name = _ms_resolve_course_for_ta(ta)
+    if not course_code:
+        raise ValueError('Unable to resolve course code for this teaching assignment.')
+
+    class_type = str(_resolve_class_type(ta) or '').upper()
+
+    if recompute:
+        try:
+            recompute_final_internal_marks(
+                actor_user_id=actor_user_id,
+                filters={'teaching_assignment_id': ta_id},
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                '_build_camu_mark_rows_for_ta: recompute failed for ta_id=%s', ta_id,
+            )
+
+    subject_obj = _resolve_subject_for_ta(ta) or getattr(ta, 'subject', None)
+    if subject_obj is None:
+        subject_obj = _SubjectModel.objects.filter(code__iexact=course_code).first()
+
+    student_list = list(_students_for_ta(ta) or [])
+    if not student_list:
+        seen = set()
+        fim_qs = (
+            FinalInternalMark.objects.filter(teaching_assignment_id=ta_id)
+            .select_related('student__user')
+            .order_by('student_id', 'id')
+        )
+        for fim in fim_qs:
+            sp = getattr(fim, 'student', None)
+            if sp is None:
+                continue
+            sid = int(getattr(sp, 'id', 0) or 0)
+            if sid <= 0 or sid in seen:
+                continue
+            seen.add(sid)
+            user = getattr(sp, 'user', None)
+            student_name = ' '.join([
+                _ms_safe_text(getattr(user, 'first_name', '')),
+                _ms_safe_text(getattr(user, 'last_name', '')),
+            ]).strip() if user else ''
+            if not student_name:
+                student_name = _ms_safe_text(getattr(user, 'username', '')) if user else ''
+            student_list.append({
+                'id': sid,
+                'reg_no': _ms_safe_text(getattr(sp, 'reg_no', '')),
+                'name': student_name,
+            })
+
+    if not student_list:
+        raise ValueError('No students found for this teaching assignment.')
+
+    compute_dispatch = {
+        'THEORY': _compute_weighted_final_total_theory_like,
+        'SPECIAL': _compute_weighted_final_total_theory_like,
+        'THEORY_PMBL': _compute_weighted_final_total_theory_like,
+        'ENGLISH': _compute_english_final_total,
+        'FOREIGN_LANG': _compute_foreign_lang_final_total,
+        'PRBL': _compute_prbl_final_total,
+        'TCPR': _compute_tcpr_final_total,
+        'PROJECT': _compute_project_final_total,
+        'TCPL': _compute_tcpl_final_total,
+    }
+
+    def _compute_for_student(ref):
+        if class_type in ('LAB', 'PRACTICAL'):
+            return _compute_lab_final_total(
+                ta=ta, subject=subject_obj, student=ref, ta_id=ta_id,
+                class_type=class_type, return_details=True,
+            )
+        fn = compute_dispatch.get(class_type)
+        if fn is None:
+            return None
+        return fn(
+            ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
+        )
+
+    rows = []
+    for s in student_list:
+        sid = int(s.get('id', 0) or 0)
+        if sid <= 0:
+            continue
+        ref = {'id': sid, 'reg_no': _ms_safe_text(s.get('reg_no'))}
+        mark = None
+        try:
+            live = _compute_for_student(ref)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                '_build_camu_mark_rows_for_ta: compute error ta_id=%s sid=%s class_type=%s',
+                ta_id, sid, class_type,
+            )
+            live = None
+        if isinstance(live, dict):
+            t100 = _ms_safe_float(live.get('total_100'))
+            if t100 is not None:
+                mark = int(round(t100))
+        rows.append({
+            'reg_no': _ms_safe_text(s.get('reg_no')),
+            'name': _ms_safe_text(s.get('name')),
+            'mark': mark,
+        })
+
+    rows.sort(key=lambda r: (_ms_safe_text(r.get('reg_no')), _ms_safe_text(r.get('name'))))
+
+    section_obj = getattr(ta, 'section', None)
+    batch_obj = getattr(section_obj, 'batch', None) if section_obj is not None else None
+    dept_obj = getattr(getattr(batch_obj, 'course', None), 'department', None) if batch_obj is not None else None
+    reg_obj = getattr(batch_obj, 'regulation', None) if batch_obj is not None else None
+    section_name = _ms_safe_text(getattr(section_obj, 'name', ''))
+    batch_name = _ms_safe_text(getattr(batch_obj, 'name', ''))
+    dept_name = _ms_safe_text(
+        getattr(dept_obj, 'short_name', None) or getattr(dept_obj, 'code', None)
+        or getattr(dept_obj, 'name', None) or ''
+    )
+    reg_label = _ms_safe_text(getattr(reg_obj, 'code', None) or getattr(reg_obj, 'name', None) or '')
+    sem_no = getattr(getattr(section_obj, 'semester', None), 'number', None)
+
+    meta = {
+        'course_code': course_code,
+        'course_name': course_name,
+        'section_name': section_name,
+        'batch_name': batch_name,
+        'dept_name': dept_name,
+        'regulation': reg_label,
+        'semester': sem_no,
+        'student_count': len(rows),
+    }
+    return rows, meta
+
+
+def _build_camu_workbook_for_ta(ta, *, actor_user_id=None, recompute=True):
+    """Return (xlsx_bytes, suggested_filename, meta) for the Camu Mark Upload export.
+
+    Wraps _build_camu_mark_rows_for_ta + _build_mark_upload_workbook so the
+    IQAC per-course and bulk ZIP exports share one row-generation path.
+    """
+    rows, meta = _build_camu_mark_rows_for_ta(
+        ta, actor_user_id=actor_user_id, recompute=recompute,
+    )
+    xlsx_bytes = _build_mark_upload_workbook(rows=rows)
+    filename = f"{_ms_safe_filename(meta.get('course_code') or 'internal_marks')} {_ms_safe_filename(meta.get('course_name') or '')}.xlsx".strip()
+    return xlsx_bytes, filename, meta
+
+
 class IqacInternalMarksBulkExportView(APIView):
     """Download filtered internal marks as ZIP of per-course Excel files.
 
@@ -3257,6 +3445,10 @@ class IqacInternalMarksBulkExportView(APIView):
 
         from OBE.services.final_internal_marks import recompute_final_internal_marks
 
+        export_type = self._safe_text(request.query_params.get('export_type')).lower() or 'detailed'
+        if export_type not in ('detailed', 'camu'):
+            return Response({'detail': 'Invalid export_type. Use detailed or camu.'}, status=400)
+
         regulation = self._safe_text(request.query_params.get('regulation'))
         semester = self._safe_text(request.query_params.get('semester'))
         department_id = self._safe_text(request.query_params.get('department_id'))
@@ -3374,46 +3566,60 @@ class IqacInternalMarksBulkExportView(APIView):
                 self.buf.clear()
                 return d
 
+        def _build_for_export(ta_obj):
+            if export_type == 'camu':
+                return _build_camu_workbook_for_ta(
+                    ta_obj,
+                    actor_user_id=getattr(request.user, 'id', None),
+                    recompute=False,
+                )
+            return _build_detailed_internal_marks_workbook(
+                ta_obj,
+                actor_user_id=getattr(request.user, 'id', None),
+                recompute=False,  # Recomputing all takes too long, rely on staff saves
+            )
+
         def stream_zip():
             zb = ZipBuffer()
             seen_filenames = set()
             with zipfile.ZipFile(zb, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
                 for ta in tas:
                     try:
-                        xlsx_bytes, _fname, meta = _build_detailed_internal_marks_workbook(
-                            ta,
-                            actor_user_id=getattr(request.user, 'id', None),
-                            recompute=False,  # Recomputing all takes too long, rely on staff saves
-                        )
+                        xlsx_bytes, _fname, meta = _build_for_export(ta)
                     except ValueError as exc:
                         import logging as _log_
                         _log_.getLogger(__name__).warning(
-                            'IqacInternalMarksBulkExportView: skipping ta %s: %s',
-                            getattr(ta, 'id', None), exc,
+                            'IqacInternalMarksBulkExportView[%s]: skipping ta %s: %s',
+                            export_type, getattr(ta, 'id', None), exc,
                         )
                         continue
                     except Exception:
                         import logging as _log_
                         _log_.getLogger(__name__).exception(
-                            'IqacInternalMarksBulkExportView: builder failed for ta %s',
-                            getattr(ta, 'id', None),
+                            'IqacInternalMarksBulkExportView[%s]: builder failed for ta %s',
+                            export_type, getattr(ta, 'id', None),
                         )
                         continue
 
                     disambig = _ms_disambiguated_filename(ta, meta, seen_filenames)
                     seen_filenames.add(disambig)
                     zf.writestr(disambig, xlsx_bytes)
-                    
+
                     chunk = zb.pop()
                     if chunk:
                         yield chunk
-            
+
             final_chunk = zb.pop()
             if final_chunk:
                 yield final_chunk
 
+        zip_filename = (
+            'internal_marks_camu_export.zip'
+            if export_type == 'camu'
+            else 'internal_marks_export.zip'
+        )
         response = StreamingHttpResponse(stream_zip(), content_type='application/zip')
-        response['Content-Disposition'] = 'attachment; filename="internal_marks_export.zip"'
+        response['Content-Disposition'] = f'attachment; filename="{zip_filename}"'
         return response
 
 
@@ -3520,7 +3726,8 @@ class IqacInternalMarksCourseExportView(APIView):
         class_type = _resolve_class_type(ta)
         qp_type = _resolve_qp_type(ta)
         batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
-        is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+        qp_type_key = str(qp_type or '').upper().replace(' ', '')
+        is_qp1_final = ('QP1FINAL' in qp_type_key) or (class_type == 'TAMIL' and qp_type_key == 'TAM_THEORY')
 
         # ── helper: display value ────────────────────────────────────
         def _v(x):
@@ -3808,6 +4015,10 @@ class IqacInternalMarksCourseExportView(APIView):
         except Exception:
             return Response({'detail': 'Invalid ta_id.'}, status=400)
 
+        export_type = _ms_safe_text(request.query_params.get('export_type')).lower() or 'detailed'
+        if export_type not in ('detailed', 'camu'):
+            return Response({'detail': 'Invalid export_type. Use detailed or camu.'}, status=400)
+
         ta = (
             TeachingAssignment.objects.filter(id=ta_id, is_active=True)
             .select_related('subject', 'curriculum_row', 'elective_subject')
@@ -3817,11 +4028,18 @@ class IqacInternalMarksCourseExportView(APIView):
             return Response({'detail': 'Teaching assignment not found.'}, status=404)
 
         try:
-            xlsx_bytes, filename, _meta = _build_detailed_internal_marks_workbook(
-                ta,
-                actor_user_id=getattr(request.user, 'id', None),
-                recompute=True,
-            )
+            if export_type == 'camu':
+                xlsx_bytes, filename, _meta = _build_camu_workbook_for_ta(
+                    ta,
+                    actor_user_id=getattr(request.user, 'id', None),
+                    recompute=True,
+                )
+            else:
+                xlsx_bytes, filename, _meta = _build_detailed_internal_marks_workbook(
+                    ta,
+                    actor_user_id=getattr(request.user, 'id', None),
+                    recompute=True,
+                )
         except ValueError as exc:
             return Response({'detail': str(exc)}, status=404)
 

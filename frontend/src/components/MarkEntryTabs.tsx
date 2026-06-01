@@ -19,6 +19,7 @@ import Cia2Entry from './Cia2Entry';
 import CQIEntry from '../pages/staff/CQIEntry';
 import PureLabCQIEntry from './PureLabCQIEntry';
 import PureProjectCQIEntry from './PureProjectCQIEntry';
+import CqiAccessGuard from './CqiAccessGuard';
 import DashboardWidgets from './layout/DashboardWidgets';
 import {
   DraftAssessmentKey,
@@ -135,6 +136,28 @@ function parseCqiOption(optionId: string): CqiPlacement | null {
   if (id === 'model_co3_co4_co5') return { showAfter: 'model', assessmentType: 'model', cos: ['CO3', 'CO4', 'CO5'] };
   if (id === 'model_co5') return { showAfter: 'model', assessmentType: 'model', cos: ['CO5'] };
   return null;
+}
+
+// Theory QP1/QP2/PMBL extends the Model CQI placement to include CO1/CO2 in addition
+// to CO3/CO4/CO5.  The CIA1 CQI placement (smaller set) still owns CO1/CO2 per the
+// ownership rule, but CQIEntry forces them OUT of borrowed/INTO owned on the Model
+// page so they become independently editable with their own model-exam-based totals.
+function maybeExtendModelPlacementForTheory(
+  placement: CqiPlacement,
+  normalizedClassType: string,
+  questionPaperType: string | null | undefined,
+): CqiPlacement {
+  if (placement.assessmentType !== 'model') return placement;
+  if (normalizedClassType !== 'THEORY' && normalizedClassType !== 'THEORY_PMBL') return placement;
+  const qp = String(questionPaperType ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  const isQpEligible = /(^|[^A-Z0-9])(QP1|QP2|PMBL)([^A-Z0-9]|$)/.test(qp) && !/QP1FINAL/.test(qp);
+  if (!isQpEligible) return placement;
+  const cos = Array.isArray(placement.cos) ? placement.cos : [];
+  const hasCo1 = cos.some((c) => /1/.test(String(c)));
+  const hasCo2 = cos.some((c) => /2/.test(String(c)));
+  if (hasCo1 && hasCo2) return placement;
+  const merged = Array.from(new Set([...(hasCo1 ? [] : ['CO1']), ...(hasCo2 ? [] : ['CO2']), ...cos]));
+  return { ...placement, cos: merged };
 }
 
 function normalizeEnabledAssessments(enabledAssessments: string[] | null | undefined): Set<string> {
@@ -668,10 +691,12 @@ export default function MarkEntryTabs({
     return raw === 'PRBL' || raw.includes('PRBL');
   }, [effectiveClassType]);
 
-  // QP1FINAL: Theory courses with QP1FINAL question paper type get a single combined CQI after MODEL
+  // QP1FINAL-like: THEORY+QP1FINAL and TAMIL+TAM_THEORY get a single combined CQI after MODEL
   const isQp1Final = useMemo(() => {
     const qp = String(questionPaperType || '').trim().toUpperCase().replace(/\s/g, '');
-    return normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
+    const isTheoryQp1Final = normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
+    const isTamilTamTheory = normalizedEffectiveClassType === 'TAMIL' && qp === 'TAM_THEORY';
+    return isTheoryQp1Final || isTamilTamTheory;
   }, [normalizedEffectiveClassType, questionPaperType]);
 
   const cqiPlacements = useMemo(() => {
@@ -713,7 +738,8 @@ export default function MarkEntryTabs({
     const options = Array.isArray(cqiConfig?.options) ? cqiConfig.options : [];
     return options
       .map((raw) => parseCqiOption(raw))
-      .filter((x): x is CqiPlacement => Boolean(x));
+      .filter((x): x is CqiPlacement => Boolean(x))
+      .map((p) => maybeExtendModelPlacementForTheory(p, normalizedEffectiveClassType, questionPaperType));
   }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final, questionPaperType]);
 
   const visibleTabs = useMemo(() => {
@@ -1625,19 +1651,29 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
+                  const cqiCos = activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'];
                   return (
-                    <CQIEntry
-                      key={`${activeCqi?.assessmentType || 'model'}:${(activeCqi?.cos || []).join('_')}`}
+                    <CqiAccessGuard
                       subjectId={subjectId}
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}
-                      questionPaperType={questionPaperType ?? null}
-                      enabledAssessments={effectiveEnabled ?? null}
-                      assessmentType={(activeCqi?.assessmentType || 'model') as 'cia1' | 'cia2' | 'model' | 'review1' | 'review2'}
-                      cos={activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5']}
-                      cqiDivider={Number(cqiConfig?.divider) || 2}
-                      cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
-                    />
+                      cos={cqiCos}
+                      onRedirect={(tabKey) => switchTab(tabKey as TabKey)}
+                    >
+                      <CQIEntry
+                        key={`${activeCqi?.assessmentType || 'model'}:${cqiCos.join('_')}`}
+                        subjectId={subjectId}
+                        teachingAssignmentId={selectedTaId ?? undefined}
+                        classType={effectiveClassType ?? null}
+                        questionPaperType={questionPaperType ?? null}
+                        enabledAssessments={effectiveEnabled ?? null}
+                        assessmentType={(activeCqi?.assessmentType || 'model') as 'cia1' | 'cia2' | 'model' | 'review1' | 'review2'}
+                        cos={cqiCos}
+                        allCqiPlacements={cqiPlacements.map((p) => ({ assessmentType: p.assessmentType, cos: p.cos }))}
+                        cqiDivider={Number(cqiConfig?.divider) || 2}
+                        cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
+                      />
+                    </CqiAccessGuard>
                   );
                 }
 

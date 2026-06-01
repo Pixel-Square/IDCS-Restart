@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT_DIR="/home/iqac/IDCS-Restart"
 FRONTEND_HOST="${FRONTEND_HOST:-idcs.krgi.co.in}"
 BACKEND_HOST="${BACKEND_HOST:-db.krgi.co.in}"
+CF_TUNNEL_CONFIG="${CF_TUNNEL_CONFIG:-/home/iqac/.cloudflared/config.yml}"
 LOCAL_FRONTEND_URL="${LOCAL_FRONTEND_URL:-http://localhost/}"
 LOCAL_LOGIN_URL="${LOCAL_LOGIN_URL:-http://localhost/api/accounts/token/}"
 PUBLIC_FRONTEND_URL="${PUBLIC_FRONTEND_URL:-https://${FRONTEND_HOST}/}"
@@ -48,6 +49,52 @@ service_is_active() {
 http_status() {
   local url="$1"
   curl -sS -o /dev/null -w "%{http_code}" --max-time "$MAX_TIME" "$url" || echo "000"
+}
+
+cloudflared_tunnel_id() {
+  if [[ ! -f "$CF_TUNNEL_CONFIG" ]]; then
+    return 1
+  fi
+  awk -F': ' '/^tunnel:[[:space:]]*/ {print $2; exit}' "$CF_TUNNEL_CONFIG"
+}
+
+cloudflared_active_connectors() {
+  local tunnel_id="$1"
+  local info
+
+  if [[ -z "$tunnel_id" ]]; then
+    echo ""
+    return 1
+  fi
+
+  info="$(cloudflared tunnel info "$tunnel_id" 2>/dev/null || true)"
+  if printf '%s\n' "$info" | grep -qi "does not have any active connection"; then
+    echo "0"
+    return 0
+  fi
+
+  printf '%s\n' "$info" | awk '
+    /^CONNECTOR ID/ {in_table=1; next}
+    in_table && $1 ~ /^[0-9a-f-]{8,}$/ {count++}
+    END {print count+0}
+  '
+}
+
+cloudflared_process_check() {
+  local cfg="$1"
+  local lines total managed unmanaged
+
+  lines="$(ps -eo args | grep '[c]loudflared' || true)"
+  total="$(printf '%s\n' "$lines" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+  if [[ -z "$lines" || "$total" -eq 0 ]]; then
+    echo "0:0:0"
+    return 0
+  fi
+
+  managed="$(printf '%s\n' "$lines" | grep -F "/usr/bin/cloudflared tunnel --config $cfg run" | wc -l | tr -d ' ')"
+  unmanaged=$(( total - managed ))
+  echo "${total}:${managed}:${unmanaged}"
 }
 
 check_http_code() {
@@ -109,7 +156,48 @@ echo
 echo "[1] Service status"
 if service_is_active nginx; then ok "nginx active"; else fail "nginx inactive"; fi
 if service_is_active gunicorn; then ok "gunicorn active"; else fail "gunicorn inactive"; fi
-if service_is_active cloudflared; then ok "cloudflared active"; else warn "cloudflared inactive"; fi
+if service_is_active cloudflared; then
+  ok "cloudflared active"
+  cf_proc_stats="$(cloudflared_process_check "$CF_TUNNEL_CONFIG")"
+  cf_total_procs="${cf_proc_stats%%:*}"
+  cf_proc_stats_rest="${cf_proc_stats#*:}"
+  cf_managed_procs="${cf_proc_stats_rest%%:*}"
+  cf_unmanaged_procs="${cf_proc_stats_rest##*:}"
+
+  if [[ "$cf_total_procs" -eq 0 ]]; then
+    fail "cloudflared process not found in ps output"
+  elif [[ "$cf_managed_procs" -ne 1 ]]; then
+    fail "cloudflared managed process count expected=1 actual=${cf_managed_procs}"
+  else
+    ok "cloudflared managed process count=${cf_managed_procs}"
+  fi
+
+  if [[ "$cf_unmanaged_procs" -gt 0 ]]; then
+    fail "cloudflared unmanaged/duplicate processes detected=${cf_unmanaged_procs}"
+  else
+    ok "cloudflared unmanaged processes=0"
+  fi
+
+  if have_cmd cloudflared; then
+    cf_tunnel_id="$(cloudflared_tunnel_id || true)"
+    if [[ -n "$cf_tunnel_id" ]]; then
+      cf_connectors="$(cloudflared_active_connectors "$cf_tunnel_id" || true)"
+      if [[ -z "$cf_connectors" ]]; then
+        warn "cloudflared connector check unavailable (tunnel=$cf_tunnel_id)"
+      elif [[ "$cf_connectors" -eq 0 ]]; then
+        fail "cloudflared tunnel has no active connectors (tunnel=$cf_tunnel_id)"
+      else
+        ok "cloudflared tunnel connectors active=${cf_connectors} (tunnel=$cf_tunnel_id)"
+      fi
+    else
+      warn "cloudflared tunnel id not found in $CF_TUNNEL_CONFIG"
+    fi
+  else
+    warn "cloudflared CLI missing; skipped connector check"
+  fi
+else
+  warn "cloudflared inactive"
+fi
 
 echo
 echo "[2] Local HTTP checks"

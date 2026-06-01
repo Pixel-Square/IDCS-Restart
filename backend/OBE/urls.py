@@ -70,6 +70,9 @@ urlpatterns = [
     path('mark-table-lock/<str:assessment>/<str:subject_id>', views.mark_table_lock_status),
     path('mark-table-lock/<str:assessment>/<str:subject_id>/confirm-mark-manager', views.mark_table_lock_confirm_mark_manager),
 
+    # Batch publication status for a CQI cycle (gates CQI page access on the frontend)
+    path('cqi-publication-status/<str:subject_id>', views.cqi_publication_status),
+
     path('due-schedule-subjects', views.due_schedule_subjects),
     path('due-schedules', views.due_schedules),
     path('due-schedule-upsert', views.due_schedule_upsert),
@@ -128,6 +131,7 @@ urlpatterns = [
     path('iqac/template-apply', views.obe_template_apply),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),
     path('iqac/final-internal-marks/student/<int:student_id>', views.final_internal_marks_by_student),
+    path('final-internal-marks/<str:subject_id>', views.final_internal_marks_for_ta),
     path('iqac/dashboard-analytics', views.iqac_dashboard_analytics),
 
     # IQAC QP Pattern config

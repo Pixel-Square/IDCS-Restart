@@ -77,6 +77,33 @@ sudo journalctl -u cloudflared --since '30 min ago' --no-pager
 
 If cloudflared logs show x509/SAN errors, restore origin to `http://localhost:80`.
 
+## 5A) Cloudflare 1033 triage (tunnel cannot be resolved)
+
+Symptom:
+- Public host returns `530` with body `error code: 1033`.
+
+Checks:
+
+```bash
+cloudflared tunnel info 69601534-0fe8-4066-84d9-12fca5deda30
+```
+
+If output says tunnel has no active connection, recover connector process:
+
+```bash
+# Stop unmanaged duplicate runs (if any), then rely on systemd-managed service only.
+pkill -u iqac -f '/usr/local/bin/cloudflared --config /home/iqac/.cloudflared/config.yml tunnel run' || true
+pkill -u iqac -f '/usr/local/bin/cloudflared --config /home/iqac/.cloudflared/japanese-jfront.yml tunnel run' || true
+sudo systemctl restart cloudflared
+```
+
+Then verify:
+
+```bash
+cloudflared tunnel info 69601534-0fe8-4066-84d9-12fca5deda30
+curl -I https://idcs.krgi.co.in/
+```
+
 ## 6) TLS certificate checks and renewal
 
 Check expiration:

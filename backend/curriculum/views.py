@@ -748,7 +748,10 @@ class ElectivePollDetailView(APIView):
         serializer = ElectivePollSerializer(poll, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            # Cascade poll-level is_active to all subjects so the hierarchy is respected
+            if 'is_active' in request.data:
+                poll.poll_subjects.update(is_active=poll.is_active)
+            return Response(ElectivePollSerializer(poll).data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):

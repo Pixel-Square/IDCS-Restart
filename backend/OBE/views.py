@@ -1347,13 +1347,61 @@ def _extract_cqi_page_state(raw_entries, page_key: str | None, assessment_type: 
     }
 
 
+def _resolve_cqi_ownership(pages: dict) -> dict[int, str]:
+    """Map each CO to the page_key that owns it.
+
+    Owner = page with the SMALLEST `coNumbers` list containing that CO.  Ties
+    broken by lexicographic page_key (smaller key wins).  Mirrors the frontend
+    `resolveCqiOwnership` helper so reads (FIM) and writes (publish merge)
+    can't drift.
+    """
+    if not isinstance(pages, dict) or not pages:
+        return {}
+
+    # Build (size, page_key, sorted_cos) tuples and sort deterministically.
+    entries: list[tuple[int, str, list[int]]] = []
+    for raw_key, snap in pages.items():
+        if not isinstance(snap, dict):
+            continue
+        cos = _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers')))
+        if not cos:
+            continue
+        entries.append((len(cos), str(raw_key), cos))
+    entries.sort(key=lambda t: (t[0], t[1]))
+
+    owner: dict[int, str] = {}
+    for _size, page_key, cos in entries:
+        for co in cos:
+            if co not in owner:
+                owner[co] = page_key
+    return owner
+
+
 def _merge_cqi_page_entries(pages: dict) -> tuple[dict, list[int]]:
+    """Merge per-page CQI entries into a flat top-level dict, applying
+    ownership filtering so a larger-set page can never overwrite a CO value
+    contributed by its smaller-set owner.
+
+    The merged dict is what `_compute_special_final_total` and
+    `_compute_weighted_final_total_theory_like` (and other FIM consumers) read,
+    so this filter is the single point that keeps reads and writes consistent.
+    """
     merged: dict = {}
     all_co_numbers: list[int] = []
 
-    for snapshot in pages.values():
+    if not isinstance(pages, dict):
+        return merged, all_co_numbers
+
+    ownership = _resolve_cqi_ownership(pages)
+
+    for raw_key, snapshot in pages.items():
         if not isinstance(snapshot, dict):
             continue
+        page_key = str(raw_key)
+        # Build the set of CO keys (e.g. "co1") this page owns; only those
+        # values are allowed into the merged top-level dict from this page.
+        owned_co_keys = {f'co{co}' for co, owner_key in ownership.items() if owner_key == page_key}
+
         entries = snapshot.get('entries')
         if isinstance(entries, dict):
             for student_id, student_entries in entries.items():
@@ -1361,7 +1409,9 @@ def _merge_cqi_page_entries(pages: dict) -> tuple[dict, list[int]]:
                     continue
                 student_key = str(student_id)
                 bucket = merged.setdefault(student_key, {})
-                bucket.update(student_entries)
+                for co_key, value in student_entries.items():
+                    if str(co_key) in owned_co_keys:
+                        bucket[str(co_key)] = value
         for co_num in _normalize_cqi_co_numbers(snapshot.get('coNumbers', snapshot.get('co_numbers'))):
             if co_num not in all_co_numbers:
                 all_co_numbers.append(co_num)
@@ -1875,6 +1925,69 @@ def final_internal_marks_by_student(request, student_id: int):
         {
             'student': {'id': sid, 'reg_no': reg_no, 'name': student_name},
             'courses': out,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def final_internal_marks_for_ta(request, subject_id: str):
+    """Faculty: return canonical final internal totals for one subject + TA.
+
+    This endpoint is intentionally TA-scoped so section-level Internal Mark pages
+    can consume the same canonical totals used by backend exports.
+    """
+    _staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject = _get_subject(subject_id, request)
+    ta_id = _get_teaching_assignment_id_from_request(request)
+    if ta_id is None:
+        return Response({'detail': 'teaching_assignment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
+    if ta is None:
+        return Response({'detail': 'Invalid teaching_assignment_id.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Keep the response in lock-step with current mark + CQI state.
+    try:
+        recompute_final_internal_marks(
+            actor_user_id=getattr(request.user, 'id', None),
+            filters={'teaching_assignment_id': ta_id},
+        )
+    except Exception:
+        logger.exception('final_internal_marks_for_ta: recompute failed for subject=%s ta=%s', subject.code, ta_id)
+
+    from .models import FinalInternalMark
+
+    rows = (
+        FinalInternalMark.objects
+        .filter(subject=subject, teaching_assignment=ta)
+        .select_related('student')
+        .order_by('student_id')
+    )
+
+    out = {}
+    for row in rows:
+        sid = getattr(row, 'student_id', None)
+        if sid is None:
+            continue
+        mark40 = float(row.final_mark) if getattr(row, 'final_mark', None) is not None else None
+        max40 = float(row.max_mark) if getattr(row, 'max_mark', None) is not None else None
+        out[str(sid)] = {
+            'student_id': int(sid),
+            'total_40': mark40,
+            'max_40': max40,
+        }
+
+    return Response(
+        {
+            'subject_id': getattr(subject, 'id', None),
+            'teaching_assignment_id': ta_id,
+            'rows': out,
         },
         status=status.HTTP_200_OK,
     )
@@ -2414,6 +2527,11 @@ def cqi_reset_page(request, subject_id: str):
     from .models import ObeCqiDraft, ObeCqiPublished, ObeMarkTableLock
 
     deleted = {'draft_page': False, 'published_page': False, 'lock': 0}
+    # COs that were actually cleared by this reset — returned in the response
+    # so the frontend can broadcast a precise `obe:reset` event.  Captured from
+    # the page snapshot BEFORE deletion; falls back to the requested CO list
+    # when the page was stored in legacy non-paged format.
+    cleared_cos: list[int] = []
 
     with transaction.atomic():
         # --- Remove page from published entries ---
@@ -2421,6 +2539,10 @@ def cqi_reset_page(request, subject_id: str):
         if pub_obj is not None and isinstance(pub_obj.entries, dict):
             raw_pages = pub_obj.entries.get('__pages')
             if isinstance(raw_pages, dict) and normalized_page_key and normalized_page_key in raw_pages:
+                # Capture the cleared CO list before deleting the snapshot.
+                snap = raw_pages.get(normalized_page_key)
+                if isinstance(snap, dict):
+                    cleared_cos = _normalize_cqi_co_numbers(snap.get('coNumbers', snap.get('co_numbers'))) or []
                 del raw_pages[normalized_page_key]
                 pub_obj.entries['__pages'] = raw_pages
                 # Re-merge co_numbers from remaining pages
@@ -2475,7 +2597,13 @@ def cqi_reset_page(request, subject_id: str):
     except Exception:
         logger.exception('cqi_reset_page: recompute_final_internal_marks failed for subject=%s ta=%s', subject.code, ta_id)
 
-    return Response({'status': 'ok', 'deleted': deleted})
+    # Fall back to the requested CO list when we couldn't read the snapshot
+    # (e.g. legacy non-paged record).  Frontend uses this to drive precise
+    # obe:reset events; if empty, listeners refetch full state.
+    if not cleared_cos:
+        cleared_cos = list(requested_co_numbers or [])
+
+    return Response({'status': 'ok', 'deleted': deleted, 'cleared_cos': cleared_cos})
 
 
 @api_view(['POST'])
@@ -9033,6 +9161,141 @@ def mark_table_lock_confirm_mark_manager(request, assessment: str, subject_id: s
             'mark_entry_unblocked_until': getattr(lock, 'mark_entry_unblocked_until', None).isoformat() if getattr(lock, 'mark_entry_unblocked_until', None) else None,
             'mark_manager_unlocked_until': getattr(lock, 'mark_manager_unlocked_until', None).isoformat() if getattr(lock, 'mark_manager_unlocked_until', None) else None,
             'entry_open': bool(entry_open),
+        }
+    )
+
+
+# (class_type, cycle) -> ordered list of (assessment_key, label) required for that CQI cycle.
+# Tab keys in MarkEntryTabs share the same identifier as the assessment key, so callers can
+# use `key` directly to drive a tab switch on the frontend.
+_CQI_COMPONENT_MATRIX: dict[tuple[str, int], list[tuple[str, str]]] = {
+    ('THEORY', 1): [('ssa1', 'SSA1'), ('formative1', 'Formative 1'), ('cia1', 'CIA 1')],
+    ('THEORY', 2): [('ssa2', 'SSA2'), ('formative2', 'Formative 2'), ('cia2', 'CIA 2')],
+    ('THEORY', 3): [('model', 'MODEL')],
+    # LAB courses expose Cycle 1/Cycle 2 entries (cia1/cia2 keys) and CQI should
+    # depend on those cycle components only.
+    ('LAB', 1): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB', 2): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB', 3): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('TCPL', 1): [('ssa1', 'SSA1'), ('formative1', 'LAB 1'), ('cia1', 'CIA 1')],
+    ('TCPL', 2): [('ssa2', 'SSA2'), ('formative2', 'LAB 2'), ('cia2', 'CIA 2')],
+    ('TCPL', 3): [('model', 'MODEL')],
+    ('TCPR', 1): [('ssa1', 'SSA1'), ('review1', 'Review 1'), ('cia1', 'CIA 1')],
+    ('TCPR', 2): [('ssa2', 'SSA2'), ('review2', 'Review 2'), ('cia2', 'CIA 2')],
+    ('TCPR', 3): [('model', 'MODEL')],
+    # PRBL CQI opens as a final combined view after project-style components.
+    ('PRBL', 1): [('review1', 'Review 1'), ('review2', 'Review 2'), ('model', 'MODEL')],
+    ('PRBL', 2): [('review1', 'Review 1'), ('review2', 'Review 2'), ('model', 'MODEL')],
+    ('PRBL', 3): [('review1', 'Review 1'), ('review2', 'Review 2'), ('model', 'MODEL')],
+}
+
+
+def _normalize_cqi_class_type(raw: str | None) -> str:
+    s = str(raw or '').strip().upper().replace('-', '').replace('_', '').replace(' ', '')
+    if not s:
+        return 'THEORY'
+    if 'PRBL' in s:
+        return 'PRBL'
+    if 'TCPR' in s:
+        return 'TCPR'
+    if 'TCPL' in s:
+        return 'TCPL'
+    if 'PURELAB' in s or s == 'LAB' or s.startswith('LAB'):
+        return 'LAB'
+    # All theory-flavoured types (THEORY, THEORY_PMBL, FOREIGN_LANG, ENGLISH, TAMIL, etc.)
+    # use the same three components per cycle, so they fall through to THEORY.
+    return 'THEORY'
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_publication_status(request, subject_id: str):
+    """Faculty: batch check whether all exam assignments for a CQI cycle are published.
+
+    Query params:
+    - teaching_assignment_id (recommended): scopes the lock lookup to a section.
+    - cycle: 1 | 2 | 3 (required).
+    - class_type: THEORY | TCPL | TCPR | ... (defaults to THEORY).
+
+    Response:
+    {
+      "subject_id": "<code>",
+      "cycle": 1,
+      "class_type": "THEORY",
+      "required_components": [
+        {"key": "ssa1", "label": "SSA1", "tab_key": "ssa1", "is_published": true},
+        ...
+      ],
+      "all_published": false,
+      "first_unpublished": {"key": "formative1", "tab_key": "formative1", "label": "Formative 1"} | null
+    }
+    """
+    staff_profile, err = _faculty_only(request)
+    if err:
+        return err
+
+    subject_code = str(subject_id or '').strip()
+    qp = _get_query_params(request)
+    ta_id = _parse_int(qp.get('teaching_assignment_id'))
+
+    try:
+        cycle = int(str(qp.get('cycle', '')).strip())
+    except (TypeError, ValueError):
+        return Response({'detail': 'cycle must be 1, 2, or 3.'}, status=status.HTTP_400_BAD_REQUEST)
+    if cycle not in (1, 2, 3):
+        return Response({'detail': 'cycle must be 1, 2, or 3.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    class_type = _normalize_cqi_class_type(qp.get('class_type'))
+    required = _CQI_COMPONENT_MATRIX.get((class_type, cycle), [])
+
+    ta = _resolve_staff_teaching_assignment(request, subject_code=subject_code, teaching_assignment_id=ta_id)
+    academic_year = getattr(ta, 'academic_year', None) if ta else None
+    section_name = _resolve_section_name_from_ta(ta)
+    is_master = _has_obe_master_permission(getattr(request, 'user', None))
+
+    components: list[dict] = []
+    first_unpublished: dict | None = None
+
+    for assessment_key, label in required:
+        try:
+            lock = _get_mark_table_lock_if_exists(
+                staff_user=getattr(request, 'user', None),
+                subject_code=subject_code,
+                assessment=assessment_key,
+                teaching_assignment=ta,
+                academic_year=academic_year,
+                section_name=section_name,
+            )
+        except OperationalError:
+            lock = None
+
+        # IQAC/OBE master users bypass the publish gate so they can view CQI freely.
+        is_published = True if is_master else bool(getattr(lock, 'is_published', False))
+
+        entry = {
+            'key': assessment_key,
+            'label': label,
+            'tab_key': assessment_key,
+            'is_published': is_published,
+        }
+        components.append(entry)
+        if first_unpublished is None and not is_published:
+            first_unpublished = {
+                'key': assessment_key,
+                'tab_key': assessment_key,
+                'label': label,
+            }
+
+    return Response(
+        {
+            'subject_id': subject_code,
+            'cycle': cycle,
+            'class_type': class_type,
+            'required_components': components,
+            'all_published': first_unpublished is None,
+            'first_unpublished': first_unpublished,
+            'teaching_assignment_id': getattr(ta, 'id', None) if ta else None,
         }
     )
 

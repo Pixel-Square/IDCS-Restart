@@ -398,7 +398,7 @@ class ElectivePollSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         from django.db.models import Q
-        from django.db import transaction
+        from django.db import transaction, IntegrityError
         from .models import CurriculumDepartment, ElectiveSubject, ElectivePollSubject
 
         subjects_data = validated_data.pop('subjects', [])
@@ -436,19 +436,28 @@ class ElectivePollSerializer(serializers.ModelSerializer):
                             'subjects': 'Parent elective not found for the selected department/batch/semester. Provide elective_subject_id or ensure the parent elective exists.'
                         })
 
-                    es = ElectiveSubject.objects.create(
-                        parent=parent_row,
-                        department_id=dept_id,
-                        department_group_id=getattr(poll.department_group, 'id', None),
-                        regulation=parent_row.regulation,
-                        semester=parent_row.semester,
-                        batch=batch_year or parent_row.batch,
-                        course_code=code,
-                        course_name=name,
-                        is_elective=True,
-                        approval_status='APPROVED',
-                        created_by=self.context['request'].user
-                    )
+                    # Normalise blank course_code to None so multiple codeless subjects
+                    # under the same parent don't trip the unique_together constraint.
+                    normalised_code = code.strip() if code and code.strip() else None
+
+                    try:
+                        es = ElectiveSubject.objects.create(
+                            parent=parent_row,
+                            department_id=dept_id,
+                            department_group_id=getattr(poll.department_group, 'id', None),
+                            regulation=parent_row.regulation,
+                            semester=parent_row.semester,
+                            batch=batch_year or parent_row.batch,
+                            course_code=normalised_code,
+                            course_name=name,
+                            is_elective=True,
+                            approval_status='APPROVED',
+                            created_by=self.context['request'].user
+                        )
+                    except IntegrityError:
+                        raise serializers.ValidationError({
+                            'subjects': f'A subject with code "{normalised_code or name}" already exists under this parent elective. Use a unique course code.'
+                        })
 
                     # Set blocked departments if provided
                     blocked_depts = sub_data.get('blocked_departments', [])

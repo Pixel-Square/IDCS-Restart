@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import LCAInstructionsPage from '../lca/LCAInstructionsPage';
 import COAttainmentPage from '../COAttainmentPage';
 import CQIPage from '../CQIPage';
+import InternalMarkCoursePage from '../InternalMarkCoursePage';
 
 import MarkEntryTabs from '../../components/MarkEntryTabs';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
@@ -12,7 +13,7 @@ import { fetchSpecialCourseEnabledAssessments } from '../../services/obe';
 import type { TeachingAssignmentItem } from '../../services/obe';
 import { normalizeClassType } from '../../constants/classTypes';
 
-type TabKey = 'marks' | 'lca_instructions' | 'co_attainment' | 'cqi';
+type TabKey = 'marks' | 'lca_instructions' | 'co_attainment' | 'cqi' | 'internal_mark';
 
 function normalize(s: any) {
   return String(s || '').trim();
@@ -39,6 +40,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
     // legacy URLs: keep working but route through LCA Instructions
     else if (path.includes('/lca') || path.includes('/cdap') || path.includes('/articulation')) setActiveTab('lca_instructions');
     else if (path.includes('/marks')) setActiveTab('marks');
+    else if (path.includes('/internal_mark') || path.includes('/internal-mark')) setActiveTab('internal_mark');
     else if (path.includes('/co_attainment')) setActiveTab('co_attainment');
     else if (path.includes('/cqi')) setActiveTab('cqi');
     else setActiveTab('marks');
@@ -195,6 +197,7 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
           {[
             { key: 'lca_instructions', label: 'LCA Instructions' },
             { key: 'marks', label: 'Mark Entry' },
+            { key: 'internal_mark', label: 'Internal Mark' },
             { key: 'co_attainment', label: 'CO ATTAINMENT' },
             { key: 'cqi', label: 'CQI' },
           ].map((t) => {
@@ -247,6 +250,17 @@ export default function AcademicControllerCourseOBEPage(): JSX.Element {
                 viewerMode={false}
               />
             </div>
+          ) : null}
+
+          {activeTab === 'internal_mark' ? (
+            <InternalMarkCoursePage
+              courseId={code}
+              enabledAssessments={enabledAssessments}
+              classType={classType}
+              questionPaperType={qpType}
+              teachingAssignmentsOverride={taOverride}
+              fixedTeachingAssignmentId={teachingAssignmentId}
+            />
           ) : null}
         </div>
       </div>

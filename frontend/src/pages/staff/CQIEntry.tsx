@@ -35,6 +35,18 @@ import { useEditWindow } from '../../hooks/useEditWindow';
 import { formatRemaining, usePublishWindow } from '../../hooks/usePublishWindow';
 import { useLockBodyScroll } from '../../hooks/useLockBodyScroll';
 import { getInternalMarkWeightSlotsForCo } from '../../utils/internalMarkWeights';
+import {
+  CqiPlacementLite,
+  findPlacementIndex,
+  getOwnedAndBorrowed,
+  resolveCqiOwnership,
+} from '../../utils/cqiOwnership';
+
+// Course types that split CQI across multiple pages (e.g., CO1/CO2 in CIA1 CQI,
+// CO3/CO4/CO5 in Model CQI).  Only these types need cross-page CO locking so
+// that COs published on one page appear as read-only on subsequent pages.
+// TAMIL is excluded — it uses a single CQI page (CO1/CO2/CO3).
+const MULTI_PAGE_CQI_TYPES = new Set(['THEORY', 'THEORY_PMBL', 'FOREIGN_LANG']);
 
 interface CQIEntryProps {
   subjectId?: string;
@@ -44,6 +56,13 @@ interface CQIEntryProps {
   enabledAssessments?: string[] | null;
   assessmentType?: 'cia1' | 'cia2' | 'model' | 'review1' | 'review2';
   cos?: string[];
+  /**
+   * Full set of CQI placements configured for this course (from MarkEntryTabs).
+   * Used to compute static CO ownership — the placement with the smallest
+   * containing CO list owns each CO. When omitted, defaults to a single
+   * placement containing all of this page's COs (trivial owner = self).
+   */
+  allCqiPlacements?: CqiPlacementLite[];
   cqiDivider?: number;
   cqiMultiplier?: number;
 }
@@ -170,9 +189,35 @@ function componentLabel(ct: string, key: string): string {
   if (k === 'fa') return 'FA';
   if (k === 'review') return 'REVIEW';
   if (k === 'me') return 'ME';
+  if (k === 'c1cqi') return 'C1CQI';
   if (k === 'lab1') return ct === 'TCPL' ? 'LAB1' : 'LAB1';
   if (k === 'lab2') return ct === 'TCPL' ? 'LAB2' : 'LAB2';
   return String(key || '').toUpperCase();
+}
+
+// Theory QP1/QP2/PMBL extended Model CQI: compute the CIA1 page's resulting
+// CQI bonus (C1CQI) for a given CO from this Model page's coData.breakdown
+// (which already has SSA/CIA/FA/ME contributions in weight units) and the
+// CIA1 page's raw CQI input mark.  CIA1's cycle = SSA+CIA+FA only (no ME).
+function computeC1CqiContribution(
+  coData: { value?: number; max?: number; breakdown?: Array<{ key: string; mark: number; max: number; w: number; contrib: number }> } | null | undefined,
+  cia1CqiInput: number | null | undefined,
+): number {
+  if (!coData) return 0;
+  if (cia1CqiInput == null || !Number.isFinite(Number(cia1CqiInput))) return 0;
+  const input = Math.max(0, Math.min(Number(cia1CqiInput), 10));
+  if (input <= 0) return 0;
+  const bd = Array.isArray(coData.breakdown) ? coData.breakdown : [];
+  if (bd.length === 0) return 0;
+  const cia1Components = bd.filter((b) => String(b?.key || '').toLowerCase() !== 'me');
+  if (cia1Components.length === 0) return 0;
+  const cia1Base = cia1Components.reduce((s, b) => s + Number(b?.contrib || 0), 0);
+  const cia1MaxW = cia1Components.reduce((s, b) => s + Number(b?.w || 0), 0);
+  if (cia1MaxW <= 0) return 0;
+  const THRESHOLD = 58;
+  const raw = 0.6 * input;
+  const room = Math.max(0, (cia1MaxW * THRESHOLD) / 100 - cia1Base);
+  return Math.max(0, Math.min(raw, room));
 }
 
 function toNumOrNull(v: unknown): number | null {
@@ -361,14 +406,15 @@ function effectiveCia2Weights(questions: any[], idx: number): { co3: number; co4
   return parsed === 4 ? { co3: 0, co4: 1 } : { co3: 1, co4: 0 };
 }
 
-export default function CQIEntry({ 
-  subjectId, 
-  teachingAssignmentId, 
+export default function CQIEntry({
+  subjectId,
+  teachingAssignmentId,
   classType,
   questionPaperType,
   enabledAssessments,
   assessmentType,
   cos,
+  allCqiPlacements,
   cqiDivider,
   cqiMultiplier,
 }: CQIEntryProps) {
@@ -383,12 +429,23 @@ export default function CQIEntry({
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [globalCfg, setGlobalCfg] = useState<{ divider: number; multiplier: number; options: any[] } | null>(null);
 
-  // Track previously published CQI pages (other pages) so already-attained COs are read-only.
-  // priorPublishedCos: set of CO numbers already published in OTHER CQI pages (not this page)
-  // priorCqiEntries: merged entries from ALL published pages (student → {co1: val, co2: val, ...})
-  const [priorPublishedCos, setPriorPublishedCos] = useState<Set<number>>(new Set());
+  // CQI cell values from OTHER published CQI pages — used for the read-only
+  // display of borrowed cells.  Decided by the static ownership rule (see
+  // ownership memo below), NOT by publish history.
   const [priorCqiEntries, setPriorCqiEntries] = useState<Record<number | string, Record<string, number | null>>>({});
-  // Incrementing this triggers a re-fetch of priorPublishedCos (e.g., after reset).
+  // Structured info about published pages — replaces the old flat key Set so
+  // borrowedCoPublished can match by assessmentType + coNumbers without
+  // depending on the stored key string (which may differ from static-prop COs
+  // when IQAC patterns override coNumbers at publish time).
+  type PublishedPageInfo = {
+    key: string;
+    assessmentType: string | null;
+    coNumbers: number[];
+    publishedAt: string | null;
+  };
+  const [publishedPageInfos, setPublishedPageInfos] = useState<PublishedPageInfo[]>([]);
+  // Incrementing this triggers a re-fetch of priorCqiEntries (e.g., after
+  // reset, or on obe:published / obe:reset events from sibling tabs).
   const [priorCosRefreshCounter, setPriorCosRefreshCounter] = useState(0);
 
   const classTypeKey = useMemo(() => {
@@ -411,6 +468,9 @@ export default function CQIEntry({
   const [draftLog, setDraftLog] = useState<{ updated_at?: string | null; updated_by?: any | null } | null>(null);
   const [publishedLog, setPublishedLog] = useState<{ published_at?: string | null } | null>(null);
   const [localPublished, setLocalPublished] = useState(false);
+  // When true, forces isPublished to false regardless of markLock.is_published.
+  // Set after a successful reset to avoid the race where the lock refresh lags.
+  const [resetOverride, setResetOverride] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [resettingMarks, setResettingMarks] = useState(false);
@@ -477,16 +537,104 @@ export default function CQIEntry({
     return () => { cancelled = true; };
   }, [classTypeKey, qpTypeKey, assessmentType]);
 
-  // Use pattern-derived COs when available, fall back to prop-derived
+  // Theory QP1/QP2/PMBL: the Model CQI page exposes CO1/CO2 as independently
+  // editable (in addition to CO3/CO4/CO5), with their own model-exam-based totals
+  // and a 60% conversion + 58% ceiling cap.  This flag gates that behavior; it
+  // does NOT depend on `coNumbers` (which would be circular), only on the static
+  // props passed in by MarkEntryTabs.
+  const isModelCqiWithExtendedCos = useMemo(() => {
+    if (String(assessmentType || '').toLowerCase() !== 'model') return false;
+    if (classTypeKey !== 'THEORY' && classTypeKey !== 'THEORY_PMBL') return false;
+    const qp = qpTypeKey.replace(/\s+/g, '');
+    if (/QP1FINAL/.test(qp)) return false;
+    if (!/(^|[^A-Z0-9])(QP1|QP2|PMBL)([^A-Z0-9]|$)/.test(qp)) return false;
+    // The placement passed in `cos` must include CO1 and CO2 (set by
+    // MarkEntryTabs.maybeExtendModelPlacementForTheory).
+    const placementCos = Array.isArray(cos) ? cos.map((c) => String(c).toUpperCase()) : [];
+    return placementCos.some((c) => /1/.test(c)) && placementCos.some((c) => /2/.test(c));
+  }, [assessmentType, classTypeKey, qpTypeKey, cos]);
+
+  // Use pattern-derived COs when available, fall back to prop-derived.
+  // For the extended Model CQI (Theory QP1/QP2/PMBL), force CO1 and CO2 into
+  // coNumbers regardless of what the IQAC pattern returns, so the page always
+  // shows independent CO1/CO2 columns.
   const coNumbers = useMemo(() => {
-    return iqacCqiCos && iqacCqiCos.length > 0 ? iqacCqiCos : rawCoNumbers;
-  }, [iqacCqiCos, rawCoNumbers]);
+    const base = iqacCqiCos && iqacCqiCos.length > 0 ? iqacCqiCos : rawCoNumbers;
+    if (isModelCqiWithExtendedCos) {
+      return Array.from(new Set([1, 2, ...base])).sort((a, b) => a - b);
+    }
+    return base;
+  }, [iqacCqiCos, rawCoNumbers, isModelCqiWithExtendedCos]);
 
   const cqiPageKey = useMemo(() => {
     const assessment = String(assessmentType || 'generic').trim().toLowerCase();
     const coKey = coNumbers.length ? coNumbers.join(',') : 'none';
     return `${assessment}:${coKey}`;
   }, [assessmentType, coNumbers]);
+
+  // ── Static CO ownership ──
+  //
+  // Ownership is derived from the STATIC placement config (from MarkEntryTabs),
+  // NOT from publish history.  The placement with the smallest containing CO
+  // list owns each CO; ties broken by lower placement index.
+  //
+  // - ownedCos: COs this page edits.
+  // - borrowedCos: COs visible on this page but owned by another placement;
+  //   permanently read-only blue boxes regardless of publish order.
+  //
+  // When `allCqiPlacements` is undefined (legacy single-placement callers like
+  // PureLab/Project), we synthesize a single placement so this page owns
+  // everything (ownership trivial).
+  const effectivePlacements = useMemo<CqiPlacementLite[]>(() => {
+    if (Array.isArray(allCqiPlacements) && allCqiPlacements.length) return allCqiPlacements;
+    // Fallback: treat this page as the only placement (it owns all its COs).
+    return [{ assessmentType: String(assessmentType || 'model'), cos: cos || [] }];
+  }, [allCqiPlacements, assessmentType, cos]);
+
+  const ownership = useMemo(() => resolveCqiOwnership(effectivePlacements), [effectivePlacements]);
+
+  // Match this CQI tab to its index in the static placement list.  Match by
+  // assessmentType (and static `cos` to disambiguate when multiple placements
+  // share an assessmentType).  We deliberately use the static `cos` prop, NOT
+  // the IQAC-overridden `coNumbers`, to avoid first-paint flash while
+  // `iqacCqiCos` is still loading.
+  const myPlacementIndex = useMemo(
+    () => findPlacementIndex(effectivePlacements, assessmentType ?? null, cos || []),
+    [effectivePlacements, assessmentType, cos],
+  );
+
+  const { owned: ownedCos, borrowed: borrowedCos } = useMemo(() => {
+    // If we can't resolve our position (no allCqiPlacements passed), default
+    // to "everything on this page is owned" so behavior matches the legacy
+    // single-page case.
+    let result: { owned: Set<number>; borrowed: Set<number> };
+    if (myPlacementIndex < 0) {
+      result = { owned: new Set<number>(coNumbers), borrowed: new Set<number>() };
+    } else {
+      result = getOwnedAndBorrowed(ownership, myPlacementIndex, coNumbers);
+    }
+    // Theory QP1/QP2/PMBL: force CO1 and CO2 to be OWNED on the Model CQI page,
+    // overriding the smallest-set ownership rule (CIA1 normally wins).  This
+    // makes them independently editable here with their own model-exam-based
+    // totals and the 58% ceiling cap.
+    if (isModelCqiWithExtendedCos) {
+      const owned = new Set(result.owned);
+      const borrowed = new Set(result.borrowed);
+      for (const co of [1, 2]) {
+        if (coNumbers.includes(co)) {
+          owned.add(co);
+          borrowed.delete(co);
+        }
+      }
+      return { owned, borrowed };
+    }
+    return result;
+  }, [ownership, myPlacementIndex, coNumbers, isModelCqiWithExtendedCos]);
+
+  // True until we have enough info to compute ownership.  Used to suppress
+  // borrowed-cell UI on the very first render so we don't flash an incorrect
+  // editable input before swapping to a blue box.
+  const ownershipReady = Array.isArray(allCqiPlacements) && allCqiPlacements.length > 0;
 
   const cqiQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -558,19 +706,29 @@ export default function CQIEntry({
     teachingAssignmentId,
     options: { poll: true },
   });
-  const isPublished = Boolean(localPublished || markLock?.is_published || publishedLog?.published_at);
+  const isPublished = resetOverride
+    ? false
+    : Boolean(localPublished || markLock?.is_published || publishedLog?.published_at);
   
   const entryOpen = !isPublished
     ? true
     : Boolean(markLock?.entry_open) || Boolean(markEntryEditWindow?.allowed_by_approval);
 
   const publishedEditLocked = Boolean(isPublished && !entryOpen);
-  
+
   const publishButtonIsRequestEdit = Boolean(publishedEditLocked && editRequestsEnabled);
   const editRequestsBlocked = Boolean(publishedEditLocked && !editRequestsEnabled);
-  const readOnly = publishedEditLocked;
+  // pageReadOnly: whole-page lock applied while published & not in an approved
+  // edit window.  Lifted by an approved Request Edit.
+  const pageReadOnly = publishedEditLocked;
+  // Legacy alias kept for places that read `readOnly` to gate fetches.
+  const readOnly = pageReadOnly;
   const globalLocked = Boolean(publishWindow?.global_override_active && publishWindow?.global_is_open === false);
   const tableBlocked = Boolean(globalLocked || publishedEditLocked);
+
+  // Per-CO read-only check.  Borrowed COs (owned by another placement) are
+  // ALWAYS read-only — even after a Request Edit approval lifts the page lock.
+  const coReadOnly = (coNum: number) => borrowedCos.has(coNum) || pageReadOnly;
   const {
     pending: markEntryReqPending,
     setPendingUntilMs: setMarkEntryReqPendingUntilMs,
@@ -640,15 +798,19 @@ export default function CQIEntry({
     return () => { mounted = false; };
   }, [subjectId, teachingAssignmentId, readOnly, cqiQuery]);
 
-  // Load ALL published CQI pages (without page-specific params) to discover previously attained COs.
-  // COs published in OTHER pages become read-only and cannot be re-entered.
-  // NOTE: This multi-page locking only applies to THEORY and THEORY_PMBL courses. For other types
-  // (TCPR, TCPL, etc.) all COs on the page are always editable.
+  // Load ALL published CQI pages — used only to populate `priorCqiEntries`
+  // (display values for borrowed cells) and `publishedPageKeys` (whether the
+  // owning page has actually been published yet, which decides the "CQI marks
+  // published" vs "First CQI not published yet" wording).
+  //
+  // The lock decision (`borrowedCos`) is driven by the STATIC ownership memo
+  // above, NOT by publish history.  This effect only feeds values into
+  // already-locked cells.
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!subjectId || !teachingAssignmentId || (classTypeKey !== 'THEORY' && classTypeKey !== 'THEORY_PMBL')) {
-        if (mounted) { setPriorPublishedCos(new Set()); setPriorCqiEntries({}); }
+      if (!subjectId || !teachingAssignmentId || !MULTI_PAGE_CQI_TYPES.has(classTypeKey)) {
+        if (mounted) { setPublishedPageInfos([]); setPriorCqiEntries({}); }
         return;
       }
       try {
@@ -667,63 +829,78 @@ export default function CQIEntry({
               entries?: Record<string, Record<string, number | null>>;
             }> = Array.isArray(pub.pages) ? pub.pages : [];
 
-            const normalizePageKey = (value: any): string => String(value || '').trim().toLowerCase();
-            const normalizeAssessment = (value: any): string => String(value || '').trim().toLowerCase();
-            const normalizeCos = (value: any): number[] => {
-              const nums: number[] = [];
-              if (Array.isArray(value)) {
-                value.forEach((item) => {
-                  const n = Number(item);
-                  if (Number.isFinite(n)) {
-                    const nn = Math.trunc(n);
-                    if (nn >= 1 && nn <= 20 && !nums.includes(nn)) nums.push(nn);
-                  }
-                });
-              }
-              nums.sort((a, b) => a - b);
-              return nums;
-            };
-            const sameCos = (a: number[], b: number[]): boolean =>
-              a.length === b.length && a.every((n, i) => n === b[i]);
+            // Resolve CO ownership for filtering page entries. Prefer the
+            // static placement ownership (so borrowed COs always map to the
+            // intended page), and fall back to a size-based ownership derived
+            // from stored page coNumbers when no placement match is available.
+            const pagesForOwnership = pages.map((pg) => ({
+              key: String(pg.key || ''),
+              assessmentType: String(pg.assessmentType || '').toLowerCase() || null,
+              nums: Array.isArray(pg.coNumbers)
+                ? pg.coNumbers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+                : [],
+            }));
 
-            // Identify COs published in OTHER pages (not this page's key)
-            const thisPageKey = cqiPageKey;
-            const thisNormKey = normalizePageKey(thisPageKey);
-            const thisNormAssessment = normalizeAssessment(assessmentType);
-            const thisNormCos = normalizeCos(coNumbers);
-            const otherCos = new Set<number>();
+            const coOwnerKey = new Map<number, string>();
+            const sortedForOwnership = [...pagesForOwnership]
+              .sort((a, b) => a.nums.length - b.nums.length || a.key.localeCompare(b.key));
+            for (const { key, nums } of sortedForOwnership) {
+              for (const co of nums) {
+                if (!coOwnerKey.has(co)) coOwnerKey.set(co, key);
+              }
+            }
+
+            const placementOwnerKey = new Map<number, string>();
+            if (ownership && ownership.size > 0) {
+              for (const [coNum, owner] of ownership.entries()) {
+                const ownerType = String(owner?.assessmentType || '').toLowerCase() || null;
+                if (!ownerType) continue;
+                const candidates = pagesForOwnership
+                  .filter((pg) => pg.assessmentType === ownerType && pg.nums.includes(coNum))
+                  .sort((a, b) => a.nums.length - b.nums.length || a.key.localeCompare(b.key));
+                if (candidates.length) {
+                  placementOwnerKey.set(coNum, candidates[0].key);
+                }
+              }
+            }
+
+            const pageInfos: PublishedPageInfo[] = [];
             const allEntries: Record<string, Record<string, number | null>> = {};
 
             for (const pg of pages) {
-              // All pages returned by cqi-published belong to ObeCqiPublished
-              // (guaranteed by the API), so they were published at some point.
-              // Legacy pages migrated from the old non-paged format may lack a
-              // publishedAt timestamp — skip only truly empty/malformed entries
-              // (no publishedAt AND no coNumbers).  This prevents CO1/CO2 from
-              // appearing editable in subsequent CQI pages when the earlier page
-              // was stored in legacy format.
-              const hasCoNumbers = pg.coNumbers && pg.coNumbers.length > 0;
+              const pgCoNumbers = Array.isArray(pg.coNumbers)
+                ? pg.coNumbers.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+                : [];
+              const hasCoNumbers = pgCoNumbers.length > 0;
+              // Skip legacy/empty pages that have neither publishedAt nor COs.
               if (!pg.publishedAt && !hasCoNumbers) continue;
-              const pgNormKey = normalizePageKey(pg.key);
-              const pgNormAssessment = normalizeAssessment(pg.assessmentType);
-              const pgNormCos = normalizeCos(pg.coNumbers || []);
-              const keyMatches = thisNormKey && pgNormKey && pgNormKey === thisNormKey;
-              const contextMatches =
-                Boolean(thisNormAssessment && pgNormAssessment && thisNormAssessment === pgNormAssessment) &&
-                sameCos(thisNormCos, pgNormCos);
 
-              // Treat as current page when either normalized key OR page context matches.
-              const isOtherPage = !(keyMatches || contextMatches);
-              const pgCos = (pg.coNumbers || []).filter((n: number) => typeof n === 'number' && n >= 1 && n <= 20);
-              if (isOtherPage) {
-                for (const co of pgCos) otherCos.add(co);
-              }
-              // Merge entries from ALL published pages for display
+              const pgKey = String(pg.key || '');
+              pageInfos.push({
+                key: pgKey,
+                assessmentType: String(pg.assessmentType || '').toLowerCase() || null,
+                coNumbers: pgCoNumbers,
+                publishedAt: pg.publishedAt ?? null,
+              });
+
+              // Merge entries applying ownership: only trust this page's value
+              // for COs it actually owns.  The backend's _build_pages_info
+              // returns raw per-page entries (not ownership-filtered), so a
+              // larger page (e.g. Model) can have stale values for COs it doesn't
+              // own (e.g. CO1 owned by CIA1).  Without this filter those stale
+              // values would overwrite the correct owning-page values.
               const pgEntries = pg.entries && typeof pg.entries === 'object' ? pg.entries : {};
               for (const [studentId, entry] of Object.entries(pgEntries)) {
                 if (!entry || typeof entry !== 'object') continue;
                 if (!allEntries[studentId]) allEntries[studentId] = {};
                 for (const [coKey, coValue] of Object.entries(entry)) {
+                  const coNum = Number(String(coKey).replace(/[^0-9]/g, ''));
+                  // Skip if a different page owns this CO.
+                  if (Number.isFinite(coNum)) {
+                    const ownerKey = placementOwnerKey.get(coNum) ?? coOwnerKey.get(coNum);
+                    if (ownerKey && ownerKey !== pgKey) continue;
+                  }
+
                   if (coValue == null) {
                     allEntries[studentId][coKey] = null;
                     continue;
@@ -736,7 +913,7 @@ export default function CQIEntry({
               }
             }
 
-            setPriorPublishedCos(otherCos);
+            setPublishedPageInfos(pageInfos);
             setPriorCqiEntries(allEntries);
             return;
           }
@@ -744,10 +921,55 @@ export default function CQIEntry({
       } catch {
         // ignore
       }
-      if (mounted) { setPriorPublishedCos(new Set()); setPriorCqiEntries({}); }
+      if (mounted) { setPublishedPageInfos([]); setPriorCqiEntries({}); }
     })();
     return () => { mounted = false; };
-  }, [subjectId, teachingAssignmentId, cqiPageKey, priorCosRefreshCounter, classTypeKey]);
+  }, [subjectId, teachingAssignmentId, cqiPageKey, priorCosRefreshCounter, classTypeKey, ownership]);
+
+  // Listen for sibling publish/reset events so borrowed-cell values refresh
+  // instantly (otherwise the "First CQI not published yet" → "CQI marks
+  // published" transition would wait for a manual reload).
+  useEffect(() => {
+    if (!subjectId) return;
+    const invalidate = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail || {};
+      if (detail.subjectId != null && String(detail.subjectId) !== String(subjectId)) return;
+      setPriorCosRefreshCounter((c) => c + 1);
+    };
+    window.addEventListener('obe:published', invalidate as EventListener);
+    window.addEventListener('obe:reset', invalidate as EventListener);
+    return () => {
+      window.removeEventListener('obe:published', invalidate as EventListener);
+      window.removeEventListener('obe:reset', invalidate as EventListener);
+    };
+  }, [subjectId]);
+
+  // For each borrowed CO, determine whether the owning page has actually been
+  // published yet.  Used by the rendering layer to choose between "CQI marks
+  // published" and "First CQI not published yet".
+  const borrowedCoPublished = useMemo(() => {
+    const map = new Map<number, boolean>();
+    for (const co of borrowedCos) {
+      const owner = ownership.get(co);
+      if (!owner) {
+        map.set(co, false);
+        continue;
+      }
+      const ownerAssessmentType = String(owner.assessmentType || '').toLowerCase();
+      // Match by assessmentType + coNumbers from the actual stored page info
+      // rather than reconstructing the stored key from static-prop COs.  The
+      // stored key was generated using IQAC-overridden coNumbers which can
+      // differ from the static placement's cos array, causing false negatives.
+      const isPublished = publishedPageInfos.some(
+        (pg) =>
+          pg.publishedAt != null &&
+          pg.assessmentType === ownerAssessmentType &&
+          pg.coNumbers.includes(co),
+      );
+      map.set(co, isPublished);
+    }
+    return map;
+  }, [borrowedCos, ownership, publishedPageInfos]);
 
   // Load global IQAC CQI config (applies to all courses).
   useEffect(() => {
@@ -856,9 +1078,9 @@ export default function CQIEntry({
       const studentTotals: any = coTotals[s.id] || {};
       const flaggedCos = coNumbers
         .filter((coNum) => {
-          // Skip COs that are owned by a prior CQI page — they are read-only "PRIOR CQI" entries
-          // and should not appear in the flagged list for this page's export.
-          if (priorPublishedCos.has(coNum)) return false;
+          // Skip COs owned by another CQI page — those are read-only on this
+          // page and not part of this page's CQI workflow.
+          if (borrowedCos.has(coNum)) return false;
           const cell = studentTotals?.[`co${coNum}`];
           const max = Number(cell?.max || 0);
           const val = Number(cell?.value || 0);
@@ -889,7 +1111,7 @@ export default function CQIEntry({
         total: totalPct,
       };
     });
-  }, [students, coTotals, coNumbers, priorPublishedCos]);
+  }, [students, coTotals, coNumbers, borrowedCos]);
 
   // ── Export modal state ─────────────────────────────────────
   type ExportReportType = 'all' | 'flagged';
@@ -1005,8 +1227,15 @@ export default function CQIEntry({
         const loadIqacModelPattern = async () => {
           if (!classTypeKey) return null as any;
           try {
+            // For MODEL exam, use the OBE-normalised class type so that THEORY_PMBL
+            // resolves to 'THEORY' — matching InternalMarkCoursePage which also uses
+            // normalizeObeClassType when fetching the IQAC model QP pattern.
+            // THEORY_PMBL shares the same model exam structure as THEORY; without this
+            // mapping the fetch returns no pattern and CO5 max falls back to 28 (default
+            // template) instead of the configured 20.
+            const modelClassType = normalizeObeClassType(classTypeKey) || classTypeKey;
             const res: any = await fetchIqacQpPattern({
-              class_type: classTypeKey,
+              class_type: modelClassType,
               question_paper_type: qpForApi,
               exam: 'MODEL',
             });
@@ -1045,7 +1274,7 @@ export default function CQIEntry({
           const taKey = String(teachingAssignmentId ?? 'none');
 
           const candidates: string[] = [];
-          if (ct === 'THEORY') {
+          if (ct === 'THEORY' || ct === 'TAMIL') {
             candidates.push(`model_theory_sheet_${subjectId}_${taKey}`);
             candidates.push(`model_theory_sheet_${subjectId}_none`);
           } else if (ct === 'TCPL') {
@@ -1099,8 +1328,12 @@ export default function CQIEntry({
           modelSheet = readLocalModelSheet();
         }
         
-        // QP1 FINAL YEAR detection: theory + QP1FINAL type.
-        const isQp1FinalCqi = ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey);
+        // QP1FINAL-like detection:
+        // - THEORY + QP1FINAL
+        // - TAMIL + TAM_THEORY
+        const isQp1FinalCqi =
+          (ct === 'THEORY' && /QP1\s*FINAL/i.test(qpTypeKey)) ||
+          (ct === 'TAMIL' && qpTypeKey.replace(/\s/g, '') === 'TAM_THEORY');
 
         // Fetch published marks based on class type and enabled assessments.
         const needs12 = coNumbers.some((co) => co === 1 || co === 2);
@@ -1296,10 +1529,18 @@ export default function CQIEntry({
                 const tMax = (modelQuestionMaxByCo as any)[ck] || 0;
                 const tRaw = theoryRawCo[ck] || 0;
                 if (i === 5) {
-                  const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
-                  const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
-                  const recordWeighted = recordContribution;
-                  sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+                  if (!modelRecordCfg?.enabled) {
+                    // Record disabled: normalize combined (theory + lab-share) over
+                    // (theoryMax + 6) and scale to CO5 total weight 7.
+                    const combinedRaw = tRaw + labShare;
+                    const combinedMax = tMax + TCPL_LAB_SHARE_MAX;
+                    sums[ck] = combinedMax > 0 ? (combinedRaw / combinedMax) * TCPL_CO_TOTAL_W[ck] : 0;
+                  } else {
+                    const theoryWeighted = tMax > 0 ? (tRaw / tMax) * TCPL_THEORY_W[i - 1] : 0;
+                    const labWeighted = (labShare / TCPL_LAB_SHARE_MAX) * TCPL_LAB_W;
+                    const recordWeighted = recordContribution;
+                    sums[ck] = theoryWeighted + labWeighted + recordWeighted;
+                  }
                 } else {
                   // CO1..CO4 (TCPL): normalize combined (theory + lab-share) over
                   // the total allocated CO marks in model exam: 20 + 6 = 26,
@@ -1363,6 +1604,7 @@ export default function CQIEntry({
         const needProjectReview1 = isProject && (String(assessmentType || '').toLowerCase() === 'review1' || String(assessmentType || '').toLowerCase() === 'model');
         const needProjectReview2 = isProject && (String(assessmentType || '').toLowerCase() === 'review2' || String(assessmentType || '').toLowerCase() === 'model');
         const needProjectModel = isProject && String(assessmentType || '').toLowerCase() === 'model';
+        const isCia1Page = String(assessmentType || '').toLowerCase() === 'cia1';
 
         const [ssa1Res, ssa2Res, f1Res, f2Res, cia1Res, cia2Res, review1Res, review2Res, labF1Res, labF2Res, labCia1Res, labCia2Res, labModelRes, prblModelRes] =
           await Promise.all([
@@ -2532,7 +2774,8 @@ export default function CQIEntry({
             }
 
             const modelConducted = modelScaled != null || (isLabLike && isExamConducted(labModel));
-            if ((meMark !== null || modelConducted) && meMax > 0) {
+            const suppressMeForCycle1 = isCia1Page && (coNum === 1 || coNum === 2);
+            if (!suppressMeForCycle1 && (meMark !== null || modelConducted) && meMax > 0) {
               const meWeight = weights.me > 0 ? weights.me : ((!isLabLike && modelScaled) ? (coNum === 5 ? 7 : 3) : meMax);
               components.push({ key: 'me', mark: meMark ?? 0, max: meMax, w: meWeight });
             }
@@ -2577,11 +2820,12 @@ export default function CQIEntry({
   const handleCQIChange = (studentId: number, coKey: string, value: string) => {
     if (tableBlocked) return;
 
-    // Prevent editing COs that were already published in prior CQI pages
+    // Per-CO read-only: borrowed COs (owned by another placement) are never
+    // editable on this page, even after Request Edit approval.
     const coNumMatch = coKey.match(/\d+/);
     if (coNumMatch) {
       const coNum = Number(coNumMatch[0]);
-      if (priorPublishedCos.has(coNum)) return;
+      if (borrowedCos.has(coNum)) return;
     }
     // allow empty to clear
     if (value === '') {
@@ -2842,13 +3086,33 @@ export default function CQIEntry({
                       setLocalPublished(false);
                       setPublishedLog(null);
                       setDraftLog(null);
+                      // Force isPublished to false immediately so the UI
+                      // returns to classic editable inputs without waiting
+                      // for the markLock refresh round-trip.
+                      setResetOverride(true);
                       // Re-fetch prior published COs so CO1/CO2 from other pages
                       // remain correctly locked after this page is unpublished.
                       setPriorCosRefreshCounter((c) => c + 1);
-                      // Refresh lock/publish state
+                      // Refresh lock/publish state — clear resetOverride once
+                      // the lock data arrives so future publishes are reflected.
                       refreshMarkLock({ silent: true });
                       refreshMarkEntryEditWindow({ silent: true });
                       try { refreshPublishWindow(); } catch {}
+                      // Allow the lock refresh to arrive before clearing override
+                      setTimeout(() => setResetOverride(false), 2000);
+                      // Broadcast so sibling CQI tabs (and dashboards) refresh
+                      // immediately — the "CQI marks published" badge on the
+                      // MODEL page must flip back to "First CQI not published
+                      // yet" without a manual reload.
+                      try {
+                        const detail: Record<string, unknown> = { subjectId };
+                        const respJson = await resetRes.clone().json().catch(() => null);
+                        const cleared = Array.isArray(respJson?.cleared_cos)
+                          ? respJson.cleared_cos.filter((n: any) => Number.isFinite(Number(n))).map((n: any) => Number(n))
+                          : coNumbers;
+                        detail.clearedCos = cleared;
+                        window.dispatchEvent(new CustomEvent('obe:reset', { detail }));
+                      } catch (_) {}
                       alert('CQI reset & unpublished successfully.');
                     } else {
                       const txt = resetRes ? await resetRes.text().catch(() => '') : '';
@@ -3018,34 +3282,13 @@ export default function CQIEntry({
       ) : null}
 
       {publishedEditLocked ? (
+        // Status banner only — the single Request Edit trigger lives in the
+        // toolbar (Publish button morphs into Request Edit when locked).
         <div style={{ marginBottom: 12, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 10, padding: '10px 12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontWeight: 800, color: '#92400e' }}>Published & locked</div>
-              <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>
-                CQI is read-only after publish. Use Request Edit to ask IQAC for edit access.
-                {markEntryReqPending ? ' Edit request is pending.' : ''}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="obe-btn obe-btn-primary"
-              disabled={editRequestsBlocked || markEntryReqPending}
-              onClick={async () => {
-                if (editRequestsBlocked) return;
-                if (markEntryReqPending) return;
-                const mobileOk = await ensureMobileVerified();
-                if (!mobileOk) {
-                  alert('Please verify your mobile number in Profile before requesting edits.');
-                  window.location.href = '/profile';
-                  return;
-                }
-                setRequestEditOpen(true);
-                setActionError(null);
-              }}
-            >
-              {editRequestsBlocked ? 'Published & Locked' : markEntryReqPending ? 'Request Pending' : 'Request Edit'}
-            </button>
+          <div style={{ fontWeight: 800, color: '#92400e' }}>Published &amp; locked</div>
+          <div style={{ marginTop: 4, fontSize: 13, color: '#6b7280' }}>
+            CQI is read-only after publish. Use the <strong>Request Edit</strong> button above to ask IQAC for edit access.
+            {markEntryReqPending ? ' Edit request is pending.' : ''}
           </div>
         </div>
       ) : null}
@@ -3099,8 +3342,8 @@ export default function CQIEntry({
           </div>
         </div>
 
-        {/* Banner: Previously attained COs from other CQI pages */}
-        {priorPublishedCos.size > 0 && (
+        {/* Banner: COs owned by another CQI page */}
+        {borrowedCos.size > 0 && (
           <div style={{
             padding: '12px 16px',
             background: '#eff6ff',
@@ -3110,9 +3353,9 @@ export default function CQIEntry({
             fontSize: 13,
             color: '#1e40af',
           }}>
-            <strong>Previously Attained COs:</strong>{' '}
-            {[...priorPublishedCos].sort((a, b) => a - b).map((co) => `CO${co}`).join(', ')}{' '}
-            — These COs were published in prior CQI sessions and are shown as <strong>read-only</strong>. Only unattained COs on this page can receive new CQI marks.
+            <strong>Owned by another CQI page:</strong>{' '}
+            {[...borrowedCos].sort((a, b) => a - b).map((co) => `CO${co}`).join(', ')}{' '}
+            — these COs are managed on a different CQI page and shown here as <strong>read-only</strong>.
           </div>
         )}
 
@@ -3153,21 +3396,21 @@ export default function CQIEntry({
                 </div>
               </th>
                   {coNumbers.map(coNum => (
-                <th 
-                  key={coNum} 
-                  style={{ 
-                    padding: '12px 8px', 
-                    textAlign: 'center', 
-                    fontWeight: 700, 
-                    color: priorPublishedCos.has(coNum) ? '#1d4ed8' : '#475569',
+                <th
+                  key={coNum}
+                  style={{
+                    padding: '12px 8px',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    color: borrowedCos.has(coNum) ? '#1d4ed8' : '#475569',
                     minWidth: 150,
-                    backgroundColor: priorPublishedCos.has(coNum) ? '#eff6ff' : undefined,
+                    backgroundColor: borrowedCos.has(coNum) ? '#eff6ff' : undefined,
                   }}
                 >
                   CO{coNum}
-                      {priorPublishedCos.has(coNum) && (
+                      {borrowedCos.has(coNum) && (
                         <div style={{ fontSize: 10, fontWeight: 600, color: '#1d4ed8', marginTop: 2 }}>
-                          (PRIOR CQI)
+                          (OTHER CQI PAGE)
                         </div>
                       )}
                       <div style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginTop: 2 }}>
@@ -3180,14 +3423,31 @@ export default function CQIEntry({
           <tbody>
             {students.map((student, idx) => {
               const studentTotals = coTotals[student.id] || {};
-              
-              // Calculate BEFORE CQI (sum of all CO values)
+
+              // Theory QP1/QP2/PMBL extended Model CQI: pull C1CQI (CIA1
+              // page's resulting bonus) per CO1/CO2 so we can fold it into
+              // the BEFORE total and breakdown displayed on this Model page.
+              const c1CqiByCo = new Map<number, number>();
+              if (isModelCqiWithExtendedCos) {
+                const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
+                for (const coN of [1, 2]) {
+                  if (!coNumbers.includes(coN)) continue;
+                  const cd = (studentTotals as any)[`co${coN}`];
+                  if (!cd) continue;
+                  const cia1Mark = priorEntry?.[`co${coN}`];
+                  const c1 = computeC1CqiContribution(cd, cia1Mark as any);
+                  if (c1 > 0) c1CqiByCo.set(coN, c1);
+                }
+              }
+
+              // Calculate BEFORE CQI (sum of all CO values), including C1CQI
+              // for Theory extended Model CO1/CO2.
               let beforeCqiValue = 0;
               let beforeCqiMax = 0;
               coNumbers.forEach(coNum => {
                 const coData = studentTotals[`co${coNum}`];
                 if (coData) {
-                  beforeCqiValue += coData.value;
+                  beforeCqiValue += coData.value + (c1CqiByCo.get(coNum) ?? 0);
                   beforeCqiMax += coData.max;
                 }
               });
@@ -3215,23 +3475,32 @@ export default function CQIEntry({
                 const coData: any = studentTotals[coKey];
                 if (!coData) return;
 
-                // For already-attained COs, use the prior published value
-                const isAlreadyAttained = priorPublishedCos.has(coNum);
+                // For COs owned by another page, use that page's published value.
+                const isBorrowed = borrowedCos.has(coNum);
                 const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
-                const priorValue = isAlreadyAttained ? clampCqiMarkValue(priorEntry[coKey]) : null;
-                const input = isAlreadyAttained
+                const priorValue = isBorrowed ? clampCqiMarkValue(priorEntry[coKey]) : null;
+                const input = isBorrowed
                   ? priorValue
                   : (cqiEntries[student.id]?.[coKey] ?? null);
                 if (input == null) return;
 
-                const coVal = Number(coData.value);
+                // For Theory extended Model CO1/CO2, the effective CO base
+                // INCLUDES C1CQI (the CIA1 page's already-applied bonus), so
+                // the 58% cap room shrinks accordingly.
+                const c1Add = c1CqiByCo.get(coNum) ?? 0;
+                const coVal = Number(coData.value) + c1Add;
                 const coMax = Number(coData.max);
                 const coPct = coMax ? (coVal / coMax) * 100 : 0;
                 const isCoBelow = coPct < THRESHOLD_PERCENT;
 
+                // Model CQI for Theory QP1/QP2/PMBL CO1/CO2: always use the
+                // 60% conversion + 58% per-CO ceiling cap, regardless of the
+                // overall percentage.  The cap is enforced via `allowance`.
+                const isModelCappedCo = isModelCqiWithExtendedCos && (coNum === 1 || coNum === 2);
+
                 let add: number;
                 if (isCoBelow) {
-                  if (isOverallBelowThreshold) {
+                  if (isOverallBelowThreshold || isModelCappedCo) {
                     // Convert CQI mark (out of 10) to 60 percentage scale
                     const rawAdd = (Number(input) / 10) * ((60 / 10) * 1); // equivalent to * 0.6
                     const allowance = Math.max(0, (THRESHOLD_PERCENT / 100) * coMax - coVal);
@@ -3375,14 +3644,22 @@ export default function CQIEntry({
                       );
                     }
 
-                    const percentage = coData.max ? (coData.value / coData.max) * 100 : 0;
+                    // Theory extended Model CO1/CO2: include C1CQI in the
+                    // displayed CO value and percentage so the user sees the
+                    // post-CIA1-CQI base on this page.
+                    const c1AddForCo = c1CqiByCo.get(coNum) ?? 0;
+                    const coDisplayValue = coData.value + c1AddForCo;
+                    const percentage = coData.max ? (coDisplayValue / coData.max) * 100 : 0;
                     const isBelowThreshold = percentage < THRESHOLD_PERCENT;
                     const cqiValue = cqiEntries[student.id]?.[coKey];
 
-                    // Check if this CO was already published in a prior CQI page
-                    const isAlreadyAttained = priorPublishedCos.has(coNum);
+                    // Ownership-driven read-only: this cell is permanently
+                    // read-only when the CO is borrowed (owned by another
+                    // placement).  Request Edit approval does NOT unlock it.
+                    const isBorrowed = borrowedCos.has(coNum);
+                    const ownerPublished = isBorrowed ? (borrowedCoPublished.get(coNum) === true) : false;
                     const priorEntry = priorCqiEntries[student.id] ?? priorCqiEntries[String(student.id)] ?? {};
-                    const priorValue = isAlreadyAttained ? clampCqiMarkValue(priorEntry[coKey]) : null;
+                    const priorValue = isBorrowed ? clampCqiMarkValue(priorEntry[coKey]) : null;
 
                     // Live feedback: CQI mark entered AND overall now meets threshold
                     const hasCqiMark = cqiValue != null && Number.isFinite(Number(cqiValue));
@@ -3394,7 +3671,7 @@ export default function CQIEntry({
                         style={{
                           padding: '10px 8px',
                           textAlign: 'center',
-                          backgroundColor: isAlreadyAttained
+                          backgroundColor: isBorrowed
                             ? '#eff6ff'
                             : isNowAttained
                             ? '#f0fdf4'
@@ -3402,12 +3679,12 @@ export default function CQIEntry({
                           transition: 'background-color 0.2s ease',
                         }}
                       >
-                        <div style={{ 
-                          fontSize: 13, 
+                        <div style={{
+                          fontSize: 13,
                           color: '#64748b',
                           marginBottom: 6,
                         }}>
-                          <div>{round2(coData.value)} ({round2(percentage)}%)</div>
+                          <div>{round2(coDisplayValue)} ({round2(percentage)}%)</div>
                           {/* show component breakdown if available */}
                           {debugMode ? null : (
                             Array.isArray((coData as any).breakdown) && (
@@ -3417,46 +3694,69 @@ export default function CQIEntry({
                                     {componentLabel(normalizeClassType(classType), String(c.key || ''))}: {round2(c.mark)} / {round2(c.max)} =&nbsp;{round2(c.contrib)}
                                   </div>
                                 ))}
+                                {c1AddForCo > 0 && (
+                                  <div key="c1cqi" style={{ display: 'inline-block', marginRight: 8, color: '#0369a1', fontWeight: 600 }}>
+                                    C1CQI: +{round2(c1AddForCo)}
+                                  </div>
+                                )}
                               </div>
                             )
                           )}
                         </div>
-                        {isAlreadyAttained ? (
-                          // CO was already published in a prior CQI page — show as read-only final
-                          <div>
-                            <div style={{
-                              fontSize: 11,
-                              color: '#1d4ed8',
-                              fontWeight: 700,
-                              marginBottom: 4,
-                            }}>
-                              CQI ALREADY ATTAINED
+                        {isBorrowed ? (
+                          // CO is owned by another CQI page — display only.
+                          // Show "CQI marks published" once the owning page is
+                          // published, otherwise "First CQI not published yet".
+                          // Students whose base CO ≥ 58% still see "✓ ATTAINED"
+                          // (no CQI needed).
+                          !isBelowThreshold ? (
+                            <div style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>
+                              ✓ ATTAINED
                             </div>
-                            {priorValue != null && Number.isFinite(Number(priorValue)) ? (
+                          ) : ownerPublished ? (
+                            <div>
                               <div style={{
-                                display: 'inline-block',
-                                padding: '4px 14px',
-                                background: '#dbeafe',
-                                borderRadius: 6,
-                                fontWeight: 800,
-                                fontSize: 14,
-                                color: '#1e40af',
-                                border: '1px solid #93c5fd',
+                                fontSize: 11,
+                                color: '#1d4ed8',
+                                fontWeight: 700,
+                                marginBottom: 4,
                               }}>
-                                {round2(Number(priorValue))} / 10
+                                CQI marks published
                               </div>
-                            ) : (
-                              <div style={{
-                                fontSize: 12,
-                                color: '#6b7280',
-                              }}>
-                                (no mark entered)
-                              </div>
-                            )}
-                            <div style={{ fontSize: 10, color: '#6b7280', marginTop: 4 }}>
-                              Published — read-only
+                              {priorValue != null && Number.isFinite(Number(priorValue)) ? (
+                                <div style={{
+                                  display: 'inline-block',
+                                  padding: '4px 14px',
+                                  background: '#dbeafe',
+                                  borderRadius: 6,
+                                  fontWeight: 800,
+                                  fontSize: 14,
+                                  color: '#1e40af',
+                                  border: '1px solid #93c5fd',
+                                }}>
+                                  {round2(Number(priorValue))} / 10
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                  (no mark entered)
+                                </div>
+                              )}
                             </div>
-                          </div>
+                          ) : (
+                            <div>
+                              <div style={{
+                                fontSize: 11,
+                                color: '#92400e',
+                                fontWeight: 700,
+                                marginBottom: 4,
+                              }}>
+                                First CQI not published yet
+                              </div>
+                              <div style={{ fontSize: 10, color: '#6b7280' }}>
+                                Editable on the owning CQI page only
+                              </div>
+                            </div>
+                          )
                         ) : isBelowThreshold ? (
                           <div>
                             <div style={{
@@ -3468,7 +3768,9 @@ export default function CQIEntry({
                             }}>
                               {isNowAttained
                                 ? '✓ Attained via CQI'
-                                : (isOverallBelowThreshold ? 'CO Not Attained (Converted to 60%)' : 'CO Not Attained (Special Improvement - 15% Add)')}
+                                : (isModelCqiWithExtendedCos && (coNum === 1 || coNum === 2)
+                                    ? 'CO Not Attained (Capped to 58%)'
+                                    : (isOverallBelowThreshold ? 'CO Not Attained (Converted to 60%)' : 'CO Not Attained (Special Improvement - 15% Add)'))}
                             </div>
                             <input
                               type="number"

@@ -32,7 +32,27 @@ def _safe_text(value):
 
 def _normalize_qp_type_key(value):
     qp = _safe_text(value).upper().replace(' ', '')
-    return qp if qp in {'QP1', 'QP2', 'CSD', 'QP1FINAL'} else None
+    return qp if qp in {'QP1', 'QP2', 'CSD', 'QP1FINAL', 'TAM_THEORY'} else None
+
+
+def _is_qp1_final_like(class_type, qp_type):
+    ct = _safe_text(class_type).upper()
+    qp = _safe_text(qp_type).upper().replace(' ', '')
+    return ('QP1FINAL' in qp) or (ct == 'TAMIL' and qp == 'TAM_THEORY')
+
+
+def _is_theory_extended_model_qp_type(qp_type):
+    """Theory QP1/QP2/PMBL (NOT QP1FINAL) — the Model CQI page exposes
+    CO1/CO2 as independently editable with their own 58% cap, mirroring the
+    frontend `isModelCqiWithExtendedCos` gate.
+    """
+    qp = _safe_text(qp_type).upper().replace(' ', '')
+    if not qp:
+        return False
+    if 'QP1FINAL' in qp:
+        return False
+    import re as _re
+    return bool(_re.search(r'(^|[^A-Z0-9])(QP1|QP2|PMBL)([^A-Z0-9]|$)', qp))
 
 
 def _safe_float(value):
@@ -1902,7 +1922,7 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     qp_type = _resolve_qp_type(ta)
     batch_id = getattr(getattr(ta, 'section', None), 'batch_id', None)
 
-    is_qp1_final = 'QP1FINAL' in str(qp_type or '').upper().replace(' ', '')
+    is_qp1_final = _is_qp1_final_like(class_type, qp_type)
     weights = list(QP1FINAL_WEIGHTS) if is_qp1_final else _get_internal_weight_slots(class_type)
     max_total = float(sum(weights))
 
@@ -2216,7 +2236,100 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
     cqi_nums = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
     cqi_co_set = {int(n) for n in cqi_nums if _safe_int(n) is not None}
-    cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
+    cqi_student = dict(cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {})
+
+    # Theory QP1/QP2/PMBL extended Model CQI: when the Model CQI page was
+    # published with CO1/CO2 entries (under page_key like 'model:1,2,3,4,5'),
+    # those values supersede the CIA1 CQI's CO1/CO2 marks for the FIM, because
+    # the Model page's CQI decision is the later/more comprehensive one.
+    # `_merge_cqi_page_entries` filters them out (CIA1 has the smaller set so it
+    # wins the top-level merge), so we read them directly from `__pages` here.
+    # Track which COs the Model page ACTUALLY recorded a non-None CQI mark for
+    # this student (NOT just which COs the page advertises via coNumbers).  A
+    # published Model page with empty CO1/CO2 inputs still lists 1,2 in its
+    # coNumbers, but we must not treat that as "Model owns the CO1/CO2 add" —
+    # otherwise the merged CIA1 raw mark would survive the drop below and get
+    # re-applied against the Model max, double-counting C1CQI.
+    model_overrode_co = set()
+    if not is_qp1_final and isinstance(cqi_entries.get('__pages'), dict):
+        for _pg_key, _pg_snap in cqi_entries['__pages'].items():
+            if not isinstance(_pg_snap, dict):
+                continue
+            _pg_at = str(_pg_snap.get('assessmentType', _pg_snap.get('assessment_type', '')) or '').lower()
+            if _pg_at != 'model':
+                continue
+            _pg_co_nums = _pg_snap.get('coNumbers', _pg_snap.get('co_numbers'))
+            if not isinstance(_pg_co_nums, list):
+                continue
+            _pg_co_set = {int(n) for n in _pg_co_nums if _safe_int(n) is not None}
+            if not ({1, 2} & _pg_co_set):
+                continue
+            _pg_entries = _pg_snap.get('entries') if isinstance(_pg_snap.get('entries'), dict) else {}
+            _pg_student = _pg_entries.get(str(sid)) or _pg_entries.get(sid) or {}
+            for _co in (1, 2):
+                if _co not in _pg_co_set:
+                    continue
+                _model_input = _safe_float(_pg_student.get(f'co{_co}'))
+                if _model_input is not None and _model_input > 0:
+                    cqi_student[f'co{_co}'] = _model_input
+                    cqi_co_set.add(_co)
+                    model_overrode_co.add(_co)
+
+    # Theory QP1/QP2/PMBL extended Model CQI: compute C1CQI (the CIA1 page's
+    # already-applied bonus) for CO1/CO2 and fold it into the per-CO add.  The
+    # CIA1 page's raw CQI mark is NOT applied against the Model max — only its
+    # resulting bonus carries forward.  This mirrors the frontend Model CQI
+    # page's BEFORE+cap process (isModelCqiWithExtendedCos).
+    theory_extended_model = (
+        not is_qp1_final
+        and class_type in {'THEORY', 'THEORY_PMBL'}
+        and _is_theory_extended_model_qp_type(qp_type)
+    )
+    c1cqi_by_co = {1: 0.0, 2: 0.0}
+    if theory_extended_model and isinstance(cqi_entries.get('__pages'), dict):
+        for _pg_key, _pg_snap in cqi_entries['__pages'].items():
+            if not isinstance(_pg_snap, dict):
+                continue
+            if str(_pg_snap.get('assessmentType', _pg_snap.get('assessment_type', '')) or '').lower() != 'cia1':
+                continue
+            _pg_co_nums = _pg_snap.get('coNumbers', _pg_snap.get('co_numbers'))
+            if not isinstance(_pg_co_nums, list):
+                continue
+            _pg_co_set = {int(n) for n in _pg_co_nums if _safe_int(n) is not None}
+            if not ({1, 2} & _pg_co_set):
+                continue
+            _pg_entries = _pg_snap.get('entries') if isinstance(_pg_snap.get('entries'), dict) else {}
+            _pg_student = _pg_entries.get(str(sid)) or _pg_entries.get(sid) or {}
+            for _co in (1, 2):
+                if _co not in _pg_co_set:
+                    continue
+                cia1_input = _safe_float(_pg_student.get(f'co{_co}'))
+                if cia1_input is None or cia1_input <= 0:
+                    continue
+                _me_for_co = (me1 if _co == 1 else me2) or 0.0
+                _w_me_for_co = (w_me1 if _co == 1 else w_me2) or 0.0
+                _cia1_base = float(co_values.get(_co) or 0) - float(_me_for_co)
+                _cia1_max = float(co_max.get(_co) or 0) - float(_w_me_for_co)
+                if _cia1_max <= 0:
+                    continue
+                _raw = CQI_BELOW_RATE * float(cia1_input)
+                _room = max(0.0, _cia1_max * (THRESHOLD_PERCENT / 100.0) - _cia1_base)
+                c1cqi_by_co[_co] = max(0.0, min(_raw, _room))
+
+    if theory_extended_model:
+        # If Model didn't actually record a CO1/CO2 mark for this student
+        # (input box was empty when the Model page published), drop any
+        # CIA1-merged raw mark from cqi_student so it isn't reapplied against
+        # the Model max.  Otherwise the FIM would double-count above the
+        # C1CQI bonus that the CIA1 page already captured.
+        for _co in (1, 2):
+            if _co not in model_overrode_co:
+                cqi_student.pop(f'co{_co}', None)
+        # Ensure CO1/CO2 enter the add loop when C1CQI alone applies (no
+        # standard cqi_student input present for that CO).
+        for _co in (1, 2):
+            if c1cqi_by_co.get(_co, 0.0) > 0:
+                cqi_co_set.add(_co)
 
     total_add = 0.0
     cqi_add_by_co = {}
@@ -2227,10 +2340,12 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
         base = co_values.get(co)
         if base is None:
             continue
+        c1 = c1cqi_by_co.get(co, 0.0) if theory_extended_model else 0.0
+        base_for_add = float(base) + float(c1)
         inp = _safe_float((cqi_student or {}).get(f'co{co}'))
-        add = _compute_cqi_add(co_value=base, co_max=co_max.get(co), input_mark=inp)
-        total_add += add
-        cqi_add_by_co[co] = _round2(add)
+        add = _compute_cqi_add(co_value=base_for_add, co_max=co_max.get(co), input_mark=inp)
+        total_add += c1 + add
+        cqi_add_by_co[co] = _round2(c1 + add)
 
     total = _round2(base_total + total_add)
     if max_total > 0:
@@ -2262,11 +2377,14 @@ def _compute_weighted_final_total_theory_like(*, ta, subject, student, ta_id, re
     # When CQI adds are small enough that the rounded /40 total is unchanged,
     # the per-CO values should also remain unchanged to avoid confusing
     # discrepancies in the Excel export where COs differ but totals are equal.
+    # For Theory extended Model CO1/CO2, include C1CQI in the per-CO snapshot
+    # because it WAS applied even if its rounded total is unchanged.
     _base_total_rounded = _round2(base_total)
     if final_total == _base_total_rounded:
         for co in co_loop:
             if co_values.get(co) is not None:
-                final_co_values[co] = _safe_float(co_values[co])
+                c1 = c1cqi_by_co.get(co, 0.0) if theory_extended_model else 0.0
+                final_co_values[co] = _round2(float(co_values[co]) + float(c1))
 
     # OE Theory (QP1FINAL) courses convert to 60 instead of 100
     scaled_max = 60.0 if is_qp1_final else 100.0
@@ -2846,7 +2964,13 @@ def _compute_project_final_total(*, ta, subject, student, ta_id, return_details=
     Uses Review1 and Review2 marks only.  Max total = 100 by default.
     CQI is applied once as a combined single-CO mark.
     """
-    from OBE.models import Review1Mark, Review2Mark, ObeCqiPublished
+    from OBE.models import (
+        Review1Mark,
+        Review2Mark,
+        LabPublishedSheet,
+        AssessmentDraft,
+        ObeCqiPublished,
+    )
 
     sid = int(student['id'])
 
@@ -2864,6 +2988,77 @@ def _compute_project_final_total(*, ta, subject, student, ta_id, return_details=
     review2_map = _assessment_map(Review2Mark, 'mark', subject.id, [sid], ta_id)
     rev1 = _safe_float(review1_map.get(sid))
     rev2 = _safe_float(review2_map.get(sid))
+
+    def _get_project_sheet_data(assessment_key):
+        """Return active review sheet data, preferring newer TA-scoped draft."""
+        draft_rows = list(
+            AssessmentDraft.objects.filter(subject_id=subject.id, assessment=assessment_key)
+            .order_by('-updated_at')
+        )
+        draft_row = _pick_scoped_row(draft_rows, ta_id)
+        draft_data = draft_row.data if draft_row and isinstance(getattr(draft_row, 'data', None), dict) else None
+        draft_updated = getattr(draft_row, 'updated_at', None) if draft_row else None
+        draft_is_ta_scoped = draft_row is not None and getattr(draft_row, 'teaching_assignment_id', None) == ta_id
+
+        pub_rows = list(
+            LabPublishedSheet.objects.filter(subject_id=subject.id, assessment=assessment_key)
+            .order_by('-updated_at')
+        )
+        pub_row = _pick_scoped_row(pub_rows, ta_id)
+        pub_data = pub_row.data if pub_row and isinstance(getattr(pub_row, 'data', None), dict) else None
+        pub_updated = getattr(pub_row, 'updated_at', None) if pub_row else None
+        pub_is_ta_scoped = pub_row is not None and getattr(pub_row, 'teaching_assignment_id', None) == ta_id
+
+        use_draft = False
+        if isinstance(draft_data, dict):
+            if pub_data is None:
+                use_draft = True
+            elif draft_is_ta_scoped and not pub_is_ta_scoped:
+                use_draft = True
+            elif draft_updated and pub_updated and draft_updated > pub_updated:
+                use_draft = True
+
+        data = draft_data if use_draft else pub_data
+        return data if isinstance(data, dict) else None
+
+    def _extract_project_review_total(assessment_key, student_id):
+        data = _get_project_sheet_data(assessment_key)
+        if not isinstance(data, dict):
+            return None
+
+        sheet = data.get('sheet') if isinstance(data.get('sheet'), dict) else data
+        if not isinstance(sheet, dict):
+            return _extract_model_total_for_student(data, student_id)
+
+        rows_by = sheet.get('rowsByStudentId')
+        if not isinstance(rows_by, dict):
+            return _extract_model_total_for_student(data, student_id)
+
+        srow = rows_by.get(str(student_id)) or rows_by.get(student_id)
+        if not isinstance(srow, dict) or bool(srow.get('absent')):
+            return None
+
+        direct = _safe_float(srow.get('ciaExam'))
+        if direct is not None:
+            return round(direct, 2)
+
+        comps = srow.get('reviewComponentMarks') if isinstance(srow.get('reviewComponentMarks'), dict) else {}
+        total = 0.0
+        has_any = False
+        for v in comps.values():
+            n = _safe_float(v)
+            if n is not None:
+                has_any = True
+                total += float(n)
+        if has_any:
+            return round(total, 2)
+
+        return _extract_model_total_for_student(data, student_id)
+
+    if rev1 is None:
+        rev1 = _safe_float(_extract_project_review_total('review1', sid))
+    if rev2 is None:
+        rev2 = _safe_float(_extract_project_review_total('review2', sid))
 
     def _scale(mark, from_max, to_weight):
         if mark is None or not from_max or not to_weight:
@@ -3467,8 +3662,15 @@ def _compute_tcpl_final_total(*, ta, subject, student, ta_id, return_details=Fal
                 _t_raw = _theory_raw[_ck]
                 _theory_weighted = (_t_raw / _t_max) * _TCPL_THEORY_W[_i - 1] if _t_max > 0 else 0.0
                 _lab_weighted = (_lab_share / _TCPL_LAB_SHARE_MAX) * _TCPL_LAB_W
-                _record_weighted = _record_norm if _i == 5 else 0.0
-                model_marks[_ck] = _theory_weighted + _lab_weighted + _record_weighted
+                if _i == 5 and not _record_en:
+                    # Record disabled: normalize (theory + lab-share) over
+                    # (theoryMax + labShareMax) and scale to CO5 total weight 7.
+                    _combined_raw = _t_raw + _lab_share
+                    _combined_max = _t_max + _TCPL_LAB_SHARE_MAX
+                    model_marks[_ck] = (_combined_raw / _combined_max) * _TCPL_CO_TOTAL_W[_i - 1] if _combined_max > 0 else 0.0
+                else:
+                    _record_weighted = _record_norm if _i == 5 else 0.0
+                    model_marks[_ck] = _theory_weighted + _lab_weighted + _record_weighted
                 model_marks['max'][_ck] = _TCPL_CO_TOTAL_W[_i - 1]
 
     # ── Assemble per-CO slots ──

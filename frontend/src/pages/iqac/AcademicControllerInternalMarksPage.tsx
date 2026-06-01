@@ -43,6 +43,8 @@ type InternalMarksFilters = {
   year: string;
   department: string;
   section: string;
+  qpType: string;
+  courseType: string;
 };
 
 const DEFAULT_FILTERS: InternalMarksFilters = {
@@ -52,6 +54,8 @@ const DEFAULT_FILTERS: InternalMarksFilters = {
   year: 'all',
   department: 'all',
   section: 'all',
+  qpType: 'all',
+  courseType: 'all',
 };
 
 function normalizeText(value: unknown): string {
@@ -184,12 +188,19 @@ function splitIntoChunks<T>(items: T[], chunkSize: number): T[][] {
   return out;
 }
 
+type ExportFormat = 'detailed' | 'camu';
+
+type PendingExport =
+  | { kind: 'zip' }
+  | { kind: 'course'; row: InternalMarkRow };
+
 export default function AcademicControllerInternalMarksPage(): JSX.Element {
   const [rows, setRows] = useState<InternalMarkRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [downloadingTaId, setDownloadingTaId] = useState<number | null>(null);
+  const [pendingExport, setPendingExport] = useState<PendingExport | null>(null);
 
   const [regulationFilter, setRegulationFilter] = useState(DEFAULT_FILTERS.regulation);
   const [semesterFilter, setSemesterFilter] = useState(DEFAULT_FILTERS.semester);
@@ -197,6 +208,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
   const [yearFilter, setYearFilter] = useState(DEFAULT_FILTERS.year);
   const [departmentFilter, setDepartmentFilter] = useState(DEFAULT_FILTERS.department);
   const [sectionFilter, setSectionFilter] = useState(DEFAULT_FILTERS.section);
+  const [qpTypeFilter, setQpTypeFilter] = useState(DEFAULT_FILTERS.qpType);
+  const [courseTypeFilter, setCourseTypeFilter] = useState(DEFAULT_FILTERS.courseType);
   const [appliedFilters, setAppliedFilters] = useState<InternalMarksFilters>(DEFAULT_FILTERS);
 
   useEffect(() => {
@@ -541,6 +554,35 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
     [rows, regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter]
   );
 
+  const baseFilteredForExtras = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          (regulationFilter === 'all' || canonReg(r.regulation) === canonReg(regulationFilter)) &&
+          (semesterFilter === 'all' || canonSemester(r.semester) === canonSemester(semesterFilter)) &&
+          (batchFilter === 'all' || canonText(r.batch) === canonText(batchFilter)) &&
+          (yearFilter === 'all' || canonSemester(r.academic_year) === canonSemester(yearFilter)) &&
+          (departmentFilter === 'all' || canonText(r.department) === canonText(departmentFilter)) &&
+          (sectionFilter === 'all' || canonText(r.section) === canonText(sectionFilter))
+      ),
+    [rows, regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter, sectionFilter]
+  );
+
+  const qpTypes = useMemo(
+    () => uniqueSorted(baseFilteredForExtras.map((r) => r.qp_type)),
+    [baseFilteredForExtras]
+  );
+
+  const courseTypes = useMemo(
+    () =>
+      uniqueSorted(
+        baseFilteredForExtras
+          .filter((r) => qpTypeFilter === 'all' || canonText(r.qp_type) === canonText(qpTypeFilter))
+          .map((r) => r.class_type)
+      ),
+    [baseFilteredForExtras, qpTypeFilter]
+  );
+
   const filteredRows = useMemo(() => {
     const fReg = canonReg(appliedFilters.regulation);
     const fSem = canonSemester(appliedFilters.semester);
@@ -548,6 +590,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
     const fYear = canonSemester(appliedFilters.year);
     const fDept = canonText(appliedFilters.department);
     const fSection = canonText(appliedFilters.section);
+    const fQpType = canonText(appliedFilters.qpType);
+    const fCourseType = canonText(appliedFilters.courseType);
 
     return rows.filter((r) => {
       if (appliedFilters.regulation !== 'all' && canonReg(r.regulation) !== fReg) return false;
@@ -556,6 +600,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       if (appliedFilters.year !== 'all' && canonSemester(r.academic_year) !== fYear) return false;
       if (appliedFilters.department !== 'all' && canonText(r.department) !== fDept) return false;
       if (appliedFilters.section !== 'all' && canonText(r.section) !== fSection) return false;
+      if (appliedFilters.qpType !== 'all' && canonText(r.qp_type) !== fQpType) return false;
+      if (appliedFilters.courseType !== 'all' && canonText(r.class_type) !== fCourseType) return false;
       return true;
     });
   }, [rows, appliedFilters]);
@@ -589,6 +635,14 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
     setSectionFilter((prev) => (prev === 'all' || sections.some((s) => canonText(s) === canonText(prev)) ? prev : 'all'));
   }, [sections]);
 
+  useEffect(() => {
+    setQpTypeFilter((prev) => (prev === 'all' || qpTypes.some((q) => canonText(q) === canonText(prev)) ? prev : 'all'));
+  }, [qpTypes]);
+
+  useEffect(() => {
+    setCourseTypeFilter((prev) => (prev === 'all' || courseTypes.some((c) => canonText(c) === canonText(prev)) ? prev : 'all'));
+  }, [courseTypes]);
+
   const hasPendingFilterChanges = useMemo(
     () =>
       regulationFilter !== appliedFilters.regulation ||
@@ -596,8 +650,10 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       batchFilter !== appliedFilters.batch ||
       yearFilter !== appliedFilters.year ||
       departmentFilter !== appliedFilters.department ||
-      sectionFilter !== appliedFilters.section,
-    [regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter, sectionFilter, appliedFilters]
+      sectionFilter !== appliedFilters.section ||
+      qpTypeFilter !== appliedFilters.qpType ||
+      courseTypeFilter !== appliedFilters.courseType,
+    [regulationFilter, semesterFilter, batchFilter, yearFilter, departmentFilter, sectionFilter, qpTypeFilter, courseTypeFilter, appliedFilters]
   );
 
   function handleApplyFilters() {
@@ -608,6 +664,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       year: yearFilter,
       department: departmentFilter,
       section: sectionFilter,
+      qpType: qpTypeFilter,
+      courseType: courseTypeFilter,
     });
   }
 
@@ -618,16 +676,19 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
     setYearFilter(DEFAULT_FILTERS.year);
     setDepartmentFilter(DEFAULT_FILTERS.department);
     setSectionFilter(DEFAULT_FILTERS.section);
+    setQpTypeFilter(DEFAULT_FILTERS.qpType);
+    setCourseTypeFilter(DEFAULT_FILTERS.courseType);
     setAppliedFilters(DEFAULT_FILTERS);
     setError(null);
   }
 
-  async function handleDownloadFilteredZip() {
+  async function handleDownloadFilteredZip(format: ExportFormat) {
     try {
       setDownloading(true);
       setError(null);
 
       const baseParams = new URLSearchParams();
+      baseParams.set('export_type', format);
       if (appliedFilters.regulation !== 'all') baseParams.set('regulation', appliedFilters.regulation);
       if (appliedFilters.semester !== 'all') baseParams.set('semester', appliedFilters.semester);
       if (appliedFilters.batch !== 'all') baseParams.set('batch', appliedFilters.batch);
@@ -682,7 +743,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       };
 
       const blob = await fetchExport(uniqueTaIds);
-      triggerDownload(blob, `internal_marks_${new Date().toISOString().slice(0, 10)}.zip`);
+      const suffix = format === 'camu' ? 'camu' : 'detailed';
+      triggerDownload(blob, `internal_marks_${suffix}_${new Date().toISOString().slice(0, 10)}.zip`);
     } catch (e: any) {
       setError(e?.message || 'Failed to download ZIP export');
     } finally {
@@ -695,7 +757,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
     return cleaned || 'internal_marks';
   }
 
-  async function handleDownloadCourseExcel(row: InternalMarkRow) {
+  async function handleDownloadCourseExcel(row: InternalMarkRow, format: ExportFormat) {
     const taId = Number(row.teaching_assignment_id);
     if (!Number.isFinite(taId) || taId <= 0) return;
 
@@ -703,7 +765,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       setDownloadingTaId(taId);
       setError(null);
 
-      const res = await fetchWithAuth(`/api/academics/iqac/internal-marks/course-export/?ta_id=${encodeURIComponent(String(taId))}`);
+      const params = new URLSearchParams({
+        ta_id: String(taId),
+        export_type: format,
+      });
+      const res = await fetchWithAuth(`/api/academics/iqac/internal-marks/course-export/?${params.toString()}`);
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || 'Failed to download course internal marks');
@@ -712,8 +778,9 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       const blob = await res.blob();
       const href = URL.createObjectURL(blob);
       const a = document.createElement('a');
+      const suffix = format === 'camu' ? ' Camu' : '';
       a.href = href;
-      a.download = `${safeFilenamePart(row.course_code)} ${safeFilenamePart(row.course_name)}.xlsx`;
+      a.download = `${safeFilenamePart(row.course_code)} ${safeFilenamePart(row.course_name)}${suffix}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -722,6 +789,17 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
       setError(e?.message || 'Failed to download course internal marks');
     } finally {
       setDownloadingTaId(null);
+    }
+  }
+
+  function handlePickFormat(format: ExportFormat) {
+    const target = pendingExport;
+    setPendingExport(null);
+    if (!target) return;
+    if (target.kind === 'zip') {
+      handleDownloadFilteredZip(format);
+    } else {
+      handleDownloadCourseExcel(target.row, format);
     }
   }
 
@@ -735,7 +813,11 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>Internal marks</div>
           <div style={{ fontSize: 13, color: '#6b7280' }}>Filter like Department Curriculum and download all selected course internal marks as ZIP.</div>
         </div>
-        <button className="obe-btn obe-btn-primary" onClick={handleDownloadFilteredZip} disabled={downloading || exportableRows.length === 0}>
+        <button
+          className="obe-btn obe-btn-primary"
+          onClick={() => setPendingExport({ kind: 'zip' })}
+          disabled={downloading || exportableRows.length === 0}
+        >
           {downloading ? 'Preparing ZIP...' : `Download Detailed Internal Marks ZIP (${exportableRows.length})`}
         </button>
       </div>
@@ -752,6 +834,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               setYearFilter('all');
               setDepartmentFilter('all');
               setSectionFilter('all');
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
             }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
@@ -772,6 +856,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               setYearFilter('all');
               setDepartmentFilter('all');
               setSectionFilter('all');
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
             }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
@@ -791,6 +877,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               setYearFilter('all');
               setDepartmentFilter('all');
               setSectionFilter('all');
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
             }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
@@ -809,6 +897,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               setYearFilter(e.target.value);
               setDepartmentFilter('all');
               setSectionFilter('all');
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
             }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
@@ -826,6 +916,8 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
             onChange={(e) => {
               setDepartmentFilter(e.target.value);
               setSectionFilter('all');
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
             }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
@@ -840,12 +932,47 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 3 }}>Section</div>
           <select
             value={sectionFilter}
-            onChange={(e) => setSectionFilter(e.target.value)}
+            onChange={(e) => {
+              setSectionFilter(e.target.value);
+              setQpTypeFilter('all');
+              setCourseTypeFilter('all');
+            }}
             style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
           >
             <option value="all">All Sections</option>
             {sections.map((s) => (
               <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 3 }}>QP Type</div>
+          <select
+            value={qpTypeFilter}
+            onChange={(e) => {
+              setQpTypeFilter(e.target.value);
+              setCourseTypeFilter('all');
+            }}
+            style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
+          >
+            <option value="all">All QP Types</option>
+            {qpTypes.map((q) => (
+              <option key={q} value={q}>{q}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 3 }}>Course Type</div>
+          <select
+            value={courseTypeFilter}
+            onChange={(e) => setCourseTypeFilter(e.target.value)}
+            style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff' }}
+          >
+            <option value="all">All Course Types</option>
+            {courseTypes.map((c) => (
+              <option key={c} value={c}>{c}</option>
             ))}
           </select>
         </div>
@@ -901,7 +1028,7 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
                     {r.teaching_assignment_id ? (
                       <button
                         className="obe-btn obe-btn-primary"
-                        onClick={() => handleDownloadCourseExcel(r)}
+                        onClick={() => setPendingExport({ kind: 'course', row: r })}
                         disabled={downloadingTaId === r.teaching_assignment_id}
                       >
                         {downloadingTaId === r.teaching_assignment_id ? 'Preparing...' : 'Download'}
@@ -916,6 +1043,63 @@ export default function AcademicControllerInternalMarksPage(): JSX.Element {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {pendingExport && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPendingExport(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: 20,
+              minWidth: 320,
+              maxWidth: 420,
+              boxShadow: '0 18px 48px rgba(15, 23, 42, 0.25)',
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>
+              Choose download format
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+              {pendingExport.kind === 'zip'
+                ? `Applies to ${exportableRows.length} filtered course${exportableRows.length === 1 ? '' : 's'}.`
+                : `For ${pendingExport.row.course_code} — ${pendingExport.row.course_name}.`}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <button
+                className="obe-btn obe-btn-primary"
+                onClick={() => handlePickFormat('detailed')}
+              >
+                Detailed Summary
+              </button>
+              <button
+                className="obe-btn obe-btn-primary"
+                onClick={() => handlePickFormat('camu')}
+              >
+                Camu Excel
+              </button>
+            </div>
+            <div style={{ marginTop: 14, textAlign: 'right' }}>
+              <button className="obe-btn" onClick={() => setPendingExport(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

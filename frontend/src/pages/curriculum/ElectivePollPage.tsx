@@ -1407,11 +1407,14 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                               .map((sub: any, idx: number) => (
                               (() => {
                                 const statusKey = `${poll.id}-${sub.id}`;
+                                const pollActive = poll.is_active;
                                 const isActive = sub.is_active !== false;
                                 const isEditing = Boolean(editingSubjects[statusKey]);
                                 const draft = editingSubjects[statusKey];
+                                // Subject controls are locked when the parent poll is inactive
+                                const subjectLocked = !pollActive;
                                 return (
-                              <tr key={idx} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50">
+                              <tr key={idx} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50/50 ${subjectLocked ? 'opacity-60' : ''}`}>
                                 <td className="px-4 py-3 font-medium text-slate-900">
                                   {isEditing ? (
                                     <input
@@ -1448,18 +1451,30 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                                 <td className="px-4 py-3">{sub.staff_name || '-'}</td>
                                 <td className="px-4 py-3">{sub.department_code || sub.department_name || '-'}</td>
                                 <td className="px-4 py-3">
-                                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
-                                    {isActive ? 'Active' : 'Inactive'}
-                                  </span>
+                                  <div className="flex flex-col gap-1">
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                      {isActive ? 'Active' : 'Inactive'}
+                                    </span>
+                                    {subjectLocked && (
+                                      <span className="text-[10px] text-slate-400 italic">Poll inactive</span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <button
-                                      onClick={() => handleToggleSubjectStatus(poll.id, sub.id, !isActive)}
-                                      disabled={subjectUpdating[statusKey]}
-                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isActive ? 'bg-rose-100 text-rose-700 hover:bg-rose-200' : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'} disabled:opacity-60 disabled:cursor-not-allowed`}
+                                      onClick={() => !subjectLocked && handleToggleSubjectStatus(poll.id, sub.id, !isActive)}
+                                      disabled={subjectUpdating[statusKey] || subjectLocked}
+                                      title={subjectLocked ? 'Activate the poll first to manage individual subjects' : undefined}
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                        subjectLocked
+                                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                          : isActive
+                                            ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                                            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                      } disabled:opacity-60 disabled:cursor-not-allowed`}
                                     >
-                                      {subjectUpdating[statusKey] ? 'Working...' : isActive ? 'Deactivate' : 'Activate'}
+                                      {subjectUpdating[statusKey] ? 'Working...' : subjectLocked ? 'Poll inactive' : isActive ? 'Deactivate' : 'Activate'}
                                     </button>
                                     {isEditing ? (
                                       <>
@@ -1480,10 +1495,13 @@ export default function ElectivePollPage({ user }: { user?: any }) {
                                     ) : (
                                       <button
                                         onClick={() => startEditSubject(poll.id, sub)}
-                                        disabled={isActive}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${isActive ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                        disabled={isActive || subjectLocked}
+                                        title={subjectLocked ? 'Activate the poll first' : isActive ? 'Deactivate the subject before editing' : undefined}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                          isActive || subjectLocked ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                        }`}
                                       >
-                                        {isActive ? 'Deactivate to edit' : 'Edit'}
+                                        {subjectLocked ? 'Poll inactive' : isActive ? 'Deactivate to edit' : 'Edit'}
                                       </button>
                                     )}
                                   </div>

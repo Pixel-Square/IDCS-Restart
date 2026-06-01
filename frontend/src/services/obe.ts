@@ -329,6 +329,60 @@ export async function fetchMarkTableLockStatus(
   return res.json();
 }
 
+export type FinalInternalMarksForTaResponse = {
+  subject_id: number | null;
+  teaching_assignment_id: number;
+  rows: Record<string, { student_id: number; total_40: number | null; max_40: number | null }>;
+};
+
+export async function fetchFinalInternalMarksForTa(
+  subjectId: string,
+  teachingAssignmentId: number,
+): Promise<FinalInternalMarksForTaResponse> {
+  const params = new URLSearchParams({
+    teaching_assignment_id: String(teachingAssignmentId),
+  });
+  const url = `${apiBase()}/api/obe/final-internal-marks/${encodeURIComponent(subjectId)}?${params.toString()}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (!res.ok) await parseError(res, 'Final internal marks fetch failed');
+  return res.json();
+}
+
+export type CqiPublicationStatusComponent = {
+  key: string;
+  label: string;
+  tab_key: string;
+  is_published: boolean;
+};
+
+export type CqiPublicationStatusResponse = {
+  subject_id: string;
+  cycle: 1 | 2 | 3;
+  class_type: string;
+  required_components: CqiPublicationStatusComponent[];
+  all_published: boolean;
+  first_unpublished: { key: string; tab_key: string; label: string } | null;
+  teaching_assignment_id: number | null;
+};
+
+export async function fetchCqiPublicationStatus(
+  subjectId: string,
+  teachingAssignmentId: number | null | undefined,
+  cycle: 1 | 2 | 3,
+  classType: string,
+): Promise<CqiPublicationStatusResponse> {
+  const params = new URLSearchParams();
+  params.set('cycle', String(cycle));
+  if (classType) params.set('class_type', classType);
+  if (typeof teachingAssignmentId === 'number') {
+    params.set('teaching_assignment_id', String(teachingAssignmentId));
+  }
+  const url = `${apiBase()}/api/obe/cqi-publication-status/${encodeURIComponent(subjectId)}?${params.toString()}`;
+  const res = await fetchWithAuth(url, { method: 'GET' });
+  if (!res.ok) await parseError(res, 'CQI publication status fetch failed');
+  return res.json();
+}
+
 export async function fetchTeachingAssignmentEnabledAssessments(teachingAssignmentId: number): Promise<string[]> {
   const info = await fetchTeachingAssignmentEnabledAssessmentsInfo(teachingAssignmentId);
   return Array.isArray(info?.enabled_assessments)

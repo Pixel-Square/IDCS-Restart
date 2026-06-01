@@ -1047,16 +1047,16 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             if (publishedCo2 == null) publishedCo2 = Number(publishedTotal) / 2;
           }
 
-          const resolvedCo1 = hasLocalMarks
-            ? (typeof (prevRow as any)?.co1 === 'number'
-                ? clamp(Number((prevRow as any).co1), 0, CO_MAX.co1)
-                : '')
+          // Don't clamp prevRow values — CO_MAX may still be at defaults if iqacPattern
+          // hasn't loaded yet, and clamping a valid stored mark (e.g. 20) against the
+          // default max (10) would corrupt the value.  Clamping happens at input time
+          // and on export, not here.
+          const resolvedCo1: number | '' = hasLocalMarks
+            ? (typeof (prevRow as any)?.co1 === 'number' ? (prevRow as any).co1 as number : '')
             : (publishedCo1 != null ? clamp(Number(publishedCo1), 0, CO_MAX.co1) : '');
 
-          const resolvedCo2 = hasLocalMarks
-            ? (typeof (prevRow as any)?.co2 === 'number'
-                ? clamp(Number((prevRow as any).co2), 0, CO_MAX.co2)
-                : '')
+          const resolvedCo2: number | '' = hasLocalMarks
+            ? (typeof (prevRow as any)?.co2 === 'number' ? (prevRow as any).co2 as number : '')
             : (publishedCo2 != null ? clamp(Number(publishedCo2), 0, CO_MAX.co2) : '');
 
           let resolvedReviewCoMarks = (prevRow as any)?.reviewCoMarks;
@@ -1540,7 +1540,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
       setSheet((prev) => ({
         ...prev,
-        rows: (prev.rows || []).map((r) => ({ ...r, co1: '', co2: '', total: '' })),
+        rows: (prev.rows || []).map((r) => ({ ...r, co1: '', co2: '', total: '', qMarks: [] })),
         markManagerLocked: false,
         markManagerSnapshot: null,
         markManagerApprovalUntil: null,
@@ -1685,8 +1685,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       return typeof row.co2 === 'number' ? round1(clamp(row.co2, 0, q2Max)) : '';
     };
 
-    const header = ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
-    const data = rowsToRender.map((r) => [r.registerNo, r.name, co1ForExport(r), co2ForExport(r), 'present']);
+    // Omit Q2 column entirely when CO2 has no marks (single-CO course like SPECIAL CSD).
+    const header = hideSecondCo
+      ? ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, 'Status']
+      : ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
+    const data = rowsToRender.map((r) => hideSecondCo
+      ? [r.registerNo, r.name, co1ForExport(r), 'present']
+      : [r.registerNo, r.name, co1ForExport(r), co2ForExport(r), 'present']);
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
     ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;

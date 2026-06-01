@@ -39,21 +39,32 @@ function useEditRequestFlag(key: string, fallbackKey?: string): boolean {
   useEffect(() => {
     let cancelled = false;
 
-    _resolveConfig().then((cfg) => {
-      if (!cancelled) setEnabled(_resolveFlagFromConfig(cfg, key, fallbackKey));
-    });
-
-    // Refresh every 5 minutes so IQAC changes propagate without a hard reload.
-    const tid = window.setInterval(() => {
+    const refresh = () => {
       _pendingPromise = null;
       _resolveConfig().then((cfg) => {
         if (!cancelled) setEnabled(_resolveFlagFromConfig(cfg, key, fallbackKey));
       });
-    }, 5 * 60 * 1000);
+    };
+
+    _resolveConfig().then((cfg) => {
+      if (!cancelled) setEnabled(_resolveFlagFromConfig(cfg, key, fallbackKey));
+    });
+
+    // Refresh every 60s so IQAC config changes propagate quickly across users
+    // (was 5 min — too slow when two faculty are coordinating on the same
+    // course/TA).
+    const tid = window.setInterval(refresh, 60 * 1000);
+
+    // Also invalidate immediately when sibling tabs publish or reset a CQI
+    // page — the same events the dashboards already listen to.
+    window.addEventListener('obe:published', refresh);
+    window.addEventListener('obe:reset', refresh);
 
     return () => {
       cancelled = true;
       window.clearInterval(tid);
+      window.removeEventListener('obe:published', refresh);
+      window.removeEventListener('obe:reset', refresh);
     };
   }, [fallbackKey, key]);
 

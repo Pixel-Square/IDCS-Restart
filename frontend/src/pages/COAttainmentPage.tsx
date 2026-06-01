@@ -1081,7 +1081,11 @@ export function COAttainmentPage({ courseId, enabledAssessments, classType: init
       }
     };
     window.addEventListener('obe:published', handler as any);
-    return () => window.removeEventListener('obe:published', handler as any);
+    window.addEventListener('obe:reset', handler as any);
+    return () => {
+      window.removeEventListener('obe:published', handler as any);
+      window.removeEventListener('obe:reset', handler as any);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId]);
 
