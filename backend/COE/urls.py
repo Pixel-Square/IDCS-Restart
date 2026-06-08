@@ -17,11 +17,13 @@ except ImportError:
     CoeResultCheckView = None
     CoeResultCheckOptionsView = None
 from .views_save import CoeResetExamDummies, CoeSaveExamDummies
-<<<<<<< HEAD
-from .external_staff_views import ExternalStaffListView, AssignExternalCodesView
-=======
-from .external_staff_views import ExternalStaffListView, AssignExternalCodesView, ExternalStaffDbMirrorView, ExternalStaffAdminSourceView, ExternalStaffAcademicsProfilesView
->>>>>>> 0803e45 (Questionbank)
+from .external_staff_views import (
+    AssignExternalCodesView,
+    ExternalStaffAcademicsProfilesView,
+    ExternalStaffAdminSourceView,
+    ExternalStaffDbMirrorView,
+    ExternalStaffListView,
+)
 
 urlpatterns = [
     path('portal/', CoePortalContextView.as_view(), name='coe_portal_context'),
@@ -38,12 +40,9 @@ urlpatterns = [
     path('student-marks/bulk/', CoeStudentMarksBulkView.as_view(), name='coe_student_marks_bulk'),
     path('final-result/', CoeFinalResultView.as_view(), name='coe_final_result'),
     path('external-staff/', ExternalStaffListView.as_view(), name='coe_external_staff'),
-<<<<<<< HEAD
-=======
     path('external-staff/admin-source/', ExternalStaffAdminSourceView.as_view(), name='coe_external_staff_admin_source'),
     path('external-staff/academics-profiles/', ExternalStaffAcademicsProfilesView.as_view(), name='coe_external_staff_academics_profiles'),
     path('external-staff/db-mirror/', ExternalStaffDbMirrorView.as_view(), name='coe_external_staff_db_mirror'),
->>>>>>> 0803e45 (Questionbank)
     path('external-staff/assign-codes/', AssignExternalCodesView.as_view(), name='coe_assign_external_codes'),
 ]
 

@@ -739,16 +739,10 @@ class StaffProfile(models.Model):
         on_delete=models.CASCADE,
         related_name='staff_profile'
     )
-<<<<<<< HEAD
-=======
-    staff_id = models.CharField(max_length=64, unique=True, db_index=True)
-    # Internal ID used for internal shuffling/identity mapping workflows.
->>>>>>> 0803e45 (Questionbank)
     internal_id = models.CharField(
         max_length=6,
         unique=True,
         db_index=True,
-<<<<<<< HEAD
         editable=False,
         help_text='Auto-generated 6-digit numeric unique ID.',
     )
@@ -756,24 +750,7 @@ class StaffProfile(models.Model):
         max_length=64,
         unique=True,
         db_index=True,
-        validators=[
-            RegexValidator(
-                regex=r'^\d{6}$',
-                message='Staff ID must be exactly 6 numeric digits.',
-                code='invalid_staff_id',
-            )
-        ],
-        help_text='Exactly 6 numeric digits (e.g. 100001).',
-=======
-        null=True,
-        blank=True,
-        validators=[
-            RegexValidator(
-                regex=r'^\d{6}$',
-                message='Internal ID must be exactly 6 digits (numeric only).',
-            )
-        ],
->>>>>>> 0803e45 (Questionbank)
+        help_text='Staff ID (format not restricted).',
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
@@ -832,20 +809,6 @@ class StaffProfile(models.Model):
         # Staff-specific status rules
         if hasattr(self, 'status') and self.status == 'ALUMNI':
             raise ValidationError({'status': 'Staff cannot have status ALUMNI.'})
-
-<<<<<<< HEAD
-=======
-    @classmethod
-    def generate_unique_internal_id(cls):
-        """Generate a unique 6-digit numeric internal ID."""
-        for _ in range(500):
-            # 000001 - 999999 (always 6 digits)
-            candidate = f"{secrets.randbelow(999_999) + 1:06d}"
-            if not cls.objects.filter(internal_id=candidate).exists():
-                return candidate
-        raise ValidationError({'internal_id': 'Unable to generate a unique internal ID. Please try again.'})
-
->>>>>>> 0803e45 (Questionbank)
     def save(self, *args, **kwargs):
         # Auto-generate internal_id if not set
         if not self.internal_id:

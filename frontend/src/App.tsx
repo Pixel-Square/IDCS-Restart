@@ -7,6 +7,7 @@ import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
+import TimetableAdminPage from './pages/timetable/admin/TimetableAdminPage';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
 import IQACEventApprovalPage from './pages/iqac/IQACEventApprovalPage';
 import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
@@ -492,7 +493,7 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/timetable"
-                  element={<ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["timetable.manage_templates"]} element={<TimetableAdminPage />} />}
                 />
                 <Route
                   path="/iqac/event-approvals"
