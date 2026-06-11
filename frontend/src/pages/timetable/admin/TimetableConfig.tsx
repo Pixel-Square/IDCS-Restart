@@ -1,5 +1,81 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trash2, Plus, Save, Edit2, X } from 'lucide-react';
+
+function TimePickerDropdown({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [hour, setHour] = useState('12');
+  const [minute, setMinute] = useState('00');
+  const [ampm, setAmpm] = useState('AM');
+
+  useEffect(() => {
+    if (value) {
+      const match = value.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (match) {
+        setHour(parseInt(match[1], 10).toString());
+        setMinute(match[2]);
+        setAmpm(match[3].toUpperCase());
+      }
+    }
+  }, [value]);
+
+  const handleChange = (h: string, m: string, ap: string) => {
+    setHour(h);
+    setMinute(m);
+    setAmpm(ap);
+    onChange(`${h}:${m} ${ap}`);
+  };
+
+  return (
+    <div className="flex gap-1 items-center bg-white border border-gray-300 rounded-lg px-2 py-1 focus-within:ring-2 focus-within:ring-blue-500 w-full sm:w-auto">
+      <select value={hour} onChange={e => handleChange(e.target.value, minute, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 12}, (_, i) => i + 1).map(h => <option key={h} value={h.toString()}>{h}</option>)}
+      </select>
+      <span className="text-gray-500 font-medium">:</span>
+      <select value={minute} onChange={e => handleChange(hour, e.target.value, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 60}, (_, i) => i).map(m => {
+          const mStr = m.toString().padStart(2, '0');
+          return <option key={mStr} value={mStr}>{mStr}</option>;
+        })}
+      </select>
+      <select value={ampm} onChange={e => handleChange(hour, minute, e.target.value)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer ml-1">
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+      </select>
+    </div>
+  );
+}
+
+function TimingSelector({ timing, onChange }: { timing: string, onChange: (val: string) => void }) {
+  const [start, setStart] = useState('12:00 AM');
+  const [end, setEnd] = useState('12:00 AM');
+
+  useEffect(() => {
+    if (timing) {
+      const parts = timing.split('-');
+      if (parts.length === 2) {
+        setStart(parts[0].trim());
+        setEnd(parts[1].trim());
+      }
+    }
+  }, [timing]);
+
+  const handleStartChange = (val: string) => {
+    setStart(val);
+    onChange(`${val} - ${end}`);
+  };
+  
+  const handleEndChange = (val: string) => {
+    setEnd(val);
+    onChange(`${start} - ${val}`);
+  };
+
+  return (
+    <div className="flex gap-2 items-center">
+      <TimePickerDropdown value={start} onChange={handleStartChange} />
+      <span className="text-gray-500 font-medium">to</span>
+      <TimePickerDropdown value={end} onChange={handleEndChange} />
+    </div>
+  );
+}
 
 interface Column {
   id: string;
@@ -370,16 +446,9 @@ export default function TimetableConfig({ templates, onSaveTemplate, onDeleteTem
                 
                 <div className="ml-12 flex gap-2 items-center">
                   <label className="text-sm font-medium text-gray-600 w-20">Timing:</label>
-                  <input
-                    type="text"
-                    value={column.timing}
-                    onChange={(e) => updateColumn(column.id, 'timing', e.target.value)}
-                    placeholder="e.g., 9:00 AM - 10:00 AM"
-                    className={`flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 ${
-                      column.timing.trim()
-                        ? 'border-gray-300 focus:ring-blue-500'
-                        : 'border-red-300 focus:ring-red-500 bg-red-50'
-                    }`}
+                  <TimingSelector
+                    timing={column.timing}
+                    onChange={(val) => updateColumn(column.id, 'timing', val)}
                   />
                   {!column.timing.trim() && (
                     <span className="text-red-500 text-sm font-semibold">Required</span>

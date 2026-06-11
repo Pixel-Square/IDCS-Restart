@@ -4,6 +4,58 @@ import { Trash2, Calendar, Clock, Plus, Edit, Save, X } from 'lucide-react'
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
+function TimePickerDropdown({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [hour, setHour] = useState('12');
+  const [minute, setMinute] = useState('00');
+  const [ampm, setAmpm] = useState('AM');
+
+  useEffect(() => {
+    if (value) {
+      const parts = value.split(':');
+      if (parts.length >= 2) {
+        let h = parseInt(parts[0], 10);
+        const m = parts[1];
+        const isPm = h >= 12;
+        if (h === 0) h = 12;
+        else if (h > 12) h -= 12;
+        setHour(h.toString());
+        setMinute(m);
+        setAmpm(isPm ? 'PM' : 'AM');
+      }
+    }
+  }, [value]);
+
+  const handleChange = (h: string, m: string, ap: string) => {
+    setHour(h);
+    setMinute(m);
+    setAmpm(ap);
+    let hh = parseInt(h, 10);
+    if (ap === 'PM' && hh < 12) hh += 12;
+    if (ap === 'AM' && hh === 12) hh = 0;
+    const hhStr = hh.toString().padStart(2, '0');
+    onChange(`${hhStr}:${m}:00`);
+  };
+
+  return (
+    <div className="flex gap-1 items-center bg-white border border-gray-300 rounded-lg px-2 py-1 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500 w-full">
+      <select value={hour} onChange={e => handleChange(e.target.value, minute, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 12}, (_, i) => i + 1).map(h => <option key={h} value={h.toString()}>{h}</option>)}
+      </select>
+      <span className="text-gray-500 font-medium">:</span>
+      <select value={minute} onChange={e => handleChange(hour, e.target.value, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 60}, (_, i) => i).map(m => {
+          const mStr = m.toString().padStart(2, '0');
+          return <option key={mStr} value={mStr}>{mStr}</option>;
+        })}
+      </select>
+      <select value={ampm} onChange={e => handleChange(hour, minute, e.target.value)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer ml-1">
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+      </select>
+    </div>
+  );
+}
+
 export default function TimetableEditor(){
   const [templates, setTemplates] = useState<any[]>([])
   const [selected, setSelected] = useState<any | null>(null)
@@ -296,19 +348,15 @@ export default function TimetableEditor(){
                                   />
                                 </td>
                                 <td className="border border-gray-200 px-4 py-3">
-                                  <input
-                                    type="time"
+                                  <TimePickerDropdown
                                     value={editSlotData.start_time || ''}
-                                    onChange={e => setEditSlotData({...editSlotData, start_time: e.target.value})}
-                                    className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    onChange={val => setEditSlotData({...editSlotData, start_time: val})}
                                   />
                                 </td>
                                 <td className="border border-gray-200 px-4 py-3">
-                                  <input
-                                    type="time"
+                                  <TimePickerDropdown
                                     value={editSlotData.end_time || ''}
-                                    onChange={e => setEditSlotData({...editSlotData, end_time: e.target.value})}
-                                    className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    onChange={val => setEditSlotData({...editSlotData, end_time: val})}
                                   />
                                 </td>
                                 <td className="border border-gray-200 px-4 py-3">
@@ -414,21 +462,17 @@ export default function TimetableEditor(){
                     
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
-                      <input 
-                        type="time" 
-                        value={newSlot.start_time} 
-                        onChange={e=>setNewSlot({...newSlot, start_time: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      <TimePickerDropdown
+                        value={newSlot.start_time}
+                        onChange={val => setNewSlot({...newSlot, start_time: val})}
                       />
                     </div>
                     
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
-                      <input 
-                        type="time" 
-                        value={newSlot.end_time} 
-                        onChange={e=>setNewSlot({...newSlot, end_time: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      <TimePickerDropdown
+                        value={newSlot.end_time}
+                        onChange={val => setNewSlot({...newSlot, end_time: val})}
                       />
                     </div>
                     

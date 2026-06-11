@@ -57,6 +57,70 @@ const getAssignmentStaffName = (staffDetails: any) => {
   return staffDetails.staff_id || '—'
 }
 
+function SearchableStaffSelect({ staffList, initialValue, id }: { staffList: Staff[], initialValue: string | number, id: string }) {
+  const [value, setValue] = useState<string | number>(initialValue || '');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  
+  const selectedStaff = staffList.find(s => s.id == value);
+  const displayValue = selectedStaff ? `${selectedStaff.staff_id} - ${getStaffDisplayName(selectedStaff)}` : '-- select staff --';
+
+  const filteredStaff = staffList.filter(s => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    const name = getStaffDisplayName(s).toLowerCase();
+    const sid = (s.staff_id || '').toLowerCase();
+    return name.includes(term) || sid.includes(term);
+  });
+
+  return (
+    <div className="relative">
+      <div 
+        className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm cursor-pointer focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        {displayValue}
+      </div>
+      <input type="hidden" id={id} value={value} />
+      
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl">
+          <div className="p-2 border-b border-gray-200">
+            <input 
+              type="text" 
+              className="w-full p-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" 
+              placeholder="Search by ID or Name..." 
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto">
+            <div 
+              className="p-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-500 italic"
+              onClick={() => { setValue(''); setIsOpen(false); }}
+            >
+              -- select staff --
+            </div>
+            {filteredStaff.map(st => (
+              <div 
+                key={st.id} 
+                className="p-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-800"
+                onClick={() => { setValue(st.id); setIsOpen(false); }}
+              >
+                {st.staff_id} - {getStaffDisplayName(st)}
+              </div>
+            ))}
+            {filteredStaff.length === 0 && (
+              <div className="p-2 text-sm text-gray-500">No matches found.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TeachingAssignmentsPage(){
   const [sections, setSections] = useState<Section[]>([])
   const [staff, setStaff] = useState<Staff[]>([])
@@ -550,17 +614,17 @@ export default function TeachingAssignmentsPage(){
     return assignments.find(a => {
       // Check section match using section_details
       const sectionMatches = 
-        (a.section_details && a.section_details.id === sectionId) ||
-        ((a as any).section_details && (a as any).section_details.id === sectionId) ||
-        a.section === sectionId || 
-        (a as any).section_id === sectionId;
+        (a.section_details && a.section_details.id == sectionId) ||
+        ((a as any).section_details && (a as any).section_details.id == sectionId) ||
+        a.section == sectionId || 
+        (a as any).section_id == sectionId;
       
       // Check curriculum match using curriculum_row_details
       const curriculumMatches = 
-        (a.curriculum_row_details && a.curriculum_row_details.id === curricularRowId) ||
-        ((a as any).curriculum_row_details && (a as any).curriculum_row_details.id === curricularRowId) ||
-        (a.curriculum_row && a.curriculum_row.id === curricularRowId) ||
-        ((a as any).curriculum_row_id === curricularRowId);
+        (a.curriculum_row_details && a.curriculum_row_details.id == curricularRowId) ||
+        ((a as any).curriculum_row_details && (a as any).curriculum_row_details.id == curricularRowId) ||
+        (a.curriculum_row && a.curriculum_row.id == curricularRowId) ||
+        ((a as any).curriculum_row_id == curricularRowId);
       
       return sectionMatches && curriculumMatches;
     });
@@ -1032,18 +1096,11 @@ export default function TeachingAssignmentsPage(){
                                   </td>
                                   <td className="px-4 py-3">
                                     {editing ? (
-                                      <select 
+                                      <SearchableStaffSelect 
                                         id={`staff-${section.id}-${subject.id}`}
-                                        defaultValue={existingAssignment?.staff_details?.id || existingAssignment?.staff || ''}
-                                        className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      >
-                                        <option value="">-- select staff --</option>
-                                        {getFilteredStaffForDeptCore().map(st => (
-                                          <option key={st.id} value={st.id}>
-                                            {st.staff_id} - {getStaffDisplayName(st)}
-                                          </option>
-                                        ))}
-                                      </select>
+                                        initialValue={existingAssignment?.staff_details?.id || existingAssignment?.staff || ''}
+                                        staffList={getFilteredStaffForDeptCore()}
+                                      />
                                     ) : existingAssignment ? (
                                       <div className="text-sm text-gray-900 font-medium">
                                         {existingAssignment.staff_details?.staff_id} - {getAssignmentStaffName(existingAssignment.staff_details)}
@@ -1531,14 +1588,11 @@ export default function TeachingAssignmentsPage(){
                                 <div className="text-sm text-gray-400 italic">Managed by {opt.owner_department_name?.split(' - ')[1] || opt.owner_department_name?.split(' - ')[0] || 'owner dept'}</div>
                               )
                             ) : editingElective ? (
-                              <select 
+                              <SearchableStaffSelect 
                                 id={`elective-staff-${opt.id}`}
-                                defaultValue={existingElectiveAssignment?.staff_details?.id || existingElectiveAssignment?.staff || ''}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                              >
-                                <option value="">-- select staff --</option>
-                                {getFilteredStaffForElective().map(st => (<option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>))}
-                              </select>
+                                initialValue={existingElectiveAssignment?.staff_details?.id || existingElectiveAssignment?.staff || ''}
+                                staffList={getFilteredStaffForElective()}
+                              />
                             ) : existingElectiveAssignment ? (
                               <div className="text-sm text-gray-900 font-medium">
                                 {existingElectiveAssignment.staff_details?.staff_id} - {getAssignmentStaffName(existingElectiveAssignment.staff_details)}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import fetchWithAuth from '../../../services/fetchAuth';
 import TimetableConfig from './TimetableConfig';
 import TimetableCreator from './TimetableCreator';
 import TimetableGenerator from './TimetableGenerator';
@@ -67,74 +68,119 @@ export default function TimetableAdminPage() {
   const [templates, setTemplates] = useState<TimetableTemplate[]>([]);
   const [semesterTemplates, setSemesterTemplates] = useState<SemesterTemplate[]>([]);
 
-  // Load templates from localStorage on component mount
+  // Load templates from API on component mount
   useEffect(() => {
-    try {
-      const savedTemplates = localStorage.getItem(STORAGE_KEY);
-      if (savedTemplates) {
-        const parsed = JSON.parse(savedTemplates);
-        const normalized = parsed.map((t: TimetableTemplate) => normalizeTemplate(t));
-        setTemplates(normalized);
-      }
+    const fetchTemplates = async () => {
+      try {
+        const response = await fetchWithAuth('/api/timetable/templates/');
+        if (response.ok) {
+          const data = await response.json();
+          const parsedTemplates = [];
+          for (const item of data) {
+             let rows = [];
+             let columns = [];
+             try {
+                if (item.description) {
+                   const parsedDesc = JSON.parse(item.description);
+                   if (parsedDesc.rows) rows = parsedDesc.rows;
+                   if (parsedDesc.columns) columns = parsedDesc.columns;
+                }
+             } catch(e) {}
 
-      const savedSemTemplates = localStorage.getItem(SEM_STORAGE_KEY);
-      if (savedSemTemplates) {
-        const parsed = JSON.parse(savedSemTemplates);
-        setSemesterTemplates(parsed);
+             // fallback mapping if empty
+             if (columns.length === 0 && item.periods) {
+                 columns = item.periods.map(p => ({
+                     id: `col-${p.id}`,
+                     title: `Column ${p.index}`,
+                     period: p.label || `Period ${p.index}`,
+                     timing: (p.start_time && p.end_time) ? `${p.start_time} - ${p.end_time}` : ''
+                 }));
+             }
+             if (rows.length === 0) {
+                 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+                 rows = DAYS.map((d, i) => ({ id: `row-${i+1}`, day: d }));
+             }
+
+             parsedTemplates.push({
+                 id: item.id.toString(),
+                 name: item.name,
+                 semesterType: item.parity ? item.parity.toLowerCase() : 'odd',
+                 columns,
+                 rows,
+                 createdAt: item.created_at
+             });
+          }
+          
+          setSemesterTemplates(parsedTemplates);
+          // the other templates use the same struct
+          const normalized = parsedTemplates.map((t: any) => normalizeTemplate(t));
+          setTemplates(normalized);
+        }
+      } catch (error) {
+        console.error('Error fetching templates:', error);
       }
-    } catch (error) {
-      console.error('Error loading templates from localStorage:', error);
-    }
+    };
+    fetchTemplates();
   }, []);
 
-  // Sync templates to localStorage whenever they change
-  useEffect(() => {
+  const handleSaveSemesterTemplate = async (template: SemesterTemplate) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));
-    } catch (error) {
-      console.error('Error saving templates to localStorage:', error);
+      const payload = {
+         id: template.id,
+         name: template.name,
+         semesterType: template.semesterType,
+         columns: template.columns,
+         rows: template.rows
+      };
+      
+      const response = await fetchWithAuth('/api/timetable/templates/save_frontend_template/', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(payload)
+      });
+      
+      if (response.ok) {
+         const data = await response.json();
+         const finalTemplate = { ...template, id: data.id.toString() };
+         setSemesterTemplates((prev) => {
+            const existing = prev.findIndex((t) => t.id === finalTemplate.id || t.id === template.id);
+            if (existing >= 0) {
+              const updated = [...prev];
+              updated[existing] = finalTemplate;
+              return updated;
+            }
+            return [...prev, finalTemplate];
+         });
+         const normFinal = normalizeTemplate(finalTemplate as any);
+         setTemplates((prev) => {
+            const existing = prev.findIndex((t) => t.id === normFinal.id || t.id === template.id);
+            if (existing >= 0) {
+              const updated = [...prev];
+              updated[existing] = normFinal;
+              return updated;
+            }
+            return [...prev, normFinal];
+         });
+      }
+    } catch (e) {
+      console.error('Save failed:', e);
+      alert('Failed to save template to server.');
     }
-  }, [templates]);
+  };
 
-  // Sync semester templates to localStorage whenever they change
-  useEffect(() => {
+  const handleDeleteSemesterTemplate = async (templateId: string) => {
     try {
-      localStorage.setItem(SEM_STORAGE_KEY, JSON.stringify(semesterTemplates));
-    } catch (error) {
-      console.error('Error saving semester templates to localStorage:', error);
+      if (!templateId.toString().startsWith('template-')) {
+          await fetchWithAuth(`/api/timetable/templates/${templateId}/`, {
+             method: 'DELETE'
+          });
+      }
+      setSemesterTemplates((prev) => prev.filter((t) => t.id !== templateId));
+      setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+    } catch (e) {
+      console.error('Delete failed:', e);
+      alert('Failed to delete template from server.');
     }
-  }, [semesterTemplates]);
-
-  const handleSaveTemplate = (template: TimetableTemplate) => {
-    setTemplates((prev) => {
-      const existing = prev.findIndex((t) => t.id === template.id);
-      if (existing >= 0) {
-        const updated = [...prev];
-        updated[existing] = template;
-        return updated;
-      }
-      return [...prev, template];
-    });
-  };
-
-  const handleDeleteTemplate = (templateId: string) => {
-    setTemplates((prev) => prev.filter((t) => t.id !== templateId));
-  };
-
-  const handleSaveSemesterTemplate = (template: SemesterTemplate) => {
-    setSemesterTemplates((prev) => {
-      const existing = prev.findIndex((t) => t.id === template.id);
-      if (existing >= 0) {
-        const updated = [...prev];
-        updated[existing] = template;
-        return updated;
-      }
-      return [...prev, template];
-    });
-  };
-
-  const handleDeleteSemesterTemplate = (templateId: string) => {
-    setSemesterTemplates((prev) => prev.filter((t) => t.id !== templateId));
   };
 
   return (

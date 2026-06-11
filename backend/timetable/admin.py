@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
 from .models import SpecialTimetable, SpecialTimetableEntry, PeriodSwapRequest
-from .models import TeacherConstraints, SubjectRequirements, TeacherSubjectMapping, GeneratedTimetable, GenerationLog
+# from .models import TeacherConstraints, SubjectRequirements, TeacherSubjectMapping, GeneratedTimetable, GenerationLog
 
 
 @admin.register(TimetableTemplate)
@@ -63,6 +63,7 @@ class PeriodSwapRequestAdmin(admin.ModelAdmin):
     )
 
 
+"""
 # ─────────────────────────────────────────────────────────────
 # Automatic Timetable Generator Admin
 # ─────────────────────────────────────────────────────────────
@@ -185,3 +186,4 @@ class GenerationLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         # Allow deletion of logs for cleanup
         return True
+"""

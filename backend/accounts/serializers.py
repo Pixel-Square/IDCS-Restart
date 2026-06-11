@@ -499,8 +499,11 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         # resolve by email
         if '@' in identifier:
             user = User.objects.filter(email__iexact=identifier).first()
+        else:
+            # try username for non-email identifiers (e.g. admin)
+            user = User.objects.filter(username__iexact=identifier).first()
 
-        # if not an email, try student reg_no then staff_id
+        # if not found yet, try student reg_no then staff_id
         if user is None:
             try:
                 from academics.models import StudentProfile, StaffProfile

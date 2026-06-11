@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ChevronLeft, Copy } from 'lucide-react';
 import { SearchableDropdown } from '../../../components/ui/SearchableDropdown';
 import { fetchDepartmentStaff } from '../../../services/staff';
+import TeachingAssignSection from './TeachingAssignSection';
 
 const DEPARTMENT_OPTIONS = [
   { label: 'CIVIL Engineering', value: 'civil' },
@@ -29,24 +30,8 @@ const COURSE_OPTIONS = [
   { label: 'Master of Business Administration (MBA)', value: 'mba' }
 ];
 
-const FACULTY_OPTIONS = [
-  { label: 'Dr. John Smith', value: 'dr_john_smith' },
-  { label: 'Dr. Sarah Johnson', value: 'dr_sarah_johnson' },
-  { label: 'Prof. Michael Williams', value: 'prof_michael_williams' },
-  { label: 'Prof. Emily Brown', value: 'prof_emily_brown' },
-  { label: 'Dr. David Jones', value: 'dr_david_jones' },
-  { label: 'Dr. Jessica Garcia', value: 'dr_jessica_garcia' },
-  { label: 'Prof. James Miller', value: 'prof_james_miller' },
-  { label: 'Prof. Linda Davis', value: 'prof_linda_davis' },
-  { label: 'Dr. Robert Rodriguez', value: 'dr_robert_rodriguez' },
-  { label: 'Dr. Maria Martinez', value: 'dr_maria_martinez' },
-  { label: 'Dr. William Anderson', value: 'dr_william_anderson' },
-  { label: 'Prof. Richard Taylor', value: 'prof_richard_taylor' },
-  { label: 'Prof. Susan Thomas', value: 'prof_susan_thomas' },
-  { label: 'Dr. Joseph Moore', value: 'dr_joseph_moore' },
-  { label: 'Dr. Charles Jackson', value: 'dr_charles_jackson' },
-  { label: 'Prof. Christopher Martin', value: 'prof_christopher_martin' },
-];
+// (Removed placeholder global faculty options. Faculty list is fetched dynamically per department.)
+
 
 interface Column {
   id: string;
@@ -80,7 +65,8 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedCourse, setSelectedCourse] = useState('');
   const [selectedFaculty, setSelectedFaculty] = useState('');
-  const [facultyOptions, setFacultyOptions] = useState<{label: string, value: string}[]>(FACULTY_OPTIONS);
+  const [facultyOptions, setFacultyOptions] = useState<{label: string, value: string}[]>([]);
+  const [showTeachingAssign, setShowTeachingAssign] = useState(false);
 
   useEffect(() => {
     async function loadStaff() {
@@ -232,29 +218,48 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
         {isGenerating && (
           <div className="mt-6 p-6 bg-white rounded-lg shadow-md border-t-4 border-green-500">
             <h3 className="text-xl font-bold mb-4 text-gray-800">Generate Options</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <SearchableDropdown
-                label="Department"
-                placeholder="Select Department"
-                options={DEPARTMENT_OPTIONS}
-                value={selectedDepartment}
-                onChange={setSelectedDepartment}
-              />
-              <SearchableDropdown
-                label="Course"
-                placeholder="Select Course"
-                options={COURSE_OPTIONS}
-                value={selectedCourse}
-                onChange={setSelectedCourse}
-              />
-              <SearchableDropdown
-                label="Faculty Name"
-                placeholder="Select Faculty"
-                options={facultyOptions}
-                value={selectedFaculty}
-                onChange={setSelectedFaculty}
-              />
+            
+            {/* Box for Department, Course, Faculty */}
+            <div className="border border-gray-200 p-4 rounded-lg bg-gray-50 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <SearchableDropdown
+                  label="Department"
+                  placeholder="Select Department"
+                  options={DEPARTMENT_OPTIONS}
+                  value={selectedDepartment}
+                  onChange={setSelectedDepartment}
+                />
+                <SearchableDropdown
+                  label="Course"
+                  placeholder="Select Course"
+                  options={COURSE_OPTIONS}
+                  value={selectedCourse}
+                  onChange={setSelectedCourse}
+                />
+                <SearchableDropdown
+                  label="Faculty Name"
+                  placeholder="Select Faculty"
+                  options={facultyOptions}
+                  value={selectedFaculty}
+                  onChange={setSelectedFaculty}
+                />
+              </div>
             </div>
+
+            {/* Box for Teaching Assign */}
+            <div className="border border-gray-200 p-4 rounded-lg bg-gray-50 mb-6">
+              <button 
+                onClick={() => setShowTeachingAssign(!showTeachingAssign)}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+              >
+                {showTeachingAssign ? 'Hide Teaching Assign' : 'Teaching Assign'}
+              </button>
+
+              {showTeachingAssign && (
+                <TeachingAssignSection facultyOptions={facultyOptions} />
+              )}
+            </div>
+
             <div className="mt-6 flex justify-end gap-3">
               <button 
                 className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 font-semibold transition-colors"

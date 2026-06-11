@@ -1359,7 +1359,109 @@ class PeriodSwapView(APIView):
         return Response({'message': 'Swap retained', 'new_date': next_date_str})
 
 
+from rest_framework.decorators import action
+
 class TimetableTemplateViewSet(viewsets.ModelViewSet):
+
+    @action(detail=False, methods=['post'])
+    def save_frontend_template(self, request):
+        data = request.data
+        template_id = data.get('id')
+        name = data.get('name')
+        semester_type = data.get('semesterType', 'odd').upper()
+        columns = data.get('columns', [])
+        rows = data.get('rows', [])
+        
+        # We will store the exact JSON config in the description field so the frontend can reconstruct it.
+        import json
+        description = json.dumps({
+            'columns': columns,
+            'rows': rows,
+            'semesterType': data.get('semesterType', 'odd')
+        })
+
+        if template_id and str(template_id).startswith('template-'):
+            # It's a newly created one from frontend, not yet in DB
+            template = TimetableTemplate.objects.create(
+                name=name,
+                parity=semester_type,
+                description=description,
+                created_by=request.user,
+                is_active=True
+            )
+        elif template_id:
+            try:
+                template = TimetableTemplate.objects.get(pk=template_id)
+                template.name = name
+                template.parity = semester_type
+                template.description = description
+                template.save()
+                # delete old slots
+                template.periods.all().delete()
+            except TimetableTemplate.DoesNotExist:
+                template = TimetableTemplate.objects.create(
+                    name=name,
+                    parity=semester_type,
+                    description=description,
+                    created_by=request.user,
+                    is_active=True
+                )
+        else:
+            template = TimetableTemplate.objects.create(
+                name=name,
+                parity=semester_type,
+                description=description,
+                created_by=request.user,
+                is_active=True
+            )
+
+        # Create slots based on columns
+        import datetime
+        import re
+        
+        def parse_time(t_str):
+            if not t_str: return None
+            try:
+                match = re.match(r'(\d+):(\d+)\s*(AM|PM)', t_str.strip(), re.IGNORECASE)
+                if match:
+                    h, m, ap = match.groups()
+                    h = int(h)
+                    m = int(m)
+                    if ap.upper() == 'PM' and h < 12:
+                        h += 12
+                    elif ap.upper() == 'AM' and h == 12:
+                        h = 0
+                    return datetime.time(h, m)
+            except Exception:
+                pass
+            return None
+
+        for idx, col in enumerate(columns):
+            start_time = None
+            end_time = None
+            if col.get('timing'):
+                parts = col.get('timing').split('-')
+                if len(parts) == 2:
+                    start_time = parse_time(parts[0])
+                    end_time = parse_time(parts[1])
+            
+            period_name = col.get('period', '')
+            is_break = period_name.lower() == 'break'
+            is_lunch = period_name.lower() == 'lunch'
+            
+            TimetableSlot.objects.create(
+                template=template,
+                index=idx + 1,
+                label=period_name,
+                is_break=is_break,
+                is_lunch=is_lunch,
+                start_time=start_time,
+                end_time=end_time
+            )
+
+        # Return the template
+        return Response({'id': template.id, 'status': 'success'})
+
     queryset = TimetableTemplate.objects.all().prefetch_related('periods')
     serializer_class = TimetableTemplateSerializer
     permission_classes = (IsAuthenticated,)
