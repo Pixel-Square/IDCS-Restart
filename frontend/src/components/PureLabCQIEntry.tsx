@@ -379,7 +379,8 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
     try {
       const entries: Record<string, any> = {};
       for (const [sid, val] of Object.entries(cqiEntries)) {
-        entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
+        const mark = typeof val === 'number' ? val : null;
+        entries[sid] = { cqiMark: mark, co1: mark };
       }
       const res = await fetchWithAuth(
         `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
@@ -414,7 +415,8 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
       await saveDraft();
       const entries: Record<string, any> = {};
       for (const [sid, val] of Object.entries(cqiEntries)) {
-        entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
+        const mark = typeof val === 'number' ? val : null;
+        entries[sid] = { cqiMark: mark, co1: mark };
       }
       const res = await fetchWithAuth(
         `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}`,

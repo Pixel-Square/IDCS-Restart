@@ -605,6 +605,7 @@ export default function LabCourseMarksEntry({
     return null;
   }, [currentClassTypeWeight]);
 
+  // 6-CO mode only applies to standard LAB, never to LAB2 (lab_PC) which only has CO1-CO5
   const is6CoMode = normalizedClassType === 'LAB' && Boolean((draft.sheet as any).is6CoMode);
 
   const effectiveLabCycleConfig = useMemo((): LabCycleWeights | null => {
@@ -1080,7 +1081,8 @@ export default function LabCourseMarksEntry({
 
   const coConfigs = useMemo(() => ensureCoConfigs(draft.sheet), [draft.sheet]);
   const markManagerLocked = Boolean(draft.sheet.markManagerLocked);
-  const ciaExamEnabled = ciaAvailable ? (isTcpl ? true : draft.sheet.ciaExamEnabled !== false) : false;
+  const isLab2 = normalizedClassType === 'LAB2';
+  const ciaExamEnabled = isLab2 ? false : (ciaAvailable ? (isTcpl ? true : draft.sheet.ciaExamEnabled !== false) : false);
   const ciaExamMaxEffective = useMemo(() => {
     return clampInt(Number((draft.sheet as any).ciaExamMax ?? DEFAULT_CIA_EXAM_MAX), 0, 100);
   }, [(draft.sheet as any).ciaExamMax]);
@@ -3259,6 +3261,7 @@ export default function LabCourseMarksEntry({
               );
             })}
 
+            {!isLab2 && (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 800, fontSize: 12, color: '#111827', background: isLabExamUi ? '#ffffff' : 'transparent', border: isLabExamUi ? '1px solid #dbe7e2' : 'none', borderRadius: isLabExamUi ? 8 : 0, padding: isLabExamUi ? '5px 8px' : 0 }}>
               {ciaAvailable ? (
                 <>
@@ -3276,6 +3279,7 @@ export default function LabCourseMarksEntry({
                 </>
               ) : null}
             </label>
+            )}
           </div>
 
           <div

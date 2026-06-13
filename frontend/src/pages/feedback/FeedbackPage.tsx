@@ -115,6 +115,9 @@ const getInitialFormData = (): FeedbackFormData => ({
   years: [],
   semesters: [],
   sections: [],
+  faculty_name: '',
+  section_wise: false,
+  section_staff_assignments: [],
   common_comment_enabled: true,
   allow_hod_view: false,
   anonymous: false,
@@ -134,6 +137,9 @@ type FeedbackFormData = {
   years: number[];
   semesters: number[];
   sections: number[];
+  faculty_name: string;
+  section_wise: boolean;
+  section_staff_assignments: { section: number; staff_name: string }[];
   common_comment_enabled: boolean;
   allow_hod_view: boolean;
   anonymous: boolean;
@@ -181,6 +187,7 @@ type ResponseDetail = {
   user_name: string;
   register_number: string | null;
   submitted_at: string;
+  anonymous?: boolean;
   answers: {
     question_id: number;
     question_text: string;
@@ -600,6 +607,7 @@ export default function FeedbackPage() {
   const showPrincipalSection = canPrincipalFeedbackPage && canPrincipalAllDepartmentsAccess && (canPrincipalCreate || canPrincipalAnalytics);
   const isIQACUser = canAllDepartmentsAccess && !canPrincipalFeedbackPage;
   const isStudentUser = String(user?.profile_type || '').toUpperCase() === 'STUDENT';
+  const isCommonCommentEnabled = Boolean(formData.common_comment_enabled);
 
   const [principalDashboardLoading, setPrincipalDashboardLoading] = useState(false);
   const [principalDashboardError, setPrincipalDashboardError] = useState<string | null>(null);
@@ -637,13 +645,13 @@ export default function FeedbackPage() {
   // Track latest per-question comment selections while Common Comment is OFF.
   // This lets us restore exact manual choices when toggling Common Comment OFF again.
   useEffect(() => {
-    if (formData.common_comment_enabled) return;
+    if (isCommonCommentEnabled) return;
     const next: Record<string, boolean> = {};
     (formData.questions || []).forEach((q, idx) => {
       next[getQuestionKey(q, idx)] = Boolean(q.allow_comment);
     });
     questionAllowCommentSnapshotRef.current = next;
-  }, [formData.common_comment_enabled, formData.questions]);
+  }, [isCommonCommentEnabled, formData.questions]);
 
   const openFeedbackForm = (form: FeedbackForm) => {
     const submissionStatus = String(form.submission_status || '').toUpperCase();
@@ -2290,7 +2298,7 @@ export default function FeedbackPage() {
   const handleAddQuestion = () => {
     if (!newQuestion.trim()) return;
 
-    const commonCommentEnabled = Boolean(formData.common_comment_enabled);
+    const commonCommentEnabled = isCommonCommentEnabled;
 
     // Ensure at least one response type is selected
     if (!allowRating && !allowComment && !allowOwnType) {
@@ -2354,7 +2362,7 @@ export default function FeedbackPage() {
     field: 'allow_rating' | 'allow_comment',
     checked: boolean
   ) => {
-    if (field === 'allow_comment' && formData.common_comment_enabled) {
+    if (field === 'allow_comment' && isCommonCommentEnabled) {
       return;
     }
 
@@ -2445,7 +2453,7 @@ export default function FeedbackPage() {
           question_type: q.allow_rating ? 'rating_radio_comment' : 'radio',
           allow_rating: q.allow_rating ? true : false,
           // Enabling Own Type must not force question-wise comment on.
-          allow_comment: formData.common_comment_enabled ? false : q.allow_comment,
+          allow_comment: isCommonCommentEnabled ? false : q.allow_comment,
           options: ensureMinOwnTypeOptions(q.options),
         };
 
@@ -2512,6 +2520,14 @@ export default function FeedbackPage() {
       status: (form.status as 'DRAFT' | 'ACTIVE') || 'DRAFT',
       common_comment_enabled: Boolean((form as any).common_comment_enabled),
       allow_hod_view: Boolean((form as any).allow_hod_view),
+      faculty_name: String((form as any).faculty_name || ''),
+      section_wise: Boolean((form as any).section_wise),
+      section_staff_assignments: Array.isArray((form as any).section_staff_assignments)
+        ? (form as any).section_staff_assignments.map((assignment: any) => ({
+            section: Number(assignment.section),
+            staff_name: String(assignment.staff_name || ''),
+          }))
+        : [],
       questions: (form.questions || []).map((q, idx) => ({
         id: q.id,
         ui_id: `saved-${q.id || idx}-${Date.now()}`,
@@ -2571,7 +2587,7 @@ export default function FeedbackPage() {
         return;
       }
 
-      if (formData.common_comment_enabled && q.question_type === 'text') {
+      if (isCommonCommentEnabled && q.question_type === 'text') {
         setSubmitError(`Question ${i + 1} is text-only. Disable Common Comment or enable rating.`);
         return;
       }
@@ -2605,6 +2621,26 @@ export default function FeedbackPage() {
       if (formData.years.length === 0) {
         setSubmitError('Please select at least one year');
         return;
+      }
+
+      if (formData.type === 'OPEN_FEEDBACK') {
+        if (formData.section_wise) {
+          if (formData.sections.length === 0) {
+            setSubmitError('Please select at least one section for section-wise feedback');
+            return;
+          }
+          const missingStaff = formData.sections.some((sectionId) => {
+            const assignment = formData.section_staff_assignments.find((a) => a.section === sectionId);
+            return !assignment || !assignment.staff_name.trim();
+          });
+          if (missingStaff) {
+            setSubmitError('Please enter staff names for all selected sections');
+            return;
+          }
+        } else if (!formData.faculty_name.trim()) {
+          setSubmitError('Please enter a faculty name');
+          return;
+        }
       }
     }
 
@@ -2659,6 +2695,12 @@ export default function FeedbackPage() {
         all_departments: isIQACUser && allDepartmentsSelected,
         department: formData.department,
         status: formData.status,
+        faculty_name: formData.faculty_name,
+        section_wise: Boolean(formData.section_wise),
+        section_staff_assignments: formData.section_staff_assignments.map((assignment) => ({
+          section: assignment.section,
+          staff_name: assignment.staff_name,
+        })),
         common_comment_enabled: Boolean(formData.common_comment_enabled),
         allow_hod_view: Boolean(formData.allow_hod_view),
         anonymous: Boolean(formData.anonymous),
@@ -2666,7 +2708,7 @@ export default function FeedbackPage() {
           id: q.id,
           question: q.question,
           allow_rating: q.allow_rating,
-          allow_comment: formData.common_comment_enabled ? false : q.allow_comment,
+          allow_comment: isCommonCommentEnabled ? false : q.allow_comment,
           is_mandatory: Boolean(q.is_mandatory),
           order: q.order,
           answer_type: q.answer_type,
@@ -3775,7 +3817,7 @@ export default function FeedbackPage() {
                       {formData.target_type === 'STUDENT' && (
                         <button
                           type="button"
-                          onClick={() => setFormData({ ...formData, type: 'SUBJECT_FEEDBACK' })}
+                          onClick={() => setFormData({ ...formData, type: 'SUBJECT_FEEDBACK', common_comment_enabled: true })}
                           className={`p-4 rounded-lg border-2 transition-all ${
                             formData.type === 'SUBJECT_FEEDBACK'
                               ? 'border-green-600 bg-green-50'
@@ -3790,7 +3832,7 @@ export default function FeedbackPage() {
                       )}
                       <button
                         type="button"
-                        onClick={() => setFormData({ ...formData, type: 'OPEN_FEEDBACK' })}
+                        onClick={() => setFormData({ ...formData, type: 'OPEN_FEEDBACK', common_comment_enabled: false })}
                         className={`p-4 rounded-lg border-2 transition-all ${
                           formData.type === 'OPEN_FEEDBACK'
                             ? 'border-green-600 bg-green-50'
@@ -3939,9 +3981,10 @@ export default function FeedbackPage() {
                                             newYears.flatMap(y => classOptions.year_sections?.[y] || []).map(s => s.value)
                                           );
                                           const newSections = formData.sections.filter(s => availableSectionIds.has(s));
+                                          const newSectionStaffAssignments = formData.section_staff_assignments.filter((assignment) => newSections.includes(assignment.section));
 
                                           // Semester will be determined automatically by backend
-                                          setFormData({ ...formData, years: newYears, sections: newSections });
+                                          setFormData({ ...formData, years: newYears, sections: newSections, section_staff_assignments: newSectionStaffAssignments });
                                         }}
                                         className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                                       />
@@ -4003,7 +4046,13 @@ export default function FeedbackPage() {
                                           const newSections = e.target.checked
                                             ? [...formData.sections, sec.value]
                                             : formData.sections.filter(s => s !== sec.value);
-                                          setFormData({ ...formData, sections: newSections });
+                                          const newSectionStaffAssignments = e.target.checked
+                                            ? [
+                                                ...formData.section_staff_assignments.filter((assignment) => newSections.includes(assignment.section)),
+                                                { section: sec.value, staff_name: '' },
+                                              ]
+                                            : formData.section_staff_assignments.filter((assignment) => newSections.includes(assignment.section));
+                                          setFormData({ ...formData, sections: newSections, section_staff_assignments: newSectionStaffAssignments });
                                         }}
                                         className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                                       />
@@ -4015,6 +4064,127 @@ export default function FeedbackPage() {
                             )}
                           </div>
                         </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {formData.target_type === 'STUDENT' && formData.type === 'OPEN_FEEDBACK' && (
+                  <div className="space-y-4 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Common Feedback Settings</h3>
+                        <p className="text-xs text-slate-600">Use section-wise mode to assign a staff name for each selected section.</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, section_wise: false, section_staff_assignments: [] })}
+                          className={`px-3 py-2 rounded-lg text-sm font-medium transition ${formData.section_wise ? 'bg-white border border-slate-300 text-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                        >
+                          General
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, section_wise: true })}
+                          className={`px-3 py-2 rounded-lg text-sm font-medium transition ${formData.section_wise ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-white border border-slate-300 text-slate-700'}`}
+                        >
+                          Section-wise
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-white border border-emerald-200 rounded-lg">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={isCommonCommentEnabled}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setFormData((prev) => ({
+                              ...prev,
+                              common_comment_enabled: checked,
+                              questions: (prev.questions || []).map((q) => ({
+                                ...q,
+                                allow_comment: checked ? false : q.allow_comment,
+                              })),
+                            }));
+                            if (checked) {
+                              setAllowComment(false);
+                            }
+                          }}
+                          className="mt-1 w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-2 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">Common Comment (Overall)</p>
+                          <p className="text-xs text-slate-600 mt-0.5">
+                            Disables per-question comments. Text-only questions are not allowed when enabled.
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+
+                    {!formData.section_wise ? (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Faculty Name <span className="text-red-500">*</span></label>
+                        <input
+                          type="text"
+                          value={formData.faculty_name}
+                          onChange={(e) => setFormData({ ...formData, faculty_name: e.target.value })}
+                          placeholder="Enter faculty name"
+                          className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900"
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-2 p-4 bg-white border border-slate-200 rounded-lg">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">Section-wise Staff Names</p>
+                            <p className="text-xs text-slate-500">Select sections above and enter a staff name for each selected section.</p>
+                          </div>
+                        </div>
+
+                        {formData.sections.length === 0 ? (
+                          <p className="text-xs text-slate-600">Choose one or more sections first to enter staff names.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {formData.sections.map((sectionId) => {
+                              const section = getAvailableSections().find((s) => s.value === sectionId);
+                              const assignment = formData.section_staff_assignments.find((a) => a.section === sectionId) || {
+                                section: sectionId,
+                                staff_name: '',
+                              };
+                              return (
+                                <div key={sectionId} className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3 items-end">
+                                  <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Section</label>
+                                    <div className="px-3 py-2 border border-slate-300 rounded-lg bg-slate-50 text-slate-800">
+                                      {section ? (section.display_name || section.label) : `Section ${sectionId}`}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Staff Name <span className="text-red-500">*</span></label>
+                                    <input
+                                      type="text"
+                                      value={assignment.staff_name}
+                                      onChange={(e) => {
+                                        const nextAssignments = formData.section_staff_assignments.map((a) =>
+                                          a.section === sectionId ? { ...a, staff_name: e.target.value } : a
+                                        );
+                                        if (!formData.section_staff_assignments.some((a) => a.section === sectionId)) {
+                                          nextAssignments.push({ section: sectionId, staff_name: e.target.value });
+                                        }
+                                        setFormData({ ...formData, section_staff_assignments: nextAssignments });
+                                      }}
+                                      placeholder="Enter staff name"
+                                      className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-900"
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -4257,7 +4427,7 @@ export default function FeedbackPage() {
                                       type="checkbox"
                                       checked={q.allow_comment}
                                       onChange={(e) => handleUpdateQuestionType(index, 'allow_comment', e.target.checked)}
-                                      disabled={formData.common_comment_enabled}
+                                      disabled={isCommonCommentEnabled}
                                       className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                                     />
                                     <span className="text-xs text-slate-700 flex items-center gap-1.5">
@@ -4386,7 +4556,7 @@ export default function FeedbackPage() {
                                 }
                                 setAllowComment(nextChecked);
                               }}
-                              disabled={formData.common_comment_enabled}
+                              disabled={isCommonCommentEnabled}
                               className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-2 focus:ring-indigo-500"
                             />
                             <span className="text-sm text-slate-700 flex items-center gap-1.5">
@@ -5563,12 +5733,26 @@ export default function FeedbackPage() {
                     </span>
                   </div>
                 </div>
-                <button
-                  onClick={() => setSelectedResponseView(null)}
-                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
-                >
-                  <X className="w-6 h-6 text-slate-600" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleExportResponsesExcel(selectedResponseView.feedback_form_id)}
+                    disabled={exportingFormId === selectedResponseView.feedback_form_id}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {exportingFormId === selectedResponseView.feedback_form_id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    {exportingFormId === selectedResponseView.feedback_form_id ? 'Downloading...' : 'Download'}
+                  </button>
+                  <button
+                    onClick={() => setSelectedResponseView(null)}
+                    className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    <X className="w-6 h-6 text-slate-600" />
+                  </button>
+                </div>
               </div>
 
               <div className="p-6 space-y-6">
@@ -5581,6 +5765,8 @@ export default function FeedbackPage() {
                   {selectedResponseView.responded && selectedResponseView.responded.length > 0 ? (
                     <div className="max-h-[450px] overflow-y-auto pr-2 space-y-4 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400">
                       {selectedResponseView.responded.map((resp) => {
+                        const isAnonymous = Boolean(resp.anonymous);
+
                         // Check if this is subject feedback by looking if any answer has teaching_assignment
                         const isSubjectFeedback = resp.answers.some(a => a.teaching_assignment);
                         

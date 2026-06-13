@@ -1256,7 +1256,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
     is_project_course = class_type == 'PROJECT'
     qp_type_raw = _resolve_qp_type(ta)
     qp_type_key = str(qp_type_raw or '').upper().replace(' ', '')
-    is_qp1_final = ('QP1FINAL' in qp_type_key) or (class_type == 'TAMIL' and qp_type_key == 'TAM_THEORY')
+    is_qp1_final = ('QP1FINAL' in qp_type_key) or (class_type == 'TAMIL' and qp_type_key == 'TAM_THEORY') or (class_type in ('LAB2', 'LAB_2')) or (qp_type_key == 'LAB_PC')
     scaled_max = 60.0 if is_qp1_final else 100.0
 
     if recompute:
@@ -1337,7 +1337,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 live = _compute_project_final_total(
                     ta=ta, subject=subject_obj, student=ref, ta_id=ta_id, return_details=True,
                 )
-            elif class_type in ('LAB', 'PRACTICAL'):
+            elif class_type in ('LAB', 'PRACTICAL', 'LAB2', 'LAB_2'):
                 live = _compute_lab_final_total(
                     ta=ta, subject=subject_obj, student=ref, ta_id=ta_id,
                     class_type=class_type, return_details=True,
@@ -2105,9 +2105,9 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             ws.auto_filter.ref = f"A2:{sp_last}{ws.max_row}"
             ws.freeze_panes = 'A3'
 
-        elif class_type in ('LAB', 'PRACTICAL'):
+        elif class_type in ('LAB', 'PRACTICAL', 'LAB2', 'LAB_2'):
             # ── LAB / PRACTICAL: Cycle-based lab sheets ──
-            lab_cfg = _get_lab_cycle_weight_config()
+            lab_cfg = _get_lab_cycle_weight_config(class_type)
             cycle1_cfg = lab_cfg.get('cycle1') or {}
             cycle2_cfg = lab_cfg.get('cycle2') or {}
             c1_co_keys = sorted(cycle1_cfg.keys(), key=lambda k: int(k) if str(k).isdigit() else 0)
@@ -2134,6 +2134,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
             CIA_EXAM_MAX = 30.0
 
             # ── Detect CO6 scheme from actual sheet coConfigs ──
+            # Only applicable for standard LAB class type. LAB_2/LAB2 only has CO1-CO5.
             def _detect_lab_co6(sheet_data):
                 _sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
                 if not isinstance(_sheet, dict):
@@ -2144,7 +2145,9 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
                 _co6 = _co_cfgs.get('6') or _co_cfgs.get(6)
                 return isinstance(_co6, dict) and _co6.get('enabled', False)
 
-            _lab_has_co6 = _detect_lab_co6(lab_cia1_data) or _detect_lab_co6(lab_cia2_data)
+            # LAB_2/LAB2 never uses CO6 — skip detection entirely
+            _is_lab2_export = class_type in ('LAB2', 'LAB_2')
+            _lab_has_co6 = (not _is_lab2_export) and (_detect_lab_co6(lab_cia1_data) or _detect_lab_co6(lab_cia2_data))
             if _lab_has_co6:
                 # CO6 scheme: cycle1=CO1,2,3 cycle2=CO4,5,6 — each CO = 10 marks
                 cycle1_cfg = {
@@ -2987,7 +2990,7 @@ def _build_detailed_internal_marks_workbook(ta, *, actor_user_id=None, recompute
     # ─────────────────────────────────────────────────────────
     # SHEETS 2-4 — CO-wise breakdown (only for theory-like types)
     # ─────────────────────────────────────────────────────────
-    _theory_like_breakdown = class_type not in ('LAB', 'PRACTICAL', 'TCPL', 'TCPR', 'PROJECT', 'SPECIAL', 'PRBL')
+    _theory_like_breakdown = class_type not in ('LAB', 'PRACTICAL', 'LAB2', 'LAB_2', 'TCPL', 'TCPR', 'PROJECT', 'SPECIAL', 'PRBL')
     if _theory_like_breakdown:
       try:
         breakdown_students = sorted(
@@ -3170,7 +3173,7 @@ def _build_camu_mark_rows_for_ta(ta, *, actor_user_id=None, recompute=True):
     }
 
     def _compute_for_student(ref):
-        if class_type in ('LAB', 'PRACTICAL'):
+        if class_type in ('LAB', 'PRACTICAL', 'LAB2', 'LAB_2'):
             return _compute_lab_final_total(
                 ta=ta, subject=subject_obj, student=ref, ta_id=ta_id,
                 class_type=class_type, return_details=True,

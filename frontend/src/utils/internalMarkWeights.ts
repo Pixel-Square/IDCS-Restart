@@ -240,6 +240,20 @@ export const DEFAULT_LAB_CYCLE_WEIGHTS: LabCycleWeights = {
   },
 };
 
+export const DEFAULT_LAB_2_CYCLE_WEIGHTS: LabCycleWeights = {
+  type: "lab_cycles",
+  cycle1: {
+    "1": { exp: 12, cia: 0 },
+    "2": { exp: 12, cia: 0 },
+    "3": { exp: 6, cia: 0 },
+  },
+  cycle2: {
+    "3": { exp: 6, cia: 0 },
+    "4": { exp: 12, cia: 0 },
+    "5": { exp: 12, cia: 0 },
+  },
+};
+
 /** 6-CO preset: Cycle 1 → CO1/CO2/CO3, Cycle 2 → CO4/CO5/CO6. Each CO = 10 (exp 7.5 + cia 2.5). Grand total = 60. */
 export const LAB_6CO_WEIGHTS: LabCycleWeights = {
   type: 'lab_cycles',

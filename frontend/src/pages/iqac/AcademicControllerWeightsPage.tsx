@@ -11,6 +11,7 @@ import {
   isLabCycleWeights,
   getLabCycleWeightConfig,
   DEFAULT_LAB_CYCLE_WEIGHTS,
+  DEFAULT_LAB_2_CYCLE_WEIGHTS,
   labCycleTotalWeight,
   isProjectWeights,
   isProjectPrblWeights,
@@ -65,7 +66,7 @@ const DEFAULT_INTERNAL_MARK_WEIGHTS_TCPL_21 = [
 ];
 
 const INTERNAL_MARK_TABLE_CLASS_TYPES = ['THEORY', 'TCPR', 'TCPL', 'AUDIT', 'TAMIL'] as const;
-const STRUCTURED_WEIGHT_CLASS_TYPES = ['LAB', 'PRACTICAL', 'PROJECT'] as const;
+const STRUCTURED_WEIGHT_CLASS_TYPES = ['LAB', 'LAB2', 'PRACTICAL', 'PROJECT'] as const;
 
 
 type WeightsRow = {
@@ -163,7 +164,7 @@ function normalizeInternalWeights(
   };
   // Backward compatibility: old format had 13 weights with CO1/CO2 as single cycle columns.
   if (next.length === 13) {
-    if (k === 'LAB' || k === 'PRACTICAL') {
+    if (k === 'LAB' || k === 'LAB2' || k === 'PRACTICAL') {
       const labCiaFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS_17[1] ?? 3);
       const modelFallback = Number(DEFAULT_INTERNAL_MARK_WEIGHTS_17[16] ?? 4);
       const pickLabCia = (legacy: unknown) => {
@@ -197,7 +198,7 @@ function normalizeInternalWeights(
   }
 
   next = ensureInternalWeightsLen(k, next);
-  if (k === 'LAB' || k === 'PRACTICAL') {
+  if (k === 'LAB' || k === 'LAB2' || k === 'PRACTICAL') {
     next = sanitizeLabPractical(next);
   }
   return next;
@@ -210,7 +211,7 @@ function buildInternalWeightsGroups(classType: string): InternalWeightsGroup[] {
   const k = normalizeClassType(classType);
 
   // Lab-like classes use CIA1/CIA2 + MODEL only.
-  if (k === 'LAB' || k === 'PRACTICAL') {
+  if (k === 'LAB' || k === 'LAB2' || k === 'PRACTICAL') {
     return [
       { header: 'CO1', cols: [{ label: 'CIA 1', index: 1 }] },
       { header: 'CO2', cols: [{ label: 'CIA 1', index: 4 }] },
@@ -306,7 +307,7 @@ function buildDefaults(): Record<string, WeightsRow> {
             ssaDef = 1;
             ciaDef = 3.25;
             formDef = 4.0; // Review
-          } else if (k === 'LAB') {
+          } else if (k === 'LAB' || k === 'LAB2') {
             ssaDef = 1;
             ciaDef = 1;
             formDef = 1;
@@ -316,6 +317,8 @@ function buildDefaults(): Record<string, WeightsRow> {
           let internalWeights: Array<number | string> | LabCycleWeights | ProjectWeights | ProjectPrblWeights = [...DEFAULT_INTERNAL_MARK_WEIGHTS_17];
           if (k === 'LAB' || k === 'PRACTICAL') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_LAB_CYCLE_WEIGHTS));
+          } else if (k === 'LAB2') {
+            internalWeights = JSON.parse(JSON.stringify(DEFAULT_LAB_2_CYCLE_WEIGHTS));
           } else if (k === 'PRBL') {
             internalWeights = JSON.parse(JSON.stringify(DEFAULT_PROJECT_PRBL_WEIGHTS));
           } else if (k === 'ENGLISH') {
@@ -384,7 +387,7 @@ function applyAny(src: any): Record<string, WeightsRow> {
     };
 
     // Structured weights for LAB/PRACTICAL/PROJECT: use as-is if valid
-    if ((k === 'LAB' || k === 'PRACTICAL') && isLabCycleWeights(rawIm)) {
+    if ((k === 'LAB' || k === 'LAB2' || k === 'PRACTICAL') && isLabCycleWeights(rawIm)) {
       out[k] = { ssa1: seedRow.ssa1, cia1: seedRow.cia1, formative1: seedRow.formative1, internal_mark_weights: rawIm };
       continue;
     }
@@ -546,7 +549,7 @@ export default function AcademicControllerWeightsPage() {
         const w = (weights[k] ?? weights[k.toLowerCase()] ?? weights[k.toUpperCase()] ?? {}) as any;
 
         // Structured weights for LAB/PRACTICAL/PROJECT: send as-is
-        if ((k === 'LAB' || k === 'PRACTICAL') && isLabCycleWeights(w?.internal_mark_weights)) {
+        if ((k === 'LAB' || k === 'LAB2' || k === 'PRACTICAL') && isLabCycleWeights(w?.internal_mark_weights)) {
           normalized[k] = {
             ssa1: Number(w?.ssa1) || 0,
             cia1: Number(w?.cia1) || 0,

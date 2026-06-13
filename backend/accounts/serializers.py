@@ -555,6 +555,22 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
             if student_status == 'DEBAR':
                 raise serializers.ValidationError('Your student account has been debarred. Please contact administration.')
 
+        # --- Login Lockdown check ---
+        # If login_lockdown is enabled, only superusers may authenticate directly.
+        # The superuser impersonation endpoint uses a separate serializer and is unaffected.
+        if not getattr(user, 'is_superuser', False):
+            try:
+                from .models import SiteConfiguration
+                cfg = SiteConfiguration.get()
+                if getattr(cfg, 'login_lockdown', False):
+                    raise serializers.ValidationError(
+                        'Login is temporarily disabled for maintenance. Please try again later.'
+                    )
+            except serializers.ValidationError:
+                raise
+            except Exception:
+                pass  # If SiteConfiguration lookup fails, don't block login
+
         # Build tokens
         refresh = RefreshToken.for_user(user)
 

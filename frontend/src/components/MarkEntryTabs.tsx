@@ -257,6 +257,15 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
     ] as TabDef[];
   }
 
+  // LAB2: 2 cycles only (CO1-CO3, CO3-CO5) – no MODEL tab, no CIA exam, total 60 marks
+  if (ct === 'LAB2') {
+    return [
+      { key: 'dashboard', label: 'Dashboard' },
+      { key: 'cia1', label: 'Cycle 1 LAB' },
+      { key: 'cia2', label: 'Cycle 2 LAB' },
+    ] as TabDef[];
+  }
+
   // PURE_LAB: keep 3 cycles (Cycle 1, Cycle 2, Cycle 3 Records)
   if (ct === 'PURE_LAB') {
     return [
@@ -718,8 +727,8 @@ export default function MarkEntryTabs({
         { showAfter: 'review2', assessmentType: 'project_combined', cos: ['CO1'] },
       ] as CqiPlacement[];
     }
-    // LAB / PURE_LAB: CQI placements handled in visibleTabs below, not via cqiPlacements
-    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
+    // LAB / LAB2 / PURE_LAB: CQI placements handled in visibleTabs below, not via cqiPlacements
+    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
       return [] as CqiPlacement[];
     }
     // ENGLISH + ELECTIVE1: single final CQI after MODEL covering all CO1–CO5
@@ -751,6 +760,11 @@ export default function MarkEntryTabs({
     }
     // LAB (2 cycles): CQI tab after Cycle 2 (cia2 key)
     if (normalizedEffectiveClassType === 'LAB') {
+      out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'cia2', assessmentType: 'cia2', cos: ['CO1'] } });
+      return out;
+    }
+    // LAB2 (2 cycles, no MODEL): CQI tab after Cycle 2 covering CO1-CO5
+    if (normalizedEffectiveClassType === 'LAB2') {
       out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'cia2', assessmentType: 'cia2', cos: ['CO1'] } });
       return out;
     }
@@ -1288,8 +1302,8 @@ export default function MarkEntryTabs({
               : active === 'review2'
                 ? 'Review 2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? (normalizedEffectiveClassType === 'LAB'
-                    ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
+                ? (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2'
+                    ? 'Cycle 1 LAB entry (CO-1/CO-2/CO-3 experiments).'
                     : normalizedEffectiveClassType === 'PRACTICAL'
                       ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
                       : normalizedEffectiveClassType === 'TCPR'
@@ -1297,8 +1311,8 @@ export default function MarkEntryTabs({
                       : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
                 ? (
-                    normalizedEffectiveClassType === 'LAB'
-                      ? 'CIA 2 LAB entry (CO-3/CO-4/CO-5 experiments + CIA exam).'
+                    normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2'
+                      ? 'Cycle 2 LAB entry (CO-3/CO-4/CO-5 experiments).'
                       : normalizedEffectiveClassType === 'PRACTICAL'
                         ? 'CIA 2 Review (Practical) - enter review marks for practical content.'
                         : normalizedEffectiveClassType === 'TCPR'
@@ -1451,7 +1465,7 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'LAB') {
+                  if (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
@@ -1461,6 +1475,7 @@ export default function MarkEntryTabs({
                         coA={1}
                         coB={2}
                         initialEnabledCos={[1, 2, 3]}
+                        ciaExamAvailable={normalizedEffectiveClassType !== 'LAB2'}
                         classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
@@ -1514,7 +1529,7 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'LAB') {
+                  if (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
@@ -1524,6 +1539,7 @@ export default function MarkEntryTabs({
                         coA={3}
                         coB={4}
                         initialEnabledCos={[3, 4, 5]}
+                        ciaExamAvailable={normalizedEffectiveClassType !== 'LAB2'}
                         classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />

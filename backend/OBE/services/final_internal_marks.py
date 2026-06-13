@@ -678,6 +678,15 @@ def _compute_special_final_total(*, ta, subject, student, ta_id, return_details=
         .filter(Q(teaching_assignment_id=ta_id) | Q(teaching_assignment__isnull=True))
         .order_by('-published_at')
     )
+    if not cqi_rows:
+        # Fallback: SPECIAL subjects are often co-taught (multiple TAs share the
+        # same section/students). If no CQI row exists for the exact TA or a
+        # legacy ta=NULL row, accept any CQI row for this subject so that a
+        # sibling TA's published CQI is still applied to this TA's FIM.
+        cqi_rows = list(
+            ObeCqiPublished.objects.filter(subject_id=subject.id)
+            .order_by('-published_at')
+        )
     cqi_row = _pick_scoped_row(cqi_rows, ta_id)
     cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
     cqi_nums = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
@@ -3123,9 +3132,29 @@ def _compute_project_final_total(*, ta, subject, student, ta_id, return_details=
 
 # ─── LAB / PRACTICAL Class-type ───────────────────────────────────────────────
 
-def _get_lab_cycle_weight_config():
-    """Return lab_cycles ClassTypeWeights for LAB, or default."""
+def _get_lab_cycle_weight_config(class_type=None):
+    """Return lab_cycles ClassTypeWeights for LAB / LAB2, or default."""
     from OBE.models import ClassTypeWeights
+
+    ct = str(class_type or '').strip().upper()
+    if ct in ('LAB2', 'LAB_2'):
+        row = ClassTypeWeights.objects.filter(class_type__in=['LAB2', 'LAB_2']).first()
+        im = getattr(row, 'internal_mark_weights', None) if row else None
+        if isinstance(im, dict) and im.get('type') == 'lab_cycles':
+            return im
+        return {
+            'type': 'lab_cycles',
+            'cycle1': {
+                '1': {'exp': 12.0, 'cia': 0.0},
+                '2': {'exp': 12.0, 'cia': 0.0},
+                '3': {'exp': 6.0, 'cia': 0.0},
+            },
+            'cycle2': {
+                '3': {'exp': 6.0, 'cia': 0.0},
+                '4': {'exp': 12.0, 'cia': 0.0},
+                '5': {'exp': 12.0, 'cia': 0.0},
+            },
+        }
 
     row = ClassTypeWeights.objects.filter(class_type='LAB').first()
     im = getattr(row, 'internal_mark_weights', None) if row else None
@@ -3150,7 +3179,7 @@ def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', r
     from OBE.models import LabPublishedSheet, ObeCqiPublished
 
     sid = int(student['id'])
-    cfg = _get_lab_cycle_weight_config()
+    cfg = _get_lab_cycle_weight_config(class_type)
     cycle1_cfg = cfg.get('cycle1') or {}
     cycle2_cfg = cfg.get('cycle2') or {}
 
@@ -3173,6 +3202,7 @@ def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', r
     cia2_data = _get_lab_sheet('cia2')
 
     # ── Detect CO6 scheme from actual sheet coConfigs ──
+    # Only applicable for standard LAB class type. LAB_2/LAB2 only has CO1-CO5.
     def _detect_co6(sheet_data):
         """Check if CO6 is enabled in the sheet's coConfigs."""
         sheet = sheet_data.get('sheet') if isinstance(sheet_data, dict) else sheet_data
@@ -3184,7 +3214,9 @@ def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', r
         co6_cfg = co_cfgs.get('6') or co_cfgs.get(6)
         return isinstance(co6_cfg, dict) and co6_cfg.get('enabled', False)
 
-    has_co6 = _detect_co6(cia1_data) or _detect_co6(cia2_data)
+    # LAB_2/LAB2 never uses CO6 — skip detection entirely
+    _is_lab2 = str(class_type or '').strip().upper() in ('LAB2', 'LAB_2')
+    has_co6 = (not _is_lab2) and (_detect_co6(cia1_data) or _detect_co6(cia2_data))
     if has_co6:
         # CO6 scheme: cycle1=CO1,2,3 cycle2=CO4,5,6 — each CO gets 10 marks (7.5 exp + 2.5 cia)
         cycle1_cfg = {
@@ -3310,9 +3342,52 @@ def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', r
     )
     cqi_row = _pick_scoped_row(cqi_rows, ta_id)
     cqi_entries = cqi_row.entries if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict) else {}
+    cqi_pages = {}
+    if cqi_row and isinstance(getattr(cqi_row, 'entries', None), dict):
+        try:
+            cqi_pages = (cqi_row.entries.get('__pages') or {}) if isinstance(cqi_row.entries, dict) else {}
+        except Exception:
+            cqi_pages = {}
     cqi_student = cqi_entries.get(str(sid)) or cqi_entries.get(sid) or {}
     cqi_nums = cqi_row.co_numbers if cqi_row and isinstance(getattr(cqi_row, 'co_numbers', None), list) else []
     cqi_co_set = {int(n) for n in cqi_nums if _safe_int(n) is not None}
+
+    def _resolve_cqi_input(co_num: int):
+        co_key = f'co{co_num}'
+        direct = (cqi_student or {}).get(co_key)
+        if direct is not None:
+            val = _safe_float(direct)
+            if val is not None:
+                return val
+
+        # Published CQI for LAB/PRACTICAL can be stored as per-page snapshots
+        # with a `cqiMark` field instead of a flat `coX` value. Fall back to
+        # the page payload so the backend FIM sync matches the Internal Mark UI.
+        if isinstance(cqi_pages, dict):
+            for snap in cqi_pages.values():
+                if not isinstance(snap, dict):
+                    continue
+                page_entries = snap.get('entries')
+                if not isinstance(page_entries, dict):
+                    continue
+                row = page_entries.get(str(sid)) or page_entries.get(sid)
+                if isinstance(row, dict):
+                    page_val = row.get(co_key)
+                    if page_val is not None:
+                        val = _safe_float(page_val)
+                        if val is not None:
+                            return val
+                    if co_num == 1:
+                        cqi_mark = row.get('cqiMark')
+                        if cqi_mark is not None:
+                            val = _safe_float(cqi_mark)
+                            if val is not None:
+                                return val
+                elif co_num == 1 and row is not None:
+                    val = _safe_float(row)
+                    if val is not None:
+                        return val
+        return None
 
     co_cqi_add = {}
     total_add = 0.0
@@ -3322,7 +3397,7 @@ def _compute_lab_final_total(*, ta, subject, student, ta_id, class_type='LAB', r
         co_mx  = co_max.get(co_key) or 0.0
         add = 0.0
         if co_num in cqi_co_set and co_mx > 0 and co_val > 0:
-            inp = _safe_float((cqi_student or {}).get(f'co{co_num}'))
+            inp = _resolve_cqi_input(co_num)
             add = _compute_cqi_add(co_value=co_val, co_max=co_mx, input_mark=inp)
         co_cqi_add[co_key] = add
         total_add += add
@@ -3931,7 +4006,7 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                     total = proj_result
 
             # LAB / PRACTICAL: lab cycle experiment+CIA marks
-            if total is None and ta_class_type in ('LAB', 'PRACTICAL'):
+            if total is None and ta_class_type in ('LAB', 'PRACTICAL', 'LAB2', 'LAB_2'):
                 lab_result = _compute_lab_final_total(
                     ta=ta, subject=subject, student=student_ref, ta_id=ta.id,
                     class_type=ta_class_type,
@@ -3951,7 +4026,7 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                 # Raw-sum fallback is only valid for THEORY-like courses whose
                 # component marks are already on the 0-40 scale.
                 # All other types now have dedicated compute functions above; skip fallback for them.
-                _skip_fallback_types = {'TCPL', 'LAB', 'PRACTICAL', 'TCPR', 'PROJECT', 'PRBL'}
+                _skip_fallback_types = {'TCPL', 'LAB', 'LAB2', 'LAB_2', 'PRACTICAL', 'TCPR', 'PROJECT', 'PRBL'}
                 if ta_class_type not in _skip_fallback_types:
                     parts = [
                         formative1.get(sid),

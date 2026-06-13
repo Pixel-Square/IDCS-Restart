@@ -1827,3 +1827,53 @@ class UCStateView(APIView):
         cfg.under_construction = normalized
         cfg.save(update_fields=['under_construction', 'updated_at'])
         return Response({'under_construction': cfg.under_construction}, status=status.HTTP_200_OK)
+
+
+class LoginLockdownView(APIView):
+    """Read/toggle the site-wide login lockdown.
+
+    GET  → any authenticated user can read the current state.
+    PUT  → only superusers can change it.
+
+    When login_lockdown is True, regular staff/student logins via
+    /api/accounts/token/ are rejected. The superuser impersonation
+    endpoint (/api/accounts/impersonate/) is unaffected.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get(self, request):
+        from .models import SiteConfiguration
+
+        cfg = SiteConfiguration.get()
+        return Response({
+            'login_lockdown': bool(getattr(cfg, 'login_lockdown', False)),
+        }, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        if not getattr(request.user, 'is_superuser', False):
+            return Response(
+                {'detail': 'Only superusers can toggle login lockdown.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        value = (request.data or {}).get('login_lockdown')
+        if value is None:
+            return Response(
+                {'detail': 'login_lockdown field is required (true or false).'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .models import SiteConfiguration
+
+        cfg = SiteConfiguration.get()
+        cfg.login_lockdown = bool(value)
+        cfg.save(update_fields=['login_lockdown', 'updated_at'])
+
+        state_label = 'ENABLED — regular logins blocked' if cfg.login_lockdown else 'DISABLED — regular logins allowed'
+        log.info('Login lockdown toggled to %s by user %s', cfg.login_lockdown, request.user.email)
+
+        return Response({
+            'login_lockdown': cfg.login_lockdown,
+            'message': f'Login lockdown is now {state_label}.',
+        }, status=status.HTTP_200_OK)

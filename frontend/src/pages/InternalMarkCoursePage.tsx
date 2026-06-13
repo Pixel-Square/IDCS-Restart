@@ -40,6 +40,7 @@ import {
   labCycleCoKeys,
   labCycleSchemaWeights,
   DEFAULT_LAB_CYCLE_WEIGHTS,
+  DEFAULT_LAB_2_CYCLE_WEIGHTS,
   LAB_6CO_WEIGHTS,
   isProjectWeights,
   isProjectPrblWeights,
@@ -248,6 +249,19 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
   const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
   const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
   return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
+}
+
+function compareRegNoThenName(
+  a: { reg_no?: string; name?: string },
+  b: { reg_no?: string; name?: string },
+): number {
+  const aReg = String(a?.reg_no || '').trim();
+  const bReg = String(b?.reg_no || '').trim();
+  const byReg = aReg.localeCompare(bReg, undefined, { numeric: true, sensitivity: 'base' });
+  if (byReg !== 0) return byReg;
+  const aName = String(a?.name || '').trim();
+  const bName = String(b?.name || '').trim();
+  return aName.localeCompare(bName, undefined, { sensitivity: 'base' });
 }
 
 function effectiveCoWeights12(co: 1 | 2 | '1&2') {
@@ -491,7 +505,7 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
     };
   }
 
-  if (ct === 'LAB' || ct === 'PRACTICAL') {
+  if (ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL') {
     const cfg = labCycleConfig || DEFAULT_LAB_CYCLE_WEIGHTS;
     const c1Keys = labCycleCoKeys(cfg.cycle1);
     const c2Keys = labCycleCoKeys(cfg.cycle2);
@@ -542,28 +556,16 @@ function buildInternalSchema(classType: string | null, enabledSet: Set<string>, 
   }
 
   if (ct === 'SPECIAL') {
-    // SPECIAL (CSD) uses cycle-grouped exam-level columns:
-    //   Cycle 1 → CIA1, SSA1, FA1
-    //   Cycle 2 → CIA2, SSA2, FA2
-    //   Cycle 3 → MODEL
-    // Each column is scaled to its configured weight (matrix column total).
-    type SpecialExam = { key: string; enabledKey: string; header: string; cycle: string };
-    const allExams: SpecialExam[] = [
-      { key: 'CIA1',       enabledKey: 'cia1',       header: 'CIA1',  cycle: 'CIA' },
-      { key: 'SSA1',       enabledKey: 'ssa1',       header: 'SSA1',  cycle: 'SSA' },
-      { key: 'FORMATIVE1', enabledKey: 'formative1', header: 'FA1',   cycle: 'FA' },
-      { key: 'CIA2',       enabledKey: 'cia2',       header: 'CIA2',  cycle: 'CIA' },
-      { key: 'SSA2',       enabledKey: 'ssa2',       header: 'SSA2',  cycle: 'SSA' },
-      { key: 'FORMATIVE2', enabledKey: 'formative2', header: 'FA2',   cycle: 'FA' },
-      { key: 'MODEL',      enabledKey: 'model',      header: 'MODEL', cycle: 'MODEL' },
-    ];
-    const exams = allExams.filter((e) => !enabledSet.size || enabledSet.has(e.enabledKey));
-    const vis = Array.from({ length: exams.length }, (_, i) => i);
+    // SPECIAL (CSD) shows CO-wise columns matching the CQI page structure:
+    //   CO1 = CIA1 (split ½) + CIA2 (split ½) + MODEL (split ½)  → max 10
+    //   CO2 = CIA1 (split ½) + CIA2 (split ½) + MODEL (split ½)  → max 10
+    //   CO3 = SSA1 + SSA2 + FA1 + FA2                            → max 20
+    // This mirrors how theory courses work so CQI applies naturally.
     return {
-      visible: vis,
-      header: exams.map((e) => e.header),
-      cycles: exams.map((e) => e.cycle),
-      labels: exams.map((e) => e.key),
+      visible: [0, 1, 2],
+      header: ['CO1', 'CO2', 'CO3'],
+      cycles: ['CIA+MODEL', 'CIA+MODEL', 'SSA+FA'],
+      labels: ['CO1', 'CO2', 'CO3'],
     };
   }
 
@@ -692,7 +694,7 @@ export default function InternalMarkCoursePage({
   }, [effectiveClassType, qpTypeNorm]);
 
   useEffect(() => {
-    if (effectiveClassType !== 'LAB' || selectedTaId == null) {
+    if (effectiveClassType !== 'LAB' && effectiveClassType !== 'LAB2' || selectedTaId == null) {
       setAssignmentEnabledAssessments(undefined);
       return;
     }
@@ -794,7 +796,7 @@ export default function InternalMarkCoursePage({
     return () => {
       mounted = false;
     };
-  }, [courseId, selectedTaId, isTheoryPmblQp2, cqiPublished?.publishedAt]);
+  }, [courseId, selectedTaId, isTheoryPmblQp2, effectiveClassType, cqiPublished?.publishedAt]);
 
   useEffect(() => {
     let mounted = true;
@@ -1052,7 +1054,7 @@ export default function InternalMarkCoursePage({
             // Backward compatibility: old format had 13 weights with CO1/CO2 as a single "cycle 1" column.
             // New format has 17 weights with CO1/CO2 split into ssa/cia/fa.
             if (arr.length === 13 && DEFAULT_INTERNAL_MAPPING.weights.length === 17) {
-              if (ct === 'LAB' || ct === 'PRACTICAL') {
+              if (ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL') {
                 const labCiaFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[1] ?? 3);
                 const modelFallback = Number(DEFAULT_INTERNAL_MAPPING.weights[16] ?? 4);
                 const pickLabCia = (legacy: unknown) => {
@@ -1088,7 +1090,7 @@ export default function InternalMarkCoursePage({
             const tcplSlotLen = 21;
             const slotLen = ct === 'TCPL' ? tcplSlotLen : DEFAULT_INTERNAL_MAPPING.weights.length;
             while (arr.length < slotLen) arr.push(ct === 'TCPL' ? 0 : (DEFAULT_INTERNAL_MAPPING.weights[arr.length] ?? 0));
-            if (ct === 'LAB' || ct === 'PRACTICAL') {
+            if (ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL') {
               arr = sanitizeLabPractical(arr);
             }
             setInternalMarkWeights(arr.slice(0, slotLen));
@@ -1170,7 +1172,7 @@ export default function InternalMarkCoursePage({
         const isTcpl = ct === 'TCPL';
         const isTcpr = ct === 'TCPR';
         const isProject = ct === 'PROJECT';
-        const isLabLike = ct === 'LAB' || ct === 'PRACTICAL';
+        const isLabLike = ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL';
         const isSpecial = ct === 'SPECIAL' && enabledSet.size;
         const allow = (k: string) => (!isSpecial ? true : enabledSet.has(String(k).toLowerCase()));
 
@@ -1561,9 +1563,8 @@ export default function InternalMarkCoursePage({
     return () => { mounted = false; };
   }, [courseId, effectiveClassType, enabledSet, selectedTaId, reloadCounter, qpTypeNorm]);
 
-  // 6-CO LAB mode: active when any published/draft lab sheet carries is6CoMode flag.
-  // We check both .sheet.is6CoMode (when draft is wrapped in { sheet: {...} }) and
-  // top-level .is6CoMode (when data is returned directly), plus the model sheet.
+  // 6-CO LAB mode: active ONLY for standard LAB class type when any published/draft
+  // lab sheet carries is6CoMode flag. LAB2 (lab_PC) never uses 6-CO mode.
   const is6CoLab = effectiveClassType === 'LAB' && !!(
     publishedLab.cia1?.sheet?.is6CoMode ||
     publishedLab.cia1?.is6CoMode ||
@@ -1575,9 +1576,14 @@ export default function InternalMarkCoursePage({
 
   // When 6-CO mode is active, override the IQAC cycle config with the fixed per-sheet weights.
   // effectiveLabCfg must be declared BEFORE schema and effMapping that depend on it.
+  // LAB2 always uses its own DEFAULT_LAB_2_CYCLE_WEIGHTS (no CIA exam, exp-only weights).
   const effectiveLabCfg = useMemo(
-    () => is6CoLab ? LAB_6CO_WEIGHTS : labCycleWeightsCfg,
-    [is6CoLab, labCycleWeightsCfg],
+    () => {
+      if (is6CoLab) return LAB_6CO_WEIGHTS;
+      if (effectiveClassType === 'LAB2') return labCycleWeightsCfg || DEFAULT_LAB_2_CYCLE_WEIGHTS;
+      return labCycleWeightsCfg;
+    },
+    [is6CoLab, labCycleWeightsCfg, effectiveClassType],
   );
 
   // NOTE: effectiveLabCfg must be used here (not labCycleWeightsCfg) so the schema
@@ -1592,7 +1598,7 @@ export default function InternalMarkCoursePage({
 
     // LAB / PRACTICAL: use structured cycle weights.
     // Use effectiveLabCfg (not labCycleWeightsCfg) so 6-CO mode gets LAB_6CO_WEIGHTS.
-    if (ct === 'LAB' || ct === 'PRACTICAL') {
+    if (ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL') {
       const cfg = effectiveLabCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
       const weights = labCycleSchemaWeights(cfg);
       return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
@@ -1625,15 +1631,31 @@ export default function InternalMarkCoursePage({
       return { header: schema.header, weights: coTotals, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
     }
 
-    // SPECIAL: use structured per-exam weights (CIA1, SSA1, FORMATIVE1, CIA2,
-    // SSA2, FORMATIVE2, MODEL). Look up by the full label key — the header may
-    // be a short display string ("FA1") that doesn't match the storage key
-    // ("FORMATIVE1").
+    // SPECIAL: derive CO-wise target weights from the exam weight config.
+    //   CO1 = CIA1/2 + CIA2/2 + MODEL/2
+    //   CO2 = CIA1/2 + CIA2/2 + MODEL/2
+    //   CO3 = SSA1  + SSA2  + FA1  + FA2
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
       const wMap = cfg.weights;
-      const weights = schema.labels.map((label) => Number(wMap[label]) || 0);
-      return { header: schema.header, weights, cycles: schema.cycles, visible: schema.visible, labels: schema.labels };
+      const co1Max = round2(
+        (Number(wMap.CIA1) || 0) / 2 +
+        (Number(wMap.CIA2) || 0) / 2 +
+        (Number(wMap.MODEL) || 0) / 2
+      );
+      const co3Max = round2(
+        (Number(wMap.SSA1) || 0) +
+        (Number(wMap.SSA2) || 0) +
+        (Number(wMap.FORMATIVE1) || 0) +
+        (Number(wMap.FORMATIVE2) || 0)
+      );
+      return {
+        header: ['CO1', 'CO2', 'CO3'],
+        weights: [co1Max, co1Max, co3Max],
+        cycles: ['CIA+MODEL', 'CIA+MODEL', 'SSA+FA'],
+        visible: [0, 1, 2],
+        labels: ['CO1', 'CO2', 'CO3'],
+      };
     }
 
     // TCPL uses 21 weight slots; all other class types use 17.
@@ -1763,8 +1785,8 @@ export default function InternalMarkCoursePage({
     return round2(sum);
   };
 
-  const computeCqiAdd = (args: { coValue: number; coMax: number; input: number | null | undefined }): number => {
-    const { coValue, coMax, input } = args;
+  const computeCqiAdd = (args: { coValue: number; coMax: number; input: number | null | undefined; isOverallBelowThreshold?: boolean }): number => {
+    const { coValue, coMax, input, isOverallBelowThreshold = true } = args;
     if (input == null) return 0;
     const inp = Number(input);
     if (!Number.isFinite(inp) || inp <= 0) return 0;
@@ -1772,11 +1794,18 @@ export default function InternalMarkCoursePage({
     const pct = (Number(coValue) / Number(coMax)) * 100;
 
     if (Number.isFinite(pct) && pct < THRESHOLD_PERCENT) {
-      const rawAdd = inp * CQI_BELOW_RATE;
-      const cap = (coMax * THRESHOLD_PERCENT) / 100;
-      const maxAllowed = Math.max(0, cap - Number(coValue));
-      const add = Math.min(rawAdd, maxAllowed);
-      return Number.isFinite(add) && add > 0 ? add : 0;
+      if (isOverallBelowThreshold) {
+        // Standard CQI: convert to 60% scale, cap at 58% of coMax
+        const rawAdd = inp * CQI_BELOW_RATE;
+        const cap = (coMax * THRESHOLD_PERCENT) / 100;
+        const maxAllowed = Math.max(0, cap - Number(coValue));
+        const add = Math.min(rawAdd, maxAllowed);
+        return Number.isFinite(add) && add > 0 ? add : 0;
+      } else {
+        // Special Improvement CQI: convert to 15% scale, NO cap
+        const add = inp * 0.15;
+        return Number.isFinite(add) && add > 0 ? add : 0;
+      }
     } else {
       // CO already attained (>= threshold) — no CQI addition regardless of input
       return 0;
@@ -2295,7 +2324,7 @@ export default function InternalMarkCoursePage({
     };
 
     // LAB/PRACTICAL: compute from lab-style cycle-based sheets
-    if (ct === 'LAB' || ct === 'PRACTICAL') {
+    if (ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL') {
       // Use effectiveLabCfg so 6-CO mode uses LAB_6CO_WEIGHTS (10 marks/CO)
       // instead of the IQAC default 5-CO config (12 marks/CO).
       const labCfg = effectiveLabCfg || DEFAULT_LAB_CYCLE_WEIGHTS;
@@ -2423,30 +2452,36 @@ export default function InternalMarkCoursePage({
       });
     }
 
-    // ── SPECIAL: exam-level columns (CIA1, SSA1, FA1, CIA2, SSA2, FA2, MODEL) ────
+    // ── SPECIAL: CO-wise columns (CO1, CO2, CO3) ─────────────────────────────
+    //   CO1 = CIA1(÷2) + CIA2(÷2) + MODEL(÷2)   → max 10
+    //   CO2 = CIA1(÷2) + CIA2(÷2) + MODEL(÷2)   → max 10
+    //   CO3 = SSA1 + SSA2 + FA1 + FA2            → max 20
     if (ct === 'SPECIAL') {
       const cfg = specialExamWeightsCfg || DEFAULT_SPECIAL_EXAM_WEIGHTS;
       const wMap = cfg.weights;
-      const ciaMaxFromQuestions = (qs: Array<{ max: number }>) => {
-        return qs.reduce((s, q) => s + (q.max || 0), 0) || 60;
-      };
-      // CSD (SPECIAL) SSA sheets are out of 20 total (10 per CO). Convert to the exam weight
-      // via scale(mark, 20, weight) so a full-marks student scores exactly the weight value.
+
+      const ciaMaxFromQuestions = (qs: Array<{ max: number }>) =>
+        qs.reduce((s, q) => s + (q.max || 0), 0) || 60;
+
       const ssa1Max = 20;
       const ssa2Max = 20;
       const cia1Max = ciaMaxFromQuestions(cia1Questions);
       const cia2Max = ciaMaxFromQuestions(cia2Questions);
-      // MODEL max from published model pattern
       const modelMax = iqacModelPattern?.marks?.length
         ? iqacModelPattern.marks.reduce((s, m) => s + Number(m || 0), 0)
         : 60;
-      // Formative total max — Formative1Mark stores all four parts (skill1+att1+skill2+att2)
-      // in the `total` field. Default per-CO max is 10 (configured via masterCfg.assessments.formative1.maxCo),
-      // so the full-marks total = 2 * maxCo. SPECIAL CSD single-CO formatives still sum to the same total.
       const fa1MaxTotal = Number.isFinite(maxes.f1.co1 + maxes.f1.co2) && (maxes.f1.co1 + maxes.f1.co2) > 0
         ? maxes.f1.co1 + maxes.f1.co2 : 20;
       const fa2MaxTotal = Number.isFinite(maxes.f2.co3 + maxes.f2.co4) && (maxes.f2.co3 + maxes.f2.co4) > 0
         ? maxes.f2.co3 + maxes.f2.co4 : 20;
+
+      // Target weights for each CO component
+      const wCiaHalf = (key: 'CIA1' | 'CIA2') => round2((Number(wMap[key]) || 0) / 2);
+      const wModelHalf = round2((Number(wMap.MODEL) || 0) / 2);
+      const wSsa1 = Number(wMap.SSA1) || 0;
+      const wSsa2 = Number(wMap.SSA2) || 0;
+      const wFa1  = Number(wMap.FORMATIVE1) || 0;
+      const wFa2  = Number(wMap.FORMATIVE2) || 0;
 
       const sumFormativeRow = (row: any): number | null => {
         if (!row || typeof row !== 'object') return null;
@@ -2460,70 +2495,66 @@ export default function InternalMarkCoursePage({
         return (s1 || 0) + (s2 || 0) + (a1 || 0) + (a2 || 0);
       };
 
+      const getCiaTotalSpecial = (byId: Record<string, any>, sid: string): number | null => {
+        const row = byId[sid] || {};
+        if (Boolean((row as any)?.absent)) return null;
+        const q = (row as any)?.q && typeof (row as any).q === 'object' ? (row as any).q : {};
+        let sum = 0; let hasAny = false;
+        for (const val of Object.values(q)) {
+          const n = toNumOrNull(val);
+          if (n != null) { sum += n; hasAny = true; }
+        }
+        return hasAny ? sum : null;
+      };
+
       return students.map((s, idx) => {
         const sid = String(s.id);
+
+        const cia1Total = getCiaTotalSpecial(cia1ById, sid);
+        const cia2Total = getCiaTotalSpecial(cia2ById, sid);
         const ssa1Total = toNumOrNull(published.ssa1[sid]);
         const ssa2Total = toNumOrNull(published.ssa2[sid]);
+        const fa1Total  = sumFormativeRow((published.f1 || {})[sid]);
+        const fa2Total  = sumFormativeRow((published.f2 || {})[sid]);
 
-        // CIA totals: sum of per-question marks from the published sheet
-        const getCiaTotal = (byId: Record<string, any>) => {
-          const row = byId[sid] || {};
-          if (Boolean((row as any)?.absent)) return null;
-          const q = (row as any)?.q && typeof (row as any).q === 'object' ? (row as any).q : {};
-          let sum = 0;
-          let hasAny = false;
-          for (const val of Object.values(q)) {
-            const n = toNumOrNull(val);
-            if (n != null) { sum += n; hasAny = true; }
-          }
-          return hasAny ? sum : null;
-        };
-        const cia1Total = getCiaTotal(cia1ById);
-        const cia2Total = getCiaTotal(cia2ById);
-
-        // Formative totals (sum of skill1 + att1 + skill2 + att2 → `total` field)
-        const fa1Total = sumFormativeRow((published.f1 || {})[sid]);
-        const fa2Total = sumFormativeRow((published.f2 || {})[sid]);
-
-        // MODEL total: sum of all CO marks
+        // MODEL total = sum of all per-CO model marks
         const model = getModelCoMarks(s);
         let modelTotal: number | null = null;
-        const mKeys = ['co1', 'co2', 'co3', 'co4', 'co5'] as const;
-        let mHas = false;
-        let mSum = 0;
-        for (const k of mKeys) {
-          const v = toNumOrNull((model as any)[k]);
-          if (v != null) { mSum += v; mHas = true; }
-        }
-        if (mHas) modelTotal = mSum;
+        { let mSum = 0; let mHas = false;
+          for (const k of ['co1', 'co2', 'co3', 'co4', 'co5'] as const) {
+            const v = toNumOrNull((model as any)[k]);
+            if (v != null) { mSum += v; mHas = true; }
+          }
+          if (mHas) modelTotal = mSum; }
 
-        // Build parts array keyed by the schema label (storage key like FORMATIVE1),
-        // not the display header (FA1) — the weight map uses storage keys.
-        const examMap: Record<string, number | null> = {
-          SSA1:       ssa1Total  != null ? scale(ssa1Total,  ssa1Max,     Number(wMap.SSA1       || 0)) : null,
-          SSA2:       ssa2Total  != null ? scale(ssa2Total,  ssa2Max,     Number(wMap.SSA2       || 0)) : null,
-          CIA1:       cia1Total  != null ? scale(cia1Total,  cia1Max,     Number(wMap.CIA1       || 0)) : null,
-          CIA2:       cia2Total  != null ? scale(cia2Total,  cia2Max,     Number(wMap.CIA2       || 0)) : null,
-          FORMATIVE1: fa1Total   != null ? scale(fa1Total,   fa1MaxTotal, Number(wMap.FORMATIVE1 || 0)) : null,
-          FORMATIVE2: fa2Total   != null ? scale(fa2Total,   fa2MaxTotal, Number(wMap.FORMATIVE2 || 0)) : null,
-          MODEL:      modelTotal != null ? scale(modelTotal, modelMax,    Number(wMap.MODEL      || 0)) : null,
+        // CIA and MODEL each split equally between CO1 and CO2
+        const cia1Co = cia1Total != null ? scale(cia1Total, cia1Max, wCiaHalf('CIA1')) : null;
+        const cia2Co = cia2Total != null ? scale(cia2Total, cia2Max, wCiaHalf('CIA2')) : null;
+        const modelCo = modelTotal != null ? scale(modelTotal, modelMax, wModelHalf) : null;
+
+        const sumCo = (parts: (number | null)[]) => {
+          const hasAny = parts.some((p) => p != null && Number.isFinite(p));
+          if (!hasAny) return null;
+          return round2(parts.reduce((s0, p) => s0 + (p != null && Number.isFinite(p) ? p : 0), 0));
         };
-        const parts = schema.labels.map((label) => {
-          const v = examMap[label];
-          return v != null ? round2(v) : null;
-        });
 
-        const any = parts.some((p) => typeof p === 'number' && Number.isFinite(p));
-        const total = any ? round2(parts.reduce((s0, p) => s0 + (typeof p === 'number' && Number.isFinite(p) ? p : 0), 0)) : null;
+        const co1Val = sumCo([cia1Co, cia2Co, modelCo]);
+        const co2Val = sumCo([cia1Co, cia2Co, modelCo]); // identical split
+        const co3Val = sumCo([
+          ssa1Total != null ? scale(ssa1Total, ssa1Max, wSsa1) : null,
+          ssa2Total != null ? scale(ssa2Total, ssa2Max, wSsa2) : null,
+          fa1Total  != null ? scale(fa1Total,  fa1MaxTotal, wFa1) : null,
+          fa2Total  != null ? scale(fa2Total,  fa2MaxTotal, wFa2) : null,
+        ]);
+
+        const parts = [co1Val, co2Val, co3Val];
+        const anyPart = parts.some((p) => p != null && Number.isFinite(p));
+        const total = anyPart
+          ? round2(parts.reduce((s0, p) => s0 + (p != null && Number.isFinite(p) ? p : 0), 0))
+          : null;
         const pct = total == null || !maxTotal ? null : Math.round((total / maxTotal) * scaledMax);
 
-        return {
-          sno: idx + 1,
-          ...s,
-          cells: parts,
-          total,
-          pct,
-        };
+        return { sno: idx + 1, ...s, cells: parts, total, pct };
       });
     }
 
@@ -3307,6 +3338,39 @@ export default function InternalMarkCoursePage({
   const computeEffectiveRows = () => {
     const entries = (cqiPublished?.entries && typeof cqiPublished.entries === 'object') ? cqiPublished.entries : {};
     const projectPages = Array.isArray(cqiPublished?.pages) ? cqiPublished.pages : [];
+    const allPages = Array.isArray(cqiPublished?.pages) ? cqiPublished.pages : [];
+
+    const getPublishedCqiInput = (studentId: number | string, coNum: number): number | null => {
+      const coKey = `co${coNum}`;
+
+      const directRow: any = (entries as any)?.[studentId] ?? (entries as any)?.[String(studentId)] ?? null;
+      if (directRow && typeof directRow === 'object') {
+        const direct = Number((directRow as any)?.[coKey]);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+      }
+
+      for (const page of allPages) {
+        if (!page || typeof page !== 'object') continue;
+        const pageEntries: any = (page as any)?.entries;
+        if (!pageEntries || typeof pageEntries !== 'object') continue;
+
+        const row: any = pageEntries?.[studentId] ?? pageEntries?.[String(studentId)] ?? null;
+        if (row && typeof row === 'object') {
+          const pageCoVal = Number((row as any)?.[coKey]);
+          if (Number.isFinite(pageCoVal) && pageCoVal > 0) return pageCoVal;
+
+          if (coNum === 1) {
+            const combinedVal = Number((row as any)?.cqiMark);
+            if (Number.isFinite(combinedVal) && combinedVal > 0) return combinedVal;
+          }
+        } else if (coNum === 1 && row != null) {
+          const scalar = Number(row);
+          if (Number.isFinite(scalar) && scalar > 0) return scalar;
+        }
+      }
+
+      return null;
+    };
 
     if (effectiveClassType === 'PROJECT' && !isPrbl) {
       // Single combined CQI for project: look for 'project_combined' page
@@ -3439,6 +3503,7 @@ export default function InternalMarkCoursePage({
       const computePerCoAdd = (
         col: { isMerged: boolean; co?: number; indices: number[]; weight: number },
         base: number,
+        isOverallBelowThreshold = true,
       ): number => {
         const coMax = Number(col.weight) || 0;
         if (coMax <= 0) return 0;
@@ -3459,8 +3524,8 @@ export default function InternalMarkCoursePage({
           }
           return c1cqi + modelAdd;
         }
-        const input = studentEntry?.[`co${coNum}`];
-        return computeCqiAdd({ coValue: base, coMax, input: input == null ? null : Number(input) });
+        const input = getPublishedCqiInput(r.id, coNum);
+        return computeCqiAdd({ coValue: base, coMax, input, isOverallBelowThreshold });
       };
 
       let cqiAddedRaw = 0;
@@ -3479,12 +3544,21 @@ export default function InternalMarkCoursePage({
 
       const computedBaseTotal = hasBaseData ? round2(baseTotalRaw) : r.total;
 
+      // Determine whether this student's overall total is below the 58% threshold.
+      // This governs which CQI formula is applied per CO:
+      //   isOverallBelowThreshold=true  → 0.6 × input, capped at 58% of coMax (Standard CQI)
+      //   isOverallBelowThreshold=false → 0.15 × input, no per-CO cap (Special Improvement)
+      const overallPct = (computedBaseTotal != null && maxTotal > 0)
+        ? (computedBaseTotal / maxTotal) * 100
+        : (r.total != null && maxTotal > 0 ? (r.total / maxTotal) * 100 : 100);
+      const isOverallBelowThreshold = Number.isFinite(overallPct) && overallPct < THRESHOLD_PERCENT;
+
       if (activeTab === 'after-cqi') {
         for (const col of displayCols) {
           if (col.isMerged && col.co != null) {
             const base = getDisplayValue(r.cells, col);
             if (base != null && Number.isFinite(base) && publishedCoSet.has(Number(col.co))) {
-              const add = computePerCoAdd(col, Number(base));
+              const add = computePerCoAdd(col, Number(base), isOverallBelowThreshold);
               if (add > 0) cqiAddedRaw += add;
             }
           }
@@ -3499,7 +3573,7 @@ export default function InternalMarkCoursePage({
           const base = val;
           const coMax = Number(col.weight) || 0;
           if (base != null && Number.isFinite(base) && coMax > 0) {
-            const add = computePerCoAdd(col, Number(base));
+            const add = computePerCoAdd(col, Number(base), isOverallBelowThreshold);
             if (add > 0) {
               val = clamp(round2(Number(base) + add), 0, coMax);
             }
@@ -3508,9 +3582,9 @@ export default function InternalMarkCoursePage({
         return val;
       });
       let effTotal = computedBaseTotal != null && cqiAdded > 0 ? round2(computedBaseTotal + cqiAdded) : computedBaseTotal;
-      // Cap total at 58% if original total was below 58%.
-      const originalTotalPct = (computedBaseTotal != null && maxTotal > 0) ? (computedBaseTotal / maxTotal) * 100 : 0;
-      if (effTotal != null && originalTotalPct < THRESHOLD_PERCENT) {
+      // Cap overall total at 58% ONLY when the student originally started below 58%.
+      // Students in the Special Improvement case (overall >= 58%) are NOT capped here.
+      if (effTotal != null && isOverallBelowThreshold) {
         const totalCap = round2((maxTotal * THRESHOLD_PERCENT) / 100);
         effTotal = Math.min(effTotal, totalCap);
       }
@@ -3534,7 +3608,7 @@ export default function InternalMarkCoursePage({
 
   // ── Excel export (student_result template) ──
   const handleExportExcel = () => {
-    const rows = computeEffectiveRows();
+    const rows = [...computeEffectiveRows()].sort(compareRegNoThenName);
     // Row 1: keys
     const headerKeys = ['StuRollNo', 'Mark', 'IsAbs', 'StuNm', 'InEligible', 'rsSts'];
     // Row 2: labels
@@ -3690,7 +3764,7 @@ export default function InternalMarkCoursePage({
       if (showTotal) { headRow1.push(String(round2(maxTotal))); headRow2.push(''); headRow3.push(''); }
       if (showPct) { headRow1.push(String(scaledMax)); headRow2.push(''); headRow3.push(''); }
 
-      const effRows = computeEffectiveRows();
+      const effRows = [...computeEffectiveRows()].sort(compareRegNoThenName);
       const tableBody = effRows.map((r: any) => {
         const row: string[] = [];
         if (showSno) row.push(String(r.sno));

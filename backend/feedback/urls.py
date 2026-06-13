@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import (
     CreateFeedbackFormView,
+    UpdateFeedbackFormView,
     GetFeedbackFormsView,
     SubmitFeedbackView,
     GetUserDepartmentView,
@@ -36,6 +37,9 @@ from .views import (
 urlpatterns = [
     # API 1: Create Feedback Form (HOD)
     path('create/', CreateFeedbackFormView.as_view(), name='feedback-create'),
+
+    # API: Update Feedback Form (HOD)
+    path('<int:form_id>/update/', UpdateFeedbackFormView.as_view(), name='feedback-update'),
     
     # API 2: Get Forms
     path('forms/', GetFeedbackFormsView.as_view(), name='feedback-forms'),

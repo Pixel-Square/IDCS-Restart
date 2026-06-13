@@ -21,6 +21,7 @@ import {
   fetchDraft,
   fetchIqacCqiConfig,
   fetchIqacQpPattern,
+  fetchSpecialQpPattern,
   fetchClassTypeWeights,
   formatApiErrorMessage,
   formatEditRequestSentMessage,
@@ -34,7 +35,7 @@ import { useMarkTableLock } from '../../hooks/useMarkTableLock';
 import { useEditWindow } from '../../hooks/useEditWindow';
 import { formatRemaining, usePublishWindow } from '../../hooks/usePublishWindow';
 import { useLockBodyScroll } from '../../hooks/useLockBodyScroll';
-import { getInternalMarkWeightSlotsForCo } from '../../utils/internalMarkWeights';
+import { getInternalMarkWeightSlotsForCo, DEFAULT_SPECIAL_EXAM_WEIGHTS } from '../../utils/internalMarkWeights';
 import {
   CqiPlacementLite,
   findPlacementIndex,
@@ -192,6 +193,8 @@ function componentLabel(ct: string, key: string): string {
   if (k === 'c1cqi') return 'C1CQI';
   if (k === 'lab1') return ct === 'TCPL' ? 'LAB1' : 'LAB1';
   if (k === 'lab2') return ct === 'TCPL' ? 'LAB2' : 'LAB2';
+  if (k === 'formative1') return 'FA1';
+  if (k === 'formative2') return 'FA2';
   return String(key || '').toUpperCase();
 }
 
@@ -563,8 +566,14 @@ export default function CQIEntry({
     if (isModelCqiWithExtendedCos) {
       return Array.from(new Set([1, 2, ...base])).sort((a, b) => a - b);
     }
+    // SPECIAL (CSD): IQAC patterns for MODEL/CIA2 may only list CO1/CO2,
+    // but the prop-derived rawCoNumbers always reflects the full CO set
+    // (CO1, CO2, CO3) from the CQI placement. Merge them so CO3 is never dropped.
+    if (classTypeKey === 'SPECIAL') {
+      return Array.from(new Set([...base, ...rawCoNumbers])).sort((a, b) => a - b);
+    }
     return base;
-  }, [iqacCqiCos, rawCoNumbers, isModelCqiWithExtendedCos]);
+  }, [iqacCqiCos, rawCoNumbers, isModelCqiWithExtendedCos, classTypeKey]);
 
   const cqiPageKey = useMemo(() => {
     const assessment = String(assessmentType || 'generic').trim().toLowerCase();
@@ -1194,7 +1203,7 @@ export default function CQIEntry({
         const isTcpr = ct === 'TCPR';
         const isProject = ct === 'PROJECT';
         const isTcpl = ct === 'TCPL';
-        const isLabLike = ct === 'LAB' || ct === 'PRACTICAL';
+        const isLabLike = ct === 'LAB' || ct === 'LAB2' || ct === 'PRACTICAL';
         const isEnglishLike = ct === 'ENGLISH' || ct === 'FOREIGN_LANG';
 
         // IQAC QP patterns: used to derive CIA CO mapping + max per CO.
@@ -1244,6 +1253,32 @@ export default function CQIEntry({
             return res?.pattern || null;
           } catch {
             return null;
+          }
+        };
+
+        // SPECIAL courses use TA-specific QP patterns configured in SpecialExamConfigurator.
+        // CQI must use the same source as mark entry so CO mapping stays consistent.
+        const normalizeSpecialPattern = (res: any) => {
+          const questions = Array.isArray(res?.pattern?.questions) ? res.pattern.questions : [];
+          if (!questions.length) return null as any;
+          const marks = questions.map((q: any) => {
+            const n = Number(q?.max);
+            return Number.isFinite(n) ? n : 0;
+          });
+          const cos = questions.map((q: any) => q?.co);
+          const hasMarks = marks.some((m: number) => m > 0);
+          const hasCos = cos.some((c: any) => String(c ?? '').trim() !== '');
+          if (!hasMarks && !hasCos) return null as any;
+          return { marks, cos } as any;
+        };
+
+        const loadSpecialPattern = async (examForApi: 'SSA1' | 'SSA2' | 'CIA1' | 'CIA2' | 'MODEL') => {
+          if (!teachingAssignmentId) return null as any;
+          try {
+            const res = await fetchSpecialQpPattern(Number(teachingAssignmentId), String(examForApi || '').toLowerCase());
+            return normalizeSpecialPattern(res);
+          } catch {
+            return null as any;
           }
         };
 
@@ -1348,27 +1383,63 @@ export default function CQIEntry({
         const englishNeedsBoth = isEnglishLike && !isLabLike && !isProject;
 
         const [iqacCia1Pattern, iqacCia2Pattern, iqacModelPattern] = await Promise.all([
-          (needs12 || sNeedsAll || englishNeedsBoth) && allow('cia1') ? loadIqacPattern('CIA1') : Promise.resolve(null),
-          (needs34 || sNeedsAll || englishNeedsBoth) && allow('cia2') ? loadIqacPattern('CIA2') : Promise.resolve(null),
-          (needsMe || sNeedsAll) ? loadIqacModelPattern() : Promise.resolve(null),
+          (needs12 || sNeedsAll || englishNeedsBoth) && allow('cia1')
+            ? (async () => {
+                if (sNeedsAll) {
+                  const special = await loadSpecialPattern('CIA1');
+                  if (special) return special;
+                }
+                return loadIqacPattern('CIA1');
+              })()
+            : Promise.resolve(null),
+          (needs34 || sNeedsAll || englishNeedsBoth) && allow('cia2')
+            ? (async () => {
+                if (sNeedsAll) {
+                  const special = await loadSpecialPattern('CIA2');
+                  if (special) return special;
+                }
+                return loadIqacPattern('CIA2');
+              })()
+            : Promise.resolve(null),
+          (needsMe || sNeedsAll)
+            ? (async () => {
+                if (sNeedsAll) {
+                  const special = await loadSpecialPattern('MODEL');
+                  if (special) return special;
+                }
+                return loadIqacModelPattern();
+              })()
+            : Promise.resolve(null),
         ]);
 
         // SPECIAL: also load SSA1/SSA2 QP patterns for CO mapping
         const [iqacSsa1Pattern, iqacSsa2Pattern] = sNeedsAll ? await Promise.all([
-          (async () => { try {
-            const res = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: null, exam: 'SSA1' as any });
-            const marks = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
-            const hasCos = Array.isArray(res?.pattern?.cos) && res.pattern.cos.length > 0;
-            if (!marks.length && !hasCos) return null;
-            return res?.pattern || null;
-          } catch { return null; } })(),
-          (async () => { try {
-            const res = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: null, exam: 'SSA2' as any });
-            const marks = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
-            const hasCos = Array.isArray(res?.pattern?.cos) && res.pattern.cos.length > 0;
-            if (!marks.length && !hasCos) return null;
-            return res?.pattern || null;
-          } catch { return null; } })(),
+          (async () => {
+            const special = await loadSpecialPattern('SSA1');
+            if (special) return special;
+            try {
+              const res = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: null, exam: 'SSA1' as any });
+              const marks = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+              const hasCos = Array.isArray(res?.pattern?.cos) && res.pattern.cos.length > 0;
+              if (!marks.length && !hasCos) return null;
+              return res?.pattern || null;
+            } catch {
+              return null;
+            }
+          })(),
+          (async () => {
+            const special = await loadSpecialPattern('SSA2');
+            if (special) return special;
+            try {
+              const res = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: null, exam: 'SSA2' as any });
+              const marks = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
+              const hasCos = Array.isArray(res?.pattern?.cos) && res.pattern.cos.length > 0;
+              if (!marks.length && !hasCos) return null;
+              return res?.pattern || null;
+            } catch {
+              return null;
+            }
+          })(),
         ]) : [null, null];
 
         const modelIsTcplLike = isTcpl || isTcpr;
@@ -2088,56 +2159,76 @@ export default function CQIEntry({
 
             // ── SPECIAL courses: compute using QP patterns + exam weights ──
             if (isSpecial && ct === 'SPECIAL') {
-              // Get SPECIAL exam weights from ClassTypeWeights
+              // Get SPECIAL exam weights from ClassTypeWeights.
+              // Use nullish coalescing so a configured weight of 0 is respected and
+              // never accidentally overridden by the hardcoded fallback.
               const specialWeightsRaw = currentClassTypeWeights?.weights || currentClassTypeWeights || {};
+              const dw = DEFAULT_SPECIAL_EXAM_WEIGHTS.weights;
+              const getW = (key: string, def: number) => {
+                const v = (specialWeightsRaw as any)?.[key];
+                return v != null && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : def;
+              };
+
+              // Cycle-based default COs when the exam pattern carries no explicit COS array.
+              // Cycle-1 exams (SSA1, CIA1, FORMATIVE1) → COs 1 and 2.
+              // Cycle-2 exams (SSA2, CIA2, FORMATIVE2) → remaining COs from the active set.
+              const cycle1FallbackCos = [1, 2].filter(c => coNumbers.includes(c));
+              const cycle2FallbackCos = coNumbers.filter(c => c >= 3);
+
               const examDefs = [
-                { key: 'SSA1', pattern: iqacSsa1Pattern, weight: Number((specialWeightsRaw as any)?.SSA1 || 10) },
-                { key: 'SSA2', pattern: iqacSsa2Pattern, weight: Number((specialWeightsRaw as any)?.SSA2 || 10) },
-                { key: 'CIA1', pattern: iqacCia1Pattern, weight: Number((specialWeightsRaw as any)?.CIA1 || 5) },
-                { key: 'CIA2', pattern: iqacCia2Pattern, weight: Number((specialWeightsRaw as any)?.CIA2 || 5) },
-                { key: 'MODEL', pattern: iqacModelPattern, weight: Number((specialWeightsRaw as any)?.MODEL || 10) },
+                { key: 'SSA1',       pattern: iqacSsa1Pattern, weight: getW('SSA1',       dw.SSA1       ?? 4),  fallbackCos: cycle1FallbackCos },
+                { key: 'SSA2',       pattern: iqacSsa2Pattern, weight: getW('SSA2',       dw.SSA2       ?? 4),  fallbackCos: cycle2FallbackCos },
+                { key: 'CIA1',       pattern: iqacCia1Pattern, weight: getW('CIA1',       dw.CIA1       ?? 5),  fallbackCos: cycle1FallbackCos },
+                { key: 'CIA2',       pattern: iqacCia2Pattern, weight: getW('CIA2',       dw.CIA2       ?? 5),  fallbackCos: cycle2FallbackCos },
+                { key: 'FORMATIVE1', pattern: null,             weight: getW('FORMATIVE1', dw.FORMATIVE1 ?? 6),  fallbackCos: cycle1FallbackCos },
+                { key: 'FORMATIVE2', pattern: null,             weight: getW('FORMATIVE2', dw.FORMATIVE2 ?? 6),  fallbackCos: cycle2FallbackCos },
+                { key: 'MODEL',      pattern: iqacModelPattern, weight: getW('MODEL',      dw.MODEL      ?? 10), fallbackCos: [] },
               ];
 
-              // Compute per-CO weight for an exam: exam_weight / number_of_unique_COs_in_pattern
-              const getExamPerCoWeight = (exam: typeof examDefs[0], co: number): number => {
-                const cos = Array.isArray(exam.pattern?.cos) ? exam.pattern.cos.map(Number) : [];
-                const uniqueCos = [...new Set(cos)];
-                if (!uniqueCos.includes(co)) return 0;
-                return exam.weight / uniqueCos.length;
+              const getPatternCoLists = (examPattern: any): number[][] => {
+                const cosRaw = Array.isArray(examPattern?.cos) ? examPattern.cos : [];
+                if (!cosRaw.length) return [];
+                return cosRaw.map((c: any) => {
+                  const parsed = parseQuestionCoNumbers(c).filter((n) => n >= 1 && n <= 5);
+                  return parsed.length ? parsed : [];
+                });
+              };
+
+              // Determine the unique COs an exam covers.
+              // Prefer the pattern's own COS array; fall back to the cycle-based default.
+              const getExamUniqueCos = (exam: typeof examDefs[0]): number[] => {
+                const coLists = getPatternCoLists(exam.pattern);
+                const fromPattern = Array.from(new Set(coLists.flat().filter((n) => Number.isFinite(n))));
+                return fromPattern.length > 0 ? fromPattern : exam.fallbackCos;
               };
 
               // Get CO-specific raw mark and max for an exam from the OBE sheets.
-              // For SSA: all questions map to one CO — full total is used (perCoWeight already
-              //   returns 0 if this CO is not in the exam).
-              // For CIA1/CIA2: filter questions by pattern cos[i] === coNum.
-              // For MODEL: read per-CO value directly from modelScaled (already split by CO).
+              // For SSA/FORMATIVE: exam-level total is used; CO splitting is done via perCoWeight.
+              // For CIA1/CIA2: filter questions by pattern CO tags.
+              // For MODEL: read per-CO value directly from modelScaled.
               const getExamCoData = (
                 examKey: string,
                 co: number,
                 studentId: number,
                 examPattern: any,
               ): { raw: number; max: number } | null => {
-                const patCos = Array.isArray(examPattern?.cos) ? examPattern.cos.map(Number) : [];
+                const patCoLists = getPatternCoLists(examPattern);
                 const patMarks = Array.isArray(examPattern?.marks) ? examPattern.marks.map(Number) : [];
 
                 switch (examKey) {
                   case 'SSA1': {
                     const raw = toNumOrNull((ssa1Res as any)?.marks?.[String(studentId)]);
-                    // CSD SSA sheets are out of 20 (10 per CO). Fall back to 20 if no IQAC pattern.
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
                       : 20;
-                    // If exam was conducted (other students have marks) but this student has none, treat as 0
                     const ssa1Conducted = Object.keys((ssa1Res as any)?.marks || {}).length > 0;
                     return raw != null ? { raw, max } : (ssa1Conducted && max > 0 ? { raw: 0, max } : null);
                   }
                   case 'SSA2': {
                     const raw = toNumOrNull((ssa2Res as any)?.marks?.[String(studentId)]);
-                    // CSD SSA sheets are out of 20 (10 per CO). Fall back to 20 if no IQAC pattern.
                     const max = patMarks.length > 0
                       ? patMarks.reduce((s: number, m: number) => s + m, 0)
                       : 20;
-                    // If exam was conducted (other students have marks) but this student has none, treat as 0
                     const ssa2Conducted = Object.keys((ssa2Res as any)?.marks || {}).length > 0;
                     return raw != null ? { raw, max } : (ssa2Conducted && max > 0 ? { raw: 0, max } : null);
                   }
@@ -2149,13 +2240,15 @@ export default function CQIEntry({
                     const ciaHasAny = Object.keys(ciaData_.rowsByStudentId || {}).length > 0;
                     const row = (ciaData_.rowsByStudentId || {})[String(studentId)] || {};
                     if (Boolean((row as any)?.absent)) {
-                      // Absent: compute max from pattern only, return 0 mark
                       let absentMax = 0;
                       ciaQs.forEach((qDef: any, idx: number) => {
-                        const patCo = patCos[idx] != null ? patCos[idx] : Number(qDef.co ?? 0);
+                        const coList = patCoLists[idx] && patCoLists[idx].length
+                          ? patCoLists[idx]
+                          : parseQuestionCoNumbers(qDef.co).filter((n) => n >= 1 && n <= 5);
+                        if (!coList.includes(co)) return;
                         const qMax = patMarks[idx] != null ? patMarks[idx] : Number(qDef.max || 0);
-                        if (patCo !== co) return;
-                        absentMax += qMax;
+                        const share = 1 / Math.max(1, coList.length);
+                        absentMax += qMax * share;
                       });
                       return absentMax > 0 ? { raw: 0, max: absentMax } : null;
                     }
@@ -2163,28 +2256,50 @@ export default function CQIEntry({
                       ? (row as any).q : row;
                     let coRaw = 0; let coMax = 0; let hasAny = false; let hasThisCo = false;
                     ciaQs.forEach((qDef: any, idx: number) => {
-                      // Use pattern cos if available, else fall back to question's own co field
-                      const patCo = patCos[idx] != null ? patCos[idx] : Number(qDef.co ?? 0);
+                      const coList = patCoLists[idx] && patCoLists[idx].length
+                        ? patCoLists[idx]
+                        : parseQuestionCoNumbers(qDef.co).filter((n) => n >= 1 && n <= 5);
+                      if (!coList.includes(co)) return;
                       const qMax = patMarks[idx] != null ? patMarks[idx] : Number(qDef.max || 0);
-                      if (patCo !== co) return;
+                      const share = 1 / Math.max(1, coList.length);
                       hasThisCo = true;
-                      coMax += qMax;
+                      coMax += qMax * share;
                       const v = toNumOrNull(q?.[qDef.key]);
-                      if (v != null) { coRaw += clamp(v, 0, qMax); hasAny = true; }
+                      if (v != null) { coRaw += clamp(v, 0, qMax) * share; hasAny = true; }
                     });
                     if (!hasThisCo) return null;
-                    // If exam was conducted but no marks for this student, return 0/max
                     if (!hasAny && ciaHasAny && coMax > 0) return { raw: 0, max: coMax };
                     return hasAny ? { raw: coRaw, max: coMax } : null;
                   }
+                  case 'FORMATIVE1':
+                  case 'FORMATIVE2': {
+                    // Formative total = skill1 + att1 + skill2 + att2 (or `total` field).
+                    // Mirrors exactly how InternalMarkCoursePage reads FA for SPECIAL.
+                    const fRes = examKey === 'FORMATIVE1' ? f1Res : f2Res;
+                    const fRow = ((fRes as any)?.marks || {})[String(studentId)] || {};
+                    const fConducted = Object.keys((fRes as any)?.marks || {}).length > 0;
+                    const totalDirect = toNumOrNull(fRow.total);
+                    const fTotal = totalDirect != null
+                      ? totalDirect
+                      : (toNumOrNull(fRow.skill1) != null || toNumOrNull(fRow.skill2) != null ||
+                         toNumOrNull(fRow.att1) != null || toNumOrNull(fRow.att2) != null)
+                        ? ((toNumOrNull(fRow.skill1) || 0) + (toNumOrNull(fRow.skill2) || 0) +
+                           (toNumOrNull(fRow.att1) || 0) + (toNumOrNull(fRow.att2) || 0))
+                        : null;
+                    // Full formative max (co1+co2 for FA1, co3+co4 for FA2) — same as internal mark page.
+                    const fMax = examKey === 'FORMATIVE1'
+                      ? ((maxes.f1.co1 || 10) + (maxes.f1.co2 || 10))
+                      : ((maxes.f2.co3 || 10) + (maxes.f2.co4 || 10));
+                    if (fTotal != null) return { raw: fTotal, max: fMax };
+                    if (fConducted && fMax > 0) return { raw: 0, max: fMax };
+                    return null;
+                  }
                   case 'MODEL': {
-                    // modelScaled already has per-CO values split from the model sheet
                     if (!modelScaled) return null;
                     const coKey = `co${co}` as const;
                     const raw = toNumOrNull((modelScaled as any)[coKey]);
                     const max = (modelMaxes as any)[coKey] ?? 0;
                     if (raw != null && max > 0) return { raw, max };
-                    // Model conducted but student has no mark for this CO → treat as 0
                     const modelHasCo = max > 0;
                     return modelHasCo ? { raw: 0, max } : null;
                   }
@@ -2194,8 +2309,15 @@ export default function CQIEntry({
               };
 
               const specialComponents: Array<{ key: string; mark: number; max: number; w: number }> = [];
+              // CSD (SPECIAL): MODEL exam only covers CO1 and CO2.
+              // CO3 in CSD has SSA2 and FA2 only — exclude MODEL from CO3.
+              const isCsdQp = /^CSD$/i.test(qpTypeKey);
               for (const exam of examDefs) {
-                const perCoW = getExamPerCoWeight(exam, coNum);
+                if (isCsdQp && exam.key === 'MODEL' && coNum === 3) continue;
+                const uniqueCos = getExamUniqueCos(exam);
+                const perCoW = exam.weight > 0 && uniqueCos.includes(coNum)
+                  ? exam.weight / uniqueCos.length
+                  : 0;
                 if (perCoW <= 0) continue;
                 const coData = getExamCoData(exam.key, coNum, student.id, exam.pattern);
                 if (!coData || coData.max <= 0) continue;
@@ -2213,7 +2335,12 @@ export default function CQIEntry({
                   const frac = it.mark / it.max;
                   return s + (frac * it.w);
                 }, 0);
-                const breakdown = specialComponents.map(it => ({ ...it, contrib: round2((it.mark / it.max) * it.w) }));
+                // For CO1 and CO2, hide Formative entries from the visual breakdown
+                // (they still contribute to the base calculation above).
+                const displayComponents = coNum <= 2
+                  ? specialComponents.filter(it => it.key !== 'formative1' && it.key !== 'formative2')
+                  : specialComponents;
+                const breakdown = displayComponents.map(it => ({ ...it, contrib: round2((it.mark / it.max) * it.w) }));
                 totals[student.id][`co${coNum}`] = {
                   value: round2(totalValue),
                   max: round2(sumW),

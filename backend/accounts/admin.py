@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.forms import UserCreationForm, UserChangeForm
 from django.utils.html import format_html
-from .models import User, Role, UserRole, Permission, RolePermission, UserQuery, ProfileImageUpdateRequest
+from .models import User, Role, UserRole, Permission, RolePermission, UserQuery, ProfileImageUpdateRequest, SiteConfiguration
 from django.contrib import messages
 from academics.models import StudentProfile, StaffProfile, Section, Department
 from django import forms
@@ -993,6 +993,37 @@ class SuperuserImpersonationPermissionAdmin(admin.ModelAdmin):
         if obj:
             readonly.append('superuser')
         return readonly
+
+
+@admin.register(SiteConfiguration)
+class SiteConfigurationAdmin(admin.ModelAdmin):
+    """Manage site-wide settings including login lockdown."""
+    list_display = ('__str__', 'login_lockdown', 'updated_at')
+    fieldsets = (
+        ('Login Control', {
+            'fields': ('login_lockdown',),
+            'description': (
+                '<strong>Login Lockdown:</strong> When enabled, all regular staff/student '
+                'logins are blocked. Only the superuser can access accounts via the '
+                'Super Login (impersonation) feature.'
+            ),
+        }),
+        ('Under Construction', {
+            'fields': ('under_construction',),
+            'classes': ('collapse',),
+        }),
+        ('App Conditions', {
+            'fields': ('app_conditions',),
+            'classes': ('collapse',),
+        }),
+    )
+
+    def has_add_permission(self, request):
+        # Singleton — only one row allowed
+        return not SiteConfiguration.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 # Register any remaining accounts models without explicit admin classes above.

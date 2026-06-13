@@ -426,6 +426,10 @@ class SiteConfiguration(models.Model):
     e.g. { "/student/attendance": ["STUDENT"], "/applications": ["STUDENT", "HOD"] }
     """
 
+    login_lockdown = models.BooleanField(
+        default=False,
+        help_text='When True, only superusers can log in (via impersonation). Regular staff/student login is blocked.',
+    )
     under_construction = models.JSONField(
         default=dict,
         blank=True,

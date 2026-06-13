@@ -1420,6 +1420,23 @@ def _merge_cqi_page_entries(pages: dict) -> tuple[dict, list[int]]:
     return merged, all_co_numbers
 
 
+def _infer_co_numbers_from_entries(entries: dict) -> list[int]:
+    """Infer CO numbers from the keys of student entry dicts.
+    Used as a last-resort fallback when the stored co_numbers field is empty
+    but flat legacy entries (e.g. {student_id: {co1: 1, co2: 1, co3: 1}})
+    are present and can tell us which COs were published.
+    """
+    import re as _re
+    cos: set[int] = set()
+    for v in (entries or {}).values():
+        if isinstance(v, dict):
+            for key in v:
+                m = _re.match(r'^co(\d+)$', str(key))
+                if m:
+                    cos.add(int(m.group(1)))
+    return sorted(cos)
+
+
 def _build_cqi_entries_payload(existing_entries, page_key: str | None, assessment_type: str | None, co_numbers: list[int], entries: dict, *, meta_kind: str, user_id=None, legacy_co_numbers=None, legacy_published_at=None):
     if not page_key:
         return entries or {}, co_numbers, None
@@ -2305,6 +2322,14 @@ def cqi_published(request, subject_id: str):
 
     obj = ObeCqiPublished.objects.filter(subject=subject, teaching_assignment=ta).first()
     if obj is None:
+        # Fallback: SPECIAL and co-taught subjects may have the CQI published by a
+        # sibling TA (same subject, different section/TA).  Accept any published row
+        # for the subject so the Internal Mark page can always display CQI data.
+        obj = (
+            ObeCqiPublished.objects.filter(subject=subject, teaching_assignment__isnull=True).first()
+            or ObeCqiPublished.objects.filter(subject=subject).order_by('-published_at').first()
+        )
+    if obj is None:
         return Response({'published': None})
 
     snapshot = _extract_cqi_page_state(obj.entries, page_key, assessment_type, requested_co_numbers, legacy_co_numbers=obj.co_numbers)
@@ -2355,9 +2380,11 @@ def cqi_published(request, subject_id: str):
         # When no specific page params requested and the record uses the new paged format,
         # merge entries across all published pages so the Internal Mark view can consume them.
         if not page_key and not assessment_type and not requested_co_numbers:
-            _, pages = _split_cqi_entries_payload(obj.entries or {})
+            legacy_entries, pages = _split_cqi_entries_payload(obj.entries or {})
             if pages:
                 all_merged, merged_co_nums = _merge_cqi_page_entries(pages)
+                if not merged_co_nums:
+                    merged_co_nums = _infer_co_numbers_from_entries(all_merged)
                 pub_dates = [s.get('publishedAt', '') for s in pages.values() if isinstance(s, dict) and s.get('publishedAt')]
                 latest_pub = max(pub_dates) if pub_dates else (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None)
                 return Response({'published': {
@@ -2366,14 +2393,28 @@ def cqi_published(request, subject_id: str):
                     'entries': all_merged,
                     'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
                 }})
+            # Legacy flat format: no __pages, entries at top level
+            if legacy_entries:
+                inferred_co_nums = obj.co_numbers or _infer_co_numbers_from_entries(legacy_entries)
+                pub_at = obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None
+                return Response({'published': {
+                    'publishedAt': pub_at,
+                    'coNumbers': inferred_co_nums,
+                    'entries': legacy_entries,
+                    'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
+                }})
         return Response({'published': None})
 
+    _eff_co_nums = snapshot.get('co_numbers') or obj.co_numbers or []
+    _eff_entries = snapshot.get('entries') or {}
+    if not _eff_co_nums:
+        _eff_co_nums = _infer_co_numbers_from_entries(_eff_entries)
     return Response(
         {
             'published': {
                 'publishedAt': snapshot.get('published_at') or (obj.published_at.isoformat() if getattr(obj, 'published_at', None) else None),
-                'coNumbers': snapshot.get('co_numbers') or obj.co_numbers or [],
-                'entries': snapshot.get('entries') or {},
+                'coNumbers': _eff_co_nums,
+                'entries': _eff_entries,
                 'pages': _build_pages_info(obj.entries, include_entries=want_page_entries),
             }
         }
@@ -2888,7 +2929,7 @@ def _normalize_exam_key(s) -> str:
 
 def _normalize_qp_type_key(value) -> str:
     qp = str(value or '').strip().upper().replace(' ', '')
-    return qp if qp in {'QP1', 'QP2', 'CSD', 'QP1FINAL'} else ''
+    return qp if qp in {'QP1', 'QP2', 'CSD', 'QP1FINAL', 'LAB_PC'} else ''
 
 
 def _validate_qp_pattern_payload(pattern_raw):
@@ -3881,6 +3922,8 @@ def _normalize_obe_class_type(value) -> str:
         return 'THEORY'
     if compact == 'PRBL' or compact == 'PROJECT' or 'PROJECT' in compact:
         return 'PROJECT'
+    if compact == 'LAB2':
+        return 'LAB2'
     if compact == 'LAB' or compact == 'L' or compact.startswith('LAB'):
         return 'LAB'
     if compact == 'PRACTICAL' or compact.startswith('PRACT'):
@@ -7025,7 +7068,7 @@ def obe_progress_overview(request):
             return ['review1', 'review2', 'model']
         if ct == 'TCPR':
             return ['ssa1', 'review1', 'cia1', 'ssa2', 'review2', 'cia2', 'model']
-        if ct == 'LAB':
+        if ct in ('LAB', 'LAB2'):
             return ['cia1', 'cia2', 'model']
         # THEORY / TCPL / unknown: show the standard theory keys
         return ['ssa1', 'formative1', 'cia1', 'ssa2', 'formative2', 'cia2', 'model']
@@ -7048,7 +7091,7 @@ def obe_progress_overview(request):
                 return 'LAB 2'
 
         # LAB: assessment names should explicitly say LAB
-        if ct == 'LAB':
+        if ct in ('LAB', 'LAB2'):
             if key == 'cia1':
                 return 'CIA 1 LAB'
             if key == 'cia2':
@@ -9175,8 +9218,13 @@ _CQI_COMPONENT_MATRIX: dict[tuple[str, int], list[tuple[str, str]]] = {
     # LAB courses expose Cycle 1/Cycle 2 entries (cia1/cia2 keys) and CQI should
     # depend on those cycle components only.
     ('LAB', 1): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB2', 1): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
     ('LAB', 2): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB2', 2): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB2', 2): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
     ('LAB', 3): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB2', 3): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
+    ('LAB2', 3): [('cia1', 'Cycle 1 LAB'), ('cia2', 'Cycle 2 LAB')],
     ('TCPL', 1): [('ssa1', 'SSA1'), ('formative1', 'LAB 1'), ('cia1', 'CIA 1')],
     ('TCPL', 2): [('ssa2', 'SSA2'), ('formative2', 'LAB 2'), ('cia2', 'CIA 2')],
     ('TCPL', 3): [('model', 'MODEL')],

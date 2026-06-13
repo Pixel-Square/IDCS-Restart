@@ -315,21 +315,15 @@ def calculate_feedback_response_metrics(feedback_form):
                     )
 
             if sections_to_query:
-                student_filters = Q(section_id__in=sections_to_query)
-                if is_year1_target:
-                    student_filters &= (
-                        Q(home_department_id=feedback_form.department_id) |
-                        Q(
-                            section_assignments__section_type='SECONDARY',
-                            section_assignments__end_date__isnull=True,
-                            section_assignments__section__batch__course__department_id=feedback_form.department_id,
-                        ) |
-                        Q(
-                            section_assignments__section_type='SECONDARY',
-                            section_assignments__end_date__isnull=True,
-                            section_assignments__section__batch__department_id=feedback_form.department_id,
-                        )
+                # Count students by section mapping regardless of core department
+                # (e.g., S&H common sections contain students from multiple departments).
+                student_filters = (
+                    Q(section_id__in=sections_to_query) |
+                    Q(
+                        section_assignments__end_date__isnull=True,
+                        section_assignments__section_id__in=sections_to_query,
                     )
+                )
                 expected_count = StudentProfile.objects.filter(student_filters).distinct().count()
 
     percentage = round((response_count / expected_count * 100) if expected_count > 0 else 0, 1)
@@ -528,6 +522,47 @@ class CreateFeedbackFormView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class UpdateFeedbackFormView(APIView):
+    """
+    API: Update Feedback Form (HOD)
+    PUT /api/feedback/<form_id>/update/
+
+    Allows updating draft feedback forms created by the current user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, form_id):
+        user_permissions = get_user_permissions(request.user)
+        if 'feedback.create' not in user_permissions:
+            return Response({
+                'detail': 'You do not have permission to update feedback forms.'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        feedback_form = get_object_or_404(FeedbackForm, id=form_id)
+
+        if feedback_form.created_by != request.user:
+            return Response({
+                'detail': 'You can only update forms you created.'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if feedback_form.status != 'DRAFT':
+            return Response({
+                'detail': 'Only draft feedback forms can be updated.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = FeedbackFormCreateSerializer(
+            feedback_form,
+            data=request.data,
+            context={'request': request}
+        )
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_form = serializer.save()
+        return Response(FeedbackFormSerializer(updated_form, context={'request': request}).data, status=status.HTTP_200_OK)
+
+
 class GetFeedbackFormsView(APIView):
     """
     API 2: Get Forms
@@ -658,11 +693,22 @@ class GetFeedbackFormsView(APIView):
                     
                     # Build query filters
                     base_filter = Q(
-                        department_id=department_id,
                         target_type='STUDENT',
                         status='ACTIVE',
                         active=True  # Only show active forms to students
                     )
+
+                    department_filter = Q()
+                    if department_id:
+                        department_filter |= Q(department_id=department_id)
+                    if student_section:
+                        # Allow forms explicitly targeting the student's section even when
+                        # their core department differs (e.g., S&H common sections).
+                        department_filter |= Q(sections__contains=[student_section.id])
+                        department_filter |= Q(section=student_section)
+
+                    if department_filter:
+                        base_filter &= department_filter
                     
                     # All classes filter
                     all_classes_filter = Q(all_classes=True)
@@ -2089,6 +2135,7 @@ class GetResponseListView(APIView):
                         'user_name': user_name,
                         'register_number': register_number,
                         'submitted_at': response.created_at.isoformat(),
+                        'anonymous': bool(feedback_form.anonymous),
                         'answers': []
                     }
                 
@@ -4322,6 +4369,46 @@ class IQACExportYearsView(APIView):
             }, status=status.HTTP_200_OK)
 
 
+def _resolve_feedback_export_faculty_name(feedback_form, student_profile=None, teaching_assignment=None):
+    """Resolve the faculty/staff name for export rows.
+
+    For section-wise forms, prefer the mapped section staff name for the
+    student's/assignment's section. Otherwise use the single faculty_name field.
+    Fall back to the creator name only when the stored faculty name is blank.
+    """
+    if getattr(feedback_form, 'section_wise', False):
+        section_id = None
+        if student_profile and getattr(student_profile, 'section_id', None):
+            section_id = student_profile.section_id
+        elif teaching_assignment and getattr(teaching_assignment, 'section_id', None):
+            section_id = teaching_assignment.section_id
+
+        if section_id and isinstance(getattr(feedback_form, 'section_staff_assignments', None), list):
+            for assignment in feedback_form.section_staff_assignments:
+                try:
+                    if int(assignment.get('section')) == int(section_id):
+                        staff_name = str(assignment.get('staff_name', '') or '').strip()
+                        if staff_name:
+                            return staff_name
+                except Exception:
+                    continue
+
+    faculty_name = str(getattr(feedback_form, 'faculty_name', '') or '').strip()
+    if faculty_name:
+        return faculty_name
+
+    created_by = getattr(feedback_form, 'created_by', None)
+    if created_by:
+        full_name = getattr(created_by, 'get_full_name', lambda: '')()
+        if full_name:
+            return full_name
+        username = getattr(created_by, 'username', '')
+        if username:
+            return username
+
+    return ''
+
+
 class IQACCommonExportView(APIView):
     """
     API: IQAC Common Export (Download Feedback Responses)
@@ -4354,6 +4441,7 @@ class IQACCommonExportView(APIView):
                 feedback_form__active=True
             ).select_related(
                 'feedback_form',
+                'feedback_form__created_by',
                 'feedback_form__department',
                 'question',
                 'user',
@@ -4382,7 +4470,6 @@ class IQACCommonExportView(APIView):
 
             # For HOD users: filter to only forms they created or forms with allow_hod_view=True
             if not scope.get('all_departments'):
-                from django.db.models import Q
                 qs = qs.filter(
                     Q(feedback_form__created_by=request.user) | 
                     Q(feedback_form__allow_hod_view=True)
@@ -4538,10 +4625,16 @@ class IQACCommonExportView(APIView):
                 
                 # Get ONLY user-entered form_name (no system-generated defaults)
                 form_name_value = response.feedback_form.form_name or ""
+                faculty_name_value = _resolve_feedback_export_faculty_name(
+                    response.feedback_form,
+                    student_profile=student_profile,
+                    teaching_assignment=response.teaching_assignment,
+                )
                 
                 # Collect data row - include form_name
                 responses_data.append({
                     'form_name': form_name_value,
+                    'faculty_name': faculty_name_value,
                     'student_name': student_name,
                     'register_number': register_number,
                     'department': department_name,
@@ -4571,6 +4664,7 @@ class IQACCommonExportView(APIView):
 
             headers = [
                 "Form Name",
+                "Faculty Name",
                 "Student Name",
                 "Register Number",
                 "Department",
@@ -4593,6 +4687,7 @@ class IQACCommonExportView(APIView):
             for row_data in responses_data:
                 row = [
                     row_data['form_name'],
+                    row_data['faculty_name'],
                     row_data['student_name'],
                     row_data['register_number'],
                     row_data['department'],
@@ -5160,6 +5255,7 @@ class FormExportExcelView(APIView):
             user_roles = list(user.roles.values_list('name', flat=True))
             is_iqac = 'IQAC' in user_roles or 'ADMIN' in user_roles
             is_hod = 'HOD' in user_roles
+            is_creator = feedback_form.created_by_id == user.id
             
             hod_department_id = None
             can_export = False
@@ -5167,11 +5263,16 @@ class FormExportExcelView(APIView):
             # IQAC → full access to all forms
             if is_iqac:
                 can_export = True
+
+            # Form creator → allow export even when not a HOD
+            elif is_creator:
+                can_export = True
+                logger.info(f"PERMISSION: Form creator → ALLOW")
             
             # HOD → check ownership and allow_hod_view flag
             elif is_hod:
                 # Case 1: HOD owns the form → allow export
-                if feedback_form.created_by_id == user.id:
+                if is_creator:
                     can_export = True
                     logger.info(f"PERMISSION: HOD is owner → ALLOW")
                 
@@ -5224,6 +5325,7 @@ class FormExportExcelView(APIView):
                 feedback_form=feedback_form
             ).select_related(
                 'feedback_form',
+                'feedback_form__created_by',
                 'feedback_form__department',
                 'question',
                 'user',
@@ -5395,10 +5497,16 @@ class FormExportExcelView(APIView):
                 
                 # Get ONLY user-entered form_name (no system-generated defaults)
                 form_name_value = feedback_form.form_name or ""
+                faculty_name_value = _resolve_feedback_export_faculty_name(
+                    feedback_form,
+                    student_profile=student_profile,
+                    teaching_assignment=response.teaching_assignment,
+                )
                 
                 # Collect data row - include form_name
                 responses_data.append({
                     'form_name': form_name_value,
+                    'faculty_name': faculty_name_value,
                     'student_name': student_name,
                     'register_number': register_number,
                     'department': department_name,
@@ -5428,6 +5536,7 @@ class FormExportExcelView(APIView):
 
             headers = [
                 "Form Name",
+                "Faculty Name",
                 "Student Name",
                 "Register Number",
                 "Department",
@@ -5450,6 +5559,7 @@ class FormExportExcelView(APIView):
             for row_data in responses_data:
                 row = [
                     row_data['form_name'],
+                    row_data['faculty_name'],
                     row_data['student_name'],
                     row_data['register_number'],
                     row_data['department'],

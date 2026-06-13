@@ -30,6 +30,7 @@ from .views import (
     ProfileImageUpdateRequestView,
     ProfileImageUpdateRequestReviewView,
     UCStateView,
+    LoginLockdownView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
@@ -74,4 +75,6 @@ urlpatterns = [
     path('settings/whatsapp/clear-session/', WhatsAppGatewayClearSessionView.as_view(), name='settings_whatsapp_clear_session'),
     # Under-construction state (read: any auth, write: IQAC only)
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
+    # Login lockdown toggle (read: any auth, write: superuser only)
+    path('login-lockdown/', LoginLockdownView.as_view(), name='login_lockdown'),
 ]
