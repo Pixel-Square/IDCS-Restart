@@ -1341,6 +1341,22 @@ def _resolve_section_name_from_ta(ta) -> str:
         return ''
     sec = getattr(ta, 'section', None)
     if not sec:
+        category = None
+        if getattr(ta, 'elective_subject', None):
+            parent = getattr(ta.elective_subject, 'parent', None)
+            if parent and getattr(parent, 'category', None):
+                category = str(parent.category).lower()
+        elif getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'is_elective', False):
+            if getattr(ta.curriculum_row, 'category', None):
+                category = str(ta.curriculum_row.category).lower()
+
+        if category is not None:
+            if 'open elective' in category or 'oe' in category.split():
+                return 'OE'
+            elif 'professional elective' in category or 'pe' in category.split():
+                return 'PE'
+            elif 'emerging' in category:
+                return 'EE'
         return ''
     return str(getattr(sec, 'name', None) or str(sec) or '').strip()
 

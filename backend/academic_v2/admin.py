@@ -76,7 +76,7 @@ class AcV2CourseAdmin(admin.ModelAdmin):
 @admin.register(AcV2Section)
 class AcV2SectionAdmin(admin.ModelAdmin):
     list_display = ['section_name', 'course', 'faculty_user', 'student_count']
-    list_filter = ['course__class_type', 'course__semester']
+    list_filter = ['teaching_assignment__staff__department', 'teaching_assignment__curriculum_row__department', 'course__class_type', 'course__semester']
     search_fields = ['section_name', 'faculty_user__username']
     raw_id_fields = ['course', 'faculty_user', 'teaching_assignment']
     

@@ -57,6 +57,20 @@ const getAssignmentStaffName = (staffDetails: any) => {
   return staffDetails.staff_id || '—'
 }
 
+const getElectiveTypeName = (opt: any) => {
+  const cat = opt.category?.toUpperCase() || '';
+  if (cat.startsWith('PE')) return 'PE';
+  if (cat === 'OE') return 'OE';
+  if (cat === 'EE' || cat === 'EM') return 'EE';
+  
+  const parentName = (opt.parent_name || '').toLowerCase();
+  if (parentName.includes('professional elective')) return 'PE';
+  if (parentName.includes('open elective')) return 'OE';
+  if (parentName.includes('emerging elective')) return 'EE';
+
+  return 'Elective';
+};
+
 function SearchableStaffSelect({ staffList, initialValue, id }: { staffList: Staff[], initialValue: string | number, id: string }) {
   const [value, setValue] = useState<string | number>(initialValue || '');
   const [searchTerm, setSearchTerm] = useState('');
@@ -1079,7 +1093,7 @@ export default function TeachingAssignmentsPage(){
                               return (
                                 <tr key={`${section.id}-${subject.id}`} className="hover:bg-gray-50 transition-colors">
                                   <td className="px-4 py-3 font-medium text-gray-900">
-                                    {subject.course_code || '-'}
+                                    {(subject.course_code && subject.course_code !== '-') ? subject.course_code : getElectiveTypeName(subject)}
                                   </td>
                                   <td className="px-4 py-3 text-gray-700">
                                     <div>{subject.course_name || 'Unnamed'}</div>
@@ -1569,7 +1583,7 @@ export default function TeachingAssignmentsPage(){
                         <div key={opt.id} className={`flex flex-col md:flex-row md:items-center gap-3 p-3 rounded-lg border border-gray-200 ${opt.is_cross_department ? 'bg-blue-50/30' : 'bg-white'}`}>
                           <div className="flex-1">
                             <div className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
-                              <span>{opt.course_code || '-'} — {opt.course_name || '-'}</span>
+                              <span>{(opt.course_code && opt.course_code !== '-') ? opt.course_code : getElectiveTypeName(opt)} — {opt.course_name || '-'}</span>
                               {opt.is_cross_department && opt.owner_department_name && (
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800" title={`Shared from ${opt.owner_department_name}`}>
                                   {opt.owner_department_name.split(' - ')[1] || opt.owner_department_name.split(' - ')[0] || 'Shared'}
@@ -1702,7 +1716,7 @@ export default function TeachingAssignmentsPage(){
                         <div key={opt.id} className="flex flex-col md:flex-row md:items-center gap-3 p-3 bg-white rounded-lg border border-amber-200">
                           <div className="flex-1">
                             <div className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
-                              <span>{opt.course_code || '-'} — {opt.course_name || '-'}</span>
+                              <span>{(opt.course_code && opt.course_code !== '-') ? opt.course_code : getElectiveTypeName(opt)} — {opt.course_name || '-'}</span>
                               {opt.parent_name && <span className="text-xs text-gray-500">({opt.parent_name})</span>}
                               {opt.owner_department_name && (
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800" title={`Shared from ${opt.owner_department_name}`}>

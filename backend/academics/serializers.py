@@ -81,6 +81,29 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
         except Exception:
             pass
 
+        # Check for elective category before other fallbacks
+        try:
+            category = None
+            if getattr(obj, 'elective_subject', None):
+                parent = getattr(obj.elective_subject, 'parent', None)
+                if parent and getattr(parent, 'category', None):
+                    category = str(parent.category).lower()
+            elif getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'is_elective', False):
+                if getattr(obj.curriculum_row, 'category', None):
+                    category = str(obj.curriculum_row.category).lower()
+
+            if category is not None:
+                if 'open elective' in category or 'oe' in category.split():
+                    return 'OE'
+                elif 'professional elective' in category or 'pe' in category.split():
+                    return 'PE'
+                elif 'emerging' in category:
+                    return 'EE'
+                return str(category).title()
+        except Exception:
+            pass
+
+
         # Fallback for elective assignments: derive a representative section
         try:
             if getattr(obj, 'elective_subject', None):
@@ -353,7 +376,7 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
     elective_subject_details = serializers.SerializerMethodField(read_only=True)
     elective_subject_id = serializers.SerializerMethodField(read_only=True)
     question_paper_type = serializers.SerializerMethodField(read_only=True)
-    section_name = serializers.CharField(source='section.name', read_only=True)
+    section_name = serializers.SerializerMethodField(read_only=True)
     custom_subject = serializers.CharField(allow_null=True, required=False)
 
     class Meta:
@@ -379,6 +402,38 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
             # If neither present, return None
         except Exception:
             pass
+        return None
+
+    def get_section_name(self, obj):
+        try:
+            sec = getattr(obj, 'section', None)
+            if sec is not None:
+                return getattr(sec, 'name', None)
+        except Exception:
+            pass
+
+        # Check for elective category
+        try:
+            category = None
+            if getattr(obj, 'elective_subject', None):
+                parent = getattr(obj.elective_subject, 'parent', None)
+                if parent and getattr(parent, 'category', None):
+                    category = str(parent.category).lower()
+            elif getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'is_elective', False):
+                if getattr(obj.curriculum_row, 'category', None):
+                    category = str(obj.curriculum_row.category).lower()
+
+            if category is not None:
+                if 'open elective' in category or 'oe' in category.split():
+                    return 'OE'
+                elif 'professional elective' in category or 'pe' in category.split():
+                    return 'PE'
+                elif 'emerging' in category:
+                    return 'EE'
+                return str(category).title()
+        except Exception:
+            pass
+            
         return None
 
     def get_elective_subject_id(self, obj):

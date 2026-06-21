@@ -1109,7 +1109,7 @@ class BatchYearAdmin(admin.ModelAdmin):
 
 @admin.register(TeachingAssignment)
 class TeachingAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'subject_display', 'section', 'academic_year', 'is_active')
+    list_display = ('staff', 'subject_display', 'section_display', 'academic_year', 'is_active')
     search_fields = (
         'staff__staff_id', 'staff__user__username', 'subject__code', 'subject__name', 'section__name'
     )
@@ -1299,6 +1299,35 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
         return 'No subject'
 
     subject_display.short_description = 'Subject (Curriculum)'
+
+    def section_display(self, obj):
+        if obj.section:
+            return str(obj.section)
+        
+        # If no section, check if it is an elective
+        category = None
+        if getattr(obj, 'elective_subject', None):
+            parent = getattr(obj.elective_subject, 'parent', None)
+            if parent and getattr(parent, 'category', None):
+                category = str(parent.category).lower()
+        elif getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'is_elective', False):
+            if getattr(obj.curriculum_row, 'category', None):
+                category = str(obj.curriculum_row.category).lower()
+                
+        if category is not None:
+            if 'open elective' in category or 'oe' in category.split():
+                return 'OE'
+            elif 'professional elective' in category or 'pe' in category.split():
+                return 'PE'
+            elif 'emerging' in category:
+                return 'EE'
+            return str(category).title()
+            
+        if getattr(obj, 'custom_subject', None):
+            return obj.get_custom_subject_display()
+            
+        return '-'
+    section_display.short_description = 'Section'
 
 
 @admin.register(StudentMentorMap)

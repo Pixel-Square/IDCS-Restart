@@ -1001,7 +1001,26 @@ class IqacInternalMarksBulkExportView(APIView):
                         name = self._safe_text(getattr(user, 'username', '')) if user else ''
 
                     ta_obj = getattr(fim, 'teaching_assignment', None)
-                    section_name = self._safe_text(getattr(getattr(ta_obj, 'section', None), 'name', None) or '-')
+                    sec_name = getattr(getattr(ta_obj, 'section', None), 'name', None)
+                    if not sec_name and ta_obj:
+                        category = None
+                        if getattr(ta_obj, 'elective_subject', None):
+                            parent = getattr(ta_obj.elective_subject, 'parent', None)
+                            if parent and getattr(parent, 'category', None):
+                                category = str(parent.category).lower()
+                        elif getattr(ta_obj, 'curriculum_row', None) and getattr(ta_obj.curriculum_row, 'is_elective', False):
+                            if getattr(ta_obj.curriculum_row, 'category', None):
+                                category = str(ta_obj.curriculum_row.category).lower()
+
+                        if category is not None:
+                            if 'open elective' in category or 'oe' in category.split():
+                                sec_name = 'OE'
+                            elif 'professional elective' in category or 'pe' in category.split():
+                                sec_name = 'PE'
+                            elif 'emerging' in category:
+                                sec_name = 'EE'
+
+                    section_name = self._safe_text(sec_name or '-')
                     total = self._safe_float(getattr(fim, 'final_mark', None))
 
                     prev = merged_students.get(sid)
@@ -2545,9 +2564,11 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
 
-        # Academic Controller (IQAC / OBE master) needs full assignment visibility
-        # even when the user does not have a linked staff profile.
-        if _user_is_iqac_admin(user):
+        perms = get_user_permissions(user)
+
+        # Academic Controller (IQAC / OBE master), superusers, and users with global access
+        # need full assignment visibility even when the user does not have a linked staff profile.
+        if _user_is_iqac_admin(user) or user.is_superuser or ('academics.assign_teaching' in perms) or ('academics.view_all_sections' in perms):
             return self.queryset
 
         staff_profile = getattr(user, 'staff_profile', None)
@@ -2559,7 +2580,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         # allowed to see elective assignments across departments as well,
         # but should NOT see every regular assignment across the system.
         advisor_section_ids = list(SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True, academic_year__is_active=True).values_list('section_id', flat=True))
-        perms = get_user_permissions(user)
+
         from django.db.models import Q
 
         # Get HOD-accessible department sections
@@ -3668,42 +3689,68 @@ class HODSectionsView(APIView):
     permission_classes = (IsAuthenticated, IsHODOfDepartment)
     def get(self, request):
         user = request.user
+        from accounts.utils import get_user_permissions
+        perms = get_user_permissions(user)
+
+        global_access = (
+            user.is_superuser
+            or _user_is_iqac_admin(user)
+            or ('academics.view_all_sections' in perms)
+            or ('academics.view_all_departments' in perms)
+            or ('academics.assign_teaching' in perms)
+        )
+
         staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
+        if not staff_profile and not global_access:
             return Response({'results': []})
 
         dept_ids = get_user_effective_departments(user) or []
-        if not dept_ids:
-            return Response({'results': []})
 
-        # Primary own sections (batch belongs to the HOD's department(s))
-        own_section_ids = set(Section.objects.filter(
-            Q(batch__course__department_id__in=dept_ids) |
-            Q(batch__department_id__in=dept_ids) |
-            Q(managing_department_id__in=dept_ids)
-        ).values_list('pk', flat=True))
+        if global_access:
+            sections = Section.objects.all().select_related(
+                'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
+            ).order_by('batch__name', 'name')
+        else:
+            if not dept_ids:
+                return Response({'results': []})
 
-        # Secondary: sections where Year-1 students have SECONDARY assignments belonging
-        # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods).
-        from django.db.models import Exists, OuterRef
-        from .models import StudentSectionAssignment as _SSA
-        has_secondary_from_dept = _SSA.objects.filter(
-            section_id=OuterRef('pk'),
-            end_date__isnull=True,
-            section_type='SECONDARY',
-            student__home_department_id__in=dept_ids,
-        )
-        secondary_section_ids = set(Section.objects.filter(
-            Exists(has_secondary_from_dept)
-        ).values_list('pk', flat=True))
+            # Primary own sections (batch belongs to the HOD's department(s))
+            own_section_ids = set(Section.objects.filter(
+                Q(batch__course__department_id__in=dept_ids) |
+                Q(batch__department_id__in=dept_ids) |
+                Q(managing_department_id__in=dept_ids)
+            ).values_list('pk', flat=True))
 
-        all_section_ids = own_section_ids | secondary_section_ids
+            # Secondary: sections where Year-1 students have SECONDARY assignments belonging
+            # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods).
+            from django.db.models import Exists, OuterRef
+            from .models import StudentSectionAssignment as _SSA
+            has_secondary_from_dept = _SSA.objects.filter(
+                section_id=OuterRef('pk'),
+                end_date__isnull=True,
+                section_type='SECONDARY',
+                student__home_department_id__in=dept_ids,
+            )
+            secondary_section_ids = set(Section.objects.filter(
+                Exists(has_secondary_from_dept)
+            ).values_list('pk', flat=True))
 
-        sections = Section.objects.filter(
-            pk__in=all_section_ids
-        ).select_related(
-            'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
-        ).order_by('batch__name', 'name')
+            all_section_ids = own_section_ids | secondary_section_ids
+
+            sections = Section.objects.filter(
+                pk__in=all_section_ids
+            ).select_related(
+                'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
+            ).order_by('batch__name', 'name')
+
+        from .models import AcademicYear
+        current_acad_year = None
+        active_ay = AcademicYear.objects.filter(is_active=True).first()
+        if active_ay:
+            try:
+                current_acad_year = int(str(active_ay.name).split('-')[0])
+            except Exception:
+                current_acad_year = None
 
         results = []
         for s in sections:
@@ -3720,6 +3767,15 @@ class HODSectionsView(APIView):
             reg = getattr(batch, 'regulation', None) if batch else None
             sem_obj = getattr(s, 'semester', None)
             sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
+            
+            student_year = None
+            if batch and getattr(batch, 'start_year', None) and current_acad_year:
+                try:
+                    delta = current_acad_year - int(batch.start_year)
+                    student_year = delta + 1
+                except Exception:
+                    student_year = None
+                    
             results.append({
                 'id': s.id,
                 'name': s.name,
@@ -3729,8 +3785,9 @@ class HODSectionsView(APIView):
                 'course_id': getattr(course, 'id', None),
                 'department_id': getattr(dept, 'id', None),
                 'department_code': getattr(dept, 'code', None),
-                'department_short_name': getattr(dept, 'short_name', None),
+                'department_short_name': getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', None),
                 'semester': sem_val,
+                'year': student_year,
             })
         return Response({'results': results})
 
@@ -3764,6 +3821,7 @@ class SectionsByDeptYearView(APIView):
             'batch__course__department',
             'batch__department',
             'managing_department',
+            'semester',
         )
 
         if dept_ids:
@@ -3825,11 +3883,16 @@ class SectionsByDeptYearView(APIView):
                 label_parts.append(f"Year {student_year}")
             # Use plain ASCII hyphens to avoid escaped unicode sequences like "\\u2013" in responses
             label = " - ".join(label_parts)
+            
+            sem_obj = getattr(sec, 'semester', None)
+            sem_number = getattr(sem_obj, 'number', None) if sem_obj else None
 
             results.append({
                 'id': sec.id,
+                'name': sec.name,
                 'label': label,
                 'year': student_year,
+                'semester': sem_number,
                 'department_short_name': dept_short,
             })
 
@@ -3848,10 +3911,21 @@ class HODStaffListView(APIView):
     def get(self, request):
         # Return staff list limited to the HOD's departments
         user = request.user
-        staff_profile = getattr(user, 'staff_profile', None)
-        if not staff_profile:
-            return Response({'results': []})
+        from accounts.utils import get_user_permissions
         perms = get_user_permissions(user)
+
+        global_access = (
+            user.is_superuser
+            or _user_is_iqac_admin(user)
+            or ('academics.view_all_staff' in perms)
+            or ('academics.view_all_departments' in perms)
+            or ('academics.assign_advisor' in perms)
+            or ('academics.assign_teaching' in perms)
+        )
+
+        staff_profile = getattr(user, 'staff_profile', None)
+        if not staff_profile and not global_access:
+            return Response({'results': []})
         dept_ids = get_user_effective_departments(user)
 
         # optionally allow department param; for globally-authorized users this
@@ -3862,13 +3936,6 @@ class HODStaffListView(APIView):
             dept_filter = int(dept_param) if dept_param else None
         except Exception:
             dept_filter = None
-
-        global_access = (
-            user.is_superuser
-            or ('academics.view_all_staff' in perms)
-            or ('academics.view_all_departments' in perms)
-            or ('academics.assign_advisor' in perms)
-        )
 
         if global_access:
             from .models import Department
