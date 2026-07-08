@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Users, BookOpen, AlertCircle, Loader } from 'lucide-react';
+import { ChevronDown, ChevronRight, Users, BookOpen, AlertCircle, Loader, X, Plus } from 'lucide-react';
 import { SearchableDropdown } from '../../../components/ui/SearchableDropdown';
 import fetchWithAuth from '../../../services/fetchAuth';
 
@@ -284,6 +284,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
   const [autoSavingSubjects, setAutoSavingSubjects] = useState<Record<string, Set<string>>>({});
   const [autoSaveMessages, setAutoSaveMessages] = useState<Record<string, Record<string, { type: 'success' | 'error'; text: string }>>>({});
   const [temporarySelection, setTemporarySelection] = useState<Record<string, string>>({});
+  const [additionalDropdowns, setAdditionalDropdowns] = useState<Record<string, number>>({});
 
   const renderSubjectMapping = (sectionKey: string, sectionId: number) => {
     const subjects = sectionCurriculum[sectionKey] || [];
@@ -332,7 +333,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
       setClassAdvisorSelection(prev => ({ ...prev, [sectionKey]: value }));
     };
 
-    const handleSubjectFacultyChange = async (subjectId: string, value: string) => {
+    const handleSubjectFacultyChange = async (subjectId: string, value: string, assignmentId?: number) => {
       // Show saving state for this specific subject
       const key = `${sectionKey}-${subjectId}`;
       setAutoSavingSubjects(prev => ({
@@ -350,7 +351,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
 
       try {
         const isNewAssignment = subjectId.startsWith('new-');
-        const actualSubjectId = isNewAssignment ? subjectId.replace('new-', '') : subjectId;
+        const isAddAssignment = subjectId.startsWith('add-');
+        let actualSubjectId = subjectId;
+        if (isNewAssignment) actualSubjectId = subjectId.replace('new-', '');
+        if (isAddAssignment) actualSubjectId = subjectId.replace(/add-([^-]+)-.*/, '$1');
         
         // Get the subject object from curriculum to verify it exists
         const subjectObj = subjects.find(s => s.id == actualSubjectId);
@@ -358,20 +362,24 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
           throw new Error(`Subject not found in curriculum (ID: ${actualSubjectId})`);
         }
 
-        // ALWAYS check for existing assignment - don't just check if it's "new"
-        const existingAssignment = assignments.find(a => {
-          const isCourseCodeMatch = a.curriculum_row_details?.course_code && subjectObj.course_code && a.curriculum_row_details.course_code === subjectObj.course_code;
-          const curriculumMatch = (
-            a.curriculum_row == Number(actualSubjectId) ||
-            (a.curriculum_row_details && a.curriculum_row_details.id == Number(actualSubjectId)) ||
-            isCourseCodeMatch
-          );
-          const sectionMatch = (
-            a.section == sectionId || 
-            (a.section_details && a.section_details.id == sectionId)
-          );
-          return curriculumMatch && sectionMatch;
-        });
+        let existingAssignment: any = null;
+        if (assignmentId) {
+          existingAssignment = assignments.find(a => a.id === assignmentId);
+        } else if (!isNewAssignment && !isAddAssignment) {
+          existingAssignment = assignments.find(a => {
+            const isCourseCodeMatch = a.curriculum_row_details?.course_code && subjectObj.course_code && a.curriculum_row_details.course_code === subjectObj.course_code;
+            const curriculumMatch = (
+              a.curriculum_row == Number(actualSubjectId) ||
+              (a.curriculum_row_details && a.curriculum_row_details.id == Number(actualSubjectId)) ||
+              isCourseCodeMatch
+            );
+            const sectionMatch = (
+              a.section == sectionId || 
+              (a.section_details && a.section_details.id == sectionId)
+            );
+            return curriculumMatch && sectionMatch;
+          });
+        }
 
         console.log(`🔍 Checking for existing assignment: subject=${actualSubjectId}, section=${sectionId}, found=${existingAssignment ? `id:${existingAssignment.id}, is_active:${existingAssignment.is_active}` : 'none'}`);
 
@@ -870,33 +878,36 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
               
               console.log(`📊 Subject ${sub.id} found ${matchingAssignments.length} matching assignments`);
 
+              const isMultiFacultyAllowed = currentDeptName === 'S&H' && Number(yearNum) === 1;
+              const rows = [];
+              
               if (matchingAssignments.length === 0) {
                 const isSavingThisSubject = subjectAutoSavingSet.has(`new-${sub.id}`);
                 const autoSaveMsg = subjectAutoMessages[`new-${sub.id}`];
                 const tempSelectedValue = temporarySelection[`new-${sub.id}`];
                 const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
                 
-                return [
+                rows.push(
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{sub.course_code || sub.code || '-'}</td>
                     <td className="px-4 py-3">{sub.course_name || sub.name || '-'}</td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-col gap-2 w-full">
-                        <div className="flex gap-2 items-center">
-                          {isSavingThisSubject ? (
-                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
-                              <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-                              ✓ {tempSelectedFaculty || 'Saving...'}
-                            </span>
-                          ) : autoSaveMsg ? (
-                            <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              {autoSaveMsg.text}
-                            </span>
-                          ) : (
-                            <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded whitespace-nowrap">No Faculty</span>
-                          )}
-                        </div>
-                        <div className="w-64">
+                      <div className="flex items-start gap-4 w-full">
+                        <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
+                          <div className="flex gap-2 items-center h-6">
+                            {isSavingThisSubject ? (
+                              <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
+                                <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                                ✓ {tempSelectedFaculty || 'Saving...'}
+                              </span>
+                            ) : autoSaveMsg ? (
+                              <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                {autoSaveMsg.text}
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded whitespace-nowrap">No Faculty</span>
+                            )}
+                          </div>
                           <SearchableDropdown
                             label=""
                             placeholder="Select Faculty"
@@ -905,104 +916,159 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                             onChange={(value) => handleSubjectFacultyChange(`new-${sub.id}`, value)}
                           />
                         </div>
+                        {isMultiFacultyAllowed && (
+                          <div className="mt-8 flex-shrink-0">
+                            <button onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: (prev[sub.id] || 0) + 1}))} className="flex items-center gap-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-300">
+                              <Plus className="w-4 h-4" /> Add
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ];
-              }
-
-              return matchingAssignments.map((assignment, aIdx) => {
-                // IMPROVED: Multiple fallbacks for getting staff info
-                const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff_id || assignment.staff || "";
-                const assignedStaffUserId = assignment.staff_details?.id || assignment.staff_details?.user?.id || assignment.staff || "";
-                
-                // Build staff name from details if available
-                let staffDisplayName = null;
-                if (assignment.staff_details?.user) {
-                  const firstName = assignment.staff_details.user.first_name || '';
-                  const lastName = assignment.staff_details.user.last_name || '';
-                  const fullName = `${firstName} ${lastName}`.trim();
-                  if (fullName) staffDisplayName = `${fullName} (${assignment.staff_details.staff_id || ''})`;
-                }
-                
-                // Log staff details for debugging
-                if (!staffDisplayName || !assignedStaffUserId) {
-                  console.warn(`⚠️ Assignment ${assignment.id} missing staff info:`, {
-                    staff_details: assignment.staff_details,
-                    staff: assignment.staff,
-                    staff_id: assignment.staff_id,
-                    assignedStaffId,
-                    assignedStaffUserId,
-                    staffDisplayName
-                  });
-                }
-                
-                // Find matching faculty option value
-                const matchingOption = facultyOptions.find(opt => 
-                  String(opt.value) === String(assignedStaffUserId) || 
-                  String(opt.value) === String(assignedStaffId) ||
-                  String(opt.value) === String(assignment.staff) ||
-                  String(opt.value) === String(assignment.staff_id)
                 );
-                const optionValue = matchingOption?.value || String(assignedStaffUserId || assignedStaffId || assignment.staff_id || assignment.staff || "");
-                
-                const isElective = !!assignment.elective_subject_details;
-                const displayCode = isElective ? assignment.elective_subject_details.course_code : (sub.course_code || sub.code || '-');
-                const displayName = isElective ? assignment.elective_subject_details.course_name : (sub.course_name || sub.name || '-');
-                
-                // Find current faculty name to display
-                const currentFacultyOption = facultyOptions.find(opt => 
-                  String(opt.value) === String(optionValue)
-                );
-                const currentFacultyLabel = currentFacultyOption?.label || staffDisplayName || optionValue;
-                
-                console.log(`📊 Assignment ${assignment.id} faculty display:`, {
-                  optionValue,
-                  matchingOption,
-                  currentFacultyLabel,
-                  staffDisplayName
-                });
-                
-                const isSavingThisSubject = subjectAutoSavingSet.has(String(sub.id));
-                const autoSaveMsg = subjectAutoMessages[String(sub.id)];
-                const tempSelectedValue = temporarySelection[String(sub.id)];
-                const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
-                const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
+              } else {
+                matchingAssignments.forEach((assignment, aIdx) => {
+                  const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff_id || assignment.staff || "";
+                  const assignedStaffUserId = assignment.staff_details?.id || assignment.staff_details?.user?.id || assignment.staff || "";
+                  
+                  let staffDisplayName = null;
+                  if (assignment.staff_details?.user) {
+                    const firstName = assignment.staff_details.user.first_name || '';
+                    const lastName = assignment.staff_details.user.last_name || '';
+                    const fullName = `${firstName} ${lastName}`.trim();
+                    if (fullName) staffDisplayName = `${fullName} (${assignment.staff_details.staff_id || ''})`;
+                  }
+                  
+                  const matchingOption = facultyOptions.find(opt => 
+                    String(opt.value) === String(assignedStaffUserId) || 
+                    String(opt.value) === String(assignedStaffId) ||
+                    String(opt.value) === String(assignment.staff) ||
+                    String(opt.value) === String(assignment.staff_id)
+                  );
+                  const optionValue = matchingOption?.value || String(assignedStaffUserId || assignedStaffId || assignment.staff_id || assignment.staff || "");
+                  
+                  const isElective = !!assignment.elective_subject_details;
+                  const displayCode = isElective ? assignment.elective_subject_details.course_code : (sub.course_code || sub.code || '-');
+                  const displayName = isElective ? assignment.elective_subject_details.course_name : (sub.course_name || sub.name || '-');
+                  
+                  const currentFacultyOption = facultyOptions.find(opt => String(opt.value) === String(optionValue));
+                  const currentFacultyLabel = currentFacultyOption?.label || staffDisplayName || optionValue;
+                  
+                  const isSavingThisSubject = subjectAutoSavingSet.has(String(sub.id));
+                  const autoSaveMsg = subjectAutoMessages[String(sub.id)];
+                  const tempSelectedValue = temporarySelection[String(sub.id)];
+                  const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
+                  const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
 
-                return (
-                  <tr key={`${idx}-${aIdx}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
-                    <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
-                    <td className="px-4 py-3">{displayName}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-col gap-2 w-full">
-                        <div className="flex gap-2 items-center">
-                          {isSavingThisSubject ? (
-                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
-                              <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-                              ✓ {displayLabel || 'Saving...'}
-                            </span>
-                          ) : autoSaveMsg ? (
-                            <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              {autoSaveMsg.text}
-                            </span>
-                          ) : (
-                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded whitespace-nowrap">✓ {displayLabel || 'No Data'}</span>
+                  rows.push(
+                    <tr key={`${idx}-${aIdx}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
+                      <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
+                      <td className="px-4 py-3">{displayName}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-start gap-4 w-full">
+                          <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
+                            <div className="flex gap-2 items-center h-6">
+                              {isSavingThisSubject ? (
+                                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
+                                  <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                                  ✓ {displayLabel || 'Saving...'}
+                                </span>
+                              ) : autoSaveMsg ? (
+                                <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                  {autoSaveMsg.text}
+                                </span>
+                              ) : (
+                                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded whitespace-nowrap">✓ {displayLabel || 'No Data'}</span>
+                              )}
+                            </div>
+                            <SearchableDropdown
+                              label=""
+                              placeholder="Select Faculty"
+                              options={facultyOptions}
+                              value={tempSelectedValue || optionValue || ""}
+                              onChange={(value) => handleSubjectFacultyChange(String(sub.id), value, assignment.id)}
+                            />
+                          </div>
+                          {isMultiFacultyAllowed && aIdx === matchingAssignments.length - 1 && (
+                            <div className="mt-8 flex-shrink-0">
+                              <button onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: (prev[sub.id] || 0) + 1}))} className="flex items-center gap-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-300">
+                                <Plus className="w-4 h-4" /> Add
+                              </button>
+                            </div>
                           )}
                         </div>
-                        <div className="w-64">
+                      </td>
+                    </tr>
+                  );
+                });
+              }
+
+              // Render any additional faculty dropdowns for multi-faculty support
+              const extraCount = additionalDropdowns[sub.id] || 0;
+              for (let i = 0; i < extraCount; i++) {
+                const addKey = `add-${sub.id}-${i}`;
+                const isSavingThisSubject = subjectAutoSavingSet.has(addKey);
+                const autoSaveMsg = subjectAutoMessages[addKey];
+                const tempSelectedValue = temporarySelection[addKey];
+                const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
+                
+                rows.push(
+                  <tr key={`${idx}-extra-${i}`} className="bg-blue-50/20 border-b">
+                    <td colSpan={2} className="px-4 py-3 text-right text-sm text-gray-600 font-medium border-r border-gray-100">
+                       <span className="flex items-center justify-end gap-2 text-blue-700">
+                         <Users className="w-4 h-4" />
+                         Co-Faculty
+                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-start gap-4 w-full">
+                        <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
+                          <div className="flex gap-2 items-center h-6">
+                             {isSavingThisSubject ? (
+                               <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
+                                 <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                                 ✓ {tempSelectedFaculty || 'Saving...'}
+                               </span>
+                             ) : autoSaveMsg ? (
+                               <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                 {autoSaveMsg.text}
+                               </span>
+                             ) : (
+                               <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded whitespace-nowrap italic">Pending assignment...</span>
+                             )}
+                          </div>
                           <SearchableDropdown
                             label=""
                             placeholder="Select Faculty"
                             options={facultyOptions}
-                            value={tempSelectedValue || optionValue || ""}
-                            onChange={(value) => handleSubjectFacultyChange(String(sub.id), value)}
+                            value={tempSelectedValue || ""}
+                            onChange={(value) => {
+                              handleSubjectFacultyChange(addKey, value).then(() => {
+                                if (value && value !== 'DELETE') {
+                                  // Remove the extra row UI, it will be rendered as an actual assignment upon refresh
+                                  setAdditionalDropdowns(prev => ({...prev, [sub.id]: Math.max(0, (prev[sub.id] || 1) - 1)}));
+                                }
+                              });
+                            }}
                           />
+                        </div>
+                        <div className="mt-8 flex-shrink-0">
+                          <button 
+                            onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: Math.max(0, (prev[sub.id] || 1) - 1)}))}
+                            className="p-2 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-md transition-colors border border-transparent hover:border-red-200"
+                            title="Cancel adding faculty"
+                          >
+                            <X size={18} />
+                          </button>
                         </div>
                       </div>
                     </td>
                   </tr>
                 );
-              });
+              }
+              
+              return rows;
             })}
           </tbody>
         </table>
