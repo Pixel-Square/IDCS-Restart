@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Users, BookOpen } from 'lucide-react';
+import { ChevronDown, ChevronRight, Users, BookOpen, AlertCircle, Loader } from 'lucide-react';
 import { SearchableDropdown } from '../../../components/ui/SearchableDropdown';
 import fetchWithAuth from '../../../services/fetchAuth';
 
@@ -22,6 +22,12 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [sectionsData, setSectionsData] = useState<SectionData[]>([]);
   const [sectionCurriculum, setSectionCurriculum] = useState<Record<string, any[]>>({});
+  const [sectionCurriculumLoading, setSectionCurriculumLoading] = useState<Record<string, boolean>>({});
+  const [sectionCurriculumError, setSectionCurriculumError] = useState<Record<string, string>>({});
+  const [classAdvisorSelection, setClassAdvisorSelection] = useState<Record<string, string>>({});
+  const [subjectFacultySelection, setSubjectFacultySelection] = useState<Record<string, Record<string, string>>>({});
+  const [savingState, setSavingState] = useState<Record<string, boolean>>({});
+  const [saveMessage, setSaveMessage] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
 
   useEffect(() => {
     const fetchSections = async () => {
@@ -124,7 +130,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
       if (yearNum === 1 && dept.name === 'S&H') {
         deptSections = filtered.filter(s => {
           const dName = (s.department_short_name || '').toLowerCase().trim();
-          if (!dName) return false;
+          if (!dName) return true;
           const shNames = deptMapping['S&H'] || [];
           return shNames.some(allowed => dName.includes(allowed));
         }).map(s => ({ id: s.id, name: s.name }));
@@ -185,55 +191,594 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
       setExpandedSection(null);
     } else {
       setExpandedSection(sectionKey);
+      
+      // Load curriculum if not already loaded
       if (!sectionCurriculum[sectionKey] && sectionId) {
+        setSectionCurriculumLoading(prev => ({ ...prev, [sectionKey]: true }));
+        setSectionCurriculumError(prev => ({ ...prev, [sectionKey]: '' }));
+        
         try {
           const res = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sectionId}`);
           if (res.ok) {
             const data = await res.json();
             setSectionCurriculum(prev => ({ ...prev, [sectionKey]: data.results || data }));
+            setSectionCurriculumError(prev => ({ ...prev, [sectionKey]: '' }));
+          } else {
+            const errorMsg = `Failed to load curriculum (HTTP ${res.status})`;
+            setSectionCurriculumError(prev => ({ ...prev, [sectionKey]: errorMsg }));
+            console.error(errorMsg);
           }
         } catch (err) {
-          console.error(err);
+          const errorMsg = err instanceof Error ? err.message : 'Unknown error loading curriculum';
+          setSectionCurriculumError(prev => ({ ...prev, [sectionKey]: errorMsg }));
+          console.error('Failed to fetch curriculum:', err);
+        } finally {
+          setSectionCurriculumLoading(prev => ({ ...prev, [sectionKey]: false }));
         }
+      }
+      
+      // Refresh assignments and advisors to show latest data
+      try {
+        const [assignRes, advisorRes] = await Promise.all([
+          fetchWithAuth('/api/academics/teaching-assignments/?page_size=0'),
+          fetchWithAuth('/api/academics/section-advisors/?page_size=0')
+        ]);
+        if (assignRes.ok) {
+          const data = await assignRes.json();
+          setAssignments(data.results || data);
+        }
+        if (advisorRes.ok) {
+          const data = await advisorRes.json();
+          setAdvisors(data.results || data);
+        }
+      } catch (err) {
+        console.error('Failed to refresh data:', err);
       }
     }
   };
 
   const [assignments, setAssignments] = useState<any[]>([]);
+  const [advisors, setAdvisors] = useState<any[]>([]);
 
   useEffect(() => {
-    const fetchAssignments = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0');
-        if (res.ok) {
-          const data = await res.json();
-          setAssignments(data.results || data);
+        const [assignRes, advisorRes] = await Promise.all([
+          fetchWithAuth('/api/academics/teaching-assignments/?page_size=0'),
+          fetchWithAuth('/api/academics/section-advisors/?page_size=0')
+        ]);
+        if (assignRes.ok) {
+          const data = await assignRes.json();
+          const assignmentsData = data.results || data;
+          console.log('📥 Loaded assignments on page load:', assignmentsData.length, 'total');
+          // Show sample assignment with staff details
+          if (assignmentsData.length > 0) {
+            console.log('📋 Sample assignment structure:', assignmentsData[0]);
+            const withStaffDetails = assignmentsData.filter((a: any) => a.staff_details);
+            console.log('✓ Assignments with staff_details:', withStaffDetails.length, '/', assignmentsData.length);
+            // Check for GEA1122 (subject id 1321)
+            const gea1122 = assignmentsData.find((a: any) => {
+              const isCurriculumMatch = a.curriculum_row == 1321 || (a.curriculum_row_details && a.curriculum_row_details.id == 1321);
+              const isSubjectMatch = a.subject && (a.subject.includes('1122') || a.subject.includes('Tamils'));
+              return isCurriculumMatch || isSubjectMatch;
+            });
+            if (gea1122) {
+              console.log('🔍 Found GEA1122 assignment:', gea1122);
+            } else {
+              console.log('❌ GEA1122 assignment NOT found in loaded data');
+            }
+          }
+          setAssignments(assignmentsData);
+        }
+        if (advisorRes.ok) {
+          const data = await advisorRes.json();
+          setAdvisors(data.results || data);
         }
       } catch (err) {
         console.error('Failed to fetch assignments:', err);
       }
     };
-    fetchAssignments();
+    fetchData();
   }, []);
+
+  const [autoSavingSubjects, setAutoSavingSubjects] = useState<Record<string, Set<string>>>({});
+  const [autoSaveMessages, setAutoSaveMessages] = useState<Record<string, Record<string, { type: 'success' | 'error'; text: string }>>>({});
+  const [temporarySelection, setTemporarySelection] = useState<Record<string, string>>({});
 
   const renderSubjectMapping = (sectionKey: string, sectionId: number) => {
     const subjects = sectionCurriculum[sectionKey] || [];
+    const isLoading = sectionCurriculumLoading[sectionKey] || false;
+    const error = sectionCurriculumError[sectionKey] || '';
+    const isSaving = savingState[sectionKey] || false;
+    const message = saveMessage[sectionKey];
+    const subjectAutoSavingSet = autoSavingSubjects[sectionKey] || new Set();
+    const subjectAutoMessages = autoSaveMessages[sectionKey] || {};
     
+    // Show loading state
+    if (isLoading) {
+      return (
+        <div className="p-8 bg-gray-50 rounded-lg text-center">
+          <Loader className="w-6 h-6 animate-spin text-blue-600 mx-auto mb-2" />
+          <p className="text-gray-600 font-medium">Loading curriculum...</p>
+        </div>
+      );
+    }
+    
+    // Show error state
+    if (error) {
+      return (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-red-800 font-medium">Failed to load curriculum</p>
+            <p className="text-red-700 text-sm mt-1">{error}</p>
+          </div>
+        </div>
+      );
+    }
+    
+    // Show empty state
+    if (!isLoading && subjects.length === 0) {
+      return (
+        <div className="p-8 bg-gray-50 rounded-lg text-center">
+          <BookOpen className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+          <p className="text-gray-600 font-medium">No subjects configured for this section</p>
+          <p className="text-gray-500 text-sm mt-1">Check if curriculum has been assigned to this section</p>
+        </div>
+      );
+    }
+    
+    const handleClassAdvisorChange = (value: string) => {
+      setClassAdvisorSelection(prev => ({ ...prev, [sectionKey]: value }));
+    };
+
+    const handleSubjectFacultyChange = async (subjectId: string, value: string) => {
+      // Show saving state for this specific subject
+      const key = `${sectionKey}-${subjectId}`;
+      setAutoSavingSubjects(prev => ({
+        ...prev,
+        [sectionKey]: new Set([...(prev[sectionKey] || []), subjectId])
+      }));
+
+      // Track the selected faculty temporarily
+      if (value) {
+        setTemporarySelection(prev => ({
+          ...prev,
+          [subjectId]: value
+        }));
+      }
+
+      try {
+        const isNewAssignment = subjectId.startsWith('new-');
+        const actualSubjectId = isNewAssignment ? subjectId.replace('new-', '') : subjectId;
+        
+        // Get the subject object from curriculum to verify it exists
+        const subjectObj = subjects.find(s => s.id == actualSubjectId);
+        if (!subjectObj) {
+          throw new Error(`Subject not found in curriculum (ID: ${actualSubjectId})`);
+        }
+
+        // ALWAYS check for existing assignment - don't just check if it's "new"
+        const existingAssignment = assignments.find(a => {
+          const isCourseCodeMatch = a.curriculum_row_details?.course_code && subjectObj.course_code && a.curriculum_row_details.course_code === subjectObj.course_code;
+          const curriculumMatch = (
+            a.curriculum_row == Number(actualSubjectId) ||
+            (a.curriculum_row_details && a.curriculum_row_details.id == Number(actualSubjectId)) ||
+            isCourseCodeMatch
+          );
+          const sectionMatch = (
+            a.section == sectionId || 
+            (a.section_details && a.section_details.id == sectionId)
+          );
+          return curriculumMatch && sectionMatch;
+        });
+
+        console.log(`🔍 Checking for existing assignment: subject=${actualSubjectId}, section=${sectionId}, found=${existingAssignment ? `id:${existingAssignment.id}, is_active:${existingAssignment.is_active}` : 'none'}`);
+
+        // Handle deletion (empty value or DELETE marker)
+        if (!value || value === 'DELETE') {
+          if (existingAssignment) {
+            const deleteRes = await fetchWithAuth(
+              `/api/academics/teaching-assignments/${existingAssignment.id}/`,
+              { method: 'DELETE' }
+            );
+            if (deleteRes.ok) {
+              setAutoSaveMessages(prev => ({
+                ...prev,
+                [sectionKey]: {
+                  ...(prev[sectionKey] || {}),
+                  [subjectId]: { type: 'success', text: '✓ Removed' }
+                }
+              }));
+              // Refresh data
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const [assignRes] = await Promise.all([
+                fetchWithAuth('/api/academics/teaching-assignments/?page_size=0')
+              ]);
+              if (assignRes.ok) {
+                setAssignments((await assignRes.json()).results || []);
+              }
+            } else {
+              const errText = await deleteRes.text().catch(() => 'Unknown error');
+              throw new Error(`Delete failed: ${errText}`);
+            }
+          }
+        } else {
+          // Create new assignment OR update existing
+          const payload = {
+            section_id: sectionId,
+            curriculum_row_id: Number(actualSubjectId),
+            staff_id: Number(value),
+            is_active: true
+          };
+          
+          console.log('📤 Sending assignment payload:', {
+            ...payload,
+            subjectObj: subjectObj,
+            section: sectionsData.find(s => s.id === sectionId),
+            isUpdate: !!existingAssignment,
+            existingAssignmentId: existingAssignment?.id
+          });
+
+          // If assignment already exists, UPDATE it; otherwise CREATE new
+          let assignmentRes;
+          if (existingAssignment) {
+            console.log(`📝 Updating existing assignment ${existingAssignment.id} with new staff_id ${value}`);
+            assignmentRes = await fetchWithAuth(`/api/academics/teaching-assignments/${existingAssignment.id}/`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                staff_id: Number(value),
+                is_active: true
+              })
+            });
+          } else {
+            console.log(`✨ Creating new assignment for subject ${actualSubjectId}`);
+            assignmentRes = await fetchWithAuth('/api/academics/teaching-assignments/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+          }
+
+          if (!assignmentRes.ok) {
+            let errDetails = 'Unknown error';
+            try {
+              const errData = await assignmentRes.json();
+              console.error('📋 Full Error Response:', errData);
+              
+              // Try to extract meaningful error message
+              if (typeof errData === 'object') {
+                if (errData.detail) errDetails = errData.detail;
+                else if (errData.non_field_errors) errDetails = errData.non_field_errors[0] || 'Validation error';
+                else if (errData.section_id) errDetails = `Section error: ${Array.isArray(errData.section_id) ? errData.section_id[0] : errData.section_id}`;
+                else if (errData.curriculum_row_id) errDetails = `Curriculum error: ${Array.isArray(errData.curriculum_row_id) ? errData.curriculum_row_id[0] : errData.curriculum_row_id}`;
+                else if (errData.curriculum_row) errDetails = `Curriculum error: ${Array.isArray(errData.curriculum_row) ? errData.curriculum_row[0] : errData.curriculum_row}`;
+                else if (errData.staff_id) errDetails = `Staff error: ${Array.isArray(errData.staff_id) ? errData.staff_id[0] : errData.staff_id}`;
+                else {
+                  const keys = Object.keys(errData);
+                  if (keys.length > 0) {
+                    const firstKey = keys[0];
+                    const firstVal = errData[firstKey];
+                    errDetails = Array.isArray(firstVal) ? firstVal[0] : firstVal;
+                  }
+                }
+              }
+            } catch (e) {
+              errDetails = `HTTP 400: Bad Request`;
+            }
+            throw new Error(errDetails);
+          }
+
+          const result = await assignmentRes.json();
+          console.log('✅ Assignment saved successfully:', result);
+          console.log('📊 Assignment ID:', result.id, 'Section:', result.section, 'Curriculum:', result.curriculum_row, 'Staff:', result.staff, 'is_active:', result.is_active);
+
+          setAutoSaveMessages(prev => ({
+            ...prev,
+            [sectionKey]: {
+              ...(prev[sectionKey] || {}),
+              [subjectId]: { type: 'success', text: '✓ Saved' }
+            }
+          }));
+
+          // Refresh data after save
+          console.log('⏳ Waiting 1s before refresh...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          try {
+            const assignRes = await fetchWithAuth('/api/academics/teaching-assignments/?page_size=0');
+            if (assignRes.ok) {
+              const data = await assignRes.json();
+              const refreshedAssignments = data.results || data || [];
+              console.log('✅ Refreshed assignments after save:', refreshedAssignments.length, 'total');
+              // Check if our new assignment is in the list
+              const newAssignmentInList = refreshedAssignments.find((a: any) => a.id === result.id);
+              if (newAssignmentInList) {
+                console.log('✓ New assignment found in refreshed list!', newAssignmentInList);
+              } else {
+                console.warn('⚠️ New assignment NOT found in refreshed list!');
+              }
+              setAssignments(refreshedAssignments);
+            } else {
+              console.warn('Failed to refresh assignments:', assignRes.status);
+            }
+          } catch (refreshErr) {
+            console.warn('Error refreshing assignments:', refreshErr);
+          }
+        }
+      } catch (err: any) {
+        console.error('❌ Error saving subject faculty:', err);
+        const errorMsg = err.message || 'Unknown error';
+        setAutoSaveMessages(prev => ({
+          ...prev,
+          [sectionKey]: {
+            ...(prev[sectionKey] || {}),
+            [subjectId]: { type: 'error', text: `✗ ${errorMsg}` }
+          }
+        }));
+      } finally {
+        // Clear saving state
+        setAutoSavingSubjects(prev => {
+          const newSet = new Set(prev[sectionKey] || []);
+          newSet.delete(subjectId);
+          return { ...prev, [sectionKey]: newSet };
+        });
+
+        // Clear message after 3 seconds and temp selection after refresh
+        setTimeout(() => {
+          setAutoSaveMessages(prev => {
+            const newMsgs = { ...(prev[sectionKey] || {}) };
+            delete newMsgs[subjectId];
+            return { ...prev, [sectionKey]: newMsgs };
+          });
+          // Clear temporary selection once confirmed
+          setTemporarySelection(prev => {
+            const newSelections = { ...prev };
+            delete newSelections[subjectId];
+            return newSelections;
+          });
+        }, 3000);
+      }
+    };
+
+    const handleSave = async () => {
+      console.log('🔵 SAVE CLICKED - Section:', sectionKey, 'Advisor:', classAdvisorSelection[sectionKey], 'Subjects:', subjectFacultySelection[sectionKey]);
+      
+      setSavingState(prev => ({ ...prev, [sectionKey]: true }));
+      setSaveMessage(prev => ({ ...prev, [sectionKey]: undefined }));
+
+      try {
+        // Save class advisor
+        const advisorValue = classAdvisorSelection[sectionKey];
+        if (advisorValue) {
+          const advisorRes = await fetchWithAuth('/api/academics/section-advisors/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              section_id: sectionId,
+              advisor_id: Number(advisorValue),
+              is_active: true
+            })
+          });
+          if (!advisorRes.ok) {
+            throw new Error('Failed to save class advisor');
+          }
+        }
+
+        // Save subject-faculty mappings
+        const subjectSelections = subjectFacultySelection[sectionKey] || {};
+        const failedMappings: string[] = [];
+        let successCount = 0;
+        let deletedCount = 0;
+
+        for (const [subjectIdRaw, newStaffId] of Object.entries(subjectSelections)) {
+          // Detect if this is a new assignment or update
+          const isNewAssignment = subjectIdRaw.startsWith('new-');
+          const subjectId = isNewAssignment 
+            ? subjectIdRaw.replace('new-', '') 
+            : subjectIdRaw;
+
+          // Find existing assignment if updating
+          const existingAssignment = !isNewAssignment 
+            ? assignments.find(a => 
+                a.section == sectionId && a.curriculum_row == Number(subjectId)
+              )
+            : null;
+
+          // Handle deletion (empty value or DELETE marker)
+          if (!newStaffId || newStaffId === 'DELETE') {
+            if (existingAssignment) {
+              try {
+                const deleteRes = await fetchWithAuth(
+                  `/api/academics/teaching-assignments/${existingAssignment.id}/`,
+                  { method: 'DELETE' }
+                );
+                if (deleteRes.ok) {
+                  deletedCount++;
+                } else {
+                  console.warn('Failed to delete assignment');
+                  const curriculum = subjects.find(s => s.id === Number(subjectId));
+                  failedMappings.push(curriculum?.course_name || `Subject ${subjectId}`);
+                }
+              } catch (err) {
+                console.warn('Error deleting assignment:', err);
+                const curriculum = subjects.find(s => s.id === Number(subjectId));
+                failedMappings.push(curriculum?.course_name || `Subject ${subjectId}`);
+              }
+            }
+            continue;
+          }
+
+          // If updating existing assignment, first delete the old one
+          if (existingAssignment) {
+            try {
+              const deleteRes = await fetchWithAuth(
+                `/api/academics/teaching-assignments/${existingAssignment.id}/`,
+                { method: 'DELETE' }
+              );
+              if (!deleteRes.ok) {
+                console.warn('Failed to delete old assignment, continuing...');
+              }
+            } catch (err) {
+              console.warn('Error deleting old assignment:', err);
+            }
+          }
+
+          // Create new assignment
+          const assignmentRes = await fetchWithAuth('/api/academics/teaching-assignments/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              section_id: sectionId,
+              curriculum_row_id: Number(subjectId),
+              staff_id: Number(newStaffId),
+              is_active: true
+            })
+          });
+
+          if (!assignmentRes.ok) {
+            const curriculum = subjects.find(s => s.id === Number(subjectId));
+            failedMappings.push(curriculum?.course_name || `Subject ${subjectId}`);
+          } else {
+            successCount++;
+          }
+        }
+
+        if (failedMappings.length > 0) {
+          console.log('DEBUG: Save completed with failures:', failedMappings);
+          setSaveMessage(prev => ({
+            ...prev,
+            [sectionKey]: {
+              type: 'error',
+              text: `Saved ${successCount}, Deleted ${deletedCount}. Failed: ${failedMappings.join(', ')}`
+            }
+          }));
+        } else if (successCount > 0 || deletedCount > 0) {
+          console.log('DEBUG: Save completed successfully, successCount:', successCount, 'deletedCount:', deletedCount);
+          setSaveMessage(prev => ({
+            ...prev,
+            [sectionKey]: {
+              type: 'success',
+              text: `✓ Saved ${successCount} assignments, Deleted ${deletedCount}! Changes persisted.`
+            }
+          }));
+          // Reload assignments and advisors after successful save to persist the changes
+          setTimeout(async () => {
+            try {
+              const [assignRes, advisorRes] = await Promise.all([
+                fetchWithAuth('/api/academics/teaching-assignments/?page_size=0'),
+                fetchWithAuth('/api/academics/section-advisors/?page_size=0')
+              ]);
+              if (assignRes.ok) {
+                const data = await assignRes.json();
+                setAssignments(data.results || data);
+              }
+              if (advisorRes.ok) {
+                const data = await advisorRes.json();
+                setAdvisors(data.results || data);
+              }
+            } catch (err) {
+              console.error('Failed to reload data:', err);
+            }
+            // Clear selections to show saved data instead
+            setClassAdvisorSelection(prev => {
+              const newState = { ...prev };
+              delete newState[sectionKey];
+              return newState;
+            });
+            setSubjectFacultySelection(prev => {
+              const newState = { ...prev };
+              delete newState[sectionKey];
+              return newState;
+            });
+          }, 1500);
+        } else {
+          setSaveMessage(prev => ({
+            ...prev,
+            [sectionKey]: {
+              type: 'error',
+              text: 'Please select at least one faculty member or delete an assignment'
+            }
+          }));
+        }
+      } catch (err) {
+        console.error('Save error:', err);
+        setSaveMessage(prev => ({
+          ...prev,
+          [sectionKey]: {
+            type: 'error',
+            text: 'Error saving assignments. Please try again.'
+          }
+        }));
+      } finally {
+        setSavingState(prev => ({ ...prev, [sectionKey]: false }));
+      }
+    };
+
+    // Debug: Log all subjects and assignments for matching
+    console.log(`📊 Section ${sectionKey} (ID: ${sectionId}) - Matching:`, {
+      subjectsCount: subjects.length,
+      assignmentsTotal: assignments.length,
+      assignmentsForDebug: assignments.slice(0, 5).map(a => ({
+        id: a.id,
+        curriculum_row: a.curriculum_row,
+        section: a.section,
+        staff: a.staff,
+        is_active: a.is_active
+      }))
+    });
+
     return (
     <div className="p-4 bg-white border border-gray-200 rounded-lg shadow-sm mt-3">
+      {/* Header with Save Button on Right */}
       <div className="mb-4 flex items-center justify-between border-b pb-4">
-        <h4 className="font-semibold text-gray-800 flex items-center gap-2">
-          <Users className="w-5 h-5 text-blue-600" />
-          Class Advisor Assignment
-        </h4>
-        <div className="w-64">
-          <SearchableDropdown
-            label=""
-            placeholder="Select Class Advisor"
-            options={facultyOptions}
-            value={""}
-            onChange={() => {}}
-          />
+        <div className="flex-1">
+          <h4 className="font-semibold text-gray-800 flex items-center gap-2 mb-3">
+            <Users className="w-5 h-5 text-blue-600" />
+            Class Advisor Assignment
+          </h4>
+          <div className="w-64">
+            {(() => {
+              // Find saved advisor for this section
+              const savedAdvisor = advisors.find(a => a.section_id === sectionId && a.is_active);
+              const savedAdvisorId = savedAdvisor?.advisor_id || "";
+              
+              return (
+                <SearchableDropdown
+                  label=""
+                  placeholder="Select Class Advisor"
+                  options={facultyOptions}
+                  value={classAdvisorSelection[sectionKey] || String(savedAdvisorId) || ""}
+                  onChange={handleClassAdvisorChange}
+                />
+              );
+            })()}
+          </div>
+        </div>
+        
+        {/* Save Button and Message on Right */}
+        <div className="flex flex-col items-end gap-2">
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 font-medium flex items-center gap-2 whitespace-nowrap"
+          >
+            {isSaving ? (
+              <>
+                <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
+                Saving...
+              </>
+            ) : (
+              <>
+                ✓ Save
+              </>
+            )}
+          </button>
+          {message && (
+            <span className={`text-xs font-medium text-right ${message.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+              {message.text}
+            </span>
+          )}
         </div>
       </div>
 
@@ -257,67 +802,203 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
               const currentDeptName = sectionKey.split('-')[0];
               const allowedDeptNames = deptMapping[currentDeptName] || [currentDeptName.toLowerCase()];
               
+              // Log current subject being processed
+              console.log(`🔍 Processing subject ${idx}: ID=${sub.id}, Code=${sub.course_code}, Name=${sub.course_name}`);
+              
               const matchingAssignments = assignments.filter(a => {
-                const sectionIdMatch = a.section == sectionId || (a.section_details && a.section_details.id == sectionId);
+                // Only consider active assignments
+                if (a.is_active === false) {
+                  // Log assignments that are being filtered out
+                  const wouldMatch = (a.curriculum_row == sub.id || (a.curriculum_row_details && a.curriculum_row_details.id == sub.id)) &&
+                                     (a.section == sectionId || (a.section_details && a.section_details.id == sectionId));
+                  if (wouldMatch) {
+                    console.warn(`⚠️ Assignment ${a.id} is inactive (is_active=false) for subject ${sub.id}`);
+                  }
+                  return false;
+                }
+                
+                // IMPROVED: Normalize all IDs to numbers for consistent comparison
+                const aCurriculumRow = Number(a.curriculum_row || a.curriculum_row_details?.id || 0);
+                const aSection = Number(a.section || a.section_details?.id || 0);
+                const subIdNum = Number(sub.id || 0);
+                const sectionIdNum = Number(sectionId || 0);
+                
+                const sectionIdMatch = aSection === sectionIdNum;
                 const sectionNameMatch = a.section_name === sectionNameStr || (a.section_details && a.section_details.name === sectionNameStr);
                 
-                const subjectMatch = a.curriculum_row == sub.id || 
-                                     (a.curriculum_row_details && a.curriculum_row_details.id == sub.id);
+                // IMPROVED: Match curriculum_row with multiple fallbacks
+                const subjectMatch = aCurriculumRow === subIdNum || 
+                                     (a.curriculum_row_details && Number(a.curriculum_row_details.id) === subIdNum) ||
+                                     (a.curriculum_row_details?.course_code && sub.course_code && a.curriculum_row_details.course_code === sub.course_code);
                 
-                const electiveMatch = a.elective_subject_details && a.elective_subject_details.parent_id == sub.id;
+                const electiveMatch = a.elective_subject_details && Number(a.elective_subject_details.parent_id) == subIdNum;
                 
-                if (subjectMatch) {
-                   return sectionIdMatch;
-                } else if (electiveMatch) {
-                   const elDept = (a.elective_subject_details.department_display || '').toLowerCase();
-                   const elDeptId = String(a.elective_subject_details.department_id || '');
-                   const isDeptMatch = allowedDeptNames.some(d => elDept.includes(d) || elDeptId === d);
-                   
-                   if (isDeptMatch && sectionNameMatch) {
-                       return true;
-                   }
-                   return sectionIdMatch;
+                const isMatch = subjectMatch ? (currentDeptName === 'S&H' ? (sectionIdMatch || sectionNameMatch) : sectionIdMatch) 
+                             : electiveMatch ? (allowedDeptNames.some(d => {
+                                   const elDept = (a.elective_subject_details.department_display || '').toLowerCase();
+                                   const elDeptId = String(a.elective_subject_details.department_id || '');
+                                   return elDept.includes(d) || elDeptId === d;
+                                 }) ? true : sectionIdMatch) 
+                             : false;
+                
+                // Enhanced logging with actual values
+                if (subjectMatch || electiveMatch || isMatch) {
+                  console.log(`📋 Subject ${sub.id} (${sub.course_code}) check against assignment ${a.id}:`, {
+                    subjectMatch,
+                    electiveMatch,
+                    sectionIdMatch,
+                    sectionNameMatch,
+                    isMatch,
+                    aCurriculumRow_normalized: aCurriculumRow,
+                    subIdNum_normalized: subIdNum,
+                    aSection_normalized: aSection,
+                    sectionIdNum_normalized: sectionIdNum,
+                    a_curriculum_row_raw: a.curriculum_row,
+                    a_section_raw: a.section,
+                    a_staff: a.staff,
+                    a_staff_details: a.staff_details,
+                    a_is_active: a.is_active
+                  });
                 }
-                return false;
-              });
+                
+                if (isMatch && (subjectMatch || electiveMatch)) {
+                  console.log(`✓ ✅ MATCHED assignment ${a.id} for subject ${sub.id}:`, a);
+                }
+                
+                return isMatch;
+              });;
+              
+              console.log(`📊 Subject ${sub.id} found ${matchingAssignments.length} matching assignments`);
 
               if (matchingAssignments.length === 0) {
+                const isSavingThisSubject = subjectAutoSavingSet.has(`new-${sub.id}`);
+                const autoSaveMsg = subjectAutoMessages[`new-${sub.id}`];
+                const tempSelectedValue = temporarySelection[`new-${sub.id}`];
+                const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
+                
                 return [
-                  <tr key={idx} className="bg-white border-b hover:bg-gray-50">
+                  <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{sub.course_code || sub.code || '-'}</td>
                     <td className="px-4 py-3">{sub.course_name || sub.name || '-'}</td>
                     <td className="px-4 py-3">
-                      <SearchableDropdown
-                        label=""
-                        placeholder="Select Faculty"
-                        options={facultyOptions}
-                        value=""
-                        onChange={() => {}}
-                      />
+                      <div className="flex flex-col gap-2 w-full">
+                        <div className="flex gap-2 items-center">
+                          {isSavingThisSubject ? (
+                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
+                              <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                              ✓ {tempSelectedFaculty || 'Saving...'}
+                            </span>
+                          ) : autoSaveMsg ? (
+                            <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                              {autoSaveMsg.text}
+                            </span>
+                          ) : (
+                            <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded whitespace-nowrap">No Faculty</span>
+                          )}
+                        </div>
+                        <div className="w-64">
+                          <SearchableDropdown
+                            label=""
+                            placeholder="Select Faculty"
+                            options={facultyOptions}
+                            value={tempSelectedValue || ""}
+                            onChange={(value) => handleSubjectFacultyChange(`new-${sub.id}`, value)}
+                          />
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ];
               }
 
               return matchingAssignments.map((assignment, aIdx) => {
-                const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff || "";
+                // IMPROVED: Multiple fallbacks for getting staff info
+                const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff_id || assignment.staff || "";
+                const assignedStaffUserId = assignment.staff_details?.id || assignment.staff_details?.user?.id || assignment.staff || "";
+                
+                // Build staff name from details if available
+                let staffDisplayName = null;
+                if (assignment.staff_details?.user) {
+                  const firstName = assignment.staff_details.user.first_name || '';
+                  const lastName = assignment.staff_details.user.last_name || '';
+                  const fullName = `${firstName} ${lastName}`.trim();
+                  if (fullName) staffDisplayName = `${fullName} (${assignment.staff_details.staff_id || ''})`;
+                }
+                
+                // Log staff details for debugging
+                if (!staffDisplayName || !assignedStaffUserId) {
+                  console.warn(`⚠️ Assignment ${assignment.id} missing staff info:`, {
+                    staff_details: assignment.staff_details,
+                    staff: assignment.staff,
+                    staff_id: assignment.staff_id,
+                    assignedStaffId,
+                    assignedStaffUserId,
+                    staffDisplayName
+                  });
+                }
+                
+                // Find matching faculty option value
+                const matchingOption = facultyOptions.find(opt => 
+                  String(opt.value) === String(assignedStaffUserId) || 
+                  String(opt.value) === String(assignedStaffId) ||
+                  String(opt.value) === String(assignment.staff) ||
+                  String(opt.value) === String(assignment.staff_id)
+                );
+                const optionValue = matchingOption?.value || String(assignedStaffUserId || assignedStaffId || assignment.staff_id || assignment.staff || "");
                 
                 const isElective = !!assignment.elective_subject_details;
                 const displayCode = isElective ? assignment.elective_subject_details.course_code : (sub.course_code || sub.code || '-');
                 const displayName = isElective ? assignment.elective_subject_details.course_name : (sub.course_name || sub.name || '-');
+                
+                // Find current faculty name to display
+                const currentFacultyOption = facultyOptions.find(opt => 
+                  String(opt.value) === String(optionValue)
+                );
+                const currentFacultyLabel = currentFacultyOption?.label || staffDisplayName || optionValue;
+                
+                console.log(`📊 Assignment ${assignment.id} faculty display:`, {
+                  optionValue,
+                  matchingOption,
+                  currentFacultyLabel,
+                  staffDisplayName
+                });
+                
+                const isSavingThisSubject = subjectAutoSavingSet.has(String(sub.id));
+                const autoSaveMsg = subjectAutoMessages[String(sub.id)];
+                const tempSelectedValue = temporarySelection[String(sub.id)];
+                const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
+                const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
 
                 return (
-                  <tr key={`${idx}-${aIdx}`} className="bg-white border-b hover:bg-gray-50">
+                  <tr key={`${idx}-${aIdx}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
                     <td className="px-4 py-3">{displayName}</td>
                     <td className="px-4 py-3">
-                      <SearchableDropdown
-                        label=""
-                        placeholder="Select Faculty"
-                        options={facultyOptions}
-                        value={assignedStaffId ? String(assignedStaffId) : ""}
-                        onChange={() => {}}
-                      />
+                      <div className="flex flex-col gap-2 w-full">
+                        <div className="flex gap-2 items-center">
+                          {isSavingThisSubject ? (
+                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
+                              <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                              ✓ {displayLabel || 'Saving...'}
+                            </span>
+                          ) : autoSaveMsg ? (
+                            <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                              {autoSaveMsg.text}
+                            </span>
+                          ) : (
+                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded whitespace-nowrap">✓ {displayLabel || 'No Data'}</span>
+                          )}
+                        </div>
+                        <div className="w-64">
+                          <SearchableDropdown
+                            label=""
+                            placeholder="Select Faculty"
+                            options={facultyOptions}
+                            value={tempSelectedValue || optionValue || ""}
+                            onChange={(value) => handleSubjectFacultyChange(String(sub.id), value)}
+                          />
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -366,7 +1047,15 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                                 onClick={() => toggleSection(`${dept.name}-${section.name}`, section.id)}
                                 className="w-full px-4 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors"
                               >
-                                <span className="font-medium text-gray-700">Section {section.name}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-gray-700">Section {section.name}</span>
+                                  {sectionCurriculumLoading[`${dept.name}-${section.name}`] && (
+                                    <Loader className="w-4 h-4 animate-spin text-blue-600" />
+                                  )}
+                                  {sectionCurriculumError[`${dept.name}-${section.name}`] && (
+                                    <AlertCircle className="w-4 h-4 text-red-600" />
+                                  )}
+                                </div>
                                 {expandedSection === `${dept.name}-${section.name}` ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                               </button>
                               {expandedSection === `${dept.name}-${section.name}` && (
@@ -377,7 +1066,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                             </div>
                           ))
                         ) : (
-                          <div className="text-sm text-gray-500 italic px-2 py-1">No sections configured for this semester in the database.</div>
+                          <div className="text-sm text-gray-600 px-3 py-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded">
+                            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                            <span>No sections configured for {dept.name} in this year. Check if batch-section mapping exists in the database.</span>
+                          </div>
                         )}
                       </div>
                     )}
