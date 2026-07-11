@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 from .views_impersonate import (
     SuperuserImpersonateView,
     SuperuserImpersonationHistoryView,
@@ -68,4 +68,8 @@ urlpatterns = [
     path('settings/whatsapp/clear-session/', WhatsAppGatewayClearSessionView.as_view(), name='settings_whatsapp_clear_session'),
     # Under-construction state (read: any auth, write: IQAC only)
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
+
+    # Compatibility alias for Academic 2.1 endpoints that may be called from
+    # the accounts-prefixed API base used by some frontends.
+    path('academic-v2/', include('academic_v2.urls')),
 ]

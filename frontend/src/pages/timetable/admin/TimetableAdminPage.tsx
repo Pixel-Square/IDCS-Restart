@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import fetchWithAuth from '../../../services/fetchAuth';
-import TimetableConfig from './TimetableConfig';
+import TimetableConfig from './OddEvenSemTimetable';
 import TimetableCreator from './TimetableCreator';
 import TimetableGenerator from './TimetableGenerator';
 

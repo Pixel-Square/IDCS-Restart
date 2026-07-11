@@ -1868,7 +1868,7 @@ export default function MarkEntryPage() {
         : { width: '100%', height: '100%' };
       const mediaStyle: React.CSSProperties = isCenter
         ? {}
-        : { objectFit: preloaderCfg.fit, width: '100%', height: '100%' };
+        : { objectFit: preloaderCfg.fit as any, width: '100%', height: '100%' };
 
       return (
         <div
@@ -1974,7 +1974,7 @@ export default function MarkEntryPage() {
       {isBypassMode && bypassSession && (
         <BypassPinnedBar
           facultyName={bypassSession.faculty_name}
-          startedAt={bypassSession.started_at}
+          startedAt={(bypassSession as any).started_at}
           onBack={() => navigate(-1)}
         />
       )}

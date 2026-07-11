@@ -28,6 +28,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
   const [subjectFacultySelection, setSubjectFacultySelection] = useState<Record<string, Record<string, string>>>({});
   const [savingState, setSavingState] = useState<Record<string, boolean>>({});
   const [saveMessage, setSaveMessage] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
+  const [sectionSubjectStaff, setSectionSubjectStaff] = useState<Record<string, any[]>>({});
 
   useEffect(() => {
     const fetchSections = async () => {
@@ -219,9 +220,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
       
       // Refresh assignments and advisors to show latest data
       try {
-        const [assignRes, advisorRes] = await Promise.all([
+        const [assignRes, advisorRes, subjectStaffRes] = await Promise.all([
           fetchWithAuth('/api/academics/teaching-assignments/?page_size=0'),
-          fetchWithAuth('/api/academics/section-advisors/?page_size=0')
+          fetchWithAuth('/api/academics/section-advisors/?page_size=0'),
+          fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`)
         ]);
         if (assignRes.ok) {
           const data = await assignRes.json();
@@ -230,6 +232,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
         if (advisorRes.ok) {
           const data = await advisorRes.json();
           setAdvisors(data.results || data);
+        }
+        if (subjectStaffRes.ok) {
+          const data = await subjectStaffRes.json();
+          setSectionSubjectStaff(prev => ({ ...prev, [sectionKey]: data.results || data || [] }));
         }
       } catch (err) {
         console.error('Failed to refresh data:', err);
@@ -294,6 +300,29 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
     const message = saveMessage[sectionKey];
     const subjectAutoSavingSet = autoSavingSubjects[sectionKey] || new Set();
     const subjectAutoMessages = autoSaveMessages[sectionKey] || {};
+    const aggregatedSubjectStaff = sectionSubjectStaff[sectionKey] || [];
+
+    const normalizeCode = (value: any) => String(value || '').trim().toUpperCase();
+    const normalizeName = (value: any) => String(value || '').trim().toLowerCase();
+
+    const findAggregatedStaffRow = (subject: any) => {
+      if (!subject) return null;
+      const subjectId = Number(subject.id || 0);
+      const subjectCode = normalizeCode(subject.course_code || subject.code);
+      const subjectName = normalizeName(subject.course_name || subject.name);
+
+      return aggregatedSubjectStaff.find((row: any) => {
+        const rowId = Number(row?.id || 0);
+        const idMatch = rowId > 0 && subjectId > 0 && rowId === subjectId;
+        if (idMatch) return true;
+
+        const rowCode = normalizeCode(row?.course_code);
+        const rowName = normalizeName(row?.course_name);
+        const codeMatch = Boolean(subjectCode && rowCode && subjectCode === rowCode);
+        const nameMatch = Boolean(subjectName && rowName && subjectName === rowName);
+        return codeMatch || nameMatch;
+      }) || null;
+    };
     
     // Show loading state
     if (isLoading) {
@@ -367,16 +396,19 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
           existingAssignment = assignments.find(a => a.id === assignmentId);
         } else if (!isNewAssignment && !isAddAssignment) {
           existingAssignment = assignments.find(a => {
-            const isCourseCodeMatch = a.curriculum_row_details?.course_code && subjectObj.course_code && a.curriculum_row_details.course_code === subjectObj.course_code;
-            const curriculumMatch = (
-              a.curriculum_row == Number(actualSubjectId) ||
-              (a.curriculum_row_details && a.curriculum_row_details.id == Number(actualSubjectId)) ||
-              isCourseCodeMatch
-            );
-            const sectionMatch = (
-              a.section == sectionId || 
-              (a.section_details && a.section_details.id == sectionId)
-            );
+            const subCourseCode = (subjectObj.course_code || subjectObj.code || '').trim();
+            const aCourseCode = (a.curriculum_row_details?.course_code || '').trim();
+            const isCourseCodeMatch = subCourseCode && aCourseCode && subCourseCode === aCourseCode;
+            
+            const subCourseName = (subjectObj.course_name || subjectObj.name || '').trim().toLowerCase();
+            const aCourseName = (a.curriculum_row_details?.course_name || '').trim().toLowerCase();
+            const isCourseNameMatch = subCourseName && aCourseName && subCourseName === aCourseName;
+            
+            const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
+            const aCurriculumRowId = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
+            const aSectionId = extractId(a.section) || Number(a.section_details?.id || 0);
+            const curriculumMatch = aCurriculumRowId === Number(actualSubjectId);
+            const sectionMatch = aSectionId === Number(sectionId);
             return curriculumMatch && sectionMatch;
           });
         }
@@ -588,9 +620,12 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
 
           // Find existing assignment if updating
           const existingAssignment = !isNewAssignment 
-            ? assignments.find(a => 
-                a.section == sectionId && a.curriculum_row == Number(subjectId)
-              )
+            ? assignments.find(a => {
+                const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
+                const aCurriculumRowId = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
+                const aSectionId = extractId(a.section) || Number(a.section_details?.id || 0);
+                return aSectionId === Number(sectionId) && aCurriculumRowId === Number(subjectId);
+              })
             : null;
 
           // Handle deletion (empty value or DELETE marker)
@@ -805,6 +840,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
           </thead>
           <tbody>
             {subjects.flatMap((sub, idx) => {
+              const aggregatedRow = findAggregatedStaffRow(sub);
+              const aggregatedAssignedStaff = Array.isArray(aggregatedRow?.assigned_staff)
+                ? aggregatedRow.assigned_staff
+                : [];
               // Find matching assignments
               const sectionNameStr = sectionKey.split('-')[1];
               const currentDeptName = sectionKey.split('-')[0];
@@ -826,22 +865,32 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                 }
                 
                 // IMPROVED: Normalize all IDs to numbers for consistent comparison
-                const aCurriculumRow = Number(a.curriculum_row || a.curriculum_row_details?.id || 0);
-                const aSection = Number(a.section || a.section_details?.id || 0);
+                const extractId = (val: any) => (val && typeof val === 'object') ? Number(val.id || 0) : Number(val || 0);
+                const aCurriculumRow = extractId(a.curriculum_row) || Number(a.curriculum_row_details?.id || 0);
+                const aSection = extractId(a.section) || Number(a.section_details?.id || 0);
                 const subIdNum = Number(sub.id || 0);
                 const sectionIdNum = Number(sectionId || 0);
                 
                 const sectionIdMatch = aSection === sectionIdNum;
                 const sectionNameMatch = a.section_name === sectionNameStr || (a.section_details && a.section_details.name === sectionNameStr);
                 
-                // IMPROVED: Match curriculum_row with multiple fallbacks
+                // IMPROVED: Match curriculum_row with multiple fallbacks including course_code and course_name
+                const subCourseCode = (sub.course_code || sub.code || '').trim();
+                const aCourseCode = (a.curriculum_row_details?.course_code || '').trim();
+                const courseCodeMatch = subCourseCode && aCourseCode && subCourseCode === aCourseCode;
+                
+                const subCourseName = (sub.course_name || sub.name || '').trim().toLowerCase();
+                const aCourseName = (a.curriculum_row_details?.course_name || '').trim().toLowerCase();
+                const courseNameMatch = subCourseName && aCourseName && subCourseName === aCourseName;
+                
                 const subjectMatch = aCurriculumRow === subIdNum || 
                                      (a.curriculum_row_details && Number(a.curriculum_row_details.id) === subIdNum) ||
-                                     (a.curriculum_row_details?.course_code && sub.course_code && a.curriculum_row_details.course_code === sub.course_code);
+                                     courseCodeMatch ||
+                                     courseNameMatch;
                 
                 const electiveMatch = a.elective_subject_details && Number(a.elective_subject_details.parent_id) == subIdNum;
                 
-                const isMatch = subjectMatch ? (currentDeptName === 'S&H' ? (sectionIdMatch || sectionNameMatch) : sectionIdMatch) 
+                const isMatch = subjectMatch ? sectionIdMatch
                              : electiveMatch ? (allowedDeptNames.some(d => {
                                    const elDept = (a.elective_subject_details.department_display || '').toLowerCase();
                                    const elDeptId = String(a.elective_subject_details.department_id || '');
@@ -850,8 +899,8 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                              : false;
                 
                 // Enhanced logging with actual values
-                if (subjectMatch || electiveMatch || isMatch) {
-                  console.log(`📋 Subject ${sub.id} (${sub.course_code}) check against assignment ${a.id}:`, {
+                if (sub.course_code === 'GEA1122') {
+                  console.log(`📋 DEBUG GEA1122 Subject ${sub.id} check against assignment ${a.id}:`, {
                     subjectMatch,
                     electiveMatch,
                     sectionIdMatch,
@@ -865,7 +914,11 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                     a_section_raw: a.section,
                     a_staff: a.staff,
                     a_staff_details: a.staff_details,
-                    a_is_active: a.is_active
+                    a_is_active: a.is_active,
+                    currentDeptName,
+                    sectionNameStr,
+                    aCourseCode,
+                    subCourseCode
                   });
                 }
                 
@@ -878,10 +931,36 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
               
               console.log(`📊 Subject ${sub.id} found ${matchingAssignments.length} matching assignments`);
 
-              const isMultiFacultyAllowed = currentDeptName === 'S&H' && Number(yearNum) === 1;
               const rows = [];
+              const fallbackCode = sub.course_code
+                || sub.code
+                || aggregatedRow?.course_code
+                || sub.mnemonic
+                || aggregatedRow?.mnemonic
+                || '-';
+              const fallbackName = sub.course_name || sub.name || aggregatedRow?.course_name || '-';
+              const effectiveAssignments = matchingAssignments.length > 0
+                ? matchingAssignments
+                : aggregatedAssignedStaff.map((staff: any, staffIndex: number) => ({
+                    __virtual: true,
+                    __virtual_key: `${sub.id}-${staff?.id || staffIndex}`,
+                    id: null,
+                    section: sectionId,
+                    curriculum_row: sub.id,
+                    staff: staff?.id,
+                    staff_id: staff?.staff_id,
+                    staff_details: {
+                      id: staff?.id,
+                      staff_id: staff?.staff_id,
+                      user: {
+                        username: staff?.username || staff?.name || '',
+                        first_name: '',
+                        last_name: ''
+                      }
+                    }
+                  }));
               
-              if (matchingAssignments.length === 0) {
+              if (effectiveAssignments.length === 0) {
                 const isSavingThisSubject = subjectAutoSavingSet.has(`new-${sub.id}`);
                 const autoSaveMsg = subjectAutoMessages[`new-${sub.id}`];
                 const tempSelectedValue = temporarySelection[`new-${sub.id}`];
@@ -889,8 +968,8 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                 
                 rows.push(
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
-                    <td className="px-4 py-3 font-medium text-gray-900">{sub.course_code || sub.code || '-'}</td>
-                    <td className="px-4 py-3">{sub.course_name || sub.name || '-'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{fallbackCode}</td>
+                    <td className="px-4 py-3">{fallbackName}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-4 w-full">
                         <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
@@ -916,19 +995,13 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                             onChange={(value) => handleSubjectFacultyChange(`new-${sub.id}`, value)}
                           />
                         </div>
-                        {isMultiFacultyAllowed && (
-                          <div className="mt-8 flex-shrink-0">
-                            <button onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: (prev[sub.id] || 0) + 1}))} className="flex items-center gap-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-300">
-                              <Plus className="w-4 h-4" /> Add
-                            </button>
-                          </div>
-                        )}
                       </div>
                     </td>
                   </tr>
                 );
               } else {
-                matchingAssignments.forEach((assignment, aIdx) => {
+                effectiveAssignments.forEach((assignment, aIdx) => {
+                  const isVirtual = Boolean(assignment.__virtual);
                   const assignedStaffId = assignment.staff_details?.staff_id || assignment.staff_id || assignment.staff || "";
                   const assignedStaffUserId = assignment.staff_details?.id || assignment.staff_details?.user?.id || assignment.staff || "";
                   
@@ -949,8 +1022,12 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                   const optionValue = matchingOption?.value || String(assignedStaffUserId || assignedStaffId || assignment.staff_id || assignment.staff || "");
                   
                   const isElective = !!assignment.elective_subject_details;
-                  const displayCode = isElective ? assignment.elective_subject_details.course_code : (sub.course_code || sub.code || '-');
-                  const displayName = isElective ? assignment.elective_subject_details.course_name : (sub.course_name || sub.name || '-');
+                  const displayCode = isElective
+                    ? assignment.elective_subject_details.course_code
+                    : fallbackCode;
+                  const displayName = isElective
+                    ? assignment.elective_subject_details.course_name
+                    : fallbackName;
                   
                   const currentFacultyOption = facultyOptions.find(opt => String(opt.value) === String(optionValue));
                   const currentFacultyLabel = currentFacultyOption?.label || staffDisplayName || optionValue;
@@ -962,7 +1039,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                   const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
 
                   rows.push(
-                    <tr key={`${idx}-${aIdx}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
+                    <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
                       <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
                       <td className="px-4 py-3">{displayName}</td>
                       <td className="px-4 py-3">
@@ -979,7 +1056,9 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                                   {autoSaveMsg.text}
                                 </span>
                               ) : (
-                                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded whitespace-nowrap">✓ {displayLabel || 'No Data'}</span>
+                                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded whitespace-nowrap">
+                                  ✓ {displayLabel || 'No Data'}{isVirtual ? ' (Mapped)' : ''}
+                                </span>
                               )}
                             </div>
                             <SearchableDropdown
@@ -987,16 +1066,9 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                               placeholder="Select Faculty"
                               options={facultyOptions}
                               value={tempSelectedValue || optionValue || ""}
-                              onChange={(value) => handleSubjectFacultyChange(String(sub.id), value, assignment.id)}
+                              onChange={(value) => handleSubjectFacultyChange(String(sub.id), value, isVirtual ? undefined : assignment.id)}
                             />
                           </div>
-                          {isMultiFacultyAllowed && aIdx === matchingAssignments.length - 1 && (
-                            <div className="mt-8 flex-shrink-0">
-                              <button onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: (prev[sub.id] || 0) + 1}))} className="flex items-center gap-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-md transition-colors border border-gray-300">
-                                <Plus className="w-4 h-4" /> Add
-                              </button>
-                            </div>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -1004,70 +1076,6 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                 });
               }
 
-              // Render any additional faculty dropdowns for multi-faculty support
-              const extraCount = additionalDropdowns[sub.id] || 0;
-              for (let i = 0; i < extraCount; i++) {
-                const addKey = `add-${sub.id}-${i}`;
-                const isSavingThisSubject = subjectAutoSavingSet.has(addKey);
-                const autoSaveMsg = subjectAutoMessages[addKey];
-                const tempSelectedValue = temporarySelection[addKey];
-                const tempSelectedFaculty = tempSelectedValue ? facultyOptions.find(opt => opt.value === tempSelectedValue)?.label : null;
-                
-                rows.push(
-                  <tr key={`${idx}-extra-${i}`} className="bg-blue-50/20 border-b">
-                    <td colSpan={2} className="px-4 py-3 text-right text-sm text-gray-600 font-medium border-r border-gray-100">
-                       <span className="flex items-center justify-end gap-2 text-blue-700">
-                         <Users className="w-4 h-4" />
-                         Co-Faculty
-                       </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-start gap-4 w-full">
-                        <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
-                          <div className="flex gap-2 items-center h-6">
-                             {isSavingThisSubject ? (
-                               <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded font-medium whitespace-nowrap flex items-center gap-1">
-                                 <div className="animate-spin h-3 w-3 border-2 border-blue-600 border-t-transparent rounded-full"></div>
-                                 ✓ {tempSelectedFaculty || 'Saving...'}
-                               </span>
-                             ) : autoSaveMsg ? (
-                               <span className={`text-xs px-2 py-1 rounded font-medium whitespace-nowrap ${autoSaveMsg.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                 {autoSaveMsg.text}
-                               </span>
-                             ) : (
-                               <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded whitespace-nowrap italic">Pending assignment...</span>
-                             )}
-                          </div>
-                          <SearchableDropdown
-                            label=""
-                            placeholder="Select Faculty"
-                            options={facultyOptions}
-                            value={tempSelectedValue || ""}
-                            onChange={(value) => {
-                              handleSubjectFacultyChange(addKey, value).then(() => {
-                                if (value && value !== 'DELETE') {
-                                  // Remove the extra row UI, it will be rendered as an actual assignment upon refresh
-                                  setAdditionalDropdowns(prev => ({...prev, [sub.id]: Math.max(0, (prev[sub.id] || 1) - 1)}));
-                                }
-                              });
-                            }}
-                          />
-                        </div>
-                        <div className="mt-8 flex-shrink-0">
-                          <button 
-                            onClick={() => setAdditionalDropdowns(prev => ({...prev, [sub.id]: Math.max(0, (prev[sub.id] || 1) - 1)}))}
-                            className="p-2 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-md transition-colors border border-transparent hover:border-red-200"
-                            title="Cancel adding faculty"
-                          >
-                            <X size={18} />
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              }
-              
               return rows;
             })}
           </tbody>

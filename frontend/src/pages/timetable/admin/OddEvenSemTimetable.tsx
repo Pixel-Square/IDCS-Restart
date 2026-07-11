@@ -1,5 +1,81 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trash2, Plus, Save, Edit2, X } from 'lucide-react';
+
+function TimePickerDropdown({ value, onChange }: { value: string, onChange: (val: string) => void }) {
+  const [hour, setHour] = useState('12');
+  const [minute, setMinute] = useState('00');
+  const [ampm, setAmpm] = useState('AM');
+
+  useEffect(() => {
+    if (value) {
+      const match = value.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (match) {
+        setHour(parseInt(match[1], 10).toString());
+        setMinute(match[2]);
+        setAmpm(match[3].toUpperCase());
+      }
+    }
+  }, [value]);
+
+  const handleChange = (h: string, m: string, ap: string) => {
+    setHour(h);
+    setMinute(m);
+    setAmpm(ap);
+    onChange(`${h}:${m} ${ap}`);
+  };
+
+  return (
+    <div className="flex gap-1 items-center bg-white border border-gray-300 rounded-lg px-2 py-1 focus-within:ring-2 focus-within:ring-blue-500 w-full sm:w-auto">
+      <select value={hour} onChange={e => handleChange(e.target.value, minute, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 12}, (_, i) => i + 1).map(h => <option key={h} value={h.toString()}>{h}</option>)}
+      </select>
+      <span className="text-gray-500 font-medium">:</span>
+      <select value={minute} onChange={e => handleChange(hour, e.target.value, ampm)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer">
+        {Array.from({length: 60}, (_, i) => i).map(m => {
+          const mStr = m.toString().padStart(2, '0');
+          return <option key={mStr} value={mStr}>{mStr}</option>;
+        })}
+      </select>
+      <select value={ampm} onChange={e => handleChange(hour, minute, e.target.value)} className="bg-transparent text-sm text-gray-700 outline-none appearance-none cursor-pointer ml-1">
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+      </select>
+    </div>
+  );
+}
+
+function TimingSelector({ timing, onChange }: { timing: string, onChange: (val: string) => void }) {
+  const [start, setStart] = useState('12:00 AM');
+  const [end, setEnd] = useState('12:00 AM');
+
+  useEffect(() => {
+    if (timing) {
+      const parts = timing.split('-');
+      if (parts.length === 2) {
+        setStart(parts[0].trim());
+        setEnd(parts[1].trim());
+      }
+    }
+  }, [timing]);
+
+  const handleStartChange = (val: string) => {
+    setStart(val);
+    onChange(`${val} - ${end}`);
+  };
+  
+  const handleEndChange = (val: string) => {
+    setEnd(val);
+    onChange(`${start} - ${val}`);
+  };
+
+  return (
+    <div className="flex gap-2 items-center">
+      <TimePickerDropdown value={start} onChange={handleStartChange} />
+      <span className="text-gray-500 font-medium">to</span>
+      <TimePickerDropdown value={end} onChange={handleEndChange} />
+    </div>
+  );
+}
 
 interface Column {
   id: string;
@@ -29,38 +105,9 @@ interface OddEvenSemTimetableProps {
 }
 
 const PERIODS: string[] = Array.from({ length: 15 }, (_, i) => `Period ${i + 1}`);
-const SPECIAL_PERIODS = ['Break', 'Lunch'] as const;
 const COLUMN_MAX = 10;
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-
-const TIME_OPTIONS: string[] = [];
-for (let hour = 7; hour <= 19; hour++) {
-  for (let m = 0; m < 60; m += 5) {
-    const min = m < 10 ? '0' + m : m;
-    const h = hour > 12 ? hour - 12 : (hour === 0 ? 12 : hour);
-    const ampm = hour >= 12 ? 'P.M' : 'A.M';
-    TIME_OPTIONS.push(`${h}.${min} ${ampm}`);
-  }
-}
-
-const getPeriodNumber = (periodStr: string): number => {
-  const match = periodStr.match(/\d+/);
-  return match ? parseInt(match[0], 10) : 0;
-};
-
-const sortColumnsByPeriod = (columns: Column[]): Column[] => {
-  // For preview ordering only. Keep user-defined order in `columns`.
-  return [...columns].sort((a, b) => getPeriodNumber(a.period) - getPeriodNumber(b.period));
-};
-
-const getColumnType = (period: string): 'period' | 'break' | 'lunch' => {
-  if (period === 'Break') return 'break';
-  if (period === 'Lunch') return 'lunch';
-  return 'period';
-};
-
 
 export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDeleteTemplate }: OddEvenSemTimetableProps) {
   const [mode, setMode] = useState<'list' | 'create' | 'edit'>('list');
@@ -73,8 +120,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
 
   // Column builder state
   const [newColumnPeriod, setNewColumnPeriod] = useState<string>('Period 1');
-  const [newColumnTiming, setNewColumnTiming] = useState<string>('');
-
+  const [newColumnTiming, setNewColumnTiming] = useState<string>('09:00 AM - 10:00 AM');
 
   const handleSemesterTypeChange = (newType: 'odd' | 'even') => {
     setSemesterType(newType);
@@ -112,9 +158,8 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
     setEditingTemplateId(null);
     setNextRowId(1);
     setNewColumnPeriod('Period 1');
-    setNewColumnTiming('');
+    setNewColumnTiming('09:00 AM - 10:00 AM');
   };
-
 
   const handleSaveTemplate = () => {
     if (!templateName.trim()) {
@@ -164,14 +209,13 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
     setMode('create');
   };
 
-
   if (mode === 'list') {
     return (
       <div className="space-y-6">
         <div className="flex justify-end">
           <button
             onClick={startCreateMode}
-            className="flex items-center gap-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold"
+            className="flex items-center gap-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-semibold shadow-md"
           >
             <Plus size={20} />
             Create New Template
@@ -179,13 +223,13 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
         </div>
 
         {templates.length === 0 ? (
-          <div className="bg-white rounded-lg shadow p-12 text-center">
+          <div className="bg-white rounded-lg shadow p-12 text-center border border-gray-100">
             <p className="text-gray-500 text-lg">No semester templates created yet. Click "Create New Template" to get started.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {templates.map((template) => (
-              <div key={template.id} className="bg-white rounded-lg shadow p-4 hover:shadow-lg transition-shadow">
+              <div key={template.id} className="bg-white rounded-lg shadow p-4 hover:shadow-lg transition-shadow border border-gray-100">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="font-bold text-lg text-gray-900">{template.name}</h3>
                   <span
@@ -207,7 +251,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleEditTemplate(template)}
-                    className="flex-1 flex items-center justify-center gap-1 bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600 transition-colors text-sm"
+                    className="flex-1 flex items-center justify-center gap-1 bg-blue-500 text-white px-3 py-2 rounded hover:bg-blue-600 transition-colors text-sm font-semibold"
                   >
                     <Edit2 size={16} />
                     Edit
@@ -232,7 +276,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
   }
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
+    <div className="bg-white rounded-lg shadow p-6 border border-gray-100">
       <div className="mb-6 flex justify-between items-center">
         <h2 className="text-2xl font-bold text-gray-900">
           {mode === 'create' ? 'Create New Template' : 'Edit Template'}
@@ -252,26 +296,28 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
       <div className="mb-6">
         <label className="block text-sm font-semibold text-gray-700 mb-3">Semester Type</label>
         <div className="flex gap-4">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              value="odd"
-              checked={semesterType === 'odd'}
-              onChange={(e) => handleSemesterTypeChange(e.target.value as 'odd' | 'even')}
-              className="w-4 h-4"
-            />
-            <span className="text-gray-700">Odd Semester</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              value="even"
-              checked={semesterType === 'even'}
-              onChange={(e) => handleSemesterTypeChange(e.target.value as 'odd' | 'even')}
-              className="w-4 h-4"
-            />
-            <span className="text-gray-700">Even Semester</span>
-          </label>
+          <button
+            type="button"
+            onClick={() => handleSemesterTypeChange('odd')}
+            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+              semesterType === 'odd'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-200'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Odd Semester
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSemesterTypeChange('even')}
+            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+              semesterType === 'even'
+                ? 'bg-orange-600 text-white shadow-lg shadow-orange-200'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Even Semester
+          </button>
         </div>
       </div>
 
@@ -282,16 +328,16 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
           type="text"
           value={templateName}
           onChange={(e) => setTemplateName(e.target.value)}
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           placeholder="e.g., Template 1"
         />
       </div>
 
       {/* Columns Section */}
-      <div className="mb-8 pb-8 border-b">
+      <div className="mb-8 pb-8 border-b border-gray-200">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-bold text-gray-900">Columns (Periods / Break / Lunch)</h3>
-          <span className="text-sm text-gray-600">{columns.length}/{COLUMN_MAX} columns</span>
+          <span className="text-sm font-semibold text-gray-600">{columns.length}/{COLUMN_MAX} columns</span>
         </div>
 
         {/* Add Column */}
@@ -304,7 +350,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
               <select
                 value={newColumnPeriod}
                 onChange={(e) => setNewColumnPeriod(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer"
               >
                 {PERIODS.map((p) => (
                   <option key={p} value={p}>
@@ -318,43 +364,10 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Timing</label>
-              <div className="flex items-center gap-2">
-                  <select
-                  value={newColumnTiming.split(' - ')[0] || ''}
-                  onChange={(e) => {
-                    const [startPart, endPartRaw] = newColumnTiming.split(' - ');
-                    const endTime = newColumnTiming.includes(' - ') ? (endPartRaw ?? '') : '';
-                    const next = e.target.value || endTime ? `${e.target.value} - ${endTime}` : '';
-                    setNewColumnTiming(next);
-                  }}
-                  className="flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  <option value="">Start Time</option>
-                  {TIME_OPTIONS.map((time) => (
-                    <option key={time} value={time}>
-                      {time}
-                    </option>
-                  ))}
-                </select>
-                <span className="font-bold text-gray-500">-</span>
-                <select
-                  value={newColumnTiming.split(' - ')[1] || ''}
-                  onChange={(e) => {
-                    const parts = newColumnTiming.split(' - ');
-                    const startTime = parts[0] || '';
-                    const next = startTime || e.target.value ? `${startTime} - ${e.target.value}` : '';
-                    setNewColumnTiming(next);
-                  }}
-                  className="flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  <option value="">End Time</option>
-                  {TIME_OPTIONS.map((time) => (
-                    <option key={time} value={time}>
-                      {time}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <TimingSelector
+                timing={newColumnTiming}
+                onChange={setNewColumnTiming}
+              />
             </div>
 
             <div className="flex justify-end">
@@ -394,10 +407,10 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
 
                   setColumns((prev) => [...prev, newCol]);
                   setNewColumnPeriod('Period 1');
-                  setNewColumnTiming('');
+                  setNewColumnTiming('09:00 AM - 10:00 AM');
                 }}
                 disabled={columns.length >= COLUMN_MAX}
-                className={`w-full md:w-auto px-5 py-2 rounded-lg font-semibold transition-colors ${
+                className={`w-full md:w-auto px-5 py-2 rounded-lg font-semibold transition-colors shadow ${
                   columns.length >= COLUMN_MAX
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     : 'bg-blue-600 text-white hover:bg-blue-700'
@@ -409,13 +422,12 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
             </div>
           </div>
 
-          <div className="mt-3 text-xs text-gray-600">
+          <div className="mt-3 text-xs text-gray-500 italic">
             Tip: Add <b>Break</b> or <b>Lunch</b> at any position by ordering the columns list as you add them.
           </div>
         </div>
 
         {columns.length === 0 ? (
-
           <p className="text-gray-500 mb-4">No columns configured yet.</p>
         ) : (
           <div className="space-y-4 mb-4">
@@ -424,14 +436,14 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                 key={column.id}
                 className={`p-4 rounded-lg border-2 ${
                   column.period === 'Break'
-                    ? 'bg-red-50 border-red-300'
+                    ? 'bg-red-50/50 border-red-200'
                     : column.period === 'Lunch'
-                    ? 'bg-orange-50 border-orange-300'
-                    : 'bg-gray-50 border-gray-200'
+                    ? 'bg-orange-50/50 border-orange-200'
+                    : 'bg-gray-50/50 border-gray-200'
                 }`}
               >
                 <div className="flex gap-2 items-center mb-3">
-                  <span className="font-semibold text-gray-700 w-12">Col {index + 1}:</span>
+                  <span className="font-semibold text-gray-700 w-16">Col {index + 1}:</span>
                   <span
                     className={`flex-1 px-3 py-2 font-semibold rounded ${
                       column.period === 'Break'
@@ -445,47 +457,20 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                   </span>
                   <button
                     onClick={() => removeColumn(column.id)}
-                    className="bg-red-500 text-white p-2 rounded hover:bg-red-600 transition-colors"
+                    className="bg-red-500 text-white p-2 rounded hover:bg-red-600 transition-colors shadow-sm"
                   >
                     <Trash2 size={16} />
                   </button>
                 </div>
-                <div>
-                  <label className="text-xs text-gray-600 block mb-1">Timing:</label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={column.timing.split(' - ')[0] || ''}
-                      onChange={(e) => {
-                        const parts = column.timing.split(' - ');
-                        const endTime = parts.length > 1 ? parts[1] : '';
-                        const newTiming = e.target.value || endTime ? `${e.target.value} - ${endTime}` : '';
-                        updateColumn(column.id, 'timing', newTiming);
-                      }}
-                      className={`flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white ${
-                        column.timing.trim() && column.timing.split(' - ')[0] ? 'border-gray-300' : 'border-red-300 bg-red-50'
-                      }`}
-                    >
-                      <option value="">Start Time</option>
-                      {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
-                    </select>
-                    <span className="font-bold text-gray-500">-</span>
-                    <select
-                      value={column.timing.split(' - ')[1] || ''}
-                      onChange={(e) => {
-                        const parts = column.timing.split(' - ');
-                        const startTime = parts[0] || '';
-                        const newTiming = startTime || e.target.value ? `${startTime} - ${e.target.value}` : '';
-                        updateColumn(column.id, 'timing', newTiming);
-                      }}
-                      className={`flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white ${
-                        column.timing.trim() && column.timing.split(' - ')[1] ? 'border-gray-300' : 'border-red-300 bg-red-50'
-                      }`}
-                    >
-                      <option value="">End Time</option>
-                      {TIME_OPTIONS.map(time => <option key={time} value={time}>{time}</option>)}
-                    </select>
-                  </div>
-                  {(!column.timing.trim() || column.timing === ' - ') && <p className="text-red-600 text-xs mt-1">Required</p>}
+                <div className="ml-16 flex flex-wrap gap-2 items-center">
+                  <label className="text-sm font-medium text-gray-600 w-20">Timing:</label>
+                  <TimingSelector
+                    timing={column.timing}
+                    onChange={(val) => updateColumn(column.id, 'timing', val)}
+                  />
+                  {!column.timing.trim() && (
+                    <span className="text-red-500 text-sm font-semibold">Required</span>
+                  )}
                 </div>
               </div>
             ))}
@@ -504,7 +489,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
       <div className="mb-8">
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-lg font-bold text-gray-900">Rows (Days)</h3>
-          <span className="text-sm text-gray-600">{rows.length}/7</span>
+          <span className="text-sm font-semibold text-gray-600">{rows.length}/7</span>
         </div>
 
         {rows.length === 0 ? (
@@ -517,11 +502,11 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
                   type="text"
                   value={row.day}
                   readOnly
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded bg-gray-100"
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded bg-gray-100 text-gray-700"
                 />
                 <button
                   onClick={() => removeRow(row.id)}
-                  className="bg-red-500 text-white p-2 rounded hover:bg-red-600 transition-colors"
+                  className="bg-red-500 text-white p-2 rounded hover:bg-red-600 transition-colors shadow-sm"
                 >
                   <Trash2 size={16} />
                 </button>
@@ -531,15 +516,71 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
         )}
 
         <button
+          type="button"
           onClick={addRow}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors font-semibold"
+          disabled={rows.length >= 7}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold transition-colors shadow ${
+            rows.length >= 7
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
         >
           <Plus size={18} />
           Add Row
         </button>
       </div>
 
-      {/* Save Button */}
+      {/* Template Preview */}
+      {columns.length > 0 && rows.length > 0 && (
+        <div className="mb-8 pb-8 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-900 mb-4">Template Preview</h3>
+          <div className="overflow-x-auto bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <table className="border-collapse w-full min-w-[600px]">
+              <thead>
+                <tr>
+                  <th className="border border-gray-300 bg-gray-200 px-3 py-2 font-bold text-sm text-left w-32">Day</th>
+                  {columns.map((col) => (
+                    <th 
+                      key={col.id} 
+                      className={`border border-gray-300 px-3 py-2 font-bold text-sm text-center ${
+                        col.period === 'Break'
+                          ? 'bg-red-200 text-red-900'
+                          : col.period === 'Lunch'
+                          ? 'bg-orange-200 text-orange-900'
+                          : 'bg-gray-200'
+                      }`}
+                    >
+                      <div>{col.period}</div>
+                      <div className="text-[10px] text-gray-500 font-normal mt-0.5">{col.timing}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td className="border border-gray-300 bg-gray-100 px-3 py-2 font-bold text-sm text-left">{row.day}</td>
+                    {columns.map((col) => (
+                      <td 
+                        key={col.id} 
+                        className={`border border-gray-300 px-3 py-2 h-12 ${
+                          col.period === 'Break'
+                            ? 'bg-red-50'
+                            : col.period === 'Lunch'
+                            ? 'bg-orange-50'
+                            : 'bg-white'
+                        }`}
+                      ></td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Save / Cancel Buttons */}
       <div className="flex justify-end gap-3">
         <button
           onClick={() => {
@@ -552,7 +593,7 @@ export default function OddEvenSemTimetable({ templates, onSaveTemplate, onDelet
         </button>
         <button
           onClick={handleSaveTemplate}
-          className="flex items-center gap-2 bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 transition-colors font-semibold"
+          className="flex items-center gap-2 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-semibold shadow-md"
         >
           <Save size={18} />
           Save Template

@@ -240,6 +240,19 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             logger.debug('get_queryset: user has wide_perms, returning all; user=%s', user.username)
             return qs
 
+        teaching_perms = {
+            'academics.assign_teaching',
+            'academics.view_elective_teaching',
+            'academics.assign_elective_teaching',
+        }
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+        if perms & teaching_perms or role_names & {'HOD', 'AHOD'}:
+            logger.debug('get_queryset: teaching-assignment user, returning all rows; user=%s perms=%s roles=%s', user.username, perms, role_names)
+            return qs
+
         # If we found a department for the user, restrict to it
         if dept_ids:
             logger.debug('get_queryset: restricting to departments=%s for user=%s', dept_ids, user.username)

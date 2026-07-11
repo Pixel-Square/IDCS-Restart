@@ -147,7 +147,6 @@ export default function Login() {
       setReason("");
 
       window.location.href = getPostLoginRedirect();
-      setError(serverMsg);
     } finally {
       setLoading(false);
     }

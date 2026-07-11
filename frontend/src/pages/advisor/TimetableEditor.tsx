@@ -4,6 +4,12 @@ import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCir
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
+const isSharedSection = (sec: any) => {
+  if (!sec) return false;
+  const code = sec.department_short_name || sec.department_code || sec.department?.code;
+  return sec.department_id === null || code === 'S&H';
+};
+
 // Stable CellPopup component outside main component to prevent recreation on every render
 function CellPopup(props: any) {
   const {
@@ -57,10 +63,13 @@ function CellPopup(props: any) {
     selectedOtherDept,
     setSelectedOtherDept,
     setLastSelectedCurriculumRaw,
+    lastSelectedCurriculumRaw,
+    sectionDepartmentId,
     selectedElectiveSubjectId,
     setSelectedElectiveSubjectId,
     otherDeptStaffList,
     setOtherDeptStaffList,
+    subjectStaffList,
   } = props
   const [deptCurriculumError, setDeptCurriculumError] = useState<string | null>(null)
   const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
@@ -95,6 +104,75 @@ function CellPopup(props: any) {
     if(item.parent_id) return item.parent_id
     return item.id
   }
+
+  const normalizeCode = (value: any) => String(value || '').trim().toUpperCase()
+  const normalizeName = (value: any) => String(value || '').trim().toLowerCase()
+
+  const findSelectedSubjectStaff = () => {
+    if (!editingCurriculumId) return null
+
+    const selectedSubject = subjectSource.find((item: any) => {
+      if (selectedElectiveSubjectId && item?.is_elective_child) {
+        return Number(item.id) === Number(selectedElectiveSubjectId)
+      }
+      return Number(resolveCurriculumId(item)) === Number(editingCurriculumId)
+    })
+
+    const selectedId = Number(selectedElectiveSubjectId || editingCurriculumId)
+    const selectedCode = normalizeCode(selectedSubject?.course_code)
+    const selectedName = normalizeName(selectedSubject?.course_name)
+
+    return (subjectStaffList || []).find((item: any) => {
+      const itemId = Number(item?.id || 0)
+      const byId = itemId > 0 && selectedId > 0 && itemId === selectedId
+      if (byId) return true
+
+      const itemCode = normalizeCode(item?.course_code)
+      const itemName = normalizeName(item?.course_name)
+      const byCode = Boolean(selectedCode && itemCode && selectedCode === itemCode)
+      const byName = Boolean(selectedName && itemName && selectedName === itemName)
+      return byCode || byName
+    }) || null
+  }
+
+  // Helper to determine staff list to show and check if they are explicitly assigned
+  const getStaffOptions = () => {
+    if (!editingCurriculumId) {
+      return { list: [], isAssigned: false };
+    }
+    // Match by id first, then by stable code/name for shared S&H curriculum rows.
+    const selectedSubjectObj = findSelectedSubjectStaff();
+
+    const assignedStaff = selectedSubjectObj?.assigned_staff || [];
+    if (assignedStaff.length > 0) {
+      return { list: assignedStaff, isAssigned: true };
+    }
+    // Fallback to department's staff list
+    return { list: isOtherDept ? (otherDeptStaffList || []) : (staffList || []), isAssigned: false };
+  };
+
+  const { list: staffOptionsList, isAssigned: hasAssignedStaff } = getStaffOptions();
+
+  // useEffect to handle auto-selection of staff when subject changes
+  React.useEffect(() => {
+    if (isCustomAssignment) {
+      return;
+    }
+    if (!editingCurriculumId) {
+      setSelectedStaffId(null);
+      return;
+    }
+
+    // Match by id first, then by stable code/name for shared S&H curriculum rows.
+    const selectedSubjectObj = findSelectedSubjectStaff();
+
+    const assignedStaff = selectedSubjectObj?.assigned_staff || [];
+    if (assignedStaff.length === 1) {
+      setSelectedStaffId(assignedStaff[0].id);
+    } else {
+      setSelectedStaffId(null);
+    }
+  }, [editingCurriculumId, selectedElectiveSubjectId, subjectStaffList, isCustomAssignment, setSelectedStaffId]);
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
@@ -162,11 +240,58 @@ function CellPopup(props: any) {
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button 
                           onClick={async ()=>{
-                            const crid = a.curriculum_row?.id || null
                             const existingBatchId = a.subject_batch?.id || null
-                            setEditingCurriculumId(crid)
-                            setEditingBatchId(existingBatchId)
-                            if(crid){
+                            const staffId = a.staff?.id || null
+                            
+                            if (a.curriculum_row) {
+                              setIsCustomAssignment(false)
+                              setCustomAssignmentText('')
+                              const crid = a.curriculum_row.id
+                              setEditingCurriculumId(crid)
+                              setEditingBatchId(existingBatchId)
+                              setSelectedStaffId(staffId)
+                              
+                              // Check if it is from another department
+                              const isOther = a.curriculum_row.department_id && sectionDepartmentId && (Number(a.curriculum_row.department_id) !== Number(sectionDepartmentId))
+                              setIsOtherDept(!!isOther)
+                              if (isOther) {
+                                setSelectedOtherDept(a.curriculum_row.department_id)
+                                // Fetch curriculum and staff list for other dept
+                                try {
+                                  const r = await fetchWithAuth(`/api/curriculum/?department=${a.curriculum_row.department_id}&page_size=0`)
+                                  if (r.ok) {
+                                    const d = await r.json()
+                                    const raw = d.results ?? d ?? []
+                                    const items = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : [])
+                                    const section = sections.find(s => s.id === sectionId)
+                                    const sectionBatch = section?.batch ?? null
+                                    const sectionRegCode = typeof currentSectionRegulation === 'string' ? currentSectionRegulation : currentSectionRegulation?.code
+                                    const sectionSem = section?.semester ?? (typeof currentSectionRegulation === 'object' ? currentSectionRegulation?.semester ?? null : null)
+                                    const filtered = (items || []).filter((c:any) => {
+                                      if (sectionRegCode && c.regulation && c.regulation !== sectionRegCode) return false
+                                      if (sectionSem && c.semester !== undefined && c.semester !== sectionSem) return false
+                                      if (sectionBatch && (c.batch !== undefined || c.batch_name !== undefined)) {
+                                        if (c.batch !== undefined && String(c.batch) !== String(sectionBatch)) return false
+                                        if (c.batch_name !== undefined && String(c.batch_name) !== String(sectionBatch)) return false
+                                      }
+                                      return true
+                                    })
+                                    setDeptCurriculum(filtered)
+                                  }
+                                } catch(err) { console.error(err) }
+                                
+                                try {
+                                  const sres = await fetchWithAuth(`/api/academics/advisor-staff/?department=${a.curriculum_row.department_id}&page_size=0`)
+                                  if (sres.ok) {
+                                    const sd = await sres.json()
+                                    setOtherDeptStaffList(sd.results || sd || [])
+                                  }
+                                } catch(err) { console.error(err) }
+                              } else {
+                                setSelectedOtherDept(null)
+                              }
+                              
+                              // Load batches
                               const list = await loadBatchesForCurriculum(crid)
                               if(existingBatchId && !list.find((b:any)=> b.id === existingBatchId)){
                                 try{
@@ -180,17 +305,14 @@ function CellPopup(props: any) {
                                   }
                                 }catch(e){ console.error('failed to load existing batch', e) }
                               }
-                            } else if(existingBatchId){
-                              try{
-                                const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
-                                if(pres.ok){
-                                  const pb = await pres.json()
-                                  setEditingAvailableBatches((prev: any) => {
-                                    if(prev.find((x: any)=> x.id === pb.id)) return prev
-                                    return [...prev, pb]
-                                  })
-                                }
-                              }catch(e){ console.error('failed to load existing batch', e) }
+                            } else {
+                              setIsCustomAssignment(true)
+                              setCustomAssignmentText(a.subject_text || '')
+                              setEditingCurriculumId(null)
+                              setEditingBatchId(null)
+                              setSelectedStaffId(staffId)
+                              setIsOtherDept(false)
+                              setSelectedOtherDept(null)
                             }
                           }}
                           className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1"
@@ -207,10 +329,26 @@ function CellPopup(props: any) {
                         </button>
                         <button 
                           onClick={async ()=>{
-                            if(!editingCurriculumId) return alert('Select new subject from right panel then click Update')
                             const payload:any = {}
-                            if(editingCurriculumId) payload.curriculum_row = editingCurriculumId
-                            if(editingBatchId !== null) payload.subject_batch_id = editingBatchId
+                            if (isCustomAssignment) {
+                              if (!customAssignmentText.trim()) return alert('Subject name is required')
+                              payload.subject_text = customAssignmentText.trim()
+                              payload.curriculum_row = null
+                              payload.subject_batch_id = null
+                            } else {
+                              if (!editingCurriculumId) return alert('Select subject from right panel then click Update')
+                              payload.curriculum_row = editingCurriculumId
+                              payload.subject_batch_id = editingBatchId
+                              payload.subject_text = null
+                              
+                              if (isOtherDept && selectedOtherDept) {
+                                payload.other_department_id = selectedOtherDept
+                                if (lastSelectedCurriculumRaw) payload.original_curriculum_raw = lastSelectedCurriculumRaw
+                                payload.chosen_curriculum_id = editingCurriculumId
+                                payload.curriculum_department_id = editingCurriculumId
+                              }
+                            }
+                            payload.staff_id = selectedStaffId
                             await handleUpdateAssignment(a.id, payload)
                           }}
                           className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
@@ -488,6 +626,32 @@ function CellPopup(props: any) {
                         ))}
                       </select>
                     </div>
+
+                    {editingCurriculumId && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Staff {hasAssignedStaff ? '(Assigned Faculty)' : '(optional)'}
+                        </label>
+                        <select
+                          value={selectedStaffId || ''}
+                          onChange={(e) => setSelectedStaffId(Number(e.target.value) || null)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="">
+                            {hasAssignedStaff ? 'Select assigned staff…' : 'Select staff (optional)…'}
+                          </option>
+                          {staffOptionsList.map((staff: any) => {
+                            const name = staff.name || (staff.user ? `${staff.user.first_name || ''} ${staff.user.last_name || ''}`.trim() || staff.user.username : '') || staff.staff_id;
+                            const subtitle = staff.username ? ` (${staff.username})` : (staff.user?.username ? ` (${staff.user.username})` : '');
+                            return (
+                              <option key={staff.id} value={staff.id}>
+                                {name}{subtitle}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    )}
                   </>
                 ) : !isCustomAssignment ? (
                   <>
@@ -526,6 +690,8 @@ function CellPopup(props: any) {
                             }
                             // ElectiveSubject children bypass regulation — they match by name in backend
                             if (c.is_elective_child) return true
+                            const currentSection = sections.find((s: any) => s.id === sectionId)
+                            if (isSharedSection(currentSection)) return true
                             if (!currentSectionRegulation?.code) return true
                             return c.regulation === currentSectionRegulation.code
                           })
@@ -556,6 +722,32 @@ function CellPopup(props: any) {
                         ))}
                       </select>
                     </div>
+
+                    {editingCurriculumId && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Staff {hasAssignedStaff ? '(Assigned Faculty)' : '(optional)'}
+                        </label>
+                        <select
+                          value={selectedStaffId || ''}
+                          onChange={(e) => setSelectedStaffId(Number(e.target.value) || null)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="">
+                            {hasAssignedStaff ? 'Select assigned staff…' : 'Select staff (optional)…'}
+                          </option>
+                          {staffOptionsList.map((staff: any) => {
+                            const name = staff.name || (staff.user ? `${staff.user.first_name || ''} ${staff.user.last_name || ''}`.trim() || staff.user.username : '') || staff.staff_id;
+                            const subtitle = staff.username ? ` (${staff.username})` : (staff.user?.username ? ` (${staff.user.username})` : '');
+                            return (
+                              <option key={staff.id} value={staff.id}>
+                                {name}{subtitle}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1134,6 +1326,8 @@ export default function TimetableEditor(){
           batch: entry.batch,
           batch_regulation: entry.batch_regulation,
           department_id: entry.department_id,
+          department_short_name: entry.department_short_name,
+          department: entry.department,
           // include semester if present on the API response under common keys
           semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null
         }))
@@ -1271,6 +1465,7 @@ export default function TimetableEditor(){
       if(editingBatchId) payload.subject_batch_id = editingBatchId
       // If user selected a specific elective child, also pass elective_subject_id
       if(selectedElectiveSubjectId) payload.elective_subject_id = selectedElectiveSubjectId
+      if(selectedStaffId) payload.staff_id = selectedStaffId
     }
     // if assigning from Other Dept, include metadata so backend can honor chosen dept/option
     if(isOtherDept && selectedOtherDept) {
@@ -1359,7 +1554,7 @@ export default function TimetableEditor(){
                     const firstName = asg.staff.first_name || '';
                     const lastName = asg.staff.last_name || '';
                     const fullName = `${firstName} ${lastName}`.trim();
-                    return fullName || asg.staff.username || '—';
+                    return asg.staff.name || fullName || asg.staff.username || '—';
                   })()}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
               </div>
@@ -1421,26 +1616,44 @@ export default function TimetableEditor(){
 
   // Create a comprehensive subjects list combining curriculum and staff assignments
   const getCombinedSubjectsList = () => {
-    if (!currentSectionRegulation?.code) return []
+    const currentSection = sections.find(s => s.id === sectionId)
+    const isShared = isSharedSection(currentSection)
+
+    let filteredCurriculum = curriculum;
+    if (!isShared) {
+      if (!currentSectionRegulation?.code) return []
+      filteredCurriculum = curriculum.filter((subject: any) => 
+        subject.regulation === currentSectionRegulation.code
+      )
+    }
     
-    // Filter curriculum by regulation
-    const regulationFilteredCurriculum = curriculum.filter((subject: any) => 
-      subject.regulation === currentSectionRegulation.code
-    )
-    
-    // Create map of staff assignments
+    const normalizeCode = (value: any) => String(value || '').trim().toUpperCase()
+    const normalizeName = (value: any) => String(value || '').trim().toLowerCase()
+
+    // Create a multi-key map so shared S&H rows still resolve when ids differ.
     const staffMap = new Map()
     subjectStaffList.forEach((staffSubject: any) => {
-      if (staffSubject.id && staffSubject.staff) {
-        staffMap.set(staffSubject.id, staffSubject.staff)
+      if (!staffSubject?.staff) return
+      if (staffSubject.id) {
+        staffMap.set(`id:${Number(staffSubject.id)}`, staffSubject.staff)
       }
+      const code = normalizeCode(staffSubject.course_code)
+      const name = normalizeName(staffSubject.course_name)
+      if (code) staffMap.set(`code:${code}`, staffSubject.staff)
+      if (name) staffMap.set(`name:${name}`, staffSubject.staff)
     })
     
     // Combine curriculum with staff data
-    const combined = regulationFilteredCurriculum.map((subject: any) => ({
-      ...subject,
-      staff: staffMap.get(subject.id) || '—'
-    }))
+    const combined = filteredCurriculum.map((subject: any) => {
+      const idKey = `id:${Number(subject.id || 0)}`
+      const codeKey = `code:${normalizeCode(subject.course_code || subject.code)}`
+      const nameKey = `name:${normalizeName(subject.course_name || subject.name)}`
+      const staff = staffMap.get(idKey) || staffMap.get(codeKey) || staffMap.get(nameKey) || '—'
+      return {
+        ...subject,
+        staff,
+      }
+    })
     
     return combined
   }
@@ -1721,6 +1934,7 @@ export default function TimetableEditor(){
           selectedStaffId={selectedStaffId}
           setSelectedStaffId={setSelectedStaffId}
           staffList={staffList}
+          subjectStaffList={subjectStaffList}
           sectionId={sectionId}
           shortLabel={shortLabel}
           loadBatchesForCurriculum={loadBatchesForCurriculum}

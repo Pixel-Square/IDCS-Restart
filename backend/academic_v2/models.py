@@ -18,6 +18,30 @@ from django.conf import settings
 from django.utils import timezone
 
 
+class AcV2GoogleSheetsOAuthCredential(models.Model):
+    """Persist Google OAuth credentials for Google Sheets creation in the database."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='acv2_google_sheets_oauth_credentials', null=True, blank=True)
+    google_user_email = models.EmailField(max_length=255, blank=True)
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField(blank=True)
+    token_uri = models.URLField(max_length=512, blank=True)
+    client_id = models.CharField(max_length=512, blank=True)
+    client_secret = models.CharField(max_length=512, blank=True)
+    scopes = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_google_sheets_oauth_credential'
+        verbose_name = 'Google Sheets OAuth Credential'
+        verbose_name_plural = 'Google Sheets OAuth Credentials'
+
+    def __str__(self):
+        return self.google_user_email or 'Google Sheets OAuth Credential'
+
+
 # ============================================================================
 # SEMESTER CONFIGURATION (Due dates, Publish control)
 # ============================================================================

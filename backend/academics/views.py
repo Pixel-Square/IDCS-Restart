@@ -2598,7 +2598,10 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                 from academics.models import Section
                 hod_department_section_ids = list(
                     Section.objects.filter(
-                        batch__course__department_id__in=hod_depts
+                        Q(batch__course__department_id__in=hod_depts) |
+                        Q(batch__department_id__in=hod_depts) |
+                        Q(managing_department_id__in=hod_depts),
+                        semester__isnull=False
                     ).values_list('id', flat=True)
                 )
         except Exception:
@@ -2624,6 +2627,8 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                 if allowed_depts:
                     dept_q = (
                         Q(section__batch__course__department_id__in=allowed_depts)
+                        | Q(section__batch__department_id__in=allowed_depts)
+                        | Q(section__managing_department_id__in=allowed_depts)
                         | Q(curriculum_row__department_id__in=allowed_depts)
                         # match elective options by their explicit department OR their parent's department
                         | Q(elective_subject__department_id__in=allowed_depts)
@@ -2666,41 +2671,90 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
         except Exception:
             is_elective_payload = False
 
-        # If this is an elective payload, serializer.validate() already
-        # enforces HOD membership or explicit elective permission. Allow
-        # creation when validated (no section required for electives).
-        if is_elective_payload:
-            serializer.save()
-            return
-        else:
-            if ('academics.assign_teaching' in perms) or user.has_perm('academics.add_teachingassignment'):
-                serializer.save()
-                return
-            serializer.save()
-            return
+        instance = serializer.save()
+        self._sync_graphics_assignments(instance, 'create')
 
-        # Otherwise restrict to advisors for the target section only
-        staff_profile = getattr(user, 'staff_profile', None)
-        section_obj = None
+    def perform_update(self, serializer):
+        old_instance = self.get_object()
+        old_staff = old_instance.staff
+        instance = serializer.save()
+        self._sync_graphics_assignments(instance, 'update', old_staff=old_staff)
+
+    def perform_destroy(self, instance):
+        old_staff = instance.staff
+        self._sync_graphics_assignments(instance, 'delete', old_staff=old_staff)
+        instance.delete()
+
+    def _sync_graphics_assignments(self, instance, action='create', old_staff=None):
         try:
-            if 'section' in getattr(serializer, 'validated_data', {}):
-                section_obj = serializer.validated_data.get('section')
-            elif 'section_id' in getattr(serializer, 'validated_data', {}):
-                sid = serializer.validated_data.get('section_id')
-                from .models import Section as _Section
-                section_obj = _Section.objects.filter(pk=int(sid)).first()
-        except Exception:
-            section_obj = None
+            cr = instance.curriculum_row
+            sec = instance.section
+            staff = instance.staff
+            if cr and sec and (cr.course_code == 'GEA1105' or (cr.course_name and 'graphics' in cr.course_name.lower())):
+                # Check if this is a shared section
+                is_shared = False
+                try:
+                    is_shared = (getattr(sec.batch, 'course_id', None) is None)
+                    if not is_shared:
+                        code = getattr(sec.department, 'code', None) or getattr(sec, 'department_short_name', None)
+                        is_shared = (code == 'S&H' or sec.department_id is None)
+                except Exception:
+                    pass
 
-        if not section_obj:
-            raise PermissionDenied('You do not have permission to assign teaching for this section.')
+                if is_shared:
+                    from django.db.models import Q
+                    from curriculum.models import CurriculumDepartment
+                    other_rows = CurriculumDepartment.objects.filter(
+                        semester=cr.semester,
+                        regulation=cr.regulation
+                    ).filter(
+                        Q(course_code='GEA1105') | Q(course_name='Engineering Graphics')
+                    ).exclude(id=cr.id)
 
-        is_advisor = SectionAdvisor.objects.filter(section=section_obj, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists() if staff_profile else False
-
-        if not is_advisor:
-            raise PermissionDenied('You do not have permission to assign teaching for this section.')
-
-        serializer.save()
+                    for other_row in other_rows:
+                        if action == 'create':
+                            exists = TeachingAssignment.objects.filter(
+                                section=sec,
+                                curriculum_row=other_row,
+                                staff=staff,
+                                is_active=True
+                            ).exists()
+                            if not exists:
+                                TeachingAssignment.objects.create(
+                                    section=sec,
+                                    curriculum_row=other_row,
+                                    staff=staff,
+                                    academic_year=instance.academic_year,
+                                    is_active=True
+                                )
+                        elif action == 'update':
+                            other_assignment = TeachingAssignment.objects.filter(
+                                section=sec,
+                                curriculum_row=other_row,
+                                staff=old_staff,
+                                is_active=True
+                            ).first()
+                            if other_assignment:
+                                other_assignment.staff = staff
+                                other_assignment.save()
+                            else:
+                                TeachingAssignment.objects.create(
+                                    section=sec,
+                                    curriculum_row=other_row,
+                                    staff=staff,
+                                    academic_year=instance.academic_year,
+                                    is_active=True
+                                )
+                        elif action == 'delete':
+                            TeachingAssignment.objects.filter(
+                                section=sec,
+                                curriculum_row=other_row,
+                                staff=old_staff,
+                                is_active=True
+                            ).delete()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error syncing graphics assignments (action={action}): {e}")
 
     @action(detail=True, methods=['get', 'post'], permission_classes=(IsAuthenticated,), url_path='enabled_assessments', url_name='enabled_assessments')
     def enabled_assessments(self, request, pk=None):
@@ -3721,21 +3775,21 @@ class HODSectionsView(APIView):
                 Q(managing_department_id__in=dept_ids)
             ).values_list('pk', flat=True))
 
-            # Secondary: sections where Year-1 students have SECONDARY assignments belonging
-            # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods).
+            # Secondary/Shared: sections where students have active assignments belonging
+            # to this HOD's department (e.g. AI&DS A / B for Year-1 dept-core periods,
+            # or S&H shared sections where core-dept students are placed).
             from django.db.models import Exists, OuterRef
             from .models import StudentSectionAssignment as _SSA
-            has_secondary_from_dept = _SSA.objects.filter(
+            has_student_from_dept = _SSA.objects.filter(
                 section_id=OuterRef('pk'),
                 end_date__isnull=True,
-                section_type='SECONDARY',
                 student__home_department_id__in=dept_ids,
             )
-            secondary_section_ids = set(Section.objects.filter(
-                Exists(has_secondary_from_dept)
+            student_section_ids = set(Section.objects.filter(
+                Exists(has_student_from_dept)
             ).values_list('pk', flat=True))
 
-            all_section_ids = own_section_ids | secondary_section_ids
+            all_section_ids = own_section_ids | student_section_ids
 
             sections = Section.objects.filter(
                 pk__in=all_section_ids
@@ -7722,7 +7776,12 @@ class AdvisorMyStudentsView(APIView):
                 ], many=True)
                 batch = getattr(sec, 'batch', None)
                 course = getattr(batch, 'course', None) if batch is not None else None
-                dept = getattr(course, 'department', None) if course is not None else None
+                dept = (
+                    getattr(course, 'department', None)
+                    if course is not None
+                    else (getattr(batch, 'department', None) if batch else None)
+                        or getattr(sec, 'managing_department', None)
+                )
                 reg = getattr(batch, 'regulation', None) if batch else None
                 sem_obj = getattr(sec, 'semester', None)
                 sem_val = getattr(sem_obj, 'number', None) if sem_obj else None

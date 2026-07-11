@@ -459,7 +459,7 @@ export default function StaffsPage() {
         return out
       })
 
-      const ws = XLSX.utils.json_to_sheet(sheetData)
+      const ws = (XLSX.utils as any).json_to_sheet(sheetData)
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Staff List')
       XLSX.writeFile(wb, `staff_list_${Date.now()}.xlsx`)

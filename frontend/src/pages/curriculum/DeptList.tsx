@@ -30,18 +30,18 @@ export default function DeptList() {
   const [adminQpTypes, setAdminQpTypes] = useState<QPType[]>([]);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
-  const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
-  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
+  const [selectedReg, setSelectedReg] = useState<string | null>(null);
+  const [selectedSem, setSelectedSem] = useState<number | null>(null);
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
 
   useEffect(() => {
-    // update selectedReg when rows change
+    // Keep filters permissive by default so the page shows all available rows.
     const regs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
-    if (regs.length === 1) setSelectedReg(regs[0]);
-    else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
+    if (selectedReg && !regs.includes(selectedReg)) setSelectedReg(null);
+    if (!selectedReg && regs.length === 1) setSelectedReg(regs[0]);
     const sems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a:any,b:any)=>a-b) : [];
-    if (sems.length === 1) setSelectedSem(sems[0]);
-    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
+    if (selectedSem != null && !sems.includes(selectedSem)) setSelectedSem(null);
+    if (selectedSem == null && sems.length === 1) setSelectedSem(sems[0]);
   }, [rows]);
   useEffect(() => {
     fetchDeptRows().then(r => setRows(r)).catch(console.error).finally(() => setLoading(false));
@@ -153,7 +153,7 @@ export default function DeptList() {
     // Show QP types that are:
     // 1. Global (class_type_id is null)
     // 2. OR specifically mapped to this class type
-    return adminQpTypes.filter(qt => !qt.class_type_id || qt.class_type_id === classTypeId);
+    return adminQpTypes.filter(qt => !(qt as any).class_type_id || (qt as any).class_type_id === classTypeId);
   };
 
   // Helper: render QP type <option> elements filtered by class type
@@ -490,6 +490,7 @@ export default function DeptList() {
                 onChange={e => setSelectedReg(e.target.value || null)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value="">All Regulations</option>
                 {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             </div>
@@ -500,6 +501,7 @@ export default function DeptList() {
                 onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value="">All Semesters</option>
                 {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
@@ -533,6 +535,16 @@ export default function DeptList() {
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
           <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setCurrentDept(null)}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                currentDept === null
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              All Departments
+            </button>
             {allDepartments.map(dept => {
               const isActive = currentDept === dept.id;
               const hasRows = uniqueDepts.includes(dept.id);

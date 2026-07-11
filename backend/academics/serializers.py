@@ -604,25 +604,27 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
         staff = validated_data.get('staff')
 
         # If there's an existing active curriculum_row mapping for the same
-        # section + academic_year, update it to point to the new staff.
+        # staff + section + academic_year, update it (or reactivate it).
         if row and section and ay and staff:
             try:
                 with transaction.atomic():
-                    existing = TeachingAssignment.objects.filter(curriculum_row=row, section=section, academic_year=ay, is_active=True).first()
+                    existing = TeachingAssignment.objects.filter(curriculum_row=row, section=section, academic_year=ay, staff=staff).first()
                     if existing:
-                        existing.staff = staff
                         if 'is_active' in validated_data:
                             existing.is_active = validated_data.get('is_active')
+                        else:
+                            existing.is_active = True
                         existing.save()
                         return existing
                     # Also handle elective mappings that are section-scoped
                     es_row = validated_data.get('elective_subject')
                     if es_row:
-                        existing = TeachingAssignment.objects.filter(elective_subject=es_row, section=section, academic_year=ay, is_active=True).first()
+                        existing = TeachingAssignment.objects.filter(elective_subject=es_row, section=section, academic_year=ay, staff=staff).first()
                         if existing:
-                            existing.staff = staff
                             if 'is_active' in validated_data:
                                 existing.is_active = validated_data.get('is_active')
+                            else:
+                                existing.is_active = True
                             existing.save()
                             return existing
             except Exception:
@@ -630,17 +632,17 @@ class TeachingAssignmentSerializer(serializers.ModelSerializer):
                 pass
 
         # If elective provided without section, try to find an existing elective mapping
-        # for the same elective + academic_year and update staff instead of creating
-        # a duplicate.
+        # for the same elective + academic_year and same staff, and update it.
         es_row = validated_data.get('elective_subject')
         if es_row and ay and staff:
             try:
                 with transaction.atomic():
-                    existing = TeachingAssignment.objects.filter(elective_subject=es_row, academic_year=ay, is_active=True).first()
+                    existing = TeachingAssignment.objects.filter(elective_subject=es_row, academic_year=ay, staff=staff).first()
                     if existing:
-                        existing.staff = staff
                         if 'is_active' in validated_data:
                             existing.is_active = validated_data.get('is_active')
+                        else:
+                            existing.is_active = True
                         existing.save()
                         return existing
             except Exception:

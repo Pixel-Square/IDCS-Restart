@@ -6,11 +6,20 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.conf import settings
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
+from django.urls import reverse
+import os
 import re
+import secrets
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 from .models import (
     AcV2SemesterConfig,
@@ -56,7 +65,13 @@ from .serializers import (
     AcV2CqiOperatorSerializer,
     AcV2PublishSettingSerializer,
 )
-from .models import AcV2PassMarkSetting
+from .models import AcV2PassMarkSetting, AcV2GoogleSheetsOAuthCredential
+from .google_sheets_service import (
+    GoogleSheetsServiceError,
+    create_google_spreadsheet,
+    sync_google_sheet_to_backend,
+    sync_marks_to_google_sheet,
+)
 
 
 def _render_notification_template(template: str, context: dict) -> str:
@@ -68,6 +83,471 @@ def _render_notification_template(template: str, context: dict) -> str:
         except Exception:
             continue
     return out
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def google_sheet_links(request):
+    """Return real Academic 2.1 section data for the Google Sheets admin page."""
+    sections_qs = (
+        AcV2Section.objects.select_related(
+            'course',
+            'course__subject',
+            'course__subject__course',
+            'course__subject__course__department',
+            'course__semester',
+            'teaching_assignment',
+            'teaching_assignment__section',
+            'teaching_assignment__section__batch',
+            'faculty_user',
+        )
+        .prefetch_related('exam_assignments', 'exam_assignments__student_marks')
+        .order_by('course__subject_code', 'section_name')
+    )
+
+    payload = []
+    for section in sections_qs:
+        course = section.course
+        subject = getattr(course, 'subject', None)
+        subject_course = getattr(subject, 'course', None)
+        subject_department = getattr(subject_course, 'department', None)
+        semester = getattr(course, 'semester', None)
+        teaching_assignment = getattr(section, 'teaching_assignment', None)
+        section_model = getattr(teaching_assignment, 'section', None)
+        batch = getattr(section_model, 'batch', None)
+
+        department_name = None
+        if subject_department is not None:
+            department_name = getattr(subject_department, 'short_name', None) or getattr(subject_department, 'name', None)
+
+        faculty_name = None
+        if getattr(section, 'faculty_user', None) is not None:
+            faculty_name = section.faculty_user.get_full_name() or section.faculty_user.username
+        elif getattr(teaching_assignment, 'staff', None) is not None and getattr(teaching_assignment.staff, 'user', None) is not None:
+            faculty_name = teaching_assignment.staff.user.get_full_name() or teaching_assignment.staff.user.username
+
+        assignments = []
+        students_map = {}
+        for exam_assignment in sorted(section.exam_assignments.all(), key=lambda item: (getattr(item, 'exam', '') or '').lower()):
+            assignment_name = exam_assignment.exam_display_name or exam_assignment.exam or 'Assignment'
+            assignments.append(assignment_name)
+
+            for mark in exam_assignment.student_marks.all():
+                register_no = mark.reg_no or ''
+                student_entry = students_map.setdefault(register_no, {
+                    'name': mark.student_name or '',
+                    'registerNo': register_no,
+                })
+                if assignment_name:
+                    student_entry[assignment_name] = str(mark.total_mark) if mark.total_mark is not None else ''
+
+        students = sorted(students_map.values(), key=lambda item: (item.get('name') or '', item.get('registerNo') or ''))
+
+        payload.append({
+            'id': str(section.id),
+            'courseCode': getattr(course, 'subject_code', '') or '',
+            'courseName': getattr(course, 'subject_name', '') or '',
+            'semester': str(getattr(semester, 'number', '') or ''),
+            'department': department_name or '',
+            'batch': getattr(batch, 'name', '') or '',
+            'facultyName': faculty_name or '',
+            'section': getattr(section, 'section_name', '') or '',
+            'active': False,
+            'assignments': assignments,
+            'students': students,
+        })
+
+    return Response(payload)
+
+
+GOOGLE_SHEETS_SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+
+
+def _get_google_oauth_client_config() -> dict:
+    client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
+    client_secret = getattr(settings, 'GOOGLE_OAUTH_CLIENT_SECRET', None) or os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '')
+    return {
+        'web': {
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'redirect_uris': [
+                getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', ''),
+            ],
+        }
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def google_sheets_oauth_status(request):
+    credential = AcV2GoogleSheetsOAuthCredential.objects.filter(is_active=True).order_by('-updated_at').first()
+    return Response({
+        'authorized': bool(credential),
+        'userEmail': credential.google_user_email if credential else None,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def google_sheets_oauth_start(request):
+    client_config = _get_google_oauth_client_config()
+    if not client_config['web']['client_id'] or not client_config['web']['client_secret']:
+        return Response({'detail': 'Google OAuth client ID and client secret are not configured.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    state = secrets.token_urlsafe(16)
+    request.session['google_sheets_oauth_state'] = state
+
+    env_redirect = getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', '')
+    redirect_uri = request.GET.get('redirect_uri') or env_redirect or request.build_absolute_uri(reverse('academic_v2:google-sheets-oauth-callback'))
+    flow = InstalledAppFlow.from_client_config(client_config, GOOGLE_SHEETS_SCOPES)
+    flow.redirect_uri = redirect_uri
+    auth_url, _ = flow.authorization_url(access_type='offline', prompt='consent', state=state)
+    return Response({'authUrl': auth_url, 'redirectUri': redirect_uri})
+
+
+@api_view(['GET'])
+def google_sheets_oauth_callback(request):
+    state = request.GET.get('state')
+    expected_state = request.session.get('google_sheets_oauth_state')
+    if state != expected_state:
+        return HttpResponse('Google authorization failed: invalid state.', status=400)
+
+    code = request.GET.get('code')
+    if not code:
+        return HttpResponse('Google authorization failed: missing authorization code.', status=400)
+
+    client_config = _get_google_oauth_client_config()
+    if not client_config['web']['client_id'] or not client_config['web']['client_secret']:
+        return HttpResponse('Google OAuth client ID and client secret are not configured.', status=400)
+
+    env_redirect = getattr(settings, 'GOOGLE_OAUTH_REDIRECT_URI', None) or os.environ.get('GOOGLE_OAUTH_REDIRECT_URI', '')
+    redirect_uri = request.GET.get('redirect_uri') or env_redirect or request.build_absolute_uri(reverse('academic_v2:google-sheets-oauth-callback'))
+    flow = InstalledAppFlow.from_client_config(client_config, GOOGLE_SHEETS_SCOPES)
+    flow.redirect_uri = redirect_uri
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+
+    credential = AcV2GoogleSheetsOAuthCredential.objects.filter(is_active=True).order_by('-updated_at').first()
+    if credential is None:
+        credential = AcV2GoogleSheetsOAuthCredential.objects.create(user=request.user if request.user.is_authenticated else None)
+
+    credential.google_user_email = creds.id_token_claims.get('email', '') if getattr(creds, 'id_token_claims', None) else ''
+    credential.access_token = creds.token or ''
+    credential.refresh_token = creds.refresh_token or credential.refresh_token or ''
+    credential.token_uri = creds.token_uri or 'https://oauth2.googleapis.com/token'
+    credential.client_id = client_config['web']['client_id']
+    credential.client_secret = client_config['web']['client_secret']
+    credential.scopes = list(getattr(creds, 'scopes', []) or GOOGLE_SHEETS_SCOPES)
+    credential.is_active = True
+    credential.save()
+
+    html = '''<html><body><p>Google authorization completed. You can close this window.</p><script>window.opener && window.opener.postMessage({type:'google-oauth-success'}, '*'); window.close();</script></body></html>'''
+    return HttpResponse(html)
+
+
+def _get_qp_specs_for_exam(ea):
+    """Retrieve detailed question paper structure (titles, max marks, COs, BTLs) for an exam assignment."""
+    ta = ea.section.teaching_assignment
+    cr = getattr(ta, 'curriculum_row', None)
+    es = getattr(ta, 'elective_subject', None)
+
+    draft = ea.draft_data if isinstance(ea.draft_data, dict) else {}
+    user_pattern = draft.get('user_pattern')
+
+    questions = []
+    if user_pattern and isinstance(user_pattern, dict):
+        titles = user_pattern.get('titles', [])
+        marks_list = user_pattern.get('marks', [])
+        cos = user_pattern.get('cos', [])
+        btls = user_pattern.get('btls', [])
+        enabled = user_pattern.get('enabled', [])
+        for i in range(len(titles)):
+            if i < len(enabled) and not enabled[i]:
+                continue
+            questions.append({
+                'id': f'q{i}',
+                'title': titles[i] if i < len(titles) else str(i + 1),
+                'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                'co': cos[i] if i < len(cos) else 0,
+                'btl': btls[i] if i < len(btls) else None,
+            })
+    else:
+        qp_type = ''
+        try:
+            qp_type = (ea.section.course.question_paper_type or '').strip()
+        except Exception:
+            qp_type = ''
+        if not qp_type:
+            qp_type = (getattr(cr, 'question_paper_type', None) or getattr(es, 'question_paper_type', None) or '').strip()
+        if not qp_type:
+            qp_type = (ea.qp_type or '').strip() or (ea.exam or '').strip() or ''
+
+        exam_key = (ea.exam_display_name or ea.exam or '').strip()
+
+        ct = None
+        try:
+            ct = ea.section.course.class_type
+        except Exception:
+            ct = None
+
+        base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
+        matched_pattern = None
+
+        if ct is not None:
+            scoped = base_qs.filter(class_type=ct)
+            if exam_key:
+                matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                matched_pattern = scoped.order_by('-updated_at').first()
+
+        if not matched_pattern:
+            global_qs = base_qs.filter(class_type__isnull=True)
+            if exam_key:
+                matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
+            else:
+                matched_pattern = global_qs.order_by('-updated_at').first()
+
+        if matched_pattern and isinstance(matched_pattern.pattern, dict):
+            p = matched_pattern.pattern
+            titles = p.get('titles', [])
+            marks_list = p.get('marks', [])
+            cos = p.get('cos', [])
+            btls = p.get('btls', [])
+            enabled = p.get('enabled', [])
+            for i in range(len(titles)):
+                if i < len(enabled) and not enabled[i]:
+                    continue
+                questions.append({
+                    'id': f'q{i}',
+                    'title': titles[i] if i < len(titles) else str(i + 1),
+                    'max_marks': marks_list[i] if i < len(marks_list) else 0,
+                    'co': cos[i] if i < len(cos) else 0,
+                    'btl': btls[i] if i < len(btls) else None,
+                })
+    return questions
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def google_sheets_sync_to_sheet(request):
+    payload = request.data or {}
+    spreadsheet_id = str(payload.get('spreadsheetId') or payload.get('spreadsheet_id') or '').strip()
+    exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
+    sheet_name = str(payload.get('sheetName') or payload.get('sheet_name') or '').strip() or None
+    config = payload.get('config') or {}
+
+    if not spreadsheet_id or not exam_assignment_id:
+        return Response({'detail': 'spreadsheetId and examAssignmentId are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    exam_assignment = get_object_or_404(AcV2ExamAssignment, pk=exam_assignment_id)
+    try:
+        result = sync_marks_to_google_sheet(
+            exam_assignment=exam_assignment,
+            spreadsheet_id=spreadsheet_id,
+            config=config,
+            sheet_name=sheet_name,
+        )
+    except GoogleSheetsServiceError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(result)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def google_sheets_sync_from_sheet(request):
+    payload = request.data or {}
+    spreadsheet_id = str(payload.get('spreadsheetId') or payload.get('spreadsheet_id') or '').strip()
+    exam_assignment_id = payload.get('examAssignmentId') or payload.get('exam_assignment_id')
+    section_id = payload.get('sectionId') or payload.get('section_id')
+    sheet_name = str(payload.get('sheetName') or payload.get('sheet_name') or '').strip() or None
+    config = payload.get('config') or {}
+
+    if not spreadsheet_id:
+        return Response({'detail': 'spreadsheetId is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        if exam_assignment_id:
+            exam_assignment = get_object_or_404(AcV2ExamAssignment, pk=exam_assignment_id)
+            result = sync_google_sheet_to_backend(
+                exam_assignment=exam_assignment,
+                spreadsheet_id=spreadsheet_id,
+                config=config,
+                sheet_name=sheet_name,
+            )
+            return Response(result)
+
+        if section_id:
+            section = get_object_or_404(AcV2Section, pk=section_id)
+            results = []
+            for exam_assignment in section.exam_assignments.all():
+                results.append(sync_google_sheet_to_backend(
+                    exam_assignment=exam_assignment,
+                    spreadsheet_id=spreadsheet_id,
+                    config=config,
+                    sheet_name=sheet_name or (exam_assignment.exam_display_name or exam_assignment.exam or 'Marks'),
+                ))
+            return Response(results)
+
+        return Response({'detail': 'examAssignmentId or sectionId is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    except GoogleSheetsServiceError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def google_sheets_create(request):
+    """Create Google spreadsheets for selected Academic 2.1 sections."""
+    from academics.models import StudentSectionAssignment
+
+    payload = request.data or {}
+    section_ids = payload.get('section_ids') or []
+    config = payload.get('config') or {}
+
+    if not isinstance(section_ids, (list, tuple)) or not section_ids:
+        return Response({'detail': 'At least one section must be selected.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    results = []
+    for section_id in section_ids:
+        section = get_object_or_404(AcV2Section, pk=section_id)
+        course = section.course
+        course_code = getattr(course, 'subject_code', '') or getattr(course, 'subject_name', '') or 'Course'
+        course_name = getattr(course, 'subject_name', '') or 'Course'
+        title = f"{course_code} - {course_name} Marks Entry"
+        
+        assignments = []
+        assignment_mapping = {}
+        seen_names = {}
+        exam_assignments_list = sorted(section.exam_assignments.all(), key=lambda item: (getattr(item, 'exam', '') or '').lower())
+        for exam_assignment in exam_assignments_list:
+            base_name = (exam_assignment.exam_display_name or exam_assignment.exam or 'Assignment').strip()
+            if base_name not in seen_names:
+                seen_names[base_name] = 1
+                unique_name = base_name
+            else:
+                seen_names[base_name] += 1
+                unique_name = f"{base_name} ({seen_names[base_name]})"
+            assignments.append(unique_name)
+            assignment_mapping[exam_assignment.id] = unique_name
+
+        # Get all active students in the section
+        student_assignments = (
+            StudentSectionAssignment.objects
+            .filter(section=section.teaching_assignment.section, end_date__isnull=True)
+            .select_related('student__user')
+            .order_by('student__reg_no')
+        )
+
+        sheet_data = {}
+        for ea in exam_assignments_list:
+            unique_name = assignment_mapping[ea.id]
+            questions = _get_qp_specs_for_exam(ea)
+
+            # Build Header Row
+            headers_row = ["ROLL NO", "NAME"]
+            for q in questions:
+                header_text = q['title']
+                details = []
+                if q.get('max_marks'):
+                    details.append(f"MAX: {q['max_marks']}")
+                if q.get('co'):
+                    details.append(f"CO{q['co']}")
+                if q.get('btl'):
+                    details.append(f"{q['btl']}")
+                
+                if details:
+                    header_text += f" ({', '.join(details)})"
+                headers_row.append(header_text)
+            headers_row.extend(["TOTAL", "ABSENT"])
+
+            rows = [headers_row]
+
+            # Fetch marks / draft marks
+            existing = {
+                str(sm.student_id): sm
+                for sm in AcV2StudentMark.objects.filter(exam_assignment=ea)
+            }
+            draft_existing = {
+                str(dm.student_id): dm
+                for dm in AcV2DraftMark.objects.filter(exam_assignment=ea)
+            }
+
+            # Build Student Rows
+            for sa in student_assignments:
+                sp = sa.student
+                sm = existing.get(str(sp.id))
+                dm = draft_existing.get(str(sp.id))
+
+                mark_val = None
+                co_marks_val = {}
+                is_absent_val = False
+
+                if dm:
+                    mark_val = float(dm.total_mark) if dm.total_mark is not None else None
+                    co_marks_val = dm.question_marks if isinstance(dm.question_marks, dict) else {}
+                    is_absent_val = bool(dm.is_absent)
+                elif sm:
+                    mark_val = float(sm.total_mark) if sm.total_mark is not None else None
+                    co_marks_val = sm.question_marks if isinstance(sm.question_marks, dict) else {}
+                    is_absent_val = bool(sm.is_absent)
+
+                row = [sp.reg_no or '', str(sp.user) if sp.user else sp.reg_no or '']
+                for q in questions:
+                    q_id = q['id']
+                    val = co_marks_val.get(q_id)
+                    if val is None:
+                        try:
+                            idx = q_id.replace('q', '')
+                            val = co_marks_val.get(idx)
+                        except Exception:
+                            pass
+                    row.append(float(val) if val is not None else '')
+                
+                row.append(mark_val if mark_val is not None else '')
+                row.append('Yes' if is_absent_val else 'No')
+                rows.append(row)
+            
+            sheet_data[unique_name] = rows
+
+        # Extract the target folder ID from the configuration and pass it explicitly
+        # into the Google Drive create payload as a list element.
+        spreadsheet_folder_id = str(config.get('spreadsheetFolderId') or '').strip()
+        if not spreadsheet_folder_id:
+            return Response(
+                {'detail': 'Spreadsheet folder ID is required. Please provide a valid Google Drive folder ID so the service account can create the sheet directly inside that folder.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            created = create_google_spreadsheet(
+                title=title,
+                assignments=assignments,
+                config=config,
+                folder_id=spreadsheet_folder_id,
+                course_code=course_code,
+                webhook_url=str(config.get('webhookUrl') or config.get('webhook_url') or '').strip() or 'https://your-idcs-api.krct.ac.in/api/marks/sync',
+                sheet_data=sheet_data,
+            )
+        except GoogleSheetsServiceError as exc:
+            msg = str(exc)
+            # If this is a Drive storage quota error, return 507 Insufficient Storage
+            if 'storage quota' in msg.lower() or 'storagequotaexceeded' in msg.replace(' ', '').lower():
+                return Response({'detail': msg}, status=507)
+            return Response({'detail': msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        results.append({
+            'id': str(section.id),
+            'courseCode': getattr(course, 'subject_code', '') or '',
+            'courseName': getattr(course, 'subject_name', '') or '',
+            'section': getattr(section, 'section_name', '') or '',
+            'sheetUrl': created.get('sheetUrl'),
+            'spreadsheetId': created.get('spreadsheetId'),
+            'title': created.get('title'),
+        })
+
+    return Response(results)
 
 
 def _resolve_mobile_for_student_profile(sp) -> str:
@@ -1535,6 +2015,18 @@ class AcV2StudentMarkViewSet(viewsets.ModelViewSet):
             exam.last_saved_at = timezone.now()
             exam.last_saved_by = request.user
             exam.save(update_fields=['last_saved_at', 'last_saved_by'])
+
+        spreadsheet_id = str(request.data.get('spreadsheet_id') or request.data.get('spreadsheetId') or '').strip()
+        if spreadsheet_id:
+            try:
+                sync_marks_to_google_sheet(
+                    exam_assignment=exam,
+                    spreadsheet_id=spreadsheet_id,
+                    config=request.data.get('config') or {},
+                    sheet_name=str(request.data.get('sheet_name') or request.data.get('sheetName') or '').strip() or None,
+                )
+            except GoogleSheetsServiceError:
+                pass
         
         return Response({'success': True, 'count': len(marks_list)})
 

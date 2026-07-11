@@ -116,34 +116,37 @@ import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
+import { LazyErrorBoundary } from './components/LazyErrorBoundary';
+import { safeLazy } from './utils/safeLazy';
 
 // Academic 2.1 - Lazy load pages for code splitting
-const AcV2AdminDashboard = React.lazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'));
+const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'), 'AcademicV2AdminDashboard');
 
 // Visual Admin
-const VisualAdminDashboard = React.lazy(() => import('./pages/visual_admin/VisualAdminDashboard'));
-const VisualAdminURLsPage = React.lazy(() => import('./pages/visual_admin/VisualAdminURLsPage'));
-const AcV2PublishControlPage = React.lazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'));
-const AcV2CycleManagementPage = React.lazy(() => import('./pages/Academic 2.1/admin/CycleManagementPage'));
-const AcV2ClassTypeEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'));
-const AcV2QpPatternEditorPage = React.lazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'));
-const AcV2ExamAssignmentAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'));
-const AcV2ApprovalInboxPage = React.lazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'));
-const AcV2InternalMarkAdminPage = React.lazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'));
-const AcV2WeightagePage = React.lazy(() => import('./pages/Academic 2.1/admin/WeightagePage'));
-const AcV2CourseListPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'));
-const AcV2MarkEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'));
-const AcV2InternalMarkPage = React.lazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'));
-const AcV2CqiEntryPage = React.lazy(() => import('./pages/Academic 2.1/faculty/CqiEntryPage'));
-const AcV2CourseManagerDashboard = React.lazy(() => import('./pages/Academic 2.1/admin/CourseManagerDashboard'));
-const AcV2CourseFacultyPage = React.lazy(() => import('./pages/Academic 2.1/admin/CourseFacultyPage'));
-const AcV2AdminBypassCoursePage = React.lazy(() => import('./pages/Academic 2.1/admin/AdminBypassCoursePage'));
-const AcV2BypassLogsPage = React.lazy(() => import('./pages/Academic 2.1/admin/BypassLogsPage'));
-const AcV2BypassShareLandingPage = React.lazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'));
-const AcV2PassMarkSettingsPage = React.lazy(() => import('./pages/Academic 2.1/admin/SettingsPage'));
-const AcV2StudentDashboardPage = React.lazy(() => import('./pages/Academic 2.1/students/DashboardPage'));
-const AcV2StudentCourseListPage = React.lazy(() => import('./pages/Academic 2.1/students/CourseListPage'));
-const AcV2StudentCourseDetailPage = React.lazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'));
+const VisualAdminDashboard = safeLazy(() => import('./pages/visual_admin/VisualAdminDashboard'), 'VisualAdminDashboard');
+const VisualAdminURLsPage = safeLazy(() => import('./pages/visual_admin/VisualAdminURLsPage'), 'VisualAdminURLsPage');
+const AcV2PublishControlPage = safeLazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'), 'PublishControlPage');
+const AcV2CycleManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/CycleManagementPage'), 'CycleManagementPage');
+const AcV2ClassTypeEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'), 'ClassTypeEditorPage');
+const AcV2QpPatternEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'), 'QpPatternEditorPage');
+const AcV2ExamAssignmentAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'), 'ExamAssignmentAdminPage');
+const AcV2ApprovalInboxPage = safeLazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'), 'ApprovalInboxPage');
+const AcV2InternalMarkAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'), 'InternalMarkAdminPage');
+const AcV2WeightagePage = safeLazy(() => import('./pages/Academic 2.1/admin/WeightagePage'), 'WeightagePage');
+const AcV2CourseListPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'), 'CourseListPage');
+const AcV2MarkEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'), 'MarkEntryPage');
+const AcV2InternalMarkPage = safeLazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'), 'InternalMarkPage');
+const AcV2CqiEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CqiEntryPage'), 'CqiEntryPage');
+const AcV2CourseManagerDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/CourseManagerDashboard'), 'CourseManagerDashboard');
+const AcV2CourseFacultyPage = safeLazy(() => import('./pages/Academic 2.1/admin/CourseFacultyPage'), 'CourseFacultyPage');
+const AcV2AdminBypassCoursePage = safeLazy(() => import('./pages/Academic 2.1/admin/AdminBypassCoursePage'), 'AdminBypassCoursePage');
+const AcV2BypassLogsPage = safeLazy(() => import('./pages/Academic 2.1/admin/BypassLogsPage'), 'BypassLogsPage');
+const AcV2BypassShareLandingPage = safeLazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'), 'BypassShareLandingPage');
+const AcV2PassMarkSettingsPage = safeLazy(() => import('./pages/Academic 2.1/admin/SettingsPage'), 'SettingsPage');
+const AcV2GoogleSheetsPage = safeLazy(() => import('./pages/Academic 2.1/admin/GoogleSheetsPage'), 'GoogleSheetsPage');
+const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
+const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
+const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
 
 type RoleObj = { name: string };
 type Me = {
@@ -747,9 +750,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2AdminDashboard />
-                        </React.Suspense>
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2AdminDashboard />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -763,9 +768,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2PublishControlPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -778,9 +785,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CycleManagementPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -793,9 +802,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2ClassTypeEditorPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -808,9 +819,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2QpPatternEditorPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -823,9 +836,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2ExamAssignmentAdminPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -838,9 +853,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2ApprovalInboxPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -853,9 +870,11 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2InternalMarkAdminPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -868,9 +887,28 @@ export default function App() {
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2WeightagePage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/google-sheets"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2GoogleSheetsPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -884,9 +922,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.staff']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CourseListPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -899,9 +939,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.staff']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2InternalMarkPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -914,9 +956,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.staff']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CqiEntryPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -929,9 +973,11 @@ export default function App() {
                       user={user}
                       requiredProfile={'STUDENT'}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2StudentDashboardPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -943,9 +989,11 @@ export default function App() {
                       user={user}
                       requiredProfile={'STUDENT'}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2StudentCourseListPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -957,9 +1005,11 @@ export default function App() {
                       user={user}
                       requiredProfile={'STUDENT'}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2StudentCourseDetailPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -972,9 +1022,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.staff']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CqiEntryPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -987,9 +1039,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.staff']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2MarkEntryPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -1003,9 +1057,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CourseManagerDashboard />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -1018,9 +1074,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2CourseFacultyPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -1033,9 +1091,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2AdminBypassCoursePage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -1048,9 +1108,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2BypassLogsPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }
@@ -1059,9 +1121,11 @@ export default function App() {
                 <Route
                   path="/academic-v2/bypass-share/:token"
                   element={
+                    <LazyErrorBoundary>
                     <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                       <AcV2BypassShareLandingPage />
                     </React.Suspense>
+                    </LazyErrorBoundary>
                   }
                 />
                 <Route
@@ -1072,9 +1136,11 @@ export default function App() {
                       requiredProfile={'STAFF'}
                       requiredPermissions={['academic_v2.page.admin']}
                       element={
+                        <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2PassMarkSettingsPage />
                         </React.Suspense>
+                        </LazyErrorBoundary>
                       }
                     />
                   }

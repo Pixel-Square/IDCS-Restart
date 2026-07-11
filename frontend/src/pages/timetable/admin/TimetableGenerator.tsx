@@ -78,7 +78,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
             const displayName = deptLabel ? `${s.name} (${deptLabel})` : s.name;
             return {
               label: displayName,
-              value: s.staff_id
+              value: String(s.id)  // Use database pk, not staff_id!
             };
           });
           // Remove duplicates

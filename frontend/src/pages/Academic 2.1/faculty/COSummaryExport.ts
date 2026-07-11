@@ -670,7 +670,7 @@ export async function exportCOSummaryToPDF(
     avgRow.push({ content: fAvg !== null ? fmt(fAvg) : '-', styles: { fontStyle: 'bold', textColor: [20, 83, 45] as [number, number, number], fillColor: [220, 252, 231] as [number, number, number], halign: 'center' } });
     avgRow.push({ content: fAvg !== null ? fmt((fAvg / total_internal_marks) * 100) : '-', styles: { fontStyle: 'bold', textColor: [76, 29, 149] as [number, number, number], fillColor: [237, 233, 254] as [number, number, number], halign: 'center' } });
   }
-  body.push(avgRow as string[][]);
+  body.push(avgRow as any);
 
   /* ── Compute column widths ── */
   const totalDataCols = 3 + cols.length + (isW ? co_count + 2 : 0);

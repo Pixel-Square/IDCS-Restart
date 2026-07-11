@@ -15,6 +15,7 @@ import {
   Grid3x3,
   Settings,
   ShieldAlert,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface AdminPage {
@@ -81,6 +82,13 @@ const adminPages: AdminPage[] = [
     description: 'System-wide configuration — pass mark thresholds and more',
     icon: <Settings size={32} />,
     order: 8,
+  },
+  {
+    title: 'Google Sheets',
+    path: '/academic-v2/admin/google-sheets',
+    description: 'Configure Google Sheets credentials and manage course sheet links for mark-entry workflows',
+    icon: <FileSpreadsheet size={32} />,
+    order: 9,
   },
   {
     title: 'Internal Marks',
