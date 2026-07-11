@@ -708,6 +708,11 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     })
     .sort(compareStudentsByViewMode)
 
+  const inactiveCount = displayStudentsList.filter(student => {
+    const status = String(student.status || 'active').toLowerCase().trim()
+    return status === 'inactive'
+  }).length
+
   // Pagination calculations
   const totalItems = displayStudentsList.length
   const totalPages = Math.ceil(totalItems / itemsPerPage)
@@ -1368,6 +1373,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   Showing <span className="font-semibold text-slate-900">{startIndex + 1}</span> to{' '}
                   <span className="font-semibold text-slate-900">{Math.min(endIndex, totalItems)}</span> of{' '}
                   <span className="font-semibold text-slate-900">{totalItems}</span> students
+                  <span className="text-slate-500"> (Inactive: {inactiveCount})</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button

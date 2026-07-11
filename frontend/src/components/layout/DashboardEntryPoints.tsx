@@ -448,22 +448,6 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
           </div>
           <p className="text-sm text-gray-600">Check your timetable</p>
         </div>
-
-        {/* System Transitions Card for IQAC/Admin */}
-        {(user as any)?.role === 'IQAC' && (
-          <div 
-            onClick={() => navigate('/iqac/system-transitions')}
-            className="bg-white rounded-lg p-6 shadow-md hover:shadow-lg transition-all cursor-pointer border-l-4 border-l-indigo-600"
-          >
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                <RefreshCw className="w-5 h-5 text-indigo-600" />
-              </div>
-              <h3 className="font-semibold text-gray-900">System Transitions</h3>
-            </div>
-            <p className="text-sm text-gray-600">Shift semesters and manage academic years</p>
-          </div>
-        )}
       </div>
     </div>
   );

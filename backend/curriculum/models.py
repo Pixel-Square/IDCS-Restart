@@ -330,7 +330,7 @@ class CurriculumDepartment(models.Model):
     class Meta:
         verbose_name = 'Department Curriculum'
         verbose_name_plural = 'Department Curricula'
-        unique_together = ('department', 'regulation', 'semester', 'course_code')
+        unique_together = ('department', 'regulation', 'semester', 'course_code', 'batch')
 
     def __str__(self):
         return f"{self.department.code} - {self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"

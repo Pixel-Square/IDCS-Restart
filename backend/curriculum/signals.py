@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
 from django.db import transaction
 from .models import CurriculumMaster, CurriculumDepartment
@@ -26,12 +26,27 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
     else:
         target_dept_ids = set(instance.departments.values_list('id', flat=True))
     
-    # Also include departments that ALREADY have this master linked 
-    # (to ensure we update existing rows even if they've been unlinked from the master's target list)
-    existing_dept_ids = set(CurriculumDepartment.objects.filter(master=instance).values_list('department_id', flat=True))
-    
-    all_dept_ids = target_dept_ids.union(existing_dept_ids)
-    dept_qs = Department.objects.filter(id__in=all_dept_ids)
+    # Track current linked departments to reflect removals.
+    existing_dept_ids = set(
+        CurriculumDepartment.objects.filter(master=instance).values_list('department_id', flat=True)
+    )
+    removed_dept_ids = existing_dept_ids - target_dept_ids
+
+    if removed_dept_ids:
+        removed_qs = CurriculumDepartment.objects.filter(
+            master=instance,
+            department_id__in=removed_dept_ids,
+        )
+        for row in removed_qs:
+            if getattr(row, 'overridden', False):
+                # Keep overridden rows but unlink from master.
+                row._syncing = True
+                row.master = None
+                row.save(update_fields=['master'])
+            else:
+                row.delete()
+
+    dept_qs = Department.objects.filter(id__in=target_dept_ids)
 
     update_fields = [
         'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
@@ -46,6 +61,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
     for dept in dept_qs:
         defaults = {
             'master': instance,
+            'department': dept,
             'regulation': instance.regulation,
             'semester': instance.semester,
             'course_code': instance.course_code,
@@ -82,6 +98,7 @@ def propagate_master_to_departments(sender, instance: CurriculumMaster, created,
                     regulation=instance.regulation,
                     semester=instance.semester,
                     course_code=instance.course_code,
+                    batch=getattr(instance, 'batch', None),
                 ).first()
             
             if not obj:
@@ -187,3 +204,9 @@ def sync_dept_changes_to_master_and_siblings(sender, instance: CurriculumDepartm
             )
         except Exception as e:
             logger.error('Failed to update siblings for master %s: %s', master.pk, e)
+
+
+@receiver(m2m_changed, sender=CurriculumMaster.departments.through)
+def propagate_master_departments_changed(sender, instance: CurriculumMaster, action, **kwargs):
+    if action in {'post_add', 'post_remove', 'post_clear'}:
+        propagate_master_to_departments(CurriculumMaster, instance, created=False)

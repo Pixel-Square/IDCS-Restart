@@ -6,6 +6,7 @@ import { fetchDepartmentStaff, StaffMember } from '../../services/staff';
 import { fetchBatchYears, fetchElectives, fetchDepartmentGroups, BatchYear, DepartmentGroup, fetchElectivePolls, createElectivePoll, updateElectivePollStatus, fetchActiveStudentPolls, submitElectiveChoice, ElectivePoll, fetchDeptRows, DeptRow, downloadElectivePollExport, fetchHodElectivePollStatus, HodElectiveDepartmentStatus, updateElectivePollSubjectStatus, updateElectivePollSubjectDetails, fetchElectivePollSeatCounts } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { downloadExcel } from '../../utils/downloadFile';
+import { showAlert } from '../../utils/dialog';
 
 function StudentElectiveChoosing() {
   const [activePolls, setActivePolls] = useState<ElectivePoll[]>([]);
@@ -288,7 +289,7 @@ function HodElectiveStatusView() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-xl font-bold text-slate-900">Elective Poll Status</h1>
-              <p className="text-xs text-slate-500 mt-1">Active polls and student choices for your department.</p>
+              <p className="text-xs text-slate-500 mt-1">Polls and student choices for your department.</p>
             </div>
             <div className="flex flex-wrap gap-2 text-[11px]">
               <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full">{summary.totalPolls} polls</span>
@@ -311,7 +312,7 @@ function HodElectiveStatusView() {
 
         {!hasPolls && (
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-center text-slate-500">
-            No active elective polls found for your department.
+            No elective polls found for your department.
           </div>
         )}
 
@@ -534,9 +535,9 @@ export default function ElectivePollPage({ user }: { user?: any }) {
     setElectivesForm(newForm);
   };
 
-  const handleBlockOutsideGroup = () => {
+  const handleBlockOutsideGroup = async () => {
     if (!selectedGroup) {
-      alert("Please select a Department Group first.");
+      await showAlert("Please select a Department Group first.", 'warning');
       return;
     }
     const group = departmentGroups.find(g => g.id === Number(selectedGroup));
@@ -569,7 +570,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       );
     } catch (err) {
       console.error('Failed to download template', err);
-      alert('Failed to download template.');
+      await showAlert('Failed to download template.', 'error');
     }
   };
 
@@ -615,7 +616,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false, raw: true });
 
       if (!rows.length) {
-        alert('Template is empty.');
+        await showAlert('Template is empty.', 'warning');
         return;
       }
 
@@ -631,6 +632,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         block_rule: headerIndex('block_rule') !== -1 ? headerIndex('block_rule') : headerIndex('block_rule_name'),
       };
 
+      let missingGroupAlert = false;
       const nextForm = rows.slice(1).reduce((acc: any[], row) => {
         if (!row.some((cell) => String(cell || '').trim())) return acc;
 
@@ -651,7 +653,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
           blocked = departments.filter((d) => d.id !== Number(deptId)).map((d) => d.id);
         } else if (blockRule === 'block outside group') {
           if (!selectedGroup) {
-            alert('Select a Department Group before using "Block outside group".');
+            missingGroupAlert = true;
           } else {
             const group = departmentGroups.find((g) => g.id === Number(selectedGroup));
             if (group) {
@@ -674,16 +676,20 @@ export default function ElectivePollPage({ user }: { user?: any }) {
         return acc;
       }, []);
 
+      if (missingGroupAlert) {
+        await showAlert('Select a Department Group before using "Block outside group".', 'warning');
+      }
+
       if (!nextForm.length) {
-        alert('No valid rows found in the template.');
+        await showAlert('No valid rows found in the template.', 'warning');
         return;
       }
 
       setElectivesForm(nextForm);
-      alert(`Imported ${nextForm.length} electives into the form.`);
+      await showAlert(`Imported ${nextForm.length} electives into the form.`);
     } catch (err) {
       console.error('Failed to import template', err);
-      alert('Failed to import template. Please check the file format.');
+      await showAlert('Failed to import template. Please check the file format.', 'error');
     } finally {
       if (importFileInputRef.current) {
         importFileInputRef.current.value = '';
@@ -790,16 +796,16 @@ export default function ElectivePollPage({ user }: { user?: any }) {
 
   const handleCreateElectives = async () => {
     if (!selectedParent) {
-      alert("Please select a Parent Elective first.");
+      await showAlert("Please select a Parent Elective first.", 'warning');
       return;
     }
     if (!selectedYear) {
-      alert("Please select a batch year.");
+      await showAlert("Please select a batch year.", 'warning');
       return;
     }
     const missingDept = electivesForm.findIndex(s => !s.dept);
     if (missingDept !== -1) {
-      alert(`Please select a providing department for subject #${missingDept + 1}.`);
+      await showAlert(`Please select a providing department for subject #${missingDept + 1}.`, 'warning');
       return;
     }
 
@@ -812,7 +818,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       return getDeptStudentCount(deptId) == null;
     });
     if (autoSeatIssue !== -1) {
-      alert(`Check seats settings for subject #${autoSeatIssue + 1}.`);
+      await showAlert(`Check seats settings for subject #${autoSeatIssue + 1}.`, 'warning');
       return;
     }
     
@@ -846,7 +852,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       
     } catch (err: any) {
       console.error(err);
-      alert(err?.message || "Failed to create elective poll.");
+      await showAlert(err?.message || "Failed to create elective poll.", 'error');
     }
   };
 
@@ -856,7 +862,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       setPolls(polls.map(p => p.id === pollId ? updated : p));
     } catch (err) {
       console.error('Failed to toggle poll status', err);
-      alert('Failed to update polling status');
+      await showAlert('Failed to update polling status', 'error');
     }
   };
 
@@ -866,7 +872,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       await downloadElectivePollExport(pollId);
     } catch (err: any) {
       console.error(err);
-      alert(err?.message || 'Failed to download export.');
+      await showAlert(err?.message || 'Failed to download export.', 'error');
     } finally {
       setDownloading(prev => ({ ...prev, [pollId]: false }));
     }
@@ -883,21 +889,24 @@ export default function ElectivePollPage({ user }: { user?: any }) {
               ...p,
               poll_subjects: (p.poll_subjects || []).map(s =>
                 s.id === subjectId ? { ...s, is_active: updated.is_active } : s
-              )
+              ),
+              is_active: (p.poll_subjects || []).some(s => (
+                s.id === subjectId ? updated.is_active !== false : s.is_active !== false
+              ))
             }
           : p
       )));
     } catch (err: any) {
       console.error('Failed to update subject status', err);
-      alert(err?.message || 'Failed to update subject status.');
+      await showAlert(err?.message || 'Failed to update subject status.', 'error');
     } finally {
       setSubjectUpdating(prev => ({ ...prev, [key]: false }));
     }
   };
 
-  const startEditSubject = (pollId: number, sub: any) => {
+  const startEditSubject = async (pollId: number, sub: any) => {
     if (sub?.is_active !== false) {
-      alert('Deactivate the subject before editing.');
+      await showAlert('Deactivate the subject before editing.', 'warning');
       return;
     }
     const key = `${pollId}-${sub.id}`;
@@ -954,7 +963,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       cancelEditSubject(pollId, subjectId);
     } catch (err: any) {
       console.error('Failed to update subject', err);
-      alert(err?.message || 'Failed to update subject.');
+      await showAlert(err?.message || 'Failed to update subject.', 'error');
     } finally {
       setSubjectUpdating(prev => ({ ...prev, [key]: false }));
     }
@@ -987,7 +996,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       setPolls((prev) => prev.map((poll) => updatedMap.get(poll.id) || poll));
     } catch (err) {
       console.error('Failed to update polls', err);
-      alert('Failed to update polls.');
+      await showAlert('Failed to update polls.', 'error');
     } finally {
       setBulkUpdating(false);
     }
