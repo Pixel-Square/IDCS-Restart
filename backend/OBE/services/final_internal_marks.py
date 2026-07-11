@@ -4044,16 +4044,31 @@ def recompute_final_internal_marks(*, actor_user_id=None, filters=None):
                     if total is not None:
                         total = max(0.0, min(40.0, total))
 
-            # max_mark: PROJECT uses 100, PRBL/ENGLISH/FOREIGN_LANG use 60,
-            # TCPL uses the sum of its 21-slot weights (typically 50), others use 40.
+            # max_mark: derive from class-type configuration so student My Marks
+            # scaling matches Internal Mark page/export logic.
+            #
+            # - PROJECT uses 100
+            # - PRBL/ENGLISH/FOREIGN_LANG use 60
+            # - TCPL uses the dedicated 21-slot TCPL weight list (typically 50)
+            # - TCPR/theory-like use the 17-slot internal weight list
             if ta_class_type == 'PROJECT':
                 prbl_max_mark = 100
             elif ta_class_type in {'PRBL', 'ENGLISH', 'FOREIGN_LANG'}:
                 prbl_max_mark = 60
             elif ta_class_type == 'TCPL':
-                prbl_max_mark = int(sum(_get_tcpl_weight_slots()))
+                try:
+                    prbl_max_mark = float(sum(_get_tcpl_weight_slots()))
+                except Exception:
+                    prbl_max_mark = int(sum(_get_tcpl_weight_slots()))
             else:
-                prbl_max_mark = 40
+                try:
+                    slots = _get_internal_weight_slots(ta_class_type)
+                    prbl_max_mark = float(sum(slots)) if slots else None
+                except Exception:
+                    prbl_max_mark = None
+
+                if not prbl_max_mark:
+                    prbl_max_mark = 40
 
             FinalInternalMark.objects.update_or_create(
                 subject=subject,

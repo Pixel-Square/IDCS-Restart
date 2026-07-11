@@ -456,5 +456,11 @@ class SiteConfiguration(models.Model):
     @classmethod
     def get(cls) -> 'SiteConfiguration':
         """Return the singleton row, creating it if it does not exist."""
-        obj, _ = cls.objects.get_or_create(id=1, defaults={'under_construction': {}})
+        # Prefer any existing SiteConfiguration row (some deployments may have
+        # an instance with a PK other than 1). Using `first()` ensures we
+        # return the single authoritative instance the admin edits. If none
+        # exists, create a new one with sane defaults.
+        obj = cls.objects.first()
+        if obj is None:
+            obj = cls.objects.create(under_construction={})
         return obj

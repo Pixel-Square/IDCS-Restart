@@ -10446,6 +10446,7 @@ class StudentMarksView(APIView):
                                 ta_ct = None
 
                             ta_meta_by_code[tcode] = {
+                                'teaching_assignment_id': getattr(ta, 'id', None),
                                 'class_type': ta_ct,
                                 'enabled_assessments': cleaned_enabled,
                                 'section_match': is_section_match,
@@ -10464,8 +10465,34 @@ class StudentMarksView(APIView):
             ta_meta_by_code = {}
             ta_subject_by_code = {}
 
+        # Keep student My Marks in lock-step with the faculty Internal Mark export path:
+        # export endpoint recomputes canonical FinalInternalMark per TA before reading rows.
+        # Do the same here for the student's section-scoped TA set to avoid stale totals.
+        try:
+            from OBE.services.final_internal_marks import recompute_final_internal_marks
+
+            _ta_ids_to_sync = []
+            for _meta in (ta_meta_by_code or {}).values():
+                _tid = _meta.get('teaching_assignment_id') if isinstance(_meta, dict) else None
+                if _tid:
+                    _ta_ids_to_sync.append(int(_tid))
+            _ta_ids_to_sync = sorted(set(_ta_ids_to_sync))
+
+            for _tid in _ta_ids_to_sync:
+                try:
+                    recompute_final_internal_marks(
+                        actor_user_id=getattr(request.user, 'id', None),
+                        filters={'teaching_assignment_id': _tid},
+                    )
+                except Exception:
+                    # Best-effort only; never block student marks page.
+                    pass
+        except Exception:
+            pass
+
         try:
             from OBE.models import LabPublishedSheet, ModelPublishedSheet, ObeCqiPublished
+            from OBE.models import FinalInternalMark
         except Exception:
             LabPublishedSheet = None
             ModelPublishedSheet = None
@@ -10757,6 +10784,72 @@ class StudentMarksView(APIView):
                 except Exception:
                     cos = None
 
+            preferred_ta_id = ta_meta.get('teaching_assignment_id')
+
+            final_internal = None
+            try:
+                if subj is not None:
+                    fim_qs = FinalInternalMark.objects.filter(subject=subj, student=sp)
+                    ta_ids_for_subj = [x for x in (ta_ids_by_code.get(code) or []) if x]
+
+                    # Strictly prefer the section-resolved TA row (same scope used by
+                    # faculty internal mark pages / exports). This prevents picking
+                    # marks from another section that happens to share subject code.
+                    if preferred_ta_id:
+                        final_internal = (
+                            fim_qs.filter(teaching_assignment_id=preferred_ta_id)
+                            .order_by('-computed_at', '-id')
+                            .first()
+                        )
+
+                    # If no preferred TA row exists, fall back to any candidate TA
+                    # discovered for this code (legacy/global assignment setups).
+                    if final_internal is None and ta_ids_for_subj:
+                        final_internal = (
+                            fim_qs.filter(teaching_assignment_id__in=ta_ids_for_subj)
+                            .order_by('-computed_at', '-id')
+                            .first()
+                        )
+
+                    if final_internal is None:
+                        final_internal = (
+                            fim_qs.filter(teaching_assignment__isnull=True)
+                            .order_by('-computed_at', '-id')
+                            .first()
+                        )
+
+                    # Do NOT use cross-TA fallback here; that can leak marks from
+                    # unrelated sections and produce mismatched totals in My Marks.
+            except Exception:
+                final_internal = None
+
+            final_internal_mark = _num(getattr(final_internal, 'final_mark', None))
+            final_internal_max_mark = _num(getattr(final_internal, 'max_mark', None))
+
+            # Defensive normalization: student-facing totals should never exceed
+            # the canonical max for that TA/subject scope.
+            if final_internal_mark is not None and final_internal_max_mark not in (None, 0):
+                try:
+                    if final_internal_mark < 0:
+                        final_internal_mark = 0.0
+                    if final_internal_mark > final_internal_max_mark:
+                        final_internal_mark = float(final_internal_max_mark)
+                except Exception:
+                    pass
+
+            final_internal_mark_100 = None
+            if final_internal_mark is not None and final_internal_max_mark not in (None, 0):
+                try:
+                    final_internal_mark_100 = round((final_internal_mark / final_internal_max_mark) * 100)
+                    if final_internal_mark_100 < 0:
+                        final_internal_mark_100 = 0
+                    if final_internal_mark_100 > 100:
+                        final_internal_mark_100 = 100
+                except Exception:
+                    final_internal_mark_100 = None
+
+            # Canonical total should be primary for student display when available.
+            internal_total_primary = final_internal_mark if final_internal_mark is not None else internal_total
             out_courses.append(
                 {
                     'id': getattr(subj, 'id', None),
@@ -10781,7 +10874,7 @@ class StudentMarksView(APIView):
                             'cycle2': internal_cycle2,
                             'cycle1_total': internal_cycle1_total,
                             'cycle2_total': internal_cycle2_total,
-                            'total': internal_total,
+                            'total': internal_total_primary,
                             'max_total': internal_max_total,
                             'max_cycle1': internal_max_cycle1,
                             'max_cycle2': internal_max_cycle2,
@@ -10790,6 +10883,15 @@ class StudentMarksView(APIView):
                         'has_cqi': has_cqi,
                         **({'cos': cos} if cos is not None else {}),
                         'bi': {k: (float(v) if isinstance(v, decimal.Decimal) else v) for k, v in bi_data_by_subj.get(getattr(subj, 'id', None), {}).items() if v is not None} if getattr(subj, 'id', None) else {},
+                        # Canonical final internal marks (primary source)
+                        'final_mark': final_internal_mark,
+                        'final_mark_max': final_internal_max_mark,
+                        'final_mark_100': final_internal_mark_100,
+
+                        # Backward-compatible aliases
+                        'final_internal_mark': final_internal_mark,
+                        'final_internal_max_mark': final_internal_max_mark,
+                        'final_internal_mark_100': final_internal_mark_100,
                     },
                 }
             )

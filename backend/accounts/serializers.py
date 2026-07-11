@@ -531,9 +531,20 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         invalid_msg = 'Unable to log in with provided credentials.'
 
         if user is None:
+            # Log the failed identifier resolution for diagnostics (no sensitive data)
+            try:
+                import logging
+                logging.getLogger(__name__).warning('Login failed: identifier not found (%s)', identifier)
+            except Exception:
+                pass
             raise serializers.ValidationError(invalid_msg)
 
         if not user.check_password(password):
+            try:
+                import logging
+                logging.getLogger(__name__).warning('Login failed: wrong password for user id=%s identifier=%s', getattr(user, 'id', None), identifier)
+            except Exception:
+                pass
             raise serializers.ValidationError(invalid_msg)
 
         if not getattr(user, 'is_active', True):
