@@ -2585,25 +2585,38 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
 
         # Get HOD-accessible department sections
         hod_department_section_ids = []
+        hod_depts = []
         try:
             # Check if user is HOD of any department
-            hod_depts = DepartmentRole.objects.filter(
+            hod_depts = list(DepartmentRole.objects.filter(
                 staff=staff_profile,
                 role__iexact='HOD',
                 academic_year__is_active=True
-            ).values_list('department_id', flat=True)
+            ).values_list('department_id', flat=True))
             
             if hod_depts:
                 # Get all sections from HOD's department(s)
                 from academics.models import Section
-                hod_department_section_ids = list(
-                    Section.objects.filter(
-                        Q(batch__course__department_id__in=hod_depts) |
-                        Q(batch__department_id__in=hod_depts) |
-                        Q(managing_department_id__in=hod_depts),
-                        semester__isnull=False
-                    ).values_list('id', flat=True)
+                own_sections = Section.objects.filter(
+                    Q(batch__course__department_id__in=hod_depts) |
+                    Q(batch__department_id__in=hod_depts) |
+                    Q(managing_department_id__in=hod_depts),
+                    semester__isnull=False
+                ).values_list('id', flat=True)
+                
+                # S&H shared sections containing students from HOD's department(s)
+                from django.db.models import Exists, OuterRef
+                from academics.models import StudentSectionAssignment as _SSA
+                has_student_from_dept = _SSA.objects.filter(
+                    section_id=OuterRef('pk'),
+                    end_date__isnull=True,
+                    student__home_department_id__in=hod_depts,
                 )
+                student_sections = Section.objects.filter(
+                    Exists(has_student_from_dept)
+                ).values_list('id', flat=True)
+                
+                hod_department_section_ids = list(set(own_sections) | set(student_sections))
         except Exception:
             pass
 
@@ -2647,12 +2660,14 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
 
             return self.queryset.filter(q)
 
-        # Default: restrict to advisor sections, HOD department sections, and own assignments
+        # Default: restrict to advisor sections, HOD department sections, HOD department staff, and own assignments
         final_q = Q()
         if advisor_section_ids:
             final_q |= Q(section_id__in=advisor_section_ids)
         if hod_department_section_ids:
             final_q |= Q(section_id__in=hod_department_section_ids)
+        if hod_depts:
+            final_q |= Q(staff__department_id__in=hod_depts)
         final_q |= Q(staff__user=getattr(user, 'id', None))
 
         if final_q:

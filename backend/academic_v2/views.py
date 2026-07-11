@@ -3240,9 +3240,14 @@ def faculty_course_info(request, ta_id):
                 teaching_assignment=ta,
                 defaults={
                     'section_name': sec.name if sec else 'A',
-                    'faculty_user': request.user,
+                    'faculty_user': getattr(getattr(ta, 'staff', None), 'user', None) or request.user,
                 },
             )
+            # Sync faculty_user on retrieve if it differs from the assigned staff user
+            assigned_user = getattr(getattr(ta, 'staff', None), 'user', None)
+            if assigned_user and acv2_sec.faculty_user != assigned_user:
+                acv2_sec.faculty_user = assigned_user
+                acv2_sec.save(update_fields=['faculty_user'])
             # Track which exam codes already exist
             existing_exam_codes = set(e['short_name'] for e in exams)
 
@@ -7849,6 +7854,7 @@ def admin_course_faculty(request, ta_id):
         section = AcV2Section.objects.select_related(
             'course', 'course__class_type', 'course__semester',
             'faculty_user', 'teaching_assignment',
+            'teaching_assignment__staff', 'teaching_assignment__staff__user',
         ).prefetch_related('exam_assignments').get(teaching_assignment_id=ta_id)
     except AcV2Section.DoesNotExist:
         return Response({'detail': 'Section not found.'}, status=404)
@@ -7861,10 +7867,17 @@ def admin_course_faculty(request, ta_id):
         course__semester=course.semester,
     ).select_related(
         'course', 'faculty_user', 'teaching_assignment',
+        'teaching_assignment__staff', 'teaching_assignment__staff__user',
     ).prefetch_related('exam_assignments').exclude(id=section.id)
 
     def _faculty_card(sec):
         faculty = sec.faculty_user
+        # Sync faculty_user on retrieve if it differs from the assigned staff user
+        assigned_user = getattr(getattr(sec.teaching_assignment, 'staff', None), 'user', None)
+        if assigned_user and faculty != assigned_user:
+            sec.faculty_user = assigned_user
+            sec.save(update_fields=['faculty_user'])
+            faculty = assigned_user
         total_exams = sec.exam_assignments.count()
         published = sum(1 for e in sec.exam_assignments.all() if e.status == 'PUBLISHED')
         faculty_photo = None
