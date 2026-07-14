@@ -2687,25 +2687,25 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
             is_elective_payload = False
 
         instance = serializer.save()
-        self._sync_graphics_assignments(instance, 'create')
+        self._sync_shared_section_assignments(instance, 'create')
 
     def perform_update(self, serializer):
         old_instance = self.get_object()
         old_staff = old_instance.staff
         instance = serializer.save()
-        self._sync_graphics_assignments(instance, 'update', old_staff=old_staff)
+        self._sync_shared_section_assignments(instance, 'update', old_staff=old_staff)
 
     def perform_destroy(self, instance):
         old_staff = instance.staff
-        self._sync_graphics_assignments(instance, 'delete', old_staff=old_staff)
+        self._sync_shared_section_assignments(instance, 'delete', old_staff=old_staff)
         instance.delete()
 
-    def _sync_graphics_assignments(self, instance, action='create', old_staff=None):
+    def _sync_shared_section_assignments(self, instance, action='create', old_staff=None):
         try:
             cr = instance.curriculum_row
             sec = instance.section
             staff = instance.staff
-            if cr and sec and (cr.course_code == 'GEA1105' or (cr.course_name and 'graphics' in cr.course_name.lower())):
+            if cr and sec:
                 # Check if this is a shared section
                 is_shared = False
                 try:
@@ -2719,12 +2719,44 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                 if is_shared:
                     from django.db.models import Q
                     from curriculum.models import CurriculumDepartment
-                    other_rows = CurriculumDepartment.objects.filter(
+                    
+                    target_code = getattr(cr, 'course_code', None)
+                    target_name = (getattr(cr, 'course_name', None) or '').strip().lower()
+                    
+                    EQUIVALENT_GROUPS = [
+                        {"ADI1151", "AMB1121"},
+                        {"ADI1153", "AMB1131"},
+                        {"CGA1101-CSE", "CGA1101-IT"},
+                        {"CGA1111-CSE", "CGA1111-IT"},
+                    ]
+                    
+                    target_codes = {str(target_code).strip().upper()} if target_code else set()
+                    if target_code:
+                        tc_upper = str(target_code).strip().upper()
+                        for group in EQUIVALENT_GROUPS:
+                            if tc_upper in group:
+                                target_codes = group
+                                break
+                    
+                    # Query other curriculum rows in the same semester and regulation
+                    other_rows_qs = CurriculumDepartment.objects.filter(
                         semester=cr.semester,
                         regulation=cr.regulation
-                    ).filter(
-                        Q(course_code='GEA1105') | Q(course_name='Engineering Graphics')
                     ).exclude(id=cr.id)
+                    
+                    other_rows = []
+                    for r in other_rows_qs:
+                        r_code = getattr(r, 'course_code', None)
+                        r_name = (getattr(r, 'course_name', None) or '').strip().lower()
+                        
+                        matched = False
+                        if target_codes and r_code and str(r_code).strip().upper() in target_codes:
+                            matched = True
+                        elif target_name and r_name and target_name == r_name:
+                            matched = True
+                            
+                        if matched:
+                            other_rows.append(r)
 
                     for other_row in other_rows:
                         if action == 'create':
@@ -2769,7 +2801,7 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
                             ).delete()
         except Exception as e:
             import logging
-            logging.getLogger(__name__).error(f"Error syncing graphics assignments (action={action}): {e}")
+            logging.getLogger(__name__).error(f"Error syncing shared section teaching assignments (action={action}): {e}")
 
     @action(detail=True, methods=['get', 'post'], permission_classes=(IsAuthenticated,), url_path='enabled_assessments', url_name='enabled_assessments')
     def enabled_assessments(self, request, pk=None):

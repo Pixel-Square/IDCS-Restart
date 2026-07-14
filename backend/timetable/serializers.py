@@ -118,6 +118,24 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
     target_code = getattr(curriculum_row, 'course_code', None)
     target_name = (getattr(curriculum_row, 'course_name', None) or '').strip().lower()
     
+    # Equivalent course codes mapping for shared sections (e.g. S&H 1st Year)
+    # If the target course is in one of these groups, we match teaching assignments
+    # from any course in the same group.
+    EQUIVALENT_GROUPS = [
+        {"ADI1151", "AMB1121"},
+        {"ADI1153", "AMB1131"},
+        {"CGA1101-CSE", "CGA1101-IT"},
+        {"CGA1111-CSE", "CGA1111-IT"},
+    ]
+    
+    target_codes = {str(target_code).strip().upper()} if target_code else set()
+    if target_code:
+        tc_upper = str(target_code).strip().upper()
+        for group in EQUIVALENT_GROUPS:
+            if tc_upper in group:
+                target_codes = group
+                break
+    
     for ta in tas:
         if not ta.staff:
             continue
@@ -138,7 +156,7 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
             if ta_row:
                 ta_code = getattr(ta_row, 'course_code', None)
                 ta_name = (getattr(ta_row, 'course_name', None) or '').strip().lower()
-                if target_code and ta_code and str(target_code).strip().upper() == str(ta_code).strip().upper():
+                if target_codes and ta_code and str(ta_code).strip().upper() in target_codes:
                     matches = True
                 elif target_name and ta_name and target_name == ta_name:
                     matches = True
@@ -146,7 +164,7 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
                 # also check if the elective subject itself matches by code/name
                 es_code = getattr(es, 'course_code', None)
                 es_name = (getattr(es, 'course_name', None) or '').strip().lower()
-                if target_code and es_code and str(target_code).strip().upper() == str(es_code).strip().upper():
+                if target_codes and es_code and str(es_code).strip().upper() in target_codes:
                     matches = True
                 elif target_name and es_name and target_name == es_name:
                     matches = True
@@ -157,6 +175,15 @@ def get_teaching_assignments_for_section_and_curriculum(section, curriculum_row)
                 matched_staff_profiles.append(ta.staff)
                 
     return matched_staff_profiles
+
+
+def _get_staff_name(u, sp):
+    if not u:
+        return getattr(sp, 'staff_id', '')
+    name = u.get_full_name().strip()
+    if not name:
+        name = u.username
+    return name or getattr(sp, 'staff_id', '')
 
 
 class TimetableAssignmentSerializer(serializers.ModelSerializer):
@@ -189,7 +216,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                 return {
                     'id': sp.id,
                     'staff_id': getattr(sp, 'staff_id', None),
-                    'name': u.get_full_name() if u else getattr(sp, 'staff_id', ''),
+                    'name': _get_staff_name(u, sp),
                     'first_name': u.first_name if u else '',
                     'last_name': u.last_name if u else '',
                     'username': u.username if u else '',
@@ -203,7 +230,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                 return {
                     'id': sp.id,
                     'staff_id': getattr(sp, 'staff_id', None),
-                    'name': u.get_full_name() if u else getattr(sp, 'staff_id', ''),
+                    'name': _get_staff_name(u, sp),
                     'first_name': u.first_name if u else '',
                     'last_name': u.last_name if u else '',
                     'username': u.username if u else '',
@@ -220,7 +247,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                         return {
                             'id': sp.id,
                             'staff_id': getattr(sp, 'staff_id', None),
-                            'name': u.get_full_name() if u else getattr(sp, 'staff_id', ''),
+                            'name': _get_staff_name(u, sp),
                             'first_name': u.first_name if u else '',
                             'last_name': u.last_name if u else '',
                             'username': u.username if u else '',
@@ -233,7 +260,7 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                         staff_ids = []
                         for sp in sps:
                             u = getattr(sp, 'user', None)
-                            full_name = u.get_full_name() if u else getattr(sp, 'staff_id', '')
+                            full_name = _get_staff_name(u, sp)
                             if full_name:
                                 names.append(full_name)
                             usernames.append(u.username if u else '')

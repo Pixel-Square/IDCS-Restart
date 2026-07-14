@@ -24,6 +24,10 @@ const isSharedSection = (s: any) => {
   return s.department_id === null || code === 'S&H';
 };
 
+const isMultiFacultyAllowed = (section: any, subject?: any) => {
+  return true;
+};
+
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY_PREFIX = 'teaching_assignments_cache'
 const CACHE_EXPIRY_MS = 5 * 60 * 1000
@@ -756,6 +760,10 @@ export default function TeachingAssignmentsPage(){
       return sectionRows.filter(c => {
         if ((c as any).is_elective) return false;
         if ((c as any).is_dept_core) {
+          // If in advisor mode (not HOD elective mode), show all core subjects for their section
+          if (!isHodElectiveMode) {
+            return true;
+          }
           const subjectDeptId = c.department_id || c.department?.id || (() => {
             const matchedRow = curriculum.find(r => r.id === c.id);
             return matchedRow?.department?.id || (matchedRow?.department as any);
@@ -782,7 +790,7 @@ export default function TeachingAssignmentsPage(){
       (section.semester ? (c.semester === section.semester) : true) &&
       (section.batch_regulation ? (c.regulation === section.batch_regulation.code) : true) &&
       !((c as any).is_elective) &&
-      (!((c as any).is_dept_core) || (() => {
+      (!((c as any).is_dept_core) || !isHodElectiveMode || (() => {
         const subjectDeptId = c.department_id || c.department?.id;
         const subjectDeptCode = c.department_code || c.department?.code;
         if (selectedDept) {
@@ -1026,7 +1034,7 @@ export default function TeachingAssignmentsPage(){
           const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLInputElement;
           if (!staffSel) continue;
 
-          const isMulti = isSharedSection(section);
+          const isMulti = isMultiFacultyAllowed(section, subject);
           const selectedIds = isMulti 
             ? JSON.parse(staffSel.value || '[]').map(Number).filter(Boolean)
             : [Number(staffSel.value)].filter(Boolean);
@@ -1352,9 +1360,9 @@ export default function TeachingAssignmentsPage(){
                                     {editing ? (
                                       <SearchableStaffSelect 
                                         id={`staff-${section.id}-${subject.id}`}
-                                        initialValue={isSharedSection(section) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
+                                        initialValue={isMultiFacultyAllowed(section, subject) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
                                         staffList={getFilteredStaffForDeptCore(subject)}
-                                        isMulti={isSharedSection(section)}
+                                        isMulti={isMultiFacultyAllowed(section, subject)}
                                       />
                                     ) : existingAssignments.length > 0 ? (
                                       <div className="flex flex-col gap-1">
@@ -1414,7 +1422,7 @@ export default function TeachingAssignmentsPage(){
                                           <button 
                                             onClick={async () => {
                                               const staffSel = document.getElementById(`staff-${section.id}-${subject.id}`) as HTMLInputElement;
-                                              const isMulti = isSharedSection(section);
+                                              const isMulti = isMultiFacultyAllowed(section, subject);
                                               const selectedIds = isMulti 
                                                 ? JSON.parse(staffSel?.value || '[]').map(Number).filter(Boolean)
                                                 : [Number(staffSel?.value)].filter(Boolean);
@@ -1623,9 +1631,9 @@ export default function TeachingAssignmentsPage(){
                                   {editing ? (
                                     <SearchableStaffSelect 
                                       id={`staff-${sec.id}-${parent.id}`}
-                                      initialValue={isSharedSection(sec) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
+                                      initialValue={isMultiFacultyAllowed(sec, parent) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
                                       staffList={getFilteredStaffForDeptCore(parent)}
-                                      isMulti={isSharedSection(sec)}
+                                      isMulti={isMultiFacultyAllowed(sec, parent)}
                                     />
                                   ) : existingAssignments.length > 0 ? (
                                     <div className="flex flex-col gap-1">
@@ -1650,7 +1658,7 @@ export default function TeachingAssignmentsPage(){
                                       <button
                                         onClick={async () => {
                                           const sel = document.getElementById(`staff-${sec.id}-${parent.id}`) as HTMLInputElement;
-                                          const isMulti = isSharedSection(sec);
+                                          const isMulti = isMultiFacultyAllowed(sec, parent);
                                           const selectedIds = isMulti 
                                             ? JSON.parse(sel?.value || '[]').map(Number).filter(Boolean)
                                             : [Number(sel?.value)].filter(Boolean);

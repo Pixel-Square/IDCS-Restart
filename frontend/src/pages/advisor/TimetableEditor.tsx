@@ -1677,21 +1677,49 @@ export default function TimetableEditor(){
             </div>
             
             <div className="flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-2 sm:gap-3">
-              {(() => {
-                const section = sections.find(x=>x.id===sectionId) || {name:'Section', batch:'', semester:null}
-                return (
-                  <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto">
-                    <div className="flex items-center gap-2">
-                      <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
-                      <span className="font-semibold text-indigo-900 text-sm md:text-base">
-                        {section.name}
-                        {section.batch && ` • ${section.batch}`}
-                        {section.semester && ` • Sem ${section.semester}`}
-                      </span>
+              {sections.length > 1 ? (
+                <div className="px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto flex items-center gap-2">
+                  <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                  <select
+                    value={sectionId || ''}
+                    onChange={(e) => {
+                      const sid = e.target.value ? Number(e.target.value) : null
+                      setSectionId(sid)
+                      const sec = sections.find(s => s.id === sid)
+                      if (sec) {
+                        setSectionDepartmentId(sec.department_id)
+                        setCurrentSectionRegulation(sec.batch_regulation)
+                      }
+                    }}
+                    className="bg-transparent font-semibold text-indigo-900 text-sm focus:outline-none cursor-pointer pr-4"
+                  >
+                    {sections.map((s) => (
+                      <option key={s.id} value={s.id} className="text-gray-900">
+                        {s.name}
+                        {s.batch ? ` • ${s.batch}` : ''}
+                        {s.semester ? ` • Sem ${s.semester}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                (() => {
+                  const section = sections.find(x=>x.id===sectionId) || {name:'Section', batch:'', semester:null}
+                  return (
+                    <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto">
+                      <div className="flex items-center gap-2">
+                        <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                        <span className="font-semibold text-indigo-900 text-sm md:text-base">
+                          {section.name}
+                          {section.batch && ` • ${section.batch}`}
+                          {section.semester && ` • Sem ${section.semester}`}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                )
-              })()}
+                  )
+                })()
+              )}
+
               {currentSectionRegulation && (
                 <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200 w-full sm:w-auto">
                   <div className="flex items-center gap-2">
@@ -1703,16 +1731,31 @@ export default function TimetableEditor(){
                   </div>
                 </div>
               )}
-              {templateId && (
-                <div className="px-3 md:px-4 py-2 bg-gray-50 rounded-lg border border-gray-200 w-full sm:w-auto">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-gray-600 flex-shrink-0" />
-                    <span className="text-sm font-medium text-gray-700">
-                      {(templates.find(t=>t.id===templateId)||{name:'Template'}).name}
-                    </span>
-                  </div>
-                </div>
-              )}
+
+              <div className="px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-200 w-full sm:w-auto flex items-center gap-2">
+                <Clock className="h-4 w-4 text-gray-600 flex-shrink-0" />
+                <select
+                  value={templateId || ''}
+                  onChange={(e) => {
+                    const tid = e.target.value ? Number(e.target.value) : null
+                    setTemplateId(tid)
+                    const active = templates.find((t: any) => t.id === tid)
+                    if (active) {
+                      setPeriods(active.periods || [])
+                    } else {
+                      setPeriods([])
+                    }
+                  }}
+                  className="bg-transparent text-sm font-medium text-gray-700 focus:outline-none cursor-pointer pr-4"
+                >
+                  <option value="" className="text-gray-900">Select Template</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id} className="text-gray-900">
+                      {t.name} {t.is_active ? '(Active)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -1726,107 +1769,119 @@ export default function TimetableEditor(){
             </div>
           </div>
           
-          {/* Desktop view: Horizontal table */}
-          <div className="hidden md:block overflow-x-auto lg:overflow-visible">
-            <table className="w-full table-fixed">
-              <thead>
-                <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
-                    Day / Period
-                  </th>
-                  {visiblePeriods.map(p=> (
-                    <th key={p.id} className="px-4 py-3">
-                      <div className="text-sm font-bold text-indigo-700">
-                        {p.label || `Period ${p.index || ''}`}
-                      </div>
-                      <div className="text-xs text-gray-600 mt-0.5">
-                        {p.start_time ? `${p.start_time}${p.end_time ? ' - ' + p.end_time : ''}` : (p.is_break? 'Break' : '')}
-                      </div>
-                    </th>
+          {visiblePeriods.length === 0 ? (
+            <div className="p-12 text-center flex flex-col items-center justify-center">
+              <AlertCircle className="h-12 w-12 text-amber-500 mb-3" />
+              <h4 className="text-base font-semibold text-gray-950">No periods found for the selected template</h4>
+              <p className="text-sm text-gray-600 mt-1 max-w-md">
+                Please select a different timetable template from the dropdown in the header to load its core periods and schedule assignments.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Desktop view: Horizontal table */}
+              <div className="hidden md:block overflow-x-auto lg:overflow-visible">
+                <table className="w-full table-fixed">
+                  <thead>
+                    <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
+                        Day / Period
+                      </th>
+                      {visiblePeriods.map(p=> (
+                        <th key={p.id} className="px-4 py-3">
+                          <div className="text-sm font-bold text-indigo-700">
+                            {p.label || `Period ${p.index || ''}`}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-0.5">
+                            {p.start_time ? `${p.start_time}${p.end_time ? ' - ' + p.end_time : ''}` : (p.is_break? 'Break' : '')}
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {DAYS.map((d,di)=> (
+                      <tr key={d} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
+                        {visiblePeriods.map(p=> {
+                          const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
+                          return (
+                            <td 
+                              key={p.id} 
+                              className={`px-4 py-3 align-top ${
+                                isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
+                              }`}
+                            >
+                              {renderCell(di+1, p)}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile view: Day tabs + Period/Subject columns */}
+              <div className="md:hidden p-4">
+                {/* Day tabs */}
+                <div className="grid grid-cols-7 gap-1 mb-4">
+                  {DAYS.map((d, di) => (
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDay(di)}
+                      className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        selectedDay === di
+                          ? 'bg-indigo-600 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {d}
+                    </button>
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {DAYS.map((d,di)=> (
-                  <tr key={d} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
-                    {visiblePeriods.map(p=> {
-                      const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
-                      return (
-                        <td 
-                          key={p.id} 
-                          className={`px-4 py-3 align-top ${
-                            isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
-                          }`}
-                        >
-                          {renderCell(di+1, p)}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </div>
 
-          {/* Mobile view: Day tabs + Period/Subject columns */}
-          <div className="md:hidden p-4">
-            {/* Day tabs */}
-            <div className="grid grid-cols-7 gap-1 mb-4">
-              {DAYS.map((d, di) => (
-                <button
-                  key={d}
-                  onClick={() => setSelectedDay(di)}
-                  className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    selectedDay === di
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-
-            {/* Period/Subject table for selected day */}
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Assignment</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {(() => {
-                    const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
-                    
-                    return nonBreakPeriods.map((p: any) => {
-                      const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
-                      
-                      return (
-                        <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
-                          <td className="px-3 py-3 align-top">
-                            <div className="text-xs font-semibold text-gray-900">
-                              {p.label || `P${p.index || ''}`}
-                            </div>
-                            {(p.start_time || p.end_time) && (
-                              <div className="text-xs text-gray-500 mt-0.5">
-                                {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
-                              </div>
-                            )}
-                          </td>
-                          <td className={`px-3 py-2 ${isSelected ? 'border-2 border-indigo-300' : ''}`}>
-                            {renderCell(selectedDay + 1, p)}
-                          </td>
-                        </tr>
-                      )
-                    })
-                  })()}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                {/* Period/Subject table for selected day */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Assignment</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {(() => {
+                        const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
+                        
+                        return nonBreakPeriods.map((p: any) => {
+                          const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
+                          
+                          return (
+                            <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+                              <td className="px-3 py-3 align-top">
+                                <div className="text-xs font-semibold text-gray-900">
+                                  {p.label || `P${p.index || ''}`}
+                                </div>
+                                {(p.start_time || p.end_time) && (
+                                  <div className="text-xs text-gray-500 mt-0.5">
+                                    {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
+                                  </div>
+                                )}
+                              </td>
+                              <td className={`px-3 py-2 ${isSelected ? 'border-2 border-indigo-300' : ''}`}>
+                                {renderCell(selectedDay + 1, p)}
+                              </td>
+                            </tr>
+                          )
+                        })
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Subjects & Staff Reference */}

@@ -1,0 +1,155 @@
+diff --git a/backend/timetable/views.py b/backend/timetable/views.py
+index 47c8f1d..d24971a 100644
+--- a/backend/timetable/views.py
++++ b/backend/timetable/views.py
+@@ -17,6 +17,15 @@ import logging
+ logger = logging.getLogger(__name__)
+ 
+ 
++def _get_staff_name_helper(u, sp):
++    if not u:
++        return getattr(sp, 'staff_id', '')
++    name = u.get_full_name().strip()
++    if not name:
++        name = u.username
++    return name or getattr(sp, 'staff_id', '')
++
++
+ def _get_student_core_department_id(student_profile) -> int | None:
+     """Return the student's core/home department id when available.
+ 
+@@ -254,14 +263,10 @@ class CurriculumBySectionView(APIView):
+             # Fetch ALL curriculum rows — including those with null course_code.
+             # Null-code subjects (e.g. "Program Core I", "Engineering Science") are
+             # deduplicated by course_name instead.
+-            from django.db.models import Q
+             qs = CurriculumDepartment.objects.filter(
+                 department_id__in=all_dept_ids,
+                 semester__number=sem_num,
+             ).select_related('department').order_by('is_dept_core', 'course_code', 'department_id')
+-            qs = qs.filter(
+-                Q(is_dept_core=False) | Q(course_code='GEA1105') | Q(course_name='Engineering Graphics')
+-            )
+ 
+             # Dept-core subjects are kept distinct per department so Mechanical and
+             # Civil variants can both appear in HOD screens.
+@@ -282,16 +287,11 @@ class CurriculumBySectionView(APIView):
+                     # Last resort: individual row keyed by pk so it always shows
+                     key = f'pk:{c.pk}'
+ 
+-                if c.is_dept_core or c.is_elective:
+-                    # Dept-core rows must stay distinct per department so the HOD
+-                    # screens can show Mechanical/Civil variants side by side.
++                if c.is_elective:
+                     # Elective parents stay shared, with the managing-dept row
+                     # winning when the same parent appears in multiple departments.
+                     dedupe_key = key
+-                    if c.is_dept_core:
+-                        dedupe_key = f'deptcore:dept:{c.department_id}:{key}'
+-
+-                    if dedupe_key not in seen or (is_managing and not c.is_dept_core):
++                    if dedupe_key not in seen or is_managing:
+                         prev = seen.get(dedupe_key, {}) if dedupe_key in seen else {}
+                         prev_code = (prev.get('course_code') or '').strip() if isinstance(prev, dict) else ''
+                         effective_code = code if code else (prev_code or None)
+@@ -304,12 +304,10 @@ class CurriculumBySectionView(APIView):
+                             'semester': sem_num,
+                             'class_type': c.class_type,
+                             'is_elective': c.is_elective,
+-                            'is_dept_core': c.is_dept_core,
++                            'is_dept_core': getattr(c, 'is_dept_core', False),
+                             'department_id': c.department_id,
+                             'department_code': getattr(c.department, 'code', None),
+                         }
+-                    # Don't collect home_dept_codes for these;
+-                    # per-dept resolution happens via ElectiveSubject.department
+                 elif key not in seen:
+                     seen[key] = {
+                         'id': c.pk,
+@@ -320,24 +318,25 @@ class CurriculumBySectionView(APIView):
+                         'semester': sem_num,
+                         'class_type': c.class_type,
+                         'is_elective': c.is_elective,
+-                        'is_dept_core': False,
++                        'is_dept_core': getattr(c, 'is_dept_core', False),
+                         'home_dept_ids': [c.department_id],
+                         'home_dept_codes': [getattr(c.department, 'short_name', None)],
+                     }
+                 else:
+-                    if not seen[key].get('is_dept_core'):
+-                        # Managing-dept entry should be the representative row
+-                        if is_managing:
+-                            seen[key]['id'] = c.pk
+-                            if code:
+-                                seen[key]['course_code'] = code
+-                            seen[key]['course_name'] = c.course_name
+-                        elif (not seen[key].get('course_code')) and code:
+-                            # Keep a usable subject code for shared rows when available
+-                            # from non-managing department variants.
++                    # Managing-dept entry should be the representative row
++                    if is_managing:
++                        seen[key]['id'] = c.pk
++                        if code:
+                             seen[key]['course_code'] = code
+-                        seen[key]['home_dept_ids'].append(c.department_id)
+-                        seen[key]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
++                        seen[key]['course_name'] = c.course_name
++                    elif (not seen[key].get('course_code')) and code:
++                        # Keep a usable subject code for shared rows when available
++                        # from non-managing department variants.
++                        seen[key]['course_code'] = code
++                    if getattr(c, 'is_dept_core', False):
++                        seen[key]['is_dept_core'] = True
++                    seen[key]['home_dept_ids'].append(c.department_id)
++                    seen[key]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
+ 
+             rows = list(seen.values())
+ 
+@@ -495,12 +494,14 @@ class SectionTimetableView(APIView):
+ 
+             staff_data = None
+             if staff_obj:
++                u = getattr(staff_obj, 'user', None)
+                 staff_data = {
+                     'id': staff_obj.pk,
+                     'staff_id': getattr(staff_obj, 'staff_id', None),
+-                    'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
+-                    'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
+-                    'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', '')
++                    'name': _get_staff_name_helper(u, staff_obj),
++                    'username': getattr(u, 'username', None),
++                    'first_name': getattr(u, 'first_name', ''),
++                    'last_name': getattr(u, 'last_name', '')
+                 }
+             elif staff_list and len(staff_list) > 1:
+                 names = []
+@@ -508,7 +509,7 @@ class SectionTimetableView(APIView):
+                 staff_ids = []
+                 for sp in staff_list:
+                     u = getattr(sp, 'user', None)
+-                    full_name = u.get_full_name() if u else getattr(sp, 'staff_id', '')
++                    full_name = _get_staff_name_helper(u, sp)
+                     if full_name:
+                         names.append(full_name)
+                     usernames.append(u.username if u else '')
+@@ -916,12 +917,9 @@ class SectionSubjectsStaffView(APIView):
+                 if not all_ids:
+                     return Response({'results': []})
+                 # Union of all dept curriculum rows, deduplicated by course_code or course_name
+-                from django.db.models import Q
+                 qs_all = CurriculumDepartment.objects.filter(
+                     department_id__in=all_ids,
+                     semester__number=sem_num,
+-                ).filter(
+-                    Q(is_dept_core=False) | Q(course_code='GEA1105') | Q(course_name='Engineering Graphics')
+                 ).order_by('course_code', 'department_id')
+                 seen: dict = {}
+                 for c in qs_all:
+@@ -1054,6 +1052,7 @@ class SectionSubjectsStaffView(APIView):
+                     'regulation': c.regulation,
+                     'class_type': c.class_type,
+                     'is_elective': c.is_elective,
++                    'is_dept_core': getattr(c, 'is_dept_core', False),
+                     'staff': staff_val,
+                     'assigned_staff': assigned_staff
+                 })
