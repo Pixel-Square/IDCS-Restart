@@ -11,10 +11,49 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from academics.models import Section
 from rest_framework.exceptions import PermissionDenied
+import re
 from django.db.models import OuterRef, Exists, Q
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_class_type(raw_class_type, curriculum_row=None):
+    raw = str(raw_class_type or '').strip()
+    if not raw:
+        return 'THEORY'
+    normalized = raw.upper().strip()
+    compact = re.sub(r'[^A-Z0-9]+', '', normalized)
+    if not compact:
+        return 'THEORY'
+    if compact.isdigit():
+        if curriculum_row is not None:
+            l = _coerce_int(getattr(curriculum_row, 'l', None)) or 0
+            t = _coerce_int(getattr(curriculum_row, 't', None)) or 0
+            p = _coerce_int(getattr(curriculum_row, 'p', None)) or 0
+            s = _coerce_int(getattr(curriculum_row, 's', None)) or 0
+            if p or s:
+                return 'TCPL' if l else 'PRACTICAL'
+            if l:
+                return 'LAB'
+        return 'THEORY'
+    if 'TCPR' in compact:
+        return 'TCPR'
+    if 'TCPL' in compact:
+        return 'TCPL'
+    if compact == 'THEORYPMBL' or compact == 'THEORY' or compact.startswith('THEORY'):
+        return 'THEORY'
+    if compact == 'PRBL' or compact == 'PROJECT' or 'PROJECT' in compact:
+        return 'PROJECT'
+    if compact == 'LAB' or compact == 'L' or compact.startswith('LAB'):
+        return 'LAB'
+    if compact == 'PRACTICAL' or compact.startswith('PRACT'):
+        return 'PRACTICAL'
+    if compact == 'AUDIT':
+        return 'AUDIT'
+    if compact == 'SPECIAL':
+        return 'SPECIAL'
+    return normalized
 
 
 def _get_staff_name_helper(u, sp):
@@ -199,7 +238,7 @@ class CurriculumBySectionView(APIView):
                     'course_code': c.course_code,
                     'course_name': c.course_name,
                     'regulation': c.regulation,
-                    'class_type': c.class_type,
+                    'class_type': _normalize_class_type(c.class_type, c),
                     'is_elective': c.is_elective,
                     'is_dept_core': getattr(c, 'is_dept_core', False),
                     'department_id': c.department_id,
@@ -302,7 +341,7 @@ class CurriculumBySectionView(APIView):
                             'course_name': c.course_name,
                             'regulation': c.regulation,
                             'semester': sem_num,
-                            'class_type': c.class_type,
+                            'class_type': _normalize_class_type(c.class_type, c),
                             'is_elective': c.is_elective,
                             'is_dept_core': getattr(c, 'is_dept_core', False),
                             'department_id': c.department_id,
@@ -316,7 +355,7 @@ class CurriculumBySectionView(APIView):
                         'course_name': c.course_name,
                         'regulation': c.regulation,
                         'semester': sem_num,
-                        'class_type': c.class_type,
+                        'class_type': _normalize_class_type(c.class_type, c),
                         'is_elective': c.is_elective,
                         'is_dept_core': getattr(c, 'is_dept_core', False),
                         'home_dept_ids': [c.department_id],
@@ -1050,7 +1089,7 @@ class SectionSubjectsStaffView(APIView):
                     'mnemonic': getattr(c, 'mnemonic', None),
                     'course_name': c.course_name,
                     'regulation': c.regulation,
-                    'class_type': c.class_type,
+                    'class_type': _normalize_class_type(c.class_type, c),
                     'is_elective': c.is_elective,
                     'is_dept_core': getattr(c, 'is_dept_core', False),
                     'staff': staff_val,
@@ -1100,7 +1139,7 @@ class SectionSubjectsStaffView(APIView):
                     'course_code': es.course_code,
                     'course_name': es.course_name,
                     'regulation': es.regulation,
-                    'class_type': es.class_type,
+                    'class_type': _normalize_class_type(es.class_type, es),
                     'is_elective': True,
                     'is_elective_child': True,
                     'parent_id': es.parent_id,

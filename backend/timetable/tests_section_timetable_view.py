@@ -248,3 +248,80 @@ class SectionSubjectsStaffViewIntegrationTests(SimpleTestCase):
         assigned_staff = target.get("assigned_staff", [])
         self.assertEqual(len(assigned_staff), 2)
         self.assertSetEqual({x.get("staff_id") for x in assigned_staff}, {"3171012", "3171023"})
+
+    def test_numeric_class_type_is_normalized_for_subjects_staff(self):
+        section = SimpleNamespace(
+            id=42,
+            semester=SimpleNamespace(number=2),
+            batch=SimpleNamespace(
+                course_id=101,
+                course=SimpleNamespace(department=SimpleNamespace(id=2)),
+            ),
+        )
+        curriculum_row = SimpleNamespace(
+            id=1027,
+            pk=1027,
+            course_code="AGI1252",
+            course_name="Fundamentals of Data Science using R",
+            c=3,
+            l=0,
+            t=0,
+            p=0,
+            s=0,
+            total_hours=20,
+            regulation="R2023",
+            class_type="3",
+            is_elective=False,
+            department_id=2,
+        )
+
+        staff_a = SimpleNamespace(
+            id=101,
+            staff_id="3171012",
+            user=SimpleNamespace(
+                username="praveen",
+                get_full_name=lambda: "Praveenkumar T",
+            ),
+        )
+        ta_one = SimpleNamespace(
+            staff=staff_a,
+            curriculum_row=curriculum_row,
+            elective_subject=None,
+        )
+
+        request = APIRequestFactory().get("/api/timetable/section/42/subjects-staff/")
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+        section_chain = MagicMock()
+        section_chain.get.return_value = section
+
+        active_ay_chain = _FakeValuesListQuery({})
+        active_ay_chain.first = lambda: SimpleNamespace(id=1)
+
+        with patch("timetable.views.Section.objects.select_related", return_value=section_chain), patch(
+            "timetable.views.Section.objects.filter",
+            return_value=_FakeValuesListQuery({"id": [42]}),
+        ), patch(
+            "academics.models.StudentSectionAssignment.objects.filter",
+            return_value=_FakeValuesListQuery({"student__home_department_id": [101]})
+        ), patch(
+            "academics.models.AcademicYear.objects.filter",
+            return_value=active_ay_chain,
+        ), patch(
+            "curriculum.models.CurriculumDepartment.objects.filter",
+            return_value=_FakeQuerySet([curriculum_row]),
+        ), patch(
+            "academics.models.TeachingAssignment.objects.filter",
+            return_value=_FakeQuerySet([ta_one]),
+        ), patch(
+            "timetable.models.TimetableAssignment.objects.filter",
+            return_value=_FakeQuerySet([]),
+        ):
+            response = SectionSubjectsStaffView.as_view()(request, section_id=42)
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get("results", [])
+        self.assertTrue(results)
+        target = next((x for x in results if x.get("course_code") == "AGI1252"), None)
+        self.assertIsNotNone(target)
+        self.assertEqual(target.get("class_type"), "THEORY")

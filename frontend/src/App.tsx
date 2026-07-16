@@ -913,6 +913,74 @@ export default function App() {
                     />
                   }
                 />
+                <Route
+                  path="/academic-v2/admin/cdap-monitor"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CdapMonitorPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/cdap-templates"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CdapTemplatesPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/cdap-templates/new"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CdapTemplateEditorPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/cdap-templates/:templateId"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CdapTemplateEditorPage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
                 {/* Faculty Routes (Staff) */}
                 <Route
                   path="/academic-v2/courses"
