@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
@@ -108,6 +108,7 @@ import MyProposalsPage from './pages/events/MyProposalsPage';
 import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import CollegesPage from './pages/colleges/CollegesPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -252,6 +253,10 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/credits" element={<CreditsPage />} />
+                <Route
+                  path="/colleges"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<CollegesPage />} />}
+                />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
                   path="/settings"

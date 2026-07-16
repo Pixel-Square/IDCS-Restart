@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Building2 } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -76,6 +76,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_bar_scan_entry: ScanLine,
   coe_retrival: FileText,
   coe_one_page_report: FileText,
+  colleges: Building2,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -494,6 +495,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   
   if (isIqac && !items.some((item) => item.key === 'applications_admin')) {
     items.push({ key: 'applications_admin', label: 'Applications Admin', to: '/iqac/applications-admin' });
+  }
+  // Colleges management – IQAC only
+  if (isIqac && !items.some((item) => item.key === 'colleges')) {
+    items.push({ key: 'colleges', label: 'Colleges', to: '/colleges' });
   }
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
   const isSecurity = rolesUpper.includes('SECURITY');
