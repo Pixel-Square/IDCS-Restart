@@ -313,7 +313,7 @@ export default function ClassTypeEditorPage() {
           <h1 className="text-2xl font-bold text-gray-900">Class Type Editor</h1>
           <p className="text-gray-500 mt-1">
             Configure class types and assign exam templates.{' '}
-            <Link to="/academic-v2/admin/exam-assignments" className="text-blue-600 hover:underline inline-flex items-center gap-1">
+            <Link to="/academic-v2/admin/exam-management?tab=exam-assignments" className="text-blue-600 hover:underline inline-flex items-center gap-1">
               Manage Exam Assignments <ExternalLink className="w-3.5 h-3.5" />
             </Link>
           </p>
@@ -460,10 +460,10 @@ export default function ClassTypeEditorPage() {
                 </div>
 
                 {/* Exam Assignments — grouped by QP Type */}
-                <div>
+                <div className="hidden">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-semibold text-gray-700">Exam Assignments</h3>
-                    <Link to="/academic-v2/admin/exam-assignments" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                    <Link to="/academic-v2/admin/exam-management?tab=exam-assignments" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
                       <ExternalLink className="w-3 h-3" /> Manage Templates
                     </Link>
                   </div>
@@ -737,7 +737,7 @@ export default function ClassTypeEditorPage() {
                 {examTemplates.length === 0 ? (
                   <div>
                     <p className="mb-3">No exam assignments found.</p>
-                    <Link to="/academic-v2/admin/exam-assignments" className="text-blue-600 hover:underline text-sm">
+                    <Link to="/academic-v2/admin/exam-management?tab=exam-assignments" className="text-blue-600 hover:underline text-sm">
                       Go create exam assignments first →
                     </Link>
                   </div>
@@ -769,7 +769,7 @@ export default function ClassTypeEditorPage() {
               </div>
             )}
             <div className="mt-4 pt-4 border-t flex justify-between items-center">
-              <Link to="/academic-v2/admin/exam-assignments" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+              <Link to="/academic-v2/admin/exam-management?tab=exam-assignments" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
                 <Plus className="w-3.5 h-3.5" /> Create new exam template
               </Link>
               <button onClick={() => setExamPickerQpType(null)} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">

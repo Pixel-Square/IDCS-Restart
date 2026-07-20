@@ -112,6 +112,8 @@ export default function InternalMarkPage() {
   const [coLoading, setCoLoading] = useState(false);
   const [coSummary, setCoSummary] = useState<COSummary | null>(null);
   const [coView, setCoView] = useState<'raw' | 'weighted'>('raw');
+  const [courseOutcomeNumbers, setCourseOutcomeNumbers] = useState<number[]>([]);
+  const [courseOutcomeLoading, setCourseOutcomeLoading] = useState(false);
 
   // Internal marks export dropdown
   const [showImExport, setShowImExport] = useState(false);
@@ -152,6 +154,33 @@ export default function InternalMarkPage() {
   }, [courseInfo]);
 
   useEffect(() => { loadData(); }, [courseId]);
+
+  useEffect(() => {
+    if (!courseId) return;
+    const loadCourseOutcomes = async () => {
+      try {
+        setCourseOutcomeLoading(true);
+        const res = await fetchWithAuth('/api/academic-v2/course-outcomes/');
+        if (!res.ok) throw new Error('Failed to load course outcomes');
+        const data = await res.json();
+        const rows = Array.isArray(data) ? data : (data.results || []);
+        const nums = Array.from(
+          new Set(
+            rows
+              .filter((row: any) => row?.is_active !== false)
+              .map((row: any) => Number(row?.number))
+              .filter((n: number) => Number.isFinite(n) && n > 0),
+          ),
+        ).sort((a, b) => a - b);
+        setCourseOutcomeNumbers(nums);
+      } catch {
+        setCourseOutcomeNumbers([]);
+      } finally {
+        setCourseOutcomeLoading(false);
+      }
+    };
+    void loadCourseOutcomes();
+  }, [courseId]);
 
   // Fetch reset notices from admin bypass logs for this course
   useEffect(() => {
@@ -606,6 +635,8 @@ export default function InternalMarkPage() {
           loading={coLoading}
           data={orderedCoSummary}
           courseInfo={courseInfo}
+          courseOutcomeNumbers={courseOutcomeNumbers}
+          courseOutcomeLoading={courseOutcomeLoading}
           view={coView}
           onChangeView={setCoView}
           onRefresh={loadCOSummary}
@@ -619,11 +650,13 @@ export default function InternalMarkPage() {
 /* ═══════════ CO Summary Tab Component ═══════════ */
 
 function COSummaryTab({
-  loading, data, courseInfo, view, onChangeView, onRefresh,
+  loading, data, courseInfo, courseOutcomeNumbers, courseOutcomeLoading, view, onChangeView, onRefresh,
 }: {
   loading: boolean;
   data: COSummary | null;
   courseInfo: CourseInfo | null;
+  courseOutcomeNumbers: number[];
+  courseOutcomeLoading: boolean;
   view: 'raw' | 'weighted';
   onChangeView: (v: 'raw' | 'weighted') => void;
   onRefresh: () => void;
@@ -757,7 +790,8 @@ function COSummaryTab({
 
   const exams = data?.exams ?? [];
   const students = data?.students ?? [];
-  const co_count = data?.co_count ?? 0;
+  const coNumbers = Array.from(new Set((courseOutcomeNumbers || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
+  const co_count = coNumbers.length;
   const total_internal_marks = data?.total_internal_marks ?? 0;
   const cqiConfig = data?.cqi_config ?? null;
 
@@ -768,7 +802,7 @@ function COSummaryTab({
       if (String(ex.kind || 'exam').toLowerCase() === 'cqi') continue;
       const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
         ? ex.covered_cos
-        : Array.from({ length: co_count }, (_, i) => i + 1);
+        : coNumbers;
       for (const coNum of coveredCos) {
         const w = Number(ex.co_weights?.[String(coNum)] ?? (ex.co_weights as any)?.[coNum] ?? 0) || 0;
         total += w;
@@ -782,7 +816,7 @@ function COSummaryTab({
     }
     const rounded = Math.round(total * 100) / 100;
     return rounded > 0 ? rounded : total_internal_marks;
-  }, [exams, co_count, total_internal_marks]);
+  }, [exams, coNumbers, total_internal_marks]);
   const round2 = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
   const normalizeExamCode = (value: string) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
   const cqiConditions = Array.isArray(cqiConfig?.conditions) ? cqiConfig.conditions : [];
@@ -814,7 +848,10 @@ function COSummaryTab({
   });
 
   const selectedCqiExamWeightByCo = useMemo(() => {
-    const out = Array.from({ length: co_count }, () => 0);
+    const out: Record<number, number> = {};
+    coNumbers.forEach((coNum) => {
+      out[coNum] = 0;
+    });
     const selectedExamCodes = new Set(
       Array.isArray(cqiConfig?.exams)
         ? cqiConfig.exams.map((code) => normalizeExamCode(String(code || ''))).filter(Boolean)
@@ -831,14 +868,14 @@ function COSummaryTab({
         : Object.keys(ex.co_weights || {}).map((k) => Number(k)).filter((n) => Number.isFinite(n));
 
       for (const coNum of coveredCos) {
-        if (!coNum || coNum < 1 || coNum > co_count) continue;
+        if (!coNum || !coNumbers.includes(coNum)) continue;
         const weight = Number(ex.co_weights?.[String(coNum)] ?? (ex.co_weights as any)?.[coNum] ?? 0) || 0;
-        if (weight > 0) out[coNum - 1] += weight;
+        if (weight > 0) out[coNum] = round2((out[coNum] || 0) + weight);
       }
     });
 
-    return out.map((v) => round2(v));
-  }, [cqiConfig?.exams, co_count, exams]);
+    return out;
+  }, [cqiConfig?.exams, coNumbers, exams]);
 
   const defaultCqiCapPercent = useMemo(() => {
     const firstCap = cqiConditions.find((cond) => cond?.cap_enabled);
@@ -846,10 +883,14 @@ function COSummaryTab({
     return Number.isFinite(pct) && pct > 0 ? pct : 58;
   }, [cqiConditions]);
 
-  const cqiCapByCo = useMemo(
-    () => selectedCqiExamWeightByCo.map((weight) => (weight > 0 ? round2((weight * defaultCqiCapPercent) / 100) : 0)),
-    [defaultCqiCapPercent, selectedCqiExamWeightByCo],
-  );
+  const cqiCapByCo = useMemo(() => {
+    const out: Record<number, number> = {};
+    coNumbers.forEach((coNum) => {
+      const weight = selectedCqiExamWeightByCo[coNum] || 0;
+      out[coNum] = weight > 0 ? round2((weight * defaultCqiCapPercent) / 100) : 0;
+    });
+    return out;
+  }, [coNumbers, defaultCqiCapPercent, selectedCqiExamWeightByCo]);
 
   // Build column groups for the table
   type ColDef = { key: string; label: string; sub: string; examIdx: number; co: number; weightNotSet?: boolean; isExamSplit?: boolean; isCombo?: boolean; comboKey?: string };
@@ -858,7 +899,7 @@ function COSummaryTab({
     // Show only configured COs for this exam (covered_cos), not all COs
     const examCos = ex.covered_cos && ex.covered_cos.length > 0
       ? ex.covered_cos
-      : Array.from({ length: co_count }, (_, i) => i + 1);
+      : coNumbers;
     for (const co of examCos) {
       const coMax = ex.co_max_map?.[String(co)] ?? ex.max_per_co;
       if (view === 'raw') {
@@ -867,7 +908,7 @@ function COSummaryTab({
         const isCqi = String(ex.kind || 'exam').toLowerCase() === 'cqi';
         const w = (ex.co_weights?.[String(co)] ?? (ex.co_weights as any)?.[co] ?? ex.weight_per_co ?? 0) as number;
         const notSet = !isCqi && (!w || w <= 0);
-        const cqiCap = isCqi && hasCqiCap ? cqiCapByCo[co - 1] : 0;
+        const cqiCap = isCqi && hasCqiCap ? (cqiCapByCo[co] || 0) : 0;
         const sub = isCqi ? (hasCqiCap && cqiCap > 0 ? `cap: ${cqiCap}` : 'CQI') : (notSet ? 'wt: NOT SET (Admin)' : `wt: ${w}`);
         cols.push({ key: `${ex.id}_CO${co}`, label: `CO${co}`, sub, examIdx: ei, co, weightNotSet: notSet });
       }
@@ -893,7 +934,7 @@ function COSummaryTab({
     if (ex.cia_enabled) {
       const ciaCos = ex.covered_cos && ex.covered_cos.length > 0
         ? ex.covered_cos
-        : Array.from({ length: co_count }, (_, i) => i + 1);
+        : coNumbers;
       const n = ciaCos.length || 1;
       const perCo = !!ex.cia_weight_per_co; // "Same for each CO" checkbox in admin
       for (const co of ciaCos) {
@@ -924,7 +965,7 @@ function COSummaryTab({
     // Calculate colCount using configured COs only (covered_cos)
     const examCos2 = ex.covered_cos && ex.covered_cos.length > 0
       ? ex.covered_cos
-      : Array.from({ length: co_count }, (_, i) => i + 1);
+      : coNumbers;
     const comboCount = view === 'raw' && Array.isArray(ex.combo_questions) ? ex.combo_questions.length : 0;
     const count = examCos2.length + (ex.cia_enabled ? examCos2.length : 0) + comboCount + (view === 'raw' ? 1 : 0);
     examGroups.push({ exam: ex, colCount: count });
@@ -945,7 +986,7 @@ function COSummaryTab({
   const getStudentCqiCapForCo = (student: COStudent, coNum: number): number | null => {
     const pct = getStudentCqiCapPercent(student);
     if (pct == null) return null;
-    const weightSum = selectedCqiExamWeightByCo[coNum - 1] ?? 0;
+    const weightSum = selectedCqiExamWeightByCo[coNum] ?? 0;
     if (!(weightSum > 0)) return null;
     return round2((weightSum * pct) / 100);
   };
@@ -957,15 +998,16 @@ function COSummaryTab({
     for (const ex of cqiExams) {
       const coveredCos = ex.covered_cos && ex.covered_cos.length > 0
         ? ex.covered_cos
-        : Array.from({ length: co_count }, (_, i) => i + 1);
+        : coNumbers;
       for (const coNum of coveredCos) {
-        if (coNum < 1 || coNum > co_count) continue;
+        const idx = coNumbers.indexOf(coNum);
+        if (idx < 0) continue;
         const key = `${ex.id}_CO${coNum}`;
         const raw = Number(student.weighted_marks[key] ?? 0) || 0;
         const cap = getStudentCqiCapForCo(student, coNum);
         const display = cap != null && raw > cap ? cap : raw;
-        const current = Number(totals[coNum - 1] ?? 0) || 0;
-        totals[coNum - 1] = round2(current - raw + display);
+        const current = Number(totals[idx] ?? 0) || 0;
+        totals[idx] = round2(current - raw + display);
       }
     }
 
@@ -1029,7 +1071,7 @@ function COSummaryTab({
   });
 
   const coTotalAverages: (number | null)[] = view === 'weighted'
-    ? Array.from({ length: co_count }, (_, i) => {
+    ? coNumbers.map((_, i) => {
         const vals = students.map((s) => getDisplayedStudentCoTotals(s)[i]).filter(v => typeof v === 'number' && v > 0) as number[];
         if (!vals.length) return null;
         return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
@@ -1045,6 +1087,13 @@ function COSummaryTab({
     : null;
 
   if (loading) return <div className="p-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
+  if (!courseOutcomeLoading && coNumbers.length === 0) {
+    return (
+      <div className="p-8 text-center rounded-lg border border-red-200 bg-red-50 text-red-700">
+        No Course Outcomes are configured by admin. Please add Course Outcomes in Exam Management, Course Outcome tab.
+      </div>
+    );
+  }
   if (!data) return <div className="p-8 text-center text-gray-400">No data. Click refresh to load.</div>;
 
   return (
@@ -1239,9 +1288,9 @@ function COSummaryTab({
                 ))}
                 {view === 'weighted' && (
                   <>
-                    {Array.from({ length: co_count }, (_, i) => (
-                      <th key={`co-total-h-${i}`} rowSpan={2} className="px-2 py-2 text-center text-xs font-semibold text-indigo-700 border-l border-indigo-200 bg-indigo-50 min-w-[60px]">
-                        CO{i + 1}<br />Total
+                    {coNumbers.map((coNum) => (
+                      <th key={`co-total-h-${coNum}`} rowSpan={2} className="px-2 py-2 text-center text-xs font-semibold text-indigo-700 border-l border-indigo-200 bg-indigo-50 min-w-[60px]">
+                        CO{coNum}<br />Total
                       </th>
                     ))}
                     <th rowSpan={2} className="px-3 py-2 text-center text-xs font-bold text-gray-900 border-l border-gray-300 bg-green-50 min-w-[70px]">
@@ -1314,7 +1363,7 @@ function COSummaryTab({
                             {displayCoTotals.map((ct, ci) => {
                               const cellKey = getCellKey(si, cellIndex);
                               const isSelected = selectedCells.has(cellKey);
-                              const coNum = ci + 1;
+                              const coNum = coNumbers[ci] ?? (ci + 1);
                               // Red if the backend flagged this CO as capped for this student.
                               const isCoTotalCapped = view === 'weighted' &&
                                 Array.isArray(s.cqi_capped_cos) && s.cqi_capped_cos.includes(coNum);

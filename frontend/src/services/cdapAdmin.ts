@@ -12,6 +12,7 @@ export interface CdapTemplate {
   key: string;
   name: string;
   headerRowLine: number;
+  sheetNumber: number;
   fieldDefinitions: CDAPFieldDefinition[];
   isActive: boolean;
   createdAt?: string;
@@ -26,6 +27,7 @@ function normalizeTemplate(template: any): CdapTemplate {
     key: String(template.key || '').trim(),
     name: String(template.name || '').trim(),
     headerRowLine: Number(template.header_row_line ?? template.headerRowLine ?? 12),
+    sheetNumber: Number(template.sheet_number ?? template.sheetNumber ?? 1),
     fieldDefinitions: Array.isArray(template.field_definitions)
       ? template.field_definitions.map((field: any) => ({
           fieldCode: String(field.field_code || field.fieldCode || '').trim(),
@@ -45,6 +47,7 @@ function templateToPayload(template: Partial<CdapTemplate>) {
     key: template.key,
     name: template.name,
     header_row_line: template.headerRowLine,
+    sheet_number: template.sheetNumber,
     field_definitions: template.fieldDefinitions?.map((field) => ({
       field_code: field.fieldCode,
       display_header: field.displayHeader,
@@ -103,6 +106,7 @@ export function createEmptyCdapTemplate(): CdapTemplate {
     key: '',
     name: '',
     headerRowLine: 12,
+    sheetNumber: 1,
     fieldDefinitions: [
       { fieldCode: 'unit', displayHeader: 'Unit', excelColumn: 'A', aliases: ['UNIT', 'Unit', 'Module', 'Unit No'] },
       { fieldCode: 'unit_name', displayHeader: 'Syllabus (Unit Name)', excelColumn: 'B', aliases: ['SYLLABUS (UNIT NAME)', 'Unit Name', 'Module Title'] },

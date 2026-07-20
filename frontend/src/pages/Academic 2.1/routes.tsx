@@ -9,8 +9,7 @@ import { RouteObject } from 'react-router-dom';
 // Lazy load pages for code splitting
 const AcademicV2AdminDashboard = React.lazy(() => import('./admin/AcademicV2AdminDashboard'));
 const PublishControlPage = React.lazy(() => import('./admin/PublishControlPage'));
-const CycleManagementPage = React.lazy(() => import('./admin/CycleManagementPage'));
-const ClassTypeEditorPage = React.lazy(() => import('./admin/ClassTypeEditorPage'));
+const ExamManagementPage = React.lazy(() => import('./admin/ExamManagementPage'));
 const QpPatternEditorPage = React.lazy(() => import('./admin/QpPatternEditorPage'));
 const ExamAssignmentAdminPage = React.lazy(() => import('./admin/ExamAssignmentAdminPage'));
 const ApprovalInboxPage = React.lazy(() => import('./admin/ApprovalInboxPage'));
@@ -41,20 +40,12 @@ export const academicV2Routes: RouteObject[] = [
     element: <PublishControlPage />,
   },
   {
-    path: 'academic-v2/admin/cycles',
-    element: <CycleManagementPage />,
-  },
-  {
-    path: 'academic-v2/admin/class-types',
-    element: <ClassTypeEditorPage />,
+    path: 'academic-v2/admin/exam-management',
+    element: <ExamManagementPage />,
   },
   {
     path: 'academic-v2/admin/qp-patterns',
     element: <QpPatternEditorPage />,
-  },
-  {
-    path: 'academic-v2/admin/exam-assignments',
-    element: <ExamAssignmentAdminPage />,
   },
   {
     path: 'academic-v2/admin/approvals',
@@ -135,14 +126,9 @@ export const academicV2Navigation = {
       description: 'Configure semester due dates and publish settings',
     },
     {
-      title: 'Cycle Management',
-      path: '/academic-v2/admin/cycles',
-      description: 'Create and manage academic cycles',
-    },
-    {
-      title: 'Class Types',
-      path: '/academic-v2/admin/class-types',
-      description: 'Manage class types and exam assignments',
+      title: 'Exam Management',
+      path: '/academic-v2/admin/exam-management',
+      description: 'Manage cycles, exam assignments, and class types',
     },
     {
       title: 'QP Patterns',

@@ -35,6 +35,7 @@ from .models import (
     AcV2CqiEditRequest,
     AcV2InternalMark,
     AcV2QpType,
+    AcV2CourseOutcome,
     AcV2QpAssignment,
     AcV2Cycle,
     AcV2CqiToken,
@@ -57,6 +58,7 @@ from .serializers import (
     AcV2InternalMarkSerializer,
     AcV2UserPatternOverrideSerializer,
     AcV2QpTypeSerializer,
+    AcV2CourseOutcomeSerializer,
     AcV2CycleSerializer,
     AcV2PassMarkSettingSerializer,
     AcV2MyMarksSettingSerializer,
@@ -1677,6 +1679,34 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
         # Soft delete
         instance.is_active = False
         instance.save()
+
+
+class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
+    """
+    Course Outcome CRUD.
+    Admin can add/manage CO numbers used by QP editor dropdowns.
+    """
+    queryset = AcV2CourseOutcome.objects.filter(is_active=True)
+    serializer_class = AcV2CourseOutcomeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        college_id = self.request.query_params.get('college')
+        if college_id:
+            qs = qs.filter(college_id=college_id)
+        return qs.order_by('display_order', 'number')
+
+    def perform_create(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        # Soft delete
+        instance.is_active = False
+        instance.save(update_fields=['is_active', 'updated_at'])
 
 
 # ============================================================================

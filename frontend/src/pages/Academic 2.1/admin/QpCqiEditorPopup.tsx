@@ -253,6 +253,7 @@ type Props = {
 
   // misc
   selectedClassTypeDefaultCoCount: number;
+  courseOutcomeNumbers?: number[];
   cycles: CycleOption[];
 
   // DB-backed token and operator registries
@@ -264,6 +265,7 @@ export default function QpCqiEditorPopup(props: Props) {
   if (!props.open) return null;
   const exam = props.selectedExamAssignmentItem?.exam;
   const cqi = exam?.cqi;
+  const coNumbers = Array.from(new Set((props.courseOutcomeNumbers || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/30 p-4 flex items-start justify-center overflow-auto">
@@ -364,30 +366,36 @@ export default function QpCqiEditorPopup(props: Props) {
                 {/* CO Selection */}
                 <div className="mt-4">
                   <div className="text-xs text-gray-500 mb-2">CO Selection</div>
-                  <div className="flex flex-wrap gap-3">
-                    {Array.from({ length: props.selectedClassTypeDefaultCoCount }, (_, i) => i + 1).map((co) => {
-                      const selected = (cqi?.cos || []).includes(co);
-                      return (
-                        <label key={co} className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={selected}
-                            disabled={!props.isEditing}
-                            onChange={(e) => {
-                              props.updateCqi((prev) => {
-                                const set = new Set(prev.cos || []);
-                                if (e.target.checked) set.add(co);
-                                else set.delete(co);
-                                return { ...prev, cos: Array.from(set).sort((a, b) => a - b) };
-                              });
-                            }}
-                            className="w-5 h-5"
-                          />
-                          <span className="text-gray-800">CO{co}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                  {coNumbers.length === 0 ? (
+                    <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      No Course Outcomes found. Please add Course Outcomes in Exam Management, Course Outcome tab.
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-3">
+                      {coNumbers.map((co) => {
+                        const selected = (cqi?.cos || []).includes(co);
+                        return (
+                          <label key={co} className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              disabled={!props.isEditing}
+                              onChange={(e) => {
+                                props.updateCqi((prev) => {
+                                  const set = new Set(prev.cos || []);
+                                  if (e.target.checked) set.add(co);
+                                  else set.delete(co);
+                                  return { ...prev, cos: Array.from(set).sort((a, b) => a - b) };
+                                });
+                              }}
+                              className="w-5 h-5"
+                            />
+                            <span className="text-gray-800">CO{co}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Exam Assignments Considered */}

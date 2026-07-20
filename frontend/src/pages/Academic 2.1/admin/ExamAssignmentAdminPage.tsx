@@ -438,8 +438,6 @@ export default function ExamAssignmentAdminPage() {
               >
                 <div className="font-medium text-sm text-gray-900 truncate">{exam.name || exam.qp_type}</div>
                 <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                  <span>{Number(exam.default_weight)}</span>
-                  <span>·</span>
                   <span>{(exam.pattern?.titles?.length || 0)} Qs</span>
                 </div>
               </div>
@@ -480,21 +478,13 @@ export default function ExamAssignmentAdminPage() {
 
               <div className="p-5 space-y-5">
                 {/* Metadata row */}
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Exam Name</label>
                     {isEditing ? (
                       <input value={formName} onChange={e => { setFormName(e.target.value); markDirty(); }} className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. CAT 1, SSA 1, Model Exam" />
                     ) : (
                       <div className="text-sm font-medium text-gray-900">{selectedExam.name || '—'}</div>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">Default Weight</label>
-                    {isEditing ? (
-                      <input type="number" min={0} step="any" value={formWeight} onChange={e => { setFormWeight(Number(e.target.value)); markDirty(); }} className="w-full px-3 py-1.5 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
-                    ) : (
-                      <div className="text-sm font-semibold text-blue-700">{Number(selectedExam.default_weight)}</div>
                     )}
                   </div>
                   <div>
@@ -807,18 +797,6 @@ export default function ExamAssignmentAdminPage() {
                   className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   autoFocus
                 />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Default Weight</label>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={newWeight}
-                  onChange={e => setNewWeight(Number(e.target.value))}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-400 mt-1">This weight will be pre-filled when assigned to a Class Type</p>
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Cycle</label>

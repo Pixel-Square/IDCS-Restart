@@ -3028,52 +3028,28 @@ export default function MarkEntryPage() {
           </table>
         </div>
 
-        {/* Watermark overlay - professional zigzag slanted seal images on published exams */}
+        {/* Watermark overlay - single centered seal on published exams */}
         {examInfo?.status === 'PUBLISHED' && sealWatermarkEnabled && (
-          <div className="absolute inset-0 pointer-events-none overflow-hidden">
-            {/* Professional zigzag watermark pattern with staggered rows extending below table */}
-            {[...Array(40)].map((_, idx) => {
-              const row = Math.floor(idx / 6);
-              const col = idx % 6;
-              // Zigzag: odd rows are offset by half a column width
-              const isOddRow = row % 2 === 1;
-              const offsetX = isOddRow ? 8.33 : 0; // Offset by half column (50%)
-              const xPercent = col * 16.67 + offsetX;
-              const yPercent = row * 14.3; // Tighter spacing for more rows below table
-              
-              // Vary opacity slightly for depth (0.08-0.15)
-              const baseOpacity = 0.08 + (idx % 3) * 0.035;
-              
-              return (
-                <div
-                  key={idx}
-                  className="absolute"
-                  style={{
-                    left: `${xPercent}%`,
-                    top: `${yPercent}%`,
-                    transform: 'translate(-50%, -50%) rotate(-45deg)',
-                    width: '100px',
-                    height: '100px',
-                    opacity: baseOpacity,
-                  }}
-                >
-                  {sealImageUrl ? (
-                    <img 
-                      src={sealImageUrl} 
-                      alt="Watermark" 
-                      className="w-full h-full object-contain"
-                      style={{ filter: 'grayscale(20%)' }}
-                    />
-                  ) : (
-                    <svg viewBox="0 0 200 200" className="w-full h-full">
-                      <circle cx="100" cy="100" r="95" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.8" />
-                      <circle cx="100" cy="100" r="60" fill="currentColor" opacity="0.95" />
-                      <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-                    </svg>
-                  )}
-                </div>
-              );
-            })}
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+            <div
+              className="w-56 h-56"
+              style={{ opacity: 0.12 }}
+            >
+              {sealImageUrl ? (
+                <img
+                  src={sealImageUrl}
+                  alt="Watermark"
+                  className="w-full h-full object-contain"
+                  style={{ filter: 'grayscale(20%)' }}
+                />
+              ) : (
+                <svg viewBox="0 0 200 200" className="w-full h-full text-slate-500">
+                  <circle cx="100" cy="100" r="95" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.8" />
+                  <circle cx="100" cy="100" r="60" fill="currentColor" opacity="0.95" />
+                  <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+                </svg>
+              )}
+            </div>
           </div>
         )}
       </div>

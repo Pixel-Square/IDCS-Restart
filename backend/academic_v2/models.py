@@ -684,6 +684,7 @@ class AcV2StudentMark(models.Model):
     co3_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co4_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co5_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    co6_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     
     # Total mark for this exam (sum of all questions)
     total_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
@@ -734,7 +735,8 @@ class AcV2StudentMark(models.Model):
         """Calculate CO marks based on question→CO mapping."""
         cos = qp_pattern.get('cos', [])
         
-        co_totals = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        max_supported_co = 6
+        co_totals = {i: 0 for i in range(1, max_supported_co + 1)}
 
         def _extract_cos(raw_co):
             """Normalize a CO spec into a validated list of CO numbers."""
@@ -745,7 +747,7 @@ class AcV2StudentMark(models.Model):
                     n = int(v)
                 except Exception:
                     return
-                if 1 <= n <= 5 and n not in out:
+                if 1 <= n <= max_supported_co and n not in out:
                     out.append(n)
 
             if raw_co is None:
@@ -795,11 +797,8 @@ class AcV2StudentMark(models.Model):
             for c in co_list:
                 co_totals[c] += split_mark
         
-        self.co1_mark = round(co_totals[1], 2)
-        self.co2_mark = round(co_totals[2], 2)
-        self.co3_mark = round(co_totals[3], 2)
-        self.co4_mark = round(co_totals[4], 2)
-        self.co5_mark = round(co_totals[5], 2)
+        for co_num in range(1, max_supported_co + 1):
+            setattr(self, f'co{co_num}_mark', round(co_totals[co_num], 2))
 
 
 class AcV2DraftMark(models.Model):
@@ -1062,6 +1061,7 @@ class AcV2InternalMark(models.Model):
     co3_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co4_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     co5_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    co6_total = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     
     # Final internal mark (e.g., /40)
     final_mark = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
@@ -1093,7 +1093,8 @@ class AcV2InternalMark(models.Model):
         """Calculate CO totals and final mark from weighted_marks."""
         wm = self.weighted_marks or {}
         
-        co_totals = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        max_supported_co = 6
+        co_totals = {i: 0 for i in range(1, max_supported_co + 1)}
         
         for key, value in wm.items():
             if value is None:
@@ -1102,14 +1103,11 @@ class AcV2InternalMark(models.Model):
             parts = key.split('_')
             if len(parts) == 2 and parts[1].startswith('CO'):
                 co_num = int(parts[1][2:])
-                if 1 <= co_num <= 5:
+                if 1 <= co_num <= max_supported_co:
                     co_totals[co_num] += float(value)
         
-        self.co1_total = round(co_totals[1], 2)
-        self.co2_total = round(co_totals[2], 2)
-        self.co3_total = round(co_totals[3], 2)
-        self.co4_total = round(co_totals[4], 2)
-        self.co5_total = round(co_totals[5], 2)
+        for co_num in range(1, max_supported_co + 1):
+            setattr(self, f'co{co_num}_total', round(co_totals[co_num], 2))
         
         self.final_mark = round(sum(co_totals.values()), 2)
 
@@ -1188,6 +1186,70 @@ class AcV2QpType(models.Model):
     
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+
+# ============================================================================
+# COURSE OUTCOME (Admin-managed CO master list)
+# ============================================================================
+
+class AcV2CourseOutcome(models.Model):
+    """
+    Master list of Course Outcomes (CO) used by Academic 2.1 editors.
+    Example rows: CO1, CO2, CO3, ...
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Numeric CO identifier used in question mappings (e.g., 1 for CO1)
+    number = models.PositiveIntegerField(db_index=True)
+
+    # Optional display label/description (e.g., "Problem Solving")
+    name = models.CharField(max_length=120, blank=True, default='')
+
+    # Explicit ordering for admin display and dropdown order
+    display_order = models.PositiveIntegerField(default=0, db_index=True)
+
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='acv2_course_outcomes',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_course_outcomes_updated',
+    )
+
+    class Meta:
+        db_table = 'acv2_course_outcome'
+        verbose_name = 'Course Outcome'
+        verbose_name_plural = 'Course Outcomes'
+        ordering = ['display_order', 'number']
+        constraints = [
+            UniqueConstraint(
+                fields=['number', 'college'],
+                condition=Q(college__isnull=False),
+                name='unique_acv2_co_number_per_college',
+            ),
+            UniqueConstraint(
+                fields=['number'],
+                condition=Q(college__isnull=True),
+                name='unique_acv2_co_number_global',
+            ),
+        ]
+
+    def __str__(self):
+        if self.name:
+            return f"CO{self.number} - {self.name}"
+        return f"CO{self.number}"
 
 
 # ============================================================================

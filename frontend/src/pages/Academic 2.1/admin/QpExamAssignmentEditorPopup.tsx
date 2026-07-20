@@ -1,31 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, X, Settings2, GripVertical, Copy, ClipboardPaste, Check, AlertTriangle, Save, Trash2, Edit3 } from 'lucide-react';
 import QpCqiEditorPopup from './QpCqiEditorPopup';
 
 const BTL_LEVELS = [1, 2, 3, 4, 5, 6];
-const CO_NUMBERS = [1, 2, 3, 4, 5];
-const CO_COMBINATIONS: number[][] = (() => {
-  const result: number[][] = [];
-  const gen = (start: number, len: number, current: number[]) => {
-    if (current.length === len) { result.push([...current]); return; }
-    for (let i = start; i <= 5; i++) gen(i + 1, len, [...current, i]);
-  };
-  for (let len = 2; len <= 5; len++) gen(1, len, []);
-  return result;
-})();
-const coToSelectVal = (co: number | number[] | null): string => {
-  if (co == null) return '';
-  if (Array.isArray(co)) return co.join(',');
-  return String(co);
-};
-const selectValToCo = (val: string): number | number[] | null => {
-  if (!val) return null;
-  if (val.includes(',')) return val.split(',').map(Number);
-  return Number(val);
+
+const toCoArray = (co: number | number[] | null): number[] => {
+  if (co == null) return [];
+  if (Array.isArray(co)) return co.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+  const value = Number(co);
+  return Number.isFinite(value) && value > 0 ? [value] : [];
 };
 const coLabel = (co: number | number[] | null): string => {
   if (co == null) return '—';
-  if (Array.isArray(co)) return co.map(c => `CO${c}`).join(' & ');
+  if (Array.isArray(co)) return co.join(',');
   return `CO${co}`;
 };
 
@@ -144,6 +132,7 @@ type Props = {
   openTokenPicker: (insert: (token: string) => void) => void;
 
   selectedClassTypeDefaultCoCount: number;
+  courseOutcomeNumbers?: number[];
   cycles: CycleOption[];
 };
 
@@ -154,11 +143,75 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
   const [schemaInputError, setSchemaInputError] = useState<string | null>(null);
   const [localEditing, setLocalEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [activeCoPickerRow, setActiveCoPickerRow] = useState<number | null>(null);
+  const [coPickerPos, setCoPickerPos] = useState<{ top: number; left: number } | null>(null);
+  const coPickerRef = useRef<HTMLDivElement | null>(null);
 
   if (!props.open || !props.selectedExamAssignmentItem) return null;
 
   const exam = props.selectedExamAssignmentItem.exam;
   const markManager = props.markManager;
+  const coNumbers = Array.from(
+    new Set((props.courseOutcomeNumbers || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)),
+  ).sort((a, b) => a - b);
+
+  const applyCheckedCos = (rowIndex: number, checkedValues: number[]) => {
+    const normalized = Array.from(new Set(checkedValues.filter((n) => Number.isFinite(n) && n > 0))).sort((a, b) => a - b);
+    if (normalized.length === 0) {
+      props.onUpdateRow(rowIndex, 'co_number', null);
+      return;
+    }
+    if (normalized.length === 1) {
+      props.onUpdateRow(rowIndex, 'co_number', normalized[0]);
+      return;
+    }
+    props.onUpdateRow(rowIndex, 'co_number', normalized);
+  };
+
+  const closeCoPicker = () => {
+    setActiveCoPickerRow(null);
+    setCoPickerPos(null);
+  };
+
+  const openCoPicker = (rowIndex: number, el: HTMLButtonElement) => {
+    const rect = el.getBoundingClientRect();
+    const pickerWidth = 208;
+    const viewportPadding = 8;
+    const left = Math.max(
+      viewportPadding,
+      Math.min(rect.right - pickerWidth, window.innerWidth - pickerWidth - viewportPadding),
+    );
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 280);
+    setActiveCoPickerRow(rowIndex);
+    setCoPickerPos({ top, left });
+  };
+
+  useEffect(() => {
+    if (activeCoPickerRow == null) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const clickedPicker = coPickerRef.current?.contains(target);
+      const clickedButton = target.closest('[data-co-picker-btn="true"]');
+      if (!clickedPicker && !clickedButton) {
+        closeCoPicker();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeCoPicker();
+    };
+    const onViewportChange = () => closeCoPicker();
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange, true);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('scroll', onViewportChange, true);
+    };
+  }, [activeCoPickerRow]);
 
   const updateMarkManager = (updater: (prev: MarkManagerConfig) => MarkManagerConfig) => {
     const next = updater(markManager);
@@ -377,6 +430,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               buildIfFromClauses={props.buildIfFromClauses as any}
               appendToken={props.appendToken}
               selectedClassTypeDefaultCoCount={props.selectedClassTypeDefaultCoCount}
+              courseOutcomeNumbers={props.courseOutcomeNumbers}
               cycles={props.cycles}
             />
           ) : (
@@ -480,8 +534,13 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
 
                     {markManager.mode === 'admin_define' && (
                       <div className="mt-2">
+                        {coNumbers.length === 0 && (
+                          <div className="mb-3 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                            No Course Outcomes found. Please add Course Outcomes in Exam Management, Course Outcome tab.
+                          </div>
+                        )}
                         <div className="flex flex-wrap items-center gap-3 mb-3">
-                          {[1,2,3,4,5].map(co => (
+                          {coNumbers.map(co => (
                             <label key={co} className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg cursor-pointer ${markManager.cos[co]?.enabled ? 'bg-teal-50 border-teal-300' : 'hover:bg-gray-50'}`}>
                               <input type="checkbox" checked={markManager.cos[co]?.enabled || false} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cos: { ...prev.cos, [co]: { ...prev.cos[co], enabled: e.target.checked } } }))} className="w-4 h-4 accent-teal-600" />
                               <span className="text-sm font-medium">CO-{co}</span>
@@ -500,7 +559,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
                               <input type="number" min={0} value={markManager.cia_max_marks} disabled={!isCurrentlyEditing} onChange={e => updateMarkManager(prev => ({ ...prev, cia_max_marks: Number(e.target.value) || 0 }))} className="w-full px-2 py-1.5 border rounded text-sm" />
                             </div>
                           )}
-                          {[1,2,3,4,5].filter(co => markManager.cos[co]?.enabled).map(co => (
+                          {coNumbers.filter(co => markManager.cos[co]?.enabled).map(co => (
                             <div key={co} className="border rounded-lg p-3 bg-gray-50">
                               <div className="text-sm font-semibold mb-2">CO-{co}</div>
                               <label className="block text-xs text-gray-500">No. of items</label>
@@ -602,26 +661,22 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
                           </td>
                           <td className="px-2 py-1.5 text-center">
                             {isCurrentlyEditing ? (
-                              <select
-                                value={coToSelectVal(row.co_number)}
-                                onChange={e => props.onUpdateRow(idx, 'co_number', selectValToCo(e.target.value))}
-                                className="w-full px-2 py-1.5 border rounded text-sm focus:ring-1 focus:ring-blue-500"
+                              <button
+                                type="button"
+                                data-co-picker-btn="true"
+                                onClick={(e) => {
+                                  if (coNumbers.length === 0) return;
+                                  if (activeCoPickerRow === idx) {
+                                    closeCoPicker();
+                                    return;
+                                  }
+                                  openCoPicker(idx, e.currentTarget);
+                                }}
+                                disabled={coNumbers.length === 0}
+                                className="w-full px-2 py-1.5 border rounded text-sm text-left bg-white hover:bg-gray-50 focus:ring-1 focus:ring-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
                               >
-                                <option value="">—</option>
-                                <optgroup label="Single CO">
-                                  {CO_NUMBERS.map(c => <option key={c} value={String(c)}>CO{c}</option>)}
-                                </optgroup>
-                                <optgroup label="Combination" style={{ background: '#f3e8ff' }}>
-                                  {CO_COMBINATIONS.map(combo => {
-                                    const val = combo.join(',');
-                                    return (
-                                      <option key={val} value={val} style={{ background: '#f3e8ff' }}>
-                                        {combo.map(c => `CO${c}`).join(' & ')}
-                                      </option>
-                                    );
-                                  })}
-                                </optgroup>
-                              </select>
+                                {coNumbers.length === 0 ? 'No COs' : (row.co_number == null ? 'CO' : coLabel(row.co_number))}
+                              </button>
                             ) : (
                               row.co_number != null ? (
                                 Array.isArray(row.co_number)
@@ -629,6 +684,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
                                   : <span className="bg-emerald-100 text-emerald-700 text-xs px-1.5 py-0.5 rounded">{coLabel(row.co_number)}</span>
                               ) : <span className="text-gray-300 text-xs">—</span>
                             )}
+
                           </td>
                           <td className="px-2 py-1.5 text-center">
                             <button
@@ -712,6 +768,63 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* CO Picker Portal */}
+      {isCurrentlyEditing && activeCoPickerRow != null && coPickerPos && createPortal(
+        <div
+          ref={coPickerRef}
+          className="fixed z-[80] w-52 rounded-lg border bg-white shadow-lg p-2 text-left"
+          style={{ top: `${coPickerPos.top}px`, left: `${coPickerPos.left}px` }}
+        >
+          <div className="text-[11px] text-gray-500 px-1 pb-1">Select COs</div>
+          <div className="max-h-44 overflow-auto space-y-1">
+            {coNumbers.map((coNum) => {
+              const row = props.localRows[activeCoPickerRow];
+              const checked = row ? toCoArray(row.co_number).includes(coNum) : false;
+              return (
+                <label key={coNum} className="flex items-center gap-2 px-1 py-1 rounded hover:bg-gray-50 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => {
+                      const currentRow = props.localRows[activeCoPickerRow];
+                      if (!currentRow) return;
+                      const current = toCoArray(currentRow.co_number);
+                      const next = e.target.checked
+                        ? [...current, coNum]
+                        : current.filter((n) => n !== coNum);
+                      applyCheckedCos(activeCoPickerRow, next);
+                      setLocalEditing(true);
+                    }}
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                  <span>CO{coNum}</span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="pt-2 mt-2 border-t flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => {
+                applyCheckedCos(activeCoPickerRow, []);
+                setLocalEditing(true);
+              }}
+              className="text-xs text-red-600 hover:underline"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={closeCoPicker}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Done
+            </button>
+          </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

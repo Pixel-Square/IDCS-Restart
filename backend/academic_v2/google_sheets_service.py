@@ -461,7 +461,7 @@ def sync_google_sheet_to_backend(
         qp_pattern = exam_assignment.get_qp_pattern()
         mark_obj.calculate_co_marks(qp_pattern)
         mark_obj.calculate_total()
-        mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks', 'total_mark', 'is_absent', 'is_exempted', 'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark'])
+        mark_obj.save(update_fields=['reg_no', 'student_name', 'question_marks', 'total_mark', 'is_absent', 'is_exempted', 'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark'])
         updated_count += 1
 
     return {'spreadsheetId': spreadsheet_id, 'sheetName': sheet_title, 'updatedRows': updated_count}

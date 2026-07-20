@@ -58,6 +58,26 @@ class CdapActiveLearningAnalysisMapping(models.Model):
         db_table = 'cdap_active_learning_analysis_mapping'
 
 
+<<<<<<< HEAD
+=======
+class CdapTemplate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(max_length=64, unique=True)
+    name = models.TextField()
+    header_row_line = models.PositiveIntegerField(default=12)
+    sheet_number = models.PositiveIntegerField(default=1)
+    field_definitions = models.JSONField(default=list)
+    is_active = models.BooleanField(default=False)
+    created_by = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'cdap_templates'
+
+
+>>>>>>> d12832d (n5)
 class ObeAssessmentMasterConfig(models.Model):
     id = models.IntegerField(primary_key=True)
     config = models.JSONField(default=dict)

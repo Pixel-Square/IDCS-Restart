@@ -9,6 +9,7 @@ from .models import (
     Weigthts,
     AcV2QpPattern,
     AcV2QpType,
+    AcV2CourseOutcome,
     AcV2Question,
     AcV2QpAssignment,
     AcV2Course,
@@ -138,6 +139,15 @@ class AcV2QpTypeAdmin(admin.ModelAdmin):
     search_fields = ['name', 'code', 'description']
     readonly_fields = ['created_at', 'updated_at']
     fields = ['name', 'code', 'description', 'college', 'is_active', 'updated_by', 'created_at', 'updated_at']
+
+
+@admin.register(AcV2CourseOutcome)
+class AcV2CourseOutcomeAdmin(admin.ModelAdmin):
+    list_display = ['number', 'name', 'display_order', 'college', 'is_active', 'updated_at']
+    list_filter = ['is_active', 'college']
+    search_fields = ['number', 'name']
+    readonly_fields = ['created_at', 'updated_at']
+    fields = ['number', 'name', 'display_order', 'college', 'is_active', 'updated_by', 'created_at', 'updated_at']
 
 
 @admin.register(AcV2Question)

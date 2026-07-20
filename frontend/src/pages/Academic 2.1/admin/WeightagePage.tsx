@@ -91,9 +91,9 @@ interface QpTypeRecord {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function deriveCos(pattern: QpPattern['pattern']): number[] {
+function deriveCos(pattern: QpPattern['pattern'], adminCos: number[]): number[] {
   const p = pattern;
-  if (!p || !Array.isArray(p.cos)) return [1, 2, 3, 4, 5];
+  if (!p || !Array.isArray(p.cos)) return adminCos;
   const enabled = Array.isArray(p.enabled) ? p.enabled : p.cos.map(() => true);
   const set = new Set<number>();
   p.cos.forEach((co, i) => {
@@ -101,7 +101,7 @@ function deriveCos(pattern: QpPattern['pattern']): number[] {
       set.add(co);
     }
   });
-  return set.size > 0 ? [...set].sort((a, b) => a - b) : [1, 2, 3, 4, 5];
+  return set.size > 0 ? [...set].sort((a, b) => a - b) : adminCos;
 }
 
 /** Compute average marks per item for each CO from the Mark Manager pattern config. */
@@ -136,8 +136,8 @@ function findWeightEntry(
   );
 }
 
-function buildDefaultEntry(pattern: QpPattern): ExamAssignment {
-  const cos = deriveCos(pattern.pattern);
+function buildDefaultEntry(pattern: QpPattern, adminCos: number[]): ExamAssignment {
+  const cos = deriveCos(pattern.pattern, adminCos);
   const isMm = !!pattern.pattern?.mark_manager?.enabled;
   const wt = Number(pattern.default_weight) || 0;
   const coWeights: Record<string, number> = {};
@@ -169,8 +169,8 @@ function buildDefaultEntry(pattern: QpPattern): ExamAssignment {
   };
 }
 
-function hydrate(ea: ExamAssignment, pattern: QpPattern): ExamAssignment {
-  const cos = deriveCos(pattern.pattern);
+function hydrate(ea: ExamAssignment, pattern: QpPattern, adminCos: number[]): ExamAssignment {
+  const cos = deriveCos(pattern.pattern, adminCos);
   const isMm = !!pattern.pattern?.mark_manager?.enabled;
   const base = ea.co_weights || {};
   // For MM exams: if no existing per-CO weights, seed with per-item averages from pattern
@@ -202,24 +202,37 @@ export default function WeightagePage() {
   const [localExams, setLocalExams] = useState<ExamAssignment[]>([]);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [courseOutcomeNumbers, setCourseOutcomeNumbers] = useState<number[]>([]);
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const [ctRes, ptRes, qtRes] = await Promise.all([
+      const [ctRes, ptRes, qtRes, coRes] = await Promise.all([
         fetchWithAuth('/api/academic-v2/class-types/'),
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
         fetchWithAuth('/api/academic-v2/qp-types/'),
+        fetchWithAuth('/api/academic-v2/course-outcomes/'),
       ]);
       if (!ctRes.ok) throw new Error('class-types');
-      const [ctData, ptData, qtData] = await Promise.all([
+      const [ctData, ptData, qtData, coData] = await Promise.all([
         ctRes.json(),
         ptRes.ok ? ptRes.json() : { results: [] },
         qtRes.ok ? qtRes.json() : { results: [] },
+        coRes.ok ? coRes.json() : { results: [] },
       ]);
       setClassTypes(Array.isArray(ctData) ? ctData : (ctData.results || []));
       setQpPatterns(Array.isArray(ptData) ? ptData : (ptData.results || []));
       setQpTypeRecords(Array.isArray(qtData) ? qtData : (qtData.results || []));
+      const coRows = Array.isArray(coData) ? coData : (coData.results || []);
+      const coNums = Array.from(
+        new Set(
+          coRows
+            .filter((row: any) => row?.is_active !== false)
+            .map((row: any) => Number(row?.number))
+            .filter((n: number) => Number.isFinite(n) && n > 0),
+        ),
+      ).sort((a, b) => a - b);
+      setCourseOutcomeNumbers(coNums);
     } catch {
       setMessage({ type: 'error', text: 'Failed to load data' });
     } finally {
@@ -270,10 +283,14 @@ export default function WeightagePage() {
   };
 
   const openPopup = (qpTypeKey: string) => {
+    if (courseOutcomeNumbers.length === 0) {
+      setMessage({ type: 'error', text: 'No Course Outcomes configured. Please add them in Exam Management -> Course Outcome.' });
+      return;
+    }
     const patterns = patternsByQpType[qpTypeKey] || [];
     const exams = patterns.map(p => {
       const existing = findWeightEntry(selectedCt?.exam_assignments || [], p);
-      return hydrate(existing ?? buildDefaultEntry(p), p);
+      return hydrate(existing ?? buildDefaultEntry(p, courseOutcomeNumbers), p, courseOutcomeNumbers);
     });
     setLocalExams(JSON.parse(JSON.stringify(exams)));
     setIsDirty(false);
@@ -337,13 +354,19 @@ export default function WeightagePage() {
         </div>
       )}
 
+      {courseOutcomeNumbers.length === 0 && (
+        <div className="p-3 rounded-lg text-sm bg-red-50 text-red-800">
+          No Course Outcomes configured. Add them in Exam Management, Course Outcome tab, before setting weightages.
+        </div>
+      )}
+
       <div className="grid grid-cols-4 gap-5">
         <div className="col-span-1 bg-white rounded-lg shadow self-start overflow-hidden">
           <div className="px-3 py-2.5 bg-gray-50 border-b text-xs font-semibold text-gray-600 uppercase tracking-wide">Class Types</div>
           {classTypes.length === 0 ? (
             <div className="p-6 text-center text-gray-400 text-sm">
               No class types.{' '}
-              <Link to="/academic-v2/admin/class-types" className="text-blue-600 hover:underline">Create one →</Link>
+              <Link to="/academic-v2/admin/exam-management?tab=class-types" className="text-blue-600 hover:underline">Create one →</Link>
             </div>
           ) : (
             classTypes.map(ct => (
@@ -442,7 +465,7 @@ export default function WeightagePage() {
                           <div>
                             <div className="text-[10px] text-gray-500 mb-1.5 font-medium uppercase tracking-wide">Without Exam</div>
                             <div className="flex flex-wrap gap-1.5">
-                              {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
+                              {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -501,7 +524,7 @@ export default function WeightagePage() {
                                 />
                                 Same for each CO
                               </label>
-                              {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
+                              {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -533,7 +556,7 @@ export default function WeightagePage() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
-                          {Array.from({ length: 5 }, (_, i) => i + 1).map(co => {
+                          {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
                             const coKey = String(co);
                             const coWeight = (exam.co_weights || {})[coKey] ?? 0;
                             return (

@@ -146,6 +146,14 @@ interface CycleOption {
   is_active?: boolean;
 }
 
+interface CourseOutcome {
+  id: string;
+  number: number;
+  name?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
 const BTL_LEVELS = [1, 2, 3, 4, 5, 6];
 const CO_NUMBERS = [1, 2, 3, 4, 5];
 
@@ -497,6 +505,7 @@ export default function QpPatternEditorPage() {
   const [patterns, setPatterns] = useState<QpPattern[]>([]);
   const [allExamAssignments, setAllExamAssignments] = useState<QpPattern[]>([]);
   const [cycles, setCycles] = useState<CycleOption[]>([]);
+  const [courseOutcomes, setCourseOutcomes] = useState<CourseOutcome[]>([]);
   const [selectedClassTypeId, setSelectedClassTypeId] = useState<string | null>(null);
   const [selectedQpType, setSelectedQpType] = useState<string>('');
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
@@ -550,6 +559,16 @@ export default function QpPatternEditorPage() {
   const [dbCqiTokens, setDbCqiTokens] = useState<DbCqiToken[]>([]);
   const [dbCqiOperators, setDbCqiOperators] = useState<DbCqiOperator[]>([]);
 
+  const courseOutcomeNumbers = React.useMemo(() => {
+    const values = (courseOutcomes || [])
+      .filter((co) => co && co.is_active !== false)
+      .map((co) => Number(co.number))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b);
+    const unique = Array.from(new Set(values));
+    return unique.length > 0 ? unique : [1, 2, 3, 4, 5];
+  }, [courseOutcomes]);
+
   const cqiConfigRef = React.useRef<HTMLDivElement | null>(null);
 
   const markDirty = () => setIsDirty(true);
@@ -568,13 +587,14 @@ export default function QpPatternEditorPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [classTypeRes, qpTypeRes, patternRes, cycleRes, tokenRes, operatorRes] = await Promise.all([
+      const [classTypeRes, qpTypeRes, patternRes, cycleRes, tokenRes, operatorRes, coRes] = await Promise.all([
         fetchWithAuth('/api/academic-v2/class-types/'),
         fetchWithAuth('/api/academic-v2/qp-types/'),
         fetchWithAuth('/api/academic-v2/qp-patterns/'),
         fetchWithAuth('/api/academic-v2/cycles/'),
         fetchWithAuth('/api/academic-v2/cqi-tokens/?condition_only=0'),
         fetchWithAuth('/api/academic-v2/cqi-operators/'),
+        fetchWithAuth('/api/academic-v2/course-outcomes/').catch(() => null),
       ]);
 
       if (!classTypeRes.ok || !patternRes.ok) throw new Error('Failed to load');
@@ -585,11 +605,13 @@ export default function QpPatternEditorPage() {
       const cycleData = cycleRes.ok ? await cycleRes.json() : { results: [] };
       const tokenData = tokenRes.ok ? await tokenRes.json() : { results: [] };
       const operatorData = operatorRes.ok ? await operatorRes.json() : { results: [] };
+      const coData = coRes && coRes.ok ? await coRes.json() : { results: [] };
       
       const classTypeList = Array.isArray(classTypeData) ? classTypeData : (classTypeData.results || []);
       const qpTypeList = Array.isArray(qpTypeData) ? qpTypeData : (qpTypeData.results || []);
       const patternList = Array.isArray(patternData) ? patternData : (patternData.results || []);
       const cycleList = Array.isArray(cycleData) ? cycleData : (cycleData.results || []);
+      const coList = Array.isArray(coData) ? coData : (coData.results || []);
       const tokenList: DbCqiToken[] = Array.isArray(tokenData) ? tokenData : (tokenData.results || []);
       const operatorList: DbCqiOperator[] = Array.isArray(operatorData) ? operatorData : (operatorData.results || []);
 
@@ -601,6 +623,7 @@ export default function QpPatternEditorPage() {
       setPatterns(patternList);
       setAllExamAssignments(examTemplates);
       setCycles(cycleList);
+      setCourseOutcomes(coList);
       setDbCqiTokens(tokenList);
       setDbCqiOperators(operatorList);
 
@@ -614,6 +637,7 @@ export default function QpPatternEditorPage() {
         patterns: patternList.length,
         exams: examTemplates.length,
         cycles: cycleList.length,
+        courseOutcomes: coList.length,
         cqiTokens: tokenList.length,
         cqiOperators: operatorList.length,
       });
@@ -1018,8 +1042,7 @@ export default function QpPatternEditorPage() {
     const targetQpType = String(selectedQpType || '').trim();
     if (!targetQpType) return;
 
-    const maxCo = Number(selectedClassType?.default_co_count ?? 5) || 5;
-    const defaultCos = Array.from({ length: maxCo }, (_, i) => i + 1);
+    const defaultCos = [...courseOutcomeNumbers];
 
     const nextNumber = (visibleExamAssignmentItems || []).filter((x) => isCqiAssignment(x.exam)).length + 1;
     const examCode = `CQI${nextNumber}`;
@@ -1099,7 +1122,9 @@ export default function QpPatternEditorPage() {
   };
 
   const cqiVariables = React.useMemo(() => {
-    const maxCo = Number(selectedClassType?.default_co_count ?? 5) || 5;
+    const maxCo = courseOutcomeNumbers.length > 0
+      ? Math.max(...courseOutcomeNumbers)
+      : (Number(selectedClassType?.default_co_count ?? 5) || 5);
     const baseExams = (visibleExamAssignments || []).filter((e) => !isCqiAssignment(e));
     const baseVars = generateCqiVariables(baseExams, maxCo);
     const sharedCustom = normalizeCustomVarList(globalCqiCustomVars)
@@ -1144,7 +1169,7 @@ export default function QpPatternEditorPage() {
       });
 
     return [...sharedCustom, ...legacyCustom, ...baseVars, ...dbTokenVars];
-  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars, dbCqiTokens]);
+  }, [visibleExamAssignments, selectedClassType, selectedExamAssignmentItem?.exam?.cqi?.custom_vars, globalCqiCustomVars, dbCqiTokens, courseOutcomeNumbers]);
 
   const groupedCqiVariables = React.useMemo(() => {
     return CQI_TOKEN_SECTION_ORDER.map((sectionKey) => ({
@@ -2971,6 +2996,7 @@ export default function QpPatternEditorPage() {
           appendToken={appendToken}
           openTokenPicker={openTokenPicker}
           selectedClassTypeDefaultCoCount={Number(selectedClassType?.default_co_count ?? 5) || 5}
+          courseOutcomeNumbers={courseOutcomeNumbers}
           cycles={cycles}
         />
       )}

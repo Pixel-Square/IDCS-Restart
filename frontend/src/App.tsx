@@ -126,10 +126,8 @@ const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/Aca
 const VisualAdminDashboard = safeLazy(() => import('./pages/visual_admin/VisualAdminDashboard'), 'VisualAdminDashboard');
 const VisualAdminURLsPage = safeLazy(() => import('./pages/visual_admin/VisualAdminURLsPage'), 'VisualAdminURLsPage');
 const AcV2PublishControlPage = safeLazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'), 'PublishControlPage');
-const AcV2CycleManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/CycleManagementPage'), 'CycleManagementPage');
-const AcV2ClassTypeEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/ClassTypeEditorPage'), 'ClassTypeEditorPage');
+const AcV2ExamManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/ExamManagementPage'), 'ExamManagementPage');
 const AcV2QpPatternEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'), 'QpPatternEditorPage');
-const AcV2ExamAssignmentAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/ExamAssignmentAdminPage'), 'ExamAssignmentAdminPage');
 const AcV2ApprovalInboxPage = safeLazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'), 'ApprovalInboxPage');
 const AcV2InternalMarkAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'), 'InternalMarkAdminPage');
 const AcV2WeightagePage = safeLazy(() => import('./pages/Academic 2.1/admin/WeightagePage'), 'WeightagePage');
@@ -144,6 +142,8 @@ const AcV2BypassLogsPage = safeLazy(() => import('./pages/Academic 2.1/admin/Byp
 const AcV2BypassShareLandingPage = safeLazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'), 'BypassShareLandingPage');
 const AcV2PassMarkSettingsPage = safeLazy(() => import('./pages/Academic 2.1/admin/SettingsPage'), 'SettingsPage');
 const AcV2GoogleSheetsPage = safeLazy(() => import('./pages/Academic 2.1/admin/GoogleSheetsPage'), 'GoogleSheetsPage');
+const AcV2CdapTemplateEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/cdap/CDAPTemplateEditorPage'), 'CDAPTemplateEditorPage');
+const AcV2CdapTemplatesPage = AcV2CdapTemplateEditorPage;
 const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
 const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
 const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
@@ -778,7 +778,7 @@ export default function App() {
                   }
                 />
                 <Route
-                  path="/academic-v2/admin/cycles"
+                  path="/academic-v2/admin/exam-management"
                   element={
                     <ProtectedRoute
                       user={user}
@@ -787,10 +787,21 @@ export default function App() {
                       element={
                         <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CycleManagementPage />
+                          <AcV2ExamManagementPage />
                         </React.Suspense>
                         </LazyErrorBoundary>
                       }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/cycles"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={<Navigate to="/academic-v2/admin/exam-management?tab=cycles" replace />}
                     />
                   }
                 />
@@ -801,13 +812,7 @@ export default function App() {
                       user={user}
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2ClassTypeEditorPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
+                      element={<Navigate to="/academic-v2/admin/exam-management?tab=class-types" replace />}
                     />
                   }
                 />
@@ -835,13 +840,7 @@ export default function App() {
                       user={user}
                       requiredRoles={['IQAC']}
                       requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2ExamAssignmentAdminPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
+                      element={<Navigate to="/academic-v2/admin/exam-management?tab=exam-assignments" replace />}
                     />
                   }
                 />
@@ -923,7 +922,7 @@ export default function App() {
                       element={
                         <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CdapMonitorPage />
+                          <Navigate to="/academic-v2/admin/cdap-templates" replace />
                         </React.Suspense>
                         </LazyErrorBoundary>
                       }

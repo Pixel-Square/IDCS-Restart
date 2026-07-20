@@ -148,9 +148,10 @@ export default function LearnerCentricApproachPage() {
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: 'array', cellText: true });
-      const sheetName = Array.isArray(workbook.SheetNames) && workbook.SheetNames.length > 0 ? workbook.SheetNames[0] : null;
+      const sheetIndex = Math.max(0, (template.sheetNumber || 1) - 1);
+      const sheetName = Array.isArray(workbook.SheetNames) && workbook.SheetNames.length > sheetIndex ? workbook.SheetNames[sheetIndex] : null;
       if (!sheetName) {
-        throw new Error('No sheets found in the uploaded file.');
+        throw new Error(`Sheet #${template.sheetNumber || 1} not found in the uploaded file. The file contains ${Array.isArray(workbook.SheetNames) ? workbook.SheetNames.length : 0} sheet(s).`);
       }
       const sheet = workbook.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false, raw: true }) as any[][];

@@ -21,6 +21,7 @@ from .models import (
     AcV2EditRequest,
     AcV2InternalMark,
     AcV2QpType,
+    AcV2CourseOutcome,
     AcV2Cycle,
     AcV2PassMarkSetting,
     AcV2MyMarksSetting,
@@ -422,7 +423,7 @@ class AcV2StudentMarkSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'exam_assignment',
             'student', 'reg_no', 'student_name',
-            'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark',
+            'co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark',
             'total_mark', 'weighted_mark',
             'question_marks',
             'is_absent', 'is_exempted', 'remarks',
@@ -630,7 +631,7 @@ class AcV2InternalMarkSerializer(serializers.ModelSerializer):
             'id', 'section', 'student',
             'reg_no', 'student_name',
             'weighted_marks',
-            'co1_total', 'co2_total', 'co3_total', 'co4_total', 'co5_total',
+            'co1_total', 'co2_total', 'co3_total', 'co4_total', 'co5_total', 'co6_total',
             'final_mark', 'max_mark',
             'computed_at',
         ]
@@ -689,6 +690,18 @@ class AcV2CycleSerializer(serializers.ModelSerializer):
             'id', 'name', 'code', 'description',
             'college', 'is_active', 'inactive_semester_ids',
             'order', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AcV2CourseOutcomeSerializer(serializers.ModelSerializer):
+    """Serializer for Course Outcomes used in QP editor CO dropdowns."""
+
+    class Meta:
+        model = AcV2CourseOutcome
+        fields = [
+            'id', 'number', 'name', 'display_order',
+            'is_active', 'college', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 

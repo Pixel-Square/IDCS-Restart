@@ -10,6 +10,7 @@ from .views import (
     AcV2ClassTypeViewSet,
     AcV2CycleViewSet,
     AcV2QpTypeViewSet,
+    AcV2CourseOutcomeViewSet,
     AcV2QpPatternViewSet,
     AcV2CourseViewSet,
     AcV2SectionViewSet,
@@ -80,6 +81,7 @@ router.register(r'semester-configs', AcV2SemesterConfigViewSet, basename='semest
 router.register(r'class-types', AcV2ClassTypeViewSet, basename='class-type')
 router.register(r'cycles', AcV2CycleViewSet, basename='cycle')
 router.register(r'qp-types', AcV2QpTypeViewSet, basename='qp-type')
+router.register(r'course-outcomes', AcV2CourseOutcomeViewSet, basename='course-outcome')
 router.register(r'qp-patterns', AcV2QpPatternViewSet, basename='qp-pattern')
 router.register(r'courses', AcV2CourseViewSet, basename='course')
 router.register(r'sections', AcV2SectionViewSet, basename='section')

@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Clock, Lock, Unlock, CheckCircle, AlertTriangle, Shield, Save, RefreshCw, Trash2, X } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
+import { fetchRoles } from '../../../services/accounts';
 
 interface Semester {
   id: string | number;
@@ -40,6 +41,7 @@ export default function PublishControlPage() {
   const [saving, setSaving] = useState(false);
   const [semesters, setSemesters] = useState<Semester[]>([]);
   const [configs, setConfigs] = useState<SemesterConfig[]>([]);
+  const [availableWorkflowRoles, setAvailableWorkflowRoles] = useState<string[]>([]);
   const [selectedSemester, setSelectedSemester] = useState<string>('');
   const [isDirty, setIsDirty] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -68,8 +70,6 @@ export default function PublishControlPage() {
     seal_watermark_enabled: false,
   });
 
-  const AVAILABLE_WORKFLOW_ROLES = ['HOD', 'IQAC', 'ADMIN'] as const;
-
   const normalizeWorkflow = (wf: any): string[] => {
     const raw = Array.isArray(wf) ? wf : [];
     const out: string[] = [];
@@ -93,14 +93,17 @@ export default function PublishControlPage() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [semRes, configRes] = await Promise.all([
+      const [semRes, configRes, roleRows] = await Promise.all([
         fetchWithAuth('/api/academics/semesters/').then(r => r.ok ? r.json() : []),
         fetchWithAuth('/api/academic-v2/semester-configs/').then(r => r.ok ? r.json() : []),
+        fetchRoles().catch(() => []),
       ]);
       const semArray = Array.isArray(semRes) ? semRes : (semRes?.results || []);
       const configArray = Array.isArray(configRes) ? configRes : (configRes?.results || []);
+      const uniqueRoles = Array.from(new Set((roleRows || []).map((r) => String(r || '').trim().toUpperCase()).filter(Boolean))).sort();
       setSemesters(semArray);
       setConfigs(configArray);
+      setAvailableWorkflowRoles(uniqueRoles);
 
       // Preserve user selection on refresh. Only auto-select current when nothing selected.
       if (!selectedSemester) {
@@ -171,7 +174,7 @@ export default function PublishControlPage() {
   const addWorkflowRole = () => {
     setLocalConfig(prev => {
       const current = normalizeWorkflow(prev.approval_workflow);
-      const next = AVAILABLE_WORKFLOW_ROLES.find(r => !current.includes(r)) || AVAILABLE_WORKFLOW_ROLES[0];
+      const next = availableWorkflowRoles.find(r => !current.includes(r)) || availableWorkflowRoles[0] || 'HOD';
       return { ...prev, approval_workflow: normalizeWorkflow([...current, next]) };
     });
     setIsDirty(true);
@@ -400,6 +403,10 @@ export default function PublishControlPage() {
   const selectedTitle = selectedSemObj
     ? `${selectedSemObj.name} ${selectedSemObj.status === 'CURRENT' ? '(Current)' : ''}`
     : 'Select a semester';
+  const roleOptions = Array.from(new Set([
+    ...availableWorkflowRoles,
+    ...normalizeWorkflow(localConfig.approval_workflow),
+  ])).sort();
 
   return (
     <div className="p-6 w-full max-w-none space-y-6">
@@ -621,6 +628,7 @@ export default function PublishControlPage() {
                   <button
                     type="button"
                     onClick={addWorkflowRole}
+                    disabled={roleOptions.length === 0}
                     className="px-3 py-1.5 rounded-lg bg-white border text-sm font-medium text-gray-700 hover:bg-gray-50"
                   >
                     Add role
@@ -639,7 +647,7 @@ export default function PublishControlPage() {
                             onChange={(e) => updateWorkflowRoleAt(idx, e.target.value)}
                             className="px-2 py-1 bg-white border rounded text-sm focus:ring-2 focus:ring-blue-500"
                           >
-                            {AVAILABLE_WORKFLOW_ROLES.map(r => (
+                            {roleOptions.map(r => (
                               <option key={r} value={r}>{r}</option>
                             ))}
                           </select>

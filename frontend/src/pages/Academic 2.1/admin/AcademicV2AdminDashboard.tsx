@@ -7,8 +7,6 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   Lock,
-  RotateCw,
-  BookOpen,
   FileText,
   CheckCircle,
   BarChart2,
@@ -28,25 +26,11 @@ interface AdminPage {
 
 const adminPages: AdminPage[] = [
   {
-    title: 'Cycle Management',
-    path: '/academic-v2/admin/cycles',
-    description: 'Create and manage academic cycles',
-    icon: <RotateCw size={32} />,
-    order: 1,
-  },
-  {
-    title: 'Exam Assignments',
-    path: '/academic-v2/admin/exam-assignments',
-    description: 'Create reusable exam templates with question customization',
+    title: 'Exam Management',
+    path: '/academic-v2/admin/exam-management',
+    description: 'Manage academic cycles, exam assignments, and class types',
     icon: <Grid3x3 size={32} />,
-    order: 2,
-  },
-  {
-    title: 'Class Types',
-    path: '/academic-v2/admin/class-types',
-    description: 'Manage class types and exam assignments',
-    icon: <BookOpen size={32} />,
-    order: 3,
+    order: 1,
   },
   {
     title: 'QP Patterns',

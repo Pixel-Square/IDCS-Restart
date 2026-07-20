@@ -371,7 +371,7 @@ def process_auto_publish(semester_config) -> dict:
                         sm.calculate_co_marks(qp_pattern)
                         if mark_val is None:
                             sm.calculate_total()
-                        sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'total_mark'])
+                        sm.save(update_fields=['co1_mark', 'co2_mark', 'co3_mark', 'co4_mark', 'co5_mark', 'co6_mark', 'total_mark'])
                 try:
                     compute_section_internal_marks(exam.section)
                 except Exception:

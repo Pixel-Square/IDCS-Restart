@@ -6984,6 +6984,94 @@ def list_uploads(request):
     return Response({'files': files_list})
 
 
+<<<<<<< HEAD
+=======
+def _normalize_cdap_template_key(raw_key: str, name: str) -> str:
+    candidate = str(raw_key or '').strip()
+    if candidate:
+        return re.sub(r'[^a-z0-9]+', '-', candidate.lower()).strip('-')
+    fallback = str(name or '').strip().lower()
+    return re.sub(r'[^a-z0-9]+', '-', fallback).strip('-') or 'cdap-template'
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cdap_templates(request):
+    if request.method == 'GET':
+        auth = _require_permissions(request, {'obe.view'})
+        if auth:
+            return auth
+
+        templates = CdapTemplate.objects.all().order_by('-is_active', '-updated_at')
+        serializer = CdapTemplateSerializer(templates, many=True)
+        return Response(serializer.data)
+
+    auth = _require_permissions(request, {'obe.master.manage'})
+    if auth:
+        return auth
+
+    incoming = request.data or {}
+    if not incoming or not str(incoming.get('name', '')).strip():
+        return Response({'detail': 'Template name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    name = str(incoming.get('name', '')).strip()
+    key = _normalize_cdap_template_key(str(incoming.get('key', '')), name)
+
+    if bool(incoming.get('is_active')):
+        CdapTemplate.objects.exclude(key=key).update(is_active=False)
+
+    template = CdapTemplate.objects.create(
+        key=key,
+        name=name,
+        header_row_line=int(incoming.get('header_row_line', 12) or 12),
+        sheet_number=int(incoming.get('sheet_number', 1) or 1),
+        field_definitions=incoming.get('field_definitions') or [],
+        is_active=bool(incoming.get('is_active')),
+        created_by=getattr(request.user, 'id', None),
+        updated_by=getattr(request.user, 'id', None),
+    )
+    serializer = CdapTemplateSerializer(template)
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cdap_template_detail(request, template_id):
+    template = get_object_or_404(CdapTemplate, id=template_id)
+
+    if request.method == 'GET':
+        auth = _require_permissions(request, {'obe.view'})
+        if auth:
+            return auth
+        serializer = CdapTemplateSerializer(template)
+        return Response(serializer.data)
+
+    auth = _require_permissions(request, {'obe.master.manage'})
+    if auth:
+        return auth
+
+    incoming = request.data or {}
+    if not incoming or not str(incoming.get('name', '')).strip():
+        return Response({'detail': 'Template name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if bool(incoming.get('is_active')):
+        CdapTemplate.objects.exclude(id=template.id).update(is_active=False)
+
+    template.key = str(incoming.get('key', template.key)).strip() or template.key
+    template.name = str(incoming.get('name', template.name)).strip()
+    template.header_row_line = int(incoming.get('header_row_line', template.header_row_line) or template.header_row_line)
+    template.sheet_number = int(incoming.get('sheet_number', template.sheet_number) or template.sheet_number)
+    template.field_definitions = incoming.get('field_definitions') or template.field_definitions
+    template.is_active = bool(incoming.get('is_active', template.is_active))
+    template.updated_by = getattr(request.user, 'id', None)
+    template.save()
+    serializer = CdapTemplateSerializer(template)
+    return Response(serializer.data)
+
+
+>>>>>>> d12832d (n5)
 @api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
