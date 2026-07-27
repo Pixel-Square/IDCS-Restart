@@ -15,7 +15,7 @@ def _load_workbook(*args, **kwargs):
 
     return load_workbook(*args, **kwargs)
 
-from .models import College
+from .models import College, FeatureCatalog, CollegeFeature
 
 
 class CollegeUploadExcelForm(forms.Form):
@@ -44,11 +44,21 @@ def _is_header_row(code: str, name: str) -> bool:
     return False
 
 
+class CollegeFeatureInline(admin.TabularInline):
+    """Inline editor: toggle features directly from the College detail page."""
+    model = CollegeFeature
+    extra = 0
+    fields = ('feature', 'is_enabled', 'enabled_at', 'disabled_at')
+    readonly_fields = ('enabled_at', 'disabled_at')
+    autocomplete_fields = ('feature',)
+
+
 @admin.register(College)
 class CollegeAdmin(admin.ModelAdmin):
     list_display = ('code', 'short_name', 'name', 'city', 'is_active')
     search_fields = ('code', 'short_name', 'name', 'city')
     list_filter = ('is_active', 'city')
+    inlines = [CollegeFeatureInline]
 
     change_list_template = 'admin/college/college/change_list.html'
 
@@ -130,3 +140,43 @@ class CollegeAdmin(admin.ModelAdmin):
             'title': 'Upload Colleges Excel',
         }
         return render(request, 'admin/college/college/upload_excel.html', context)
+
+
+# ---------------------------------------------------------------------------
+# Feature Catalog — master list of all toggleable modules
+# ---------------------------------------------------------------------------
+
+@admin.register(FeatureCatalog)
+class FeatureCatalogAdmin(admin.ModelAdmin):
+    list_display = ('code', 'name', 'category', 'is_default', 'sort_order', 'applicable_roles')
+    list_filter = ('category', 'is_default')
+    search_fields = ('code', 'name', 'description', 'applicable_roles', 'sidebar_keys')
+    ordering = ('sort_order', 'category', 'name')
+    list_editable = ('is_default', 'sort_order')
+    filter_horizontal = ('permissions',)
+    fieldsets = (
+        (None, {
+            'fields': ('code', 'name', 'description', 'category', 'icon'),
+        }),
+        ('Defaults & Ordering', {
+            'fields': ('is_default', 'sort_order'),
+        }),
+        ('Mapping', {
+            'fields': ('applicable_roles', 'sidebar_keys', 'permissions'),
+            'description': 'Comma-separated values linking features to user roles and sidebar keys. Plus explicit permission mapping.',
+        }),
+    )
+
+
+# ---------------------------------------------------------------------------
+# College Feature — per-college toggle state
+# ---------------------------------------------------------------------------
+
+@admin.register(CollegeFeature)
+class CollegeFeatureAdmin(admin.ModelAdmin):
+    list_display = ('college', 'feature', 'is_enabled', 'enabled_at', 'disabled_at')
+    list_filter = ('is_enabled', 'college', 'feature__category')
+    search_fields = ('college__code', 'college__name', 'feature__code', 'feature__name')
+    list_editable = ('is_enabled',)
+    autocomplete_fields = ('college', 'feature')
+    ordering = ('college__code', 'feature__sort_order')

@@ -11,3 +11,6 @@ class CurriculumConfig(AppConfig):
             from . import signals  # noqa: F401
         except Exception:
             pass
+        from backups_logs.registry import section_registry
+        from .backup_sections import CurriculumBackupSection
+        section_registry.register(CurriculumBackupSection())

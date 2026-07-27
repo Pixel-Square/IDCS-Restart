@@ -26,6 +26,10 @@ export default function RequestsPage({ user }: RequestsPageProps) {
   const section = String(searchParams.get('section') || '').toLowerCase();
   const [canSeeApplicationsInbox, setCanSeeApplicationsInbox] = React.useState(false);
 
+  const collegeFeatures = (user?.college_features || []) as string[];
+  const hasCollegeFeatures = collegeFeatures.length > 0;
+  const cf = (code: string) => !hasCollegeFeatures || collegeFeatures.includes(code);
+
   // PERMISSION-BASED ONLY: Staff approvals require explicit permission
   const canSeeStaffApprovals = perms.includes('staff_requests.approve_requests');
   const canSeeAttendanceRequests =
@@ -64,9 +68,23 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     };
   }, [roles]);
 
+  if (!cf('requests_hub')) {
+    return (
+      <DashboardLayout>
+        <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
+          <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500 shadow-sm max-w-2xl mx-auto mt-12">
+            <Bell className="h-10 w-10 mx-auto text-slate-300 mb-3" />
+            <h3 className="text-lg font-semibold text-slate-700">Feature Disabled</h3>
+            <p className="mt-1">The Requests Hub is not enabled for your college.</p>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   const links: RequestLink[] = [];
 
-  if (canSeeStaffApprovals) {
+  if (canSeeStaffApprovals && cf('staff_requests')) {
     links.push({
       key: 'staff-approvals',
       title: 'Staff Request Approvals',
@@ -76,7 +94,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
-  if (canSeeAttendanceRequests) {
+  if (canSeeAttendanceRequests && (cf('attendance_marking') || cf('attendance_analytics'))) {
     links.push({
       key: 'attendance-requests',
       title: 'Attendance Unlock Requests',
@@ -86,7 +104,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
-  if (canSeeObeMasterRequests) {
+  if (canSeeObeMasterRequests && cf('obe')) {
     links.push({
       key: 'obe-master-requests',
       title: 'OBE: Master Requests',
@@ -96,7 +114,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
-  if (canSeeHodObeRequests) {
+  if (canSeeHodObeRequests && cf('obe')) {
     links.push({
       key: 'obe-hod-requests',
       title: 'HOD: OBE Requests',
@@ -116,7 +134,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
-  if (canSeeApplicationsInbox) {
+  if (canSeeApplicationsInbox && (cf('applications_staff') || cf('applications_student'))) {
     links.push({
       key: 'applications-inbox',
       title: 'Approvals Inbox',

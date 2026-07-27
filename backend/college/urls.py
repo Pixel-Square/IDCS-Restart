@@ -1,7 +1,40 @@
 from django.urls import path
-from .views import CollegeListCreateView, CollegeDetailView
+from .views import (
+    CollegeListCreateView,
+    CollegeDetailView,
+    CollegeUsersListView,
+    CollegeUserImportTemplateView,
+    CollegeUserImportView,
+    CollegeUserDeleteView,
+    CollegeFeaturesListView,
+    CollegeFeatureToggleView,
+    DepartmentListCreateView,
+    DepartmentDetailView,
+    BatchListCreateView,
+    BatchDetailView,
+    RegulationListCreateView,
+    RegulationDetailView,
+    CourseListView,
+)
 
 urlpatterns = [
     path('colleges/', CollegeListCreateView.as_view(), name='college-list-create'),
     path('colleges/<int:pk>/', CollegeDetailView.as_view(), name='college-detail'),
+    path('colleges/<int:pk>/users/', CollegeUsersListView.as_view(), name='college-users-list'),
+    path('colleges/<int:pk>/users/import-template/', CollegeUserImportTemplateView.as_view(), name='college-users-import-template'),
+    path('colleges/<int:pk>/users/import/', CollegeUserImportView.as_view(), name='college-users-import'),
+    path('colleges/<int:pk>/users/<int:user_id>/', CollegeUserDeleteView.as_view(), name='college-user-delete'),
+    path('colleges/<int:pk>/features/', CollegeFeaturesListView.as_view(), name='college-features-list'),
+    path('colleges/<int:pk>/features/<str:code>/', CollegeFeatureToggleView.as_view(), name='college-feature-toggle'),
+    # Departments CRUD
+    path('departments/', DepartmentListCreateView.as_view(), name='department-list-create'),
+    path('departments/<int:pk>/', DepartmentDetailView.as_view(), name='department-detail'),
+    # Batches CRUD
+    path('batches/', BatchListCreateView.as_view(), name='batch-list-create'),
+    path('batches/<int:pk>/', BatchDetailView.as_view(), name='batch-detail'),
+    # Regulations CRUD
+    path('regulations/', RegulationListCreateView.as_view(), name='regulation-list-create'),
+    path('regulations/<int:pk>/', RegulationDetailView.as_view(), name='regulation-detail'),
+    # Lookup helpers
+    path('courses/', CourseListView.as_view(), name='course-list'),
 ]

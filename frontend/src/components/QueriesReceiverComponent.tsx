@@ -32,7 +32,7 @@ const STATUS_CONFIG = {
 
 const STATUS_OPTIONS = Object.keys(STATUS_CONFIG);
 
-export default function QueriesReceiverComponent() {
+export default function QueriesReceiverComponent({ user }: { user?: any }) {
   const [queries, setQueries] = useState<UserQuery[]>([]);
   const [departments, setDepartments] = useState<Array<{ id: number; code: string; name: string; short_name: string }>>([]);
   const [roles, setRoles] = useState<Array<{ id: number; name: string }>>([]);
@@ -117,10 +117,32 @@ export default function QueriesReceiverComponent() {
     });
   }
 
+  async function forwardToSuperAdmin(id: number) {
+    if (!window.confirm('Are you sure you want to forward this token to the Super Admin?')) return;
+    
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    
+    try {
+      await updateQuery(id, { forwarded_to_super_admin: true });
+      setSuccess('Query forwarded to Super Admin successfully!');
+      await loadQueries();
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      setError('Failed to forward query. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const statusCounts = queries.reduce((acc, q) => {
     acc[q.status] = (acc[q.status] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  const isSuperAdmin = user?.is_superuser || user?.roles?.includes('SUPER_ADMIN');
+  const isCollegeAdmin = user?.roles?.includes('COLLEGE ADMIN');
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200">
@@ -290,6 +312,12 @@ export default function QueriesReceiverComponent() {
                               ))}
                             </div>
                           )}
+                          {query.forwarded_to_super_admin && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-100 text-rose-700 rounded text-xs font-medium ml-2">
+                              <AlertCircle className="w-3 h-3" />
+                              Forwarded to Super Admin
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <span>Query #{query.serial_number}</span>
@@ -326,6 +354,16 @@ export default function QueriesReceiverComponent() {
                           <StatusIcon className="w-3.5 h-3.5" />
                           {statusConfig.label}
                         </span>
+                        {isCollegeAdmin && !isSuperAdmin && !query.forwarded_to_super_admin && (
+                          <button
+                            onClick={() => forwardToSuperAdmin(query.id)}
+                            disabled={saving}
+                            className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title="Forward to Super Admin"
+                          >
+                            <Send className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => startEdit(query)}
                           className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"

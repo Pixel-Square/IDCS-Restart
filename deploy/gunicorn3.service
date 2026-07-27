@@ -1,0 +1,22 @@
+[Unit]
+Description=gunicorn daemon for IDCS 3.0
+After=network.target
+
+[Service]
+User=iqac
+Group=www-data
+UMask=0007
+# WorkingDirectory and ExecStart paths cannot contain spaces in systemd,
+# so we delegate to a wrapper script at a space-free path.
+ExecStart=/home/iqac/gunicorn3_start.sh
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=60
+LimitNOFILE=65536
+RuntimeDirectory=gunicorn3
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

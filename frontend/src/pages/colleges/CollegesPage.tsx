@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Building2, Plus, Search, Edit2, Trash2, X, Check, Globe, Phone, Mail, MapPin, Calendar, Link } from 'lucide-react';
+import { Building2, Plus, Search, Edit2, Trash2, X, Check, Globe, Phone, Mail, MapPin, Calendar, Link, ChevronRight } from 'lucide-react';
 
 interface College {
   id: number;
@@ -52,6 +53,7 @@ export default function CollegesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const fetchColleges = useCallback(async () => {
     setLoading(true);
@@ -203,7 +205,8 @@ export default function CollegesPage() {
           {colleges.map(col => (
             <div
               key={col.id}
-              className="bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-all p-5 flex flex-col gap-4"
+              onClick={() => navigate(`/colleges/${col.id}`)}
+              className="bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md hover:border-blue-200 transition-all p-5 flex flex-col gap-4 cursor-pointer group"
             >
               {/* Card Header */}
               <div className="flex items-start justify-between gap-2">
@@ -229,7 +232,7 @@ export default function CollegesPage() {
                 <div className="flex gap-1 flex-shrink-0">
                   <button
                     id={`edit-college-${col.id}`}
-                    onClick={() => openEdit(col)}
+                    onClick={(e) => { e.stopPropagation(); openEdit(col); }}
                     className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                     title="Edit"
                   >
@@ -237,12 +240,13 @@ export default function CollegesPage() {
                   </button>
                   <button
                     id={`delete-college-${col.id}`}
-                    onClick={() => setDeleteConfirm(col.id)}
+                    onClick={(e) => { e.stopPropagation(); setDeleteConfirm(col.id); }}
                     className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                     title="Delete"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
+                  <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-blue-400 transition-colors ml-1 mt-1.5" />
                 </div>
               </div>
 

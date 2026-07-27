@@ -138,6 +138,16 @@ class MeSerializer(serializers.Serializer):
     name_email_edited = serializers.SerializerMethodField()
     profileEdited = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
+    role_features = serializers.SerializerMethodField()
+    is_superuser = serializers.BooleanField(read_only=True)
+
+    def get_role_features(self, obj):
+        try:
+            from .models import Role
+            features = list(Role.objects.filter(user_roles__user=obj).values_list('features__code', flat=True).distinct())
+            return [f for f in features if f]
+        except Exception:
+            return []
 
     def get_under_construction(self, obj):
         try:
@@ -339,8 +349,8 @@ class UserQuerySerializer(serializers.ModelSerializer):
     
     class Meta:
         model = UserQuery
-        fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes')
-        read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'created_at', 'updated_at', 'admin_notes', 'status')
+        fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'query_text', 'status', 'created_at', 'updated_at', 'admin_notes', 'forwarded_to_super_admin')
+        read_only_fields = ('id', 'serial_number', 'user', 'username', 'user_roles', 'user_department', 'dept_serial_number', 'mobile_number', 'mobile_verified', 'created_at', 'updated_at', 'admin_notes', 'status', 'forwarded_to_super_admin')
     
     def get_serial_number(self, obj):
         """Calculate serial number based on creation order (oldest = 1)."""
@@ -434,7 +444,7 @@ class UserQueryListSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = UserQuery
-        fields = ('id', 'serial_number', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at')
+        fields = ('id', 'serial_number', 'username', 'query_preview', 'status', 'admin_notes', 'created_at', 'updated_at', 'forwarded_to_super_admin')
     
     def get_query_preview(self, obj):
         """Return first 100 characters of query text."""

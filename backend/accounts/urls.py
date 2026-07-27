@@ -31,6 +31,7 @@ from .views import (
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
 from .api.roles import RolesListView
+from .api.roles_management import RolesManagementListCreateView, RoleDetailView, PermissionsListView, FeaturesListView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -68,4 +69,9 @@ urlpatterns = [
     path('settings/whatsapp/clear-session/', WhatsAppGatewayClearSessionView.as_view(), name='settings_whatsapp_clear_session'),
     # Under-construction state (read: any auth, write: IQAC only)
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
+    # Roles management (IQAC)
+    path('roles/manage/', RolesManagementListCreateView.as_view(), name='roles_manage_list_create'),
+    path('roles/manage/<int:pk>/', RoleDetailView.as_view(), name='roles_manage_detail'),
+    path('permissions/', PermissionsListView.as_view(), name='permissions_list'),
+    path('features/', FeaturesListView.as_view(), name='features_list'),
 ]
