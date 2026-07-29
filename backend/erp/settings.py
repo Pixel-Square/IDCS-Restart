@@ -266,6 +266,39 @@ ESSL_DEVICE_PASSWORD = int(os.getenv('ESSL_DEVICE_PASSWORD', '0'))
 ESSL_RECONNECT_DELAY = int(os.getenv('ESSL_RECONNECT_DELAY', '5'))
 ESSL_CONNECT_TIMEOUT = int(os.getenv('ESSL_CONNECT_TIMEOUT', '8'))
 
+
+def _parse_essl_device_ips(raw_value):
+    devices = []
+    if not raw_value:
+        return devices
+
+    for item in raw_value.split(','):
+        entry = item.strip()
+        if not entry:
+            continue
+
+        if ':' in entry:
+            ip, port = entry.rsplit(':', 1)
+        else:
+            ip, port = entry, str(ESSL_DEVICE_PORT)
+
+        ip = ip.strip()
+        port = port.strip()
+        if not ip:
+            continue
+
+        try:
+            port_value = int(port)
+        except ValueError:
+            port_value = ESSL_DEVICE_PORT
+
+        devices.append({'ip': ip, 'port': port_value})
+
+    return devices
+
+
+ESSL_DEVICE_IPS = _parse_essl_device_ips(os.getenv('ESSL_DEVICE_IPS', ''))
+
 # --- SMS / OTP ---
 # OTP verification uses `accounts.services.sms.send_sms`.
 # By default, SMS_BACKEND=console which logs the SMS (useful for dev).

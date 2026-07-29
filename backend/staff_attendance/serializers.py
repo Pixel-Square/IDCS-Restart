@@ -27,7 +27,27 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         read_only_fields = ['uploaded_by', 'uploaded_at']
     
     def get_full_name(self, obj):
-        return obj.user.get_full_name() if hasattr(obj.user, 'get_full_name') else obj.user.username
+        full_name = ''
+        if hasattr(obj.user, 'get_full_name'):
+            try:
+                full_name = (obj.user.get_full_name() or '').strip()
+            except Exception:
+                full_name = ''
+        if full_name:
+            return full_name
+
+        username = (getattr(obj.user, 'username', '') or '').strip()
+        if username:
+            return username
+
+        try:
+            staff_id = (obj.user.staff_profile.staff_id or '').strip()
+            if staff_id:
+                return staff_id
+        except Exception:
+            pass
+
+        return f"User {obj.user_id}"
 
     def get_staff_id(self, obj):
         try:
