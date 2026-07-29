@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, CheckCircle, XCircle, AlertCircle, Clock, Filter } from 'lucide-react';
+import { Calendar, CheckCircle, XCircle, AlertCircle, Clock, Filter, Download } from 'lucide-react';
 import { getApiBase } from '../../services/apiBase';
 import { apiClient } from '../../services/auth';
 
@@ -46,14 +46,18 @@ export default function PSStaffAttendanceViewPage() {
   const [loading, setLoading] = useState(false);
   const [loadingDepts, setLoadingDepts] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<string>('');
-  const [selectedDepartment, setSelectedDepartment] = useState<number | null>(null);
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<number[]>([]);
+  const [showDeptDropdown, setShowDeptDropdown] = useState(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
 
   // Initialize to today
   useEffect(() => {
     const today = new Date();
-    setSelectedDate(today.toISOString().split('T')[0]);
+    const dateStr = today.toISOString().split('T')[0];
+    setFromDate(dateStr);
+    setToDate(dateStr);
   }, []);
 
   // Fetch available departments
@@ -63,10 +67,19 @@ export default function PSStaffAttendanceViewPage() {
 
   // Fetch attendance when date/department changes
   useEffect(() => {
-    if (selectedDate) {
+    if (fromDate && toDate) {
       fetchAllAttendance();
     }
-  }, [selectedDate, selectedDepartment]);
+  }, [fromDate, toDate, selectedDepartmentIds]);
+
+  // Close department dropdown on outside click
+  useEffect(() => {
+    const handleOutsideClick = () => setShowDeptDropdown(false);
+    if (showDeptDropdown) {
+      document.addEventListener('click', handleOutsideClick);
+    }
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, [showDeptDropdown]);
 
   const fetchDepartments = async () => {
     try {
@@ -86,18 +99,55 @@ export default function PSStaffAttendanceViewPage() {
       setLoading(true);
       setError(null);
       const url = `${getApiBase()}/api/staff-attendance/records/monthly_records/`;
-      const params: any = {
-        from_date: selectedDate,
-        to_date: selectedDate
+
+      const normalizedFromDate = fromDate <= toDate ? fromDate : toDate;
+      const normalizedToDate = fromDate <= toDate ? toDate : fromDate;
+
+      const baseParams: any = {
+        from_date: normalizedFromDate,
+        to_date: normalizedToDate
       };
-      
-      // Only add department filter if selected
-      if (selectedDepartment) {
-        params.department_id = selectedDepartment;
+
+      if (selectedDepartmentIds.length === 0) {
+        const response = await apiClient.get(url, { params: baseParams });
+        setAttendanceData(response.data);
+      } else {
+        const responses = await Promise.all(
+          selectedDepartmentIds.map((departmentId) =>
+            apiClient.get(url, {
+              params: {
+                ...baseParams,
+                department_id: departmentId
+              }
+            })
+          )
+        );
+
+        const mergedById = new Map<number, AttendanceRecord>();
+        responses.forEach((resp) => {
+          const records: AttendanceRecord[] = resp?.data?.records || [];
+          records.forEach((record) => mergedById.set(record.id, record));
+        });
+
+        const mergedRecords = Array.from(mergedById.values()).sort((a, b) => {
+          const dateDiff = b.date.localeCompare(a.date);
+          return dateDiff !== 0 ? dateDiff : a.user_id - b.user_id;
+        });
+
+        const mergedSummary: AttendanceSummary = {
+          from_date: normalizedFromDate,
+          to_date: normalizedToDate,
+          total_records: mergedRecords.length,
+          present_count: mergedRecords.filter((r) => r.status === 'present').length,
+          absent_count: mergedRecords.filter((r) => r.status === 'absent').length,
+          partial_count: mergedRecords.filter((r) => r.status === 'partial' || r.status === 'half_day').length,
+        };
+
+        setAttendanceData({
+          records: mergedRecords,
+          summary: mergedSummary,
+        });
       }
-      
-      const response = await apiClient.get(url, { params });
-      setAttendanceData(response.data);
     } catch (err) {
       console.error('Failed to fetch attendance:', err);
       setError('Failed to load attendance records');
@@ -106,14 +156,82 @@ export default function PSStaffAttendanceViewPage() {
     }
   };
 
-  const handleDateChange = (direction: 'prev' | 'next') => {
-    const current = new Date(selectedDate);
-    if (direction === 'prev') {
-      current.setDate(current.getDate() - 1);
-    } else {
-      current.setDate(current.getDate() + 1);
-    }
-    setSelectedDate(current.toISOString().split('T')[0]);
+  const handleDateRangeShift = (direction: 'prev' | 'next') => {
+    if (!fromDate || !toDate) return;
+
+    const from = new Date(fromDate);
+    const to = new Date(toDate);
+    const step = direction === 'prev' ? -1 : 1;
+
+    from.setDate(from.getDate() + step);
+    to.setDate(to.getDate() + step);
+
+    setFromDate(from.toISOString().split('T')[0]);
+    setToDate(to.toISOString().split('T')[0]);
+  };
+
+  const toggleDepartment = (deptId: number) => {
+    setSelectedDepartmentIds((prev) =>
+      prev.includes(deptId) ? prev.filter((id) => id !== deptId) : [...prev, deptId]
+    );
+  };
+
+  const clearDepartmentFilter = () => {
+    setSelectedDepartmentIds([]);
+  };
+
+  const formatTimeForCsv = (timeValue: string | null) => timeValue || '-';
+
+  const downloadCurrentView = () => {
+    if (filteredRecords.length === 0) return;
+
+    const selectedDeptLabel =
+      selectedDepartmentIds.length === 0
+        ? 'All Departments'
+        : departments
+            .filter((d) => selectedDepartmentIds.includes(d.id))
+            .map((d) => d.short_name || d.code || d.name)
+            .join(', ');
+
+    const rows: string[][] = [
+      ['From Date', fromDate],
+      ['To Date', toDate],
+      ['Departments', selectedDeptLabel],
+      [],
+      ['Staff ID', 'Staff Member', 'Date', 'Status', 'FN', 'AN', 'Time In', 'Time Out', 'Notes'],
+      ...filteredRecords.map((record) => [
+        record.staff_id || '-',
+        record.full_name,
+        record.date,
+        record.status,
+        record.fn_status,
+        record.an_status,
+        formatTimeForCsv(record.morning_in),
+        formatTimeForCsv(record.evening_out),
+        record.notes || '-',
+      ]),
+    ];
+
+    const csvContent = rows
+      .map((row) =>
+        row
+          .map((cell) => {
+            const value = String(cell ?? '');
+            return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+          })
+          .join(',')
+      )
+      .join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.download = `staff_attendance_${fromDate}_to_${toDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const getStatusIcon = (status: string) => {
@@ -178,17 +296,27 @@ export default function PSStaffAttendanceViewPage() {
     }
   };
 
+  const getDisplayName = (record: AttendanceRecord): string => {
+    const fullName = (record.full_name || '').trim();
+    if (fullName) return fullName;
+    const staffId = (record.staff_id || '').trim();
+    if (staffId) return staffId;
+    return `Staff ${record.user_id}`;
+  };
+
 
 
   // Filter records by search term
   const filteredRecords = attendanceData?.records.filter(record => 
-    record.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    getDisplayName(record).toLowerCase().includes(searchTerm.toLowerCase()) ||
     (record.staff_id || '').toLowerCase().includes(searchTerm.toLowerCase())
   ) || [];
 
-  const selectedDeptName = selectedDepartment 
-    ? departments.find(d => d.id === selectedDepartment)?.name || 'All Departments'
-    : 'All Departments';
+  const selectedDepartments = departments.filter((d) => selectedDepartmentIds.includes(d.id));
+  const selectedDeptLabel =
+    selectedDepartments.length === 0
+      ? 'All Departments'
+      : selectedDepartments.map((d) => d.short_name || d.code || d.name).join(', ');
 
   return (
     <div className="p-6">
@@ -214,50 +342,89 @@ export default function PSStaffAttendanceViewPage() {
             {loadingDepts ? (
               <p className="text-gray-600">Loading departments...</p>
             ) : (
-              <select
-                value={selectedDepartment || ''}
-                onChange={(e) => setSelectedDepartment(e.target.value ? parseInt(e.target.value) : null)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">All Departments</option>
-                {departments.map((dept) => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.name} {dept.code && `(${dept.code})`}
-                  </option>
-                ))}
-              </select>
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setShowDeptDropdown((prev) => !prev)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-left bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {selectedDepartments.length === 0
+                    ? 'All Departments'
+                    : `${selectedDepartments.length} department${selectedDepartments.length > 1 ? 's' : ''} selected`}
+                </button>
+
+                {showDeptDropdown && (
+                  <div className="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-md shadow-lg max-h-64 overflow-y-auto">
+                    <label className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedDepartmentIds.length === 0}
+                        onChange={clearDepartmentFilter}
+                        className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                      />
+                      <span className="text-sm text-gray-800">All Departments</span>
+                    </label>
+                    {departments.map((dept) => (
+                      <label
+                        key={dept.id}
+                        className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedDepartmentIds.includes(dept.id)}
+                          onChange={() => toggleDepartment(dept.id)}
+                          className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                        />
+                        <span className="text-sm text-gray-800">
+                          {dept.name} {dept.code && `(${dept.code})`}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+            <p className="text-xs text-gray-500 mt-2">Selected: {selectedDeptLabel}</p>
           </div>
 
           {/* Date Range and Navigation */}
           <div className="border-t pt-6">
             <div className="flex items-end gap-2 mb-4">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-900 mb-2">Select Date</label>
+                <label className="block text-sm font-medium text-gray-900 mb-2">From Date</label>
                 <input
                   type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-900 mb-2">To Date</label>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <button
-                onClick={() => handleDateChange('prev')}
+                onClick={() => handleDateRangeShift('prev')}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
               >
                 ← Previous
               </button>
               <button
-                onClick={() => handleDateChange('next')}
+                onClick={() => handleDateRangeShift('next')}
                 className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
               >
                 Next →
               </button>
             </div>
 
-            {selectedDate && (
+            {fromDate && toDate && (
               <p className="text-sm text-gray-600 mb-4">
-                Showing attendance for <strong>{formatDate(selectedDate)}</strong> {selectedDepartment && `for <strong>${selectedDeptName}</strong>`}
+                Showing attendance from <strong>{formatDate(fromDate)}</strong> to <strong>{formatDate(toDate)}</strong> for <strong>{selectedDeptLabel}</strong>
               </p>
             )}
 
@@ -325,17 +492,30 @@ export default function PSStaffAttendanceViewPage() {
           {/* Search Filter */}
           {attendanceData && filteredRecords.length > 0 && (
             <div className="border-t pt-6 mt-6">
-              <label className="block text-sm font-medium text-gray-900 mb-2">Search Staff Member</label>
-              <input
-                type="text"
-                placeholder="Search by name or staff id..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                {filteredRecords.length} of {attendanceData.records.length} records shown
-              </p>
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-900 mb-2">Search Staff Member</label>
+                  <input
+                    type="text"
+                    placeholder="Search by name or staff id..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {filteredRecords.length} of {attendanceData.records.length} records shown
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadCurrentView}
+                  disabled={filteredRecords.length === 0}
+                  className="inline-flex items-center px-4 py-2 border border-green-600 text-sm font-medium rounded-md text-green-700 bg-white hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Shown Data
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -360,9 +540,8 @@ export default function PSStaffAttendanceViewPage() {
         ) : attendanceData && attendanceData.records.length > 0 ? (
           <>
             {(() => {
-              const todaysRecords = attendanceData.records.filter(r => r.date === selectedDate);
-              const displayedRecords = todaysRecords.filter(record =>
-                record.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              const displayedRecords = attendanceData.records.filter(record =>
+                getDisplayName(record).toLowerCase().includes(searchTerm.toLowerCase()) ||
                 (record.staff_id || '').toLowerCase().includes(searchTerm.toLowerCase())
               );
               return displayedRecords.length > 0 ? (
@@ -407,7 +586,7 @@ export default function PSStaffAttendanceViewPage() {
                               {record.staff_id || '—'}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                              {record.full_name}
+                              {getDisplayName(record)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                               {formatDate(record.date)}
@@ -461,7 +640,7 @@ export default function PSStaffAttendanceViewPage() {
             <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No Records Found</h3>
             <p className="text-gray-600">
-              No attendance records found for the selected date {selectedDepartment && 'and department'}.
+              No attendance records found for the selected date range and department filter.
             </p>
           </div>
         )}

@@ -2,12 +2,15 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 from datetime import datetime, timedelta, date
 import csv
 import io
+import socket
 
+from staff_attendance.biometric import ingest_biometric_punch
 from .models import (
     AttendanceRecord,
     UploadLog,
@@ -37,6 +40,62 @@ from .permissions import (
     StaffAttendanceViewPermission,
     StaffAttendanceConfigPermission,
 )
+
+def _build_essl_device_list():
+    devices = getattr(settings, 'ESSL_DEVICE_IPS', []) or []
+    if devices:
+        return [
+            {
+                'label': f"eSSL Device {index + 1}",
+                'ip': device['ip'],
+                'port': int(device['port']),
+            }
+            for index, device in enumerate(devices)
+        ]
+
+    single_ip = getattr(settings, 'ESSL_DEVICE_IP', '').strip()
+    if not single_ip:
+        return []
+
+    return [{
+        'label': 'eSSL Device',
+        'ip': single_ip,
+        'port': int(getattr(settings, 'ESSL_DEVICE_PORT', 4370)),
+    }]
+
+
+def _normalize_essl_direction_value(punch_value):
+    if punch_value in (0, '0', 'IN', 'in'):
+        return 'IN'
+    if punch_value in (1, '1', 'OUT', 'out'):
+        return 'OUT'
+    return 'UNKNOWN'
+
+
+def _parse_essl_date_range(payload: dict) -> tuple[date, date, date, date, bool]:
+    date_str = payload.get('date')
+    if date_str:
+        target_date = datetime.fromisoformat(date_str).date()
+        return target_date, target_date, target_date, target_date, False
+
+    year = int(payload.get('year') or timezone.localdate().year)
+    month = int(payload.get('month') or timezone.localdate().month)
+    requested_start = date(year, month, 1)
+    requested_end = date(year + 1, 1, 1) - timedelta(days=1) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+
+    cursor_start = payload.get('start_date')
+    if cursor_start:
+        requested_start = datetime.fromisoformat(cursor_start).date()
+
+    cursor_end = payload.get('end_date')
+    if cursor_end:
+        requested_end = datetime.fromisoformat(cursor_end).date()
+
+    batch_days = int(payload.get('batch_days') or 1)
+    batch_days = max(1, min(batch_days, 3))
+    processed_end = min(requested_end, requested_start + timedelta(days=batch_days - 1))
+    has_more = processed_end < requested_end
+    return requested_start, requested_end, requested_start, processed_end, has_more
 
 
 class AttendanceRecordViewSet(viewsets.ModelViewSet):
@@ -639,12 +698,191 @@ class CSVUploadViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def essl_settings(self, request):
         """Get eSSL device settings"""
-        return Response({'devices': []})
+        def _probe_device(ip, port, timeout=2.0):
+            try:
+                with socket.create_connection((ip, port), timeout=timeout):
+                    return True, None
+            except OSError as exc:
+                return False, str(exc)
+
+        devices = getattr(settings, 'ESSL_DEVICE_IPS', []) or []
+
+        if not devices:
+            single_ip = getattr(settings, 'ESSL_DEVICE_IP', '').strip()
+            if single_ip:
+                devices = [{
+                    'label': 'eSSL Device',
+                    'ip': single_ip,
+                    'port': getattr(settings, 'ESSL_DEVICE_PORT', 4370),
+                    'last_punch_at': None,
+                    'status': 'configured',
+                }]
+        else:
+            devices = [
+                {
+                    'label': f"eSSL Device {index + 1}",
+                    'ip': device['ip'],
+                    'port': device['port'],
+                    'last_punch_at': None,
+                    'status': 'configured',
+                }
+                for index, device in enumerate(devices)
+            ]
+
+        for device in devices:
+            is_active, probe_error = _probe_device(device['ip'], int(device['port']))
+            device['is_active'] = is_active
+            device['probe_error'] = probe_error
+
+        return Response({'devices': devices})
 
     @action(detail=False, methods=['post'])
     def retrieve_essl_data(self, request):
         """Retrieve and process eSSL data"""
-        return Response({'success': True, 'message': 'eSSL data retrieval not yet implemented'})
+        try:
+            from zk import ZK  # type: ignore
+        except ImportError:
+            return Response(
+                {'success': False, 'error': 'Missing dependency: pyzk. Install it in the production environment.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        requested_start_date, requested_end_date, start_date, end_date, has_more = _parse_essl_date_range(dict(request.data or {}))
+        devices = _build_essl_device_list()
+        if not devices:
+            return Response(
+                {'success': False, 'error': 'No eSSL devices configured'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        summary = {
+            'total_logs_checked': 0,
+            'matched_logs': 0,
+            'created_logs': 0,
+            'attendance_updates': 0,
+            'mapped_staff_total': 0,
+            'start_date': requested_start_date.isoformat(),
+            'end_date': requested_end_date.isoformat(),
+        }
+        device_results = []
+        mapped_users = set()
+
+        for device in devices:
+            device_result = {
+                'label': device['label'],
+                'ip': device['ip'],
+                'port': device['port'],
+                'connected': False,
+                'logs_checked': 0,
+                'matched_logs': 0,
+                'created_logs': 0,
+                'attendance_updates': 0,
+                'error': None,
+            }
+
+            conn = None
+            try:
+                zk = ZK(
+                    device['ip'],
+                    port=device['port'],
+                    timeout=getattr(settings, 'ESSL_CONNECT_TIMEOUT', 8),
+                    password=getattr(settings, 'ESSL_DEVICE_PASSWORD', 0),
+                    force_udp=False,
+                    ommit_ping=False,
+                )
+                conn = zk.connect()
+                device_result['connected'] = True
+
+                try:
+                    conn.disable_device()
+                except Exception:
+                    pass
+
+                try:
+                    raw_attendance = conn.get_attendance() or []
+                except Exception as exc:
+                    device_result['error'] = f'Failed to read attendance logs: {exc}'
+                    raw_attendance = []
+
+                for item in raw_attendance:
+                    device_result['logs_checked'] += 1
+                    summary['total_logs_checked'] += 1
+
+                    raw_timestamp = getattr(item, 'timestamp', None)
+                    if raw_timestamp is None:
+                        continue
+
+                    punch_dt = raw_timestamp if isinstance(raw_timestamp, datetime) else None
+                    if punch_dt is None:
+                        continue
+
+                    punch_date = timezone.localtime(punch_dt).date() if timezone.is_aware(punch_dt) else punch_dt.date()
+                    if punch_date < start_date or punch_date > end_date:
+                        continue
+
+                    device_result['matched_logs'] += 1
+                    summary['matched_logs'] += 1
+
+                    raw_uid = str(getattr(item, 'uid', '') or '')
+                    raw_staff_id = str(getattr(item, 'user_id', '') or '')
+                    raw_direction = _normalize_essl_direction_value(getattr(item, 'punch', None))
+
+                    result = ingest_biometric_punch(
+                        raw_uid=raw_uid,
+                        raw_staff_id=raw_staff_id,
+                        raw_direction=raw_direction,
+                        raw_timestamp=punch_dt,
+                        source='essl_manual_retrieval',
+                        device_ip=device['ip'],
+                        device_port=device['port'],
+                        payload={
+                            'uid': raw_uid,
+                            'user_id': raw_staff_id,
+                            'punch': getattr(item, 'punch', None),
+                            'timestamp': str(punch_dt),
+                            'machine_number': getattr(item, 'machine_number', None),
+                        },
+                    )
+
+                    if result['created_log']:
+                        device_result['created_logs'] += 1
+                        summary['created_logs'] += 1
+
+                    if result['attendance_updated']:
+                        device_result['attendance_updates'] += 1
+                        summary['attendance_updates'] += 1
+
+                    if result['user']:
+                        mapped_users.add(result['user'].pk)
+
+                try:
+                    conn.enable_device()
+                except Exception:
+                    pass
+
+            except Exception as exc:
+                device_result['error'] = str(exc)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.disconnect()
+                    except Exception:
+                        pass
+
+            device_results.append(device_result)
+
+        summary['mapped_staff_total'] = len(mapped_users)
+
+        return Response({
+            'success': True,
+            'message': 'eSSL data retrieval completed' if not has_more else 'eSSL data retrieval partial batch completed',
+            'summary': summary,
+            'processed_from_date': start_date.isoformat(),
+            'processed_to_date': end_date.isoformat(),
+            'next_start_date': (end_date + timedelta(days=1)).isoformat() if has_more else None,
+            'has_more': has_more,
+            'devices': device_results,
+        })
 
 
 class HalfDayRequestViewSet(viewsets.ModelViewSet):

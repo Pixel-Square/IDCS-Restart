@@ -42,6 +42,7 @@ interface Holiday {
   date: string;
   name: string;
   notes: string;
+  is_removable?: boolean;
   created_by_name: string;
   created_at: string;
   department_ids: number[];
@@ -59,7 +60,7 @@ interface Department {
 interface StaffOption {
   user_id: number;
   username: string;
-  full_name: string;
+  full_name: string | null;
   staff_id: string | null;
   department: { id: number; code: string; short_name: string; name: string } | null;
 }
@@ -70,7 +71,7 @@ interface StaffTimeLimitOverride {
   user_info: {
     id: number;
     username: string;
-    full_name: string;
+    full_name: string | null;
     staff_id: string | null;
     department: { id: number; code: string; short_name: string; name: string } | null;
   };
@@ -106,17 +107,36 @@ interface EsslRetrieveResponse {
     created_logs: number;
     attendance_updates: number;
     mapped_staff_total: number;
+    start_date?: string;
+    end_date?: string;
   };
-  results?: Array<{
-    device: string;
-    success: boolean;
-    error?: string | null;
-    total_logs_checked: number;
+  processed_from_date?: string | null;
+  processed_to_date?: string | null;
+  next_start_date?: string | null;
+  has_more?: boolean;
+  devices?: Array<{
+    label: string;
+    ip: string;
+    port: number;
+    connected: boolean;
+    logs_checked: number;
     matched_logs: number;
     created_logs: number;
     attendance_updates: number;
-    mapped_staff: number;
+    error?: string | null;
   }>;
+}
+
+interface EsslRunningSummary {
+  total_logs_checked: number;
+  matched_logs: number;
+  created_logs: number;
+  attendance_updates: number;
+  mapped_staff_total: number;
+  requested_start_date: string;
+  requested_end_date: string;
+  processed_from_date: string;
+  processed_to_date: string;
 }
 
 const StaffAttendanceUpload: React.FC = () => {
@@ -173,6 +193,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const [retrieveMonth, setRetrieveMonth] = useState(now.getMonth() + 1);
   const [retrieveDate, setRetrieveDate] = useState('');
   const [esslRetrieveResult, setEsslRetrieveResult] = useState<EsslRetrieveResponse | null>(null);
+  const [esslRunningSummary, setEsslRunningSummary] = useState<EsslRunningSummary | null>(null);
 
   // Department-specific settings states
   const [deptSettings, setDeptSettings] = useState<any[]>([]);
@@ -207,6 +228,14 @@ const StaffAttendanceUpload: React.FC = () => {
   const [savingStaffOverride, setSavingStaffOverride] = useState(false);
   const [staffOverrides, setStaffOverrides] = useState<StaffTimeLimitOverride[]>([]);
   const [loadingStaffOverrides, setLoadingStaffOverrides] = useState(false);
+
+  const resolveDisplayName = (fullName?: string | null, username?: string | null, staffId?: string | null) => {
+    const cleaned = (fullName || '').trim();
+    if (cleaned) return cleaned;
+    if (username && username.trim()) return username.trim();
+    if (staffId && staffId.trim()) return staffId.trim();
+    return 'Unknown Staff';
+  };
 
   // Fetch holidays on component mount
   useEffect(() => {
@@ -464,10 +493,34 @@ const StaffAttendanceUpload: React.FC = () => {
     }
   };
 
-  const handleRetrieveEsslData = async () => {
+  const mergeEsslState = (data: EsslRetrieveResponse) => {
+    setEsslRetrieveResult(data);
+    if (data.summary) {
+      setEsslRunningSummary((prev) => {
+        const requestedStartDate = data.summary?.start_date || prev?.requested_start_date || data.processed_from_date || '';
+        const requestedEndDate = data.summary?.end_date || prev?.requested_end_date || data.processed_to_date || '';
+        return {
+          total_logs_checked: data.summary?.total_logs_checked ?? prev?.total_logs_checked ?? 0,
+          matched_logs: data.summary?.matched_logs ?? prev?.matched_logs ?? 0,
+          created_logs: data.summary?.created_logs ?? prev?.created_logs ?? 0,
+          attendance_updates: data.summary?.attendance_updates ?? prev?.attendance_updates ?? 0,
+          mapped_staff_total: data.summary?.mapped_staff_total ?? prev?.mapped_staff_total ?? 0,
+          requested_start_date: requestedStartDate,
+          requested_end_date: requestedEndDate,
+          processed_from_date: data.processed_from_date || prev?.processed_from_date || requestedStartDate,
+          processed_to_date: data.processed_to_date || prev?.processed_to_date || requestedEndDate,
+        };
+      });
+    }
+  };
+
+  const handleRetrieveEsslData = async (startDate?: string) => {
     try {
       setRetrievingEssl(true);
-      setEsslRetrieveResult(null);
+      if (!startDate) {
+        setEsslRetrieveResult(null);
+        setEsslRunningSummary(null);
+      }
 
       const payload: Record<string, any> = {};
       if (retrieveDate) {
@@ -475,6 +528,10 @@ const StaffAttendanceUpload: React.FC = () => {
       } else {
         payload.year = retrieveYear;
         payload.month = retrieveMonth;
+        payload.batch_days = 1;
+        if (startDate) {
+          payload.start_date = startDate;
+        }
       }
 
       const response = await apiClient.post(
@@ -483,7 +540,8 @@ const StaffAttendanceUpload: React.FC = () => {
         { timeout: 300000 }
       );
 
-      setEsslRetrieveResult(response.data);
+      const data: EsslRetrieveResponse = response.data;
+      mergeEsslState(data);
       await fetchEsslSettings();
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Failed to retrieve eSSL data';
@@ -491,6 +549,18 @@ const StaffAttendanceUpload: React.FC = () => {
     } finally {
       setRetrievingEssl(false);
     }
+  };
+
+  const handleContinueEsslData = async () => {
+    if (!esslRetrieveResult?.next_start_date) {
+      return;
+    }
+    await handleRetrieveEsslData(esslRetrieveResult.next_start_date);
+  };
+
+  const handleStopEsslData = async () => {
+    setEsslRetrieveResult((current) => current ? { ...current, has_more: false } : current);
+    setRetrievingEssl(false);
   };
 
   const fetchDepartmentSettings = async () => {
@@ -1475,7 +1545,7 @@ const StaffAttendanceUpload: React.FC = () => {
               <option value="">Select a staff</option>
               {staffOptions.map((s) => (
                 <option key={s.user_id} value={s.user_id}>
-                  {(s.staff_id || s.username)} — {s.full_name}
+                  {(s.staff_id || s.username)} — {resolveDisplayName(s.full_name, s.username, s.staff_id)}
                 </option>
               ))}
             </select>
@@ -1585,7 +1655,7 @@ const StaffAttendanceUpload: React.FC = () => {
                   >
                     <div className="flex-1">
                       <div className="text-sm font-semibold text-gray-900">
-                        {(o.user_info.staff_id || o.user_info.username)} — {o.user_info.full_name}
+                        {(o.user_info.staff_id || o.user_info.username)} — {resolveDisplayName(o.user_info.full_name, o.user_info.username, o.user_info.staff_id)}
                       </div>
                       <div className="text-xs text-gray-600 mt-0.5">
                         Dept: {o.user_info.department?.short_name || o.user_info.department?.code || '-'}
@@ -1849,7 +1919,7 @@ const StaffAttendanceUpload: React.FC = () => {
               <div className="flex items-end">
                 <button
                   type="button"
-                  onClick={handleRetrieveEsslData}
+                  onClick={() => handleRetrieveEsslData()}
                   disabled={retrievingEssl}
                   className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-cyan-700 hover:bg-cyan-800 disabled:opacity-60"
                 >
@@ -1865,11 +1935,43 @@ const StaffAttendanceUpload: React.FC = () => {
             {esslRetrieveResult?.summary && (
               <div className="mt-3 bg-cyan-50 border border-cyan-200 rounded p-3 text-sm text-cyan-900">
                 <div className="font-semibold mb-1">Retrieval Summary</div>
-                <div>Logs Checked: {esslRetrieveResult.summary.total_logs_checked}</div>
-                <div>Matched Logs: {esslRetrieveResult.summary.matched_logs}</div>
-                <div>New Logs Created: {esslRetrieveResult.summary.created_logs}</div>
-                <div>Attendance Updated: {esslRetrieveResult.summary.attendance_updates}</div>
-                <div>Mapped Staff Count: {esslRetrieveResult.summary.mapped_staff_total}</div>
+                <div>Logs Checked: {esslRunningSummary?.total_logs_checked ?? esslRetrieveResult.summary.total_logs_checked}</div>
+                <div>Matched Logs: {esslRunningSummary?.matched_logs ?? esslRetrieveResult.summary.matched_logs}</div>
+                <div>New Logs Created: {esslRunningSummary?.created_logs ?? esslRetrieveResult.summary.created_logs}</div>
+                <div>Attendance Updated: {esslRunningSummary?.attendance_updates ?? esslRetrieveResult.summary.attendance_updates}</div>
+                <div>Mapped Staff Count: {esslRunningSummary?.mapped_staff_total ?? esslRetrieveResult.summary.mapped_staff_total}</div>
+                <div className="mt-2 text-xs text-cyan-800">
+                  Retrieved Range: {(esslRunningSummary?.processed_from_date || esslRetrieveResult.processed_from_date || esslRetrieveResult.summary.start_date || '-')}
+                  {' '}to{' '}
+                  {(esslRunningSummary?.processed_to_date || esslRetrieveResult.processed_to_date || esslRetrieveResult.summary.end_date || '-')}
+                </div>
+                {esslRetrieveResult.next_start_date && (
+                  <div className="mt-1 text-xs text-cyan-800">
+                    Next Range Starts: {esslRetrieveResult.next_start_date}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {esslRetrieveResult?.has_more && esslRetrieveResult.next_start_date && (
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleContinueEsslData}
+                  disabled={retrievingEssl}
+                  className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-cyan-700 hover:bg-cyan-800 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${retrievingEssl ? 'animate-spin' : ''}`} />
+                  Continue
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStopEsslData}
+                  disabled={retrievingEssl}
+                  className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Stop
+                </button>
               </div>
             )}
           </div>
