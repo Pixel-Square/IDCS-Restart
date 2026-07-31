@@ -77,9 +77,11 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
 
             {expanded && (
               <div className="border-t p-4 space-y-4">
-                {/* OD Details */}
+                {/* OD/Event Details */}
                 <div className="bg-gray-50 rounded-lg p-3">
-                  <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">On Duty Details</h5>
+                  <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+                    {form.on_duty_request_id ? 'On Duty Details' : 'Manual Event Details'}
+                  </h5>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
                     {Object.entries(form.on_duty_form_data || {}).filter(([, v]) => v).map(([k, v]) => {
                       let parsedV = v;
@@ -121,6 +123,15 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                         <div key={k}><span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}:</span> <span className="font-medium truncate max-w-full inline-block align-bottom" title={displayVal}>{displayVal}</span></div>
                       );
                     })}
+                    
+                    {form.event_proof && (
+                      <div>
+                        <span className="text-gray-500 capitalize">Event Proof:</span>
+                        <FilePreviewLink filename="Event_Proof" href={form.event_proof} className="text-blue-600 hover:underline inline-flex items-center gap-1 ml-2">
+                          <FileText size={12}/> View Proof
+                        </FilePreviewLink>
+                      </div>
+                    )}
                   </div>
                 </div>
 

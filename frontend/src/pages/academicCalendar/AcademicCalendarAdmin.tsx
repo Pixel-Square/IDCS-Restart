@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Calendar, Upload, Plus, Trash2, AlertCircle, Loader2, X, Eye, ChevronUp, MousePointer2 } from 'lucide-react'
+import { Calendar, Upload, Plus, Trash2, AlertCircle, Loader2, X, Eye, ChevronUp, MousePointer2, Power } from 'lucide-react'
 import { ModalPortal } from '../../components/ModalPortal'
 import { CalendarData } from './calendarTypes'
 import { CalendarGrid } from './CalendarGrid'
@@ -27,7 +27,8 @@ function formatIsoDateLabel(iso?: string | null): string {
 }
 
 export default function AcademicCalendarAdmin() {
-  const [calendars, setCalendars] = useState<CalendarData[]>([])
+  const [calendars, setCalendars] = useState<(CalendarData & { is_active?: boolean })[]>([])
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
   // Viewing state
   const [viewingCalendar, setViewingCalendar] = useState<CalendarData | null>(null)
@@ -80,12 +81,13 @@ export default function AcademicCalendarAdmin() {
       if (!res.ok) throw new Error('Failed to load calendars')
       const data = await res.json()
       const list = Array.isArray(data?.calendars) ? data.calendars : []
-      const mapped: CalendarData[] = list.map((c: any) => ({
+      const mapped = list.map((c: any) => ({
         id: c.id,
         name: c.name,
         academicYear: c.academic_year || '',
         fromDate: c.from_date,
         toDate: c.to_date,
+        is_active: !!c.is_active,
         createdAt: c.created_at,
         updatedAt: c.updated_at,
         dates: [],
@@ -173,6 +175,23 @@ export default function AcademicCalendarAdmin() {
       if (viewingCalendar?.id === selectedCalendar.id) setViewingCalendar(null)
     } catch (err: any) {
       setDeleteError(err?.message || 'Delete failed')
+    }
+  }
+
+  const handleToggleActive = async (cal: CalendarData & { is_active?: boolean }) => {
+    setTogglingId(cal.id)
+    try {
+      const res = await fetchWithAuth(`/api/academic-calendar/calendars/${cal.id}/toggle-active/`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to toggle')
+      const data = await res.json()
+      setCalendars(prev => prev.map(c => c.id === cal.id
+        ? { ...c, is_active: data.is_active }
+        : { ...c, is_active: data.is_active ? false : (c as any).is_active }
+      ))
+    } catch {
+      alert('Failed to update calendar status')
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -325,11 +344,21 @@ export default function AcademicCalendarAdmin() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {calendars.map((calendar) => (
-                <div key={calendar.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+              {calendars.map((calendar) => {
+                const isActive = (calendar as any).is_active
+                const isToggling = togglingId === calendar.id
+                return (
+                <div key={calendar.id} className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${isActive ? 'border-green-400 bg-green-50/40' : 'border-gray-200'}`}>
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex-1">
-                      <h3 className="font-semibold text-gray-900">{calendar.name}</h3>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <h3 className="font-semibold text-gray-900">{calendar.name}</h3>
+                        {isActive && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-300">
+                            <Power className="w-3 h-3" /> Active
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-gray-600">{calendar.academicYear}</p>
                     </div>
                     <button onClick={() => { setSelectedCalendar(calendar); setShowDeleteConfirm(true); setDeleteError(null) }} className="text-red-500 hover:text-red-700 p-1">
@@ -349,14 +378,30 @@ export default function AcademicCalendarAdmin() {
                     </div>
                     <div className="text-xs text-gray-500 mt-2">Updated: {formatIsoDateLabel(calendar.updatedAt) || '—'}</div>
                   </div>
-                  <button
-                    onClick={() => openCalendarView(calendar)}
-                    className={`w-full flex items-center justify-center gap-2 text-sm px-3 py-2 rounded-lg transition-colors ${viewingCalendar?.id === calendar.id ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-50 hover:bg-blue-100 text-blue-700'}`}
-                  >
-                    <Eye className="w-4 h-4" /> {viewingCalendar?.id === calendar.id ? 'Viewing' : 'View Calendar'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openCalendarView(calendar)}
+                      className={`flex-1 flex items-center justify-center gap-2 text-sm px-3 py-2 rounded-lg transition-colors ${viewingCalendar?.id === calendar.id ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-50 hover:bg-blue-100 text-blue-700'}`}
+                    >
+                      <Eye className="w-4 h-4" /> {viewingCalendar?.id === calendar.id ? 'Viewing' : 'View'}
+                    </button>
+                    <button
+                      onClick={() => handleToggleActive(calendar as any)}
+                      disabled={isToggling}
+                      title={isActive ? 'Deactivate this calendar' : 'Set as active calendar'}
+                      className={`flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
+                        isActive
+                          ? 'bg-green-600 text-white hover:bg-red-600'
+                          : 'bg-gray-100 text-gray-600 hover:bg-green-100 hover:text-green-700 border border-gray-200'
+                      }`}
+                    >
+                      {isToggling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
+                      {isActive ? 'Active' : 'Set Active'}
+                    </button>
+                  </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>

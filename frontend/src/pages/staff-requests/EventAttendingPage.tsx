@@ -6,10 +6,11 @@ import ApprovalsTab from './event-attending/ApprovalsTab';
 import StaffDeclarationTab from './event-attending/StaffDeclarationTab';
 import WorkflowSettingsTab from './event-attending/WorkflowSettingsTab';
 import { generateEventPdf } from './event-attending/generateEventPdf';
-import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2 } from 'lucide-react';
+import ConditionsTab from './event-attending/ConditionsTab';
+import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus } from 'lucide-react';
 
 export default function EventAttendingPage() {
-  const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'settings'>('forms');
+  const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'conditions' | 'settings'>('forms');
   const [odForms, setOdForms] = useState<ApprovedODForm[]>([]);
   const [myForms, setMyForms] = useState<EventAttendingFormListItem[]>([]);
   const [budget, setBudget] = useState<MyEventBudget | null>(null);
@@ -73,6 +74,7 @@ export default function EventAttendingPage() {
     { key: 'forms' as const, label: 'My Forms', icon: <ClipboardList size={16} />, show: true },
     { key: 'approvals' as const, label: 'Approvals', icon: <CheckSquare size={16} />, show: isApprover, badge: pendingApprovals.length },
     { key: 'declarations' as const, label: 'Staff Declaration', icon: <BookOpen size={16} />, show: isIQAC },
+    { key: 'conditions' as const, label: 'Conditions', icon: <ListPlus size={16} />, show: isIQAC },
     { key: 'settings' as const, label: 'Settings', icon: <Settings size={16} />, show: isIQAC },
   ];
 
@@ -187,6 +189,7 @@ export default function EventAttendingPage() {
 
           {activeTab === 'approvals' && <ApprovalsTab pendingForms={pendingApprovals} processedForms={processedApprovals} onProcessed={loadData} />}
           {activeTab === 'declarations' && <StaffDeclarationTab />}
+          {activeTab === 'conditions' && <ConditionsTab />}
           {activeTab === 'settings' && <WorkflowSettingsTab />}
         </>
       )}

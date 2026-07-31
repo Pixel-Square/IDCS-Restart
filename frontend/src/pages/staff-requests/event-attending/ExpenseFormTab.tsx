@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import type { ApprovedODForm, TravelExpenseRow, FoodExpenseRow, OtherExpenseRow } from '../../../types/eventAttending';
 import type { MyEventBudget } from '../../../types/eventAttending';
 import { submitEventForm } from '../../../services/eventAttending';
-import { ChevronDown, ChevronUp, Plus, Trash2, Upload, CheckCircle, AlertTriangle } from 'lucide-react';
+import { ChevronDown, ChevronUp, Plus, Trash2, Upload, CheckCircle, AlertTriangle, FileText, Link2 } from 'lucide-react';
 
 interface Props {
   odForms: ApprovedODForm[];
@@ -20,11 +20,32 @@ const EVENT_FIELD_LABELS: Record<string, string> = {
   platform_if_online: 'Platform (if Online)', expected_outcome: 'Expected Outcome',
   purpose: 'Purpose', type: 'Type', reason: 'Reason',
   from_date: 'From Date', to_date: 'To Date', from_noon: 'From (Session)', to_noon: 'To (Session)',
+  kss_link: 'KSS Link'
 };
 
 export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) {
+  const [formMode, setFormMode] = useState<'od' | 'manual'>('od');
   const [selectedOD, setSelectedOD] = useState<ApprovedODForm | null>(null);
   const [expandedOD, setExpandedOD] = useState<number | null>(null);
+  
+  // Manual Event Details state
+  const [eventDetails, setEventDetails] = useState({
+    type: '',
+    reason: '',
+    from_date: '',
+    from_noon: '',
+    to_date: '',
+    to_noon: '',
+    event_title: '',
+    host_institution_name: '',
+    mode_of_event: '',
+    nature_of_event: '',
+    platform_if_online: '',
+    expected_outcome: '',
+    purpose: '',
+    kss_link: ''
+  });
+
   const [travel, setTravel] = useState<TravelExpenseRow[]>([{ ...EMPTY_TRAVEL }]);
   const [food, setFood] = useState<FoodExpenseRow[]>([{ ...EMPTY_FOOD }]);
   const [other, setOther] = useState<OtherExpenseRow[]>([{ ...EMPTY_OTHER }]);
@@ -54,7 +75,16 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const isOtherEmpty = (r: OtherExpenseRow) => !r.date && !r.bill_no && !r.expense_details && (!r.amount || Number(r.amount) === 0);
 
   const handleSubmit = async () => {
-    if (!selectedOD) { setError('Please select an approved On Duty form'); return; }
+    if (formMode === 'od' && !selectedOD) { 
+      setError('Please select an approved On Duty form'); return; 
+    }
+    
+    if (formMode === 'manual') {
+      if (!eventDetails.type || !eventDetails.reason || !eventDetails.from_date || !eventDetails.from_noon || !eventDetails.kss_link || !files.event_proof) {
+        setError('Please fill all required event details (*) and upload event proof in the Event Details section.');
+        return;
+      }
+    }
     
     const invalidTravel = travel.some(r => !isTravelEmpty(r) && (!r.date || !r.mode_of_travel || !r.from || !r.to || !r.amount));
     if (invalidTravel) { setError('Please fill all required fields (*) in Travel Expenses for the rows you entered.'); return; }
@@ -68,7 +98,12 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     setError(''); setSuccess(''); setSubmitting(true);
     try {
       const fd = new FormData();
-      fd.append('on_duty_request_id', String(selectedOD.id));
+      if (formMode === 'od') {
+        fd.append('on_duty_request_id', String(selectedOD!.id));
+      } else {
+        fd.append('event_details', JSON.stringify(eventDetails));
+      }
+      
       fd.append('travel_expenses', JSON.stringify(travel.filter(r => !isTravelEmpty(r))));
       fd.append('food_expenses', JSON.stringify(food.filter(r => !isFoodEmpty(r))));
       fd.append('other_expenses', JSON.stringify(other.filter(r => !isOtherEmpty(r))));
@@ -76,9 +111,15 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       fd.append('advance_amount_received', String(advanceAmount || 0));
       if (advanceDate) fd.append('advance_date', advanceDate);
       Object.entries(files).forEach(([k, f]) => fd.append(k, f));
+      
       await submitEventForm(fd);
       setSuccess('Event Attending form submitted successfully!');
-      setSelectedOD(null); setTravel([{ ...EMPTY_TRAVEL }]); setFood([{ ...EMPTY_FOOD }]);
+      setSelectedOD(null); 
+      setEventDetails({
+        type: '', reason: '', from_date: '', from_noon: '', to_date: '', to_noon: '', event_title: '',
+        host_institution_name: '', mode_of_event: '', nature_of_event: '', platform_if_online: '', expected_outcome: '', purpose: '', kss_link: ''
+      });
+      setTravel([{ ...EMPTY_TRAVEL }]); setFood([{ ...EMPTY_FOOD }]);
       setOther([{ ...EMPTY_OTHER }]); setFeesSpend(0); setAdvanceAmount(0); setAdvanceDate(''); setFiles({});
       onSubmitted();
     } catch (e: any) {
@@ -86,56 +127,191 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     } finally { setSubmitting(false); }
   };
 
+  const showExpenses = formMode === 'manual' || (formMode === 'od' && selectedOD !== null);
+
   return (
     <div className="space-y-6">
       {/* Budget Summary */}
       {budget && (
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          {[
-            { label: 'Normal Events Available', value: budget.normal_available, color: budget.normal_available > 0 ? 'green' : 'red' },
-            { label: 'Conference Available', value: budget.conference_available, color: budget.conference_available > 0 ? 'green' : 'red' },
-          ].map((b, i) => (
-            <div key={i} className={`rounded-xl border p-3 bg-${b.color}-50 border-${b.color}-200`}>
-              <p className={`text-xs font-medium text-${b.color}-600`}>{b.label}</p>
-              <p className={`text-lg font-bold text-${b.color}-700`}>₹{b.value.toLocaleString()}</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="rounded-xl border p-4 bg-blue-50/30 border-blue-100 flex flex-col gap-2">
+            <h4 className="text-sm font-semibold text-gray-800">Normal Events</h4>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-gray-500">Allocated Budget</p>
+                <p className="text-lg font-bold text-gray-700">₹{budget.normal_events_budget.toLocaleString()}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs font-medium text-blue-600">Available Balance</p>
+                <p className="text-2xl font-black text-blue-700">₹{budget.normal_available.toLocaleString()}</p>
+              </div>
             </div>
-          ))}
+          </div>
+          
+          <div className="rounded-xl border p-4 bg-purple-50/30 border-purple-100 flex flex-col gap-2">
+            <h4 className="text-sm font-semibold text-gray-800">Conference Events</h4>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-medium text-gray-500">Allocated Budget</p>
+                <p className="text-lg font-bold text-gray-700">₹{budget.conference_budget.toLocaleString()}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs font-medium text-purple-600">Available Balance</p>
+                <p className="text-2xl font-black text-purple-700">₹{budget.conference_available.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Approved OD Forms */}
-      <div>
-        <h3 className="text-base font-semibold text-gray-800 mb-3">Approved On Duty Forms</h3>
-        {availableODs.length === 0 ? (
-          <p className="text-sm text-gray-500 bg-gray-50 rounded-lg p-4">No approved On Duty forms available for expense submission.</p>
-        ) : (
-          <div className="space-y-2">
-            {availableODs.map(od => (
-              <div key={od.id} className={`border rounded-xl transition-all ${selectedOD?.id === od.id ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
-                <div className="flex items-center justify-between p-3 cursor-pointer" onClick={() => { setSelectedOD(od); setExpandedOD(expandedOD === od.id ? null : od.id); }}>
-                  <div className="flex items-center gap-3">
-                    <input type="radio" checked={selectedOD?.id === od.id} readOnly className="w-4 h-4 text-blue-600" />
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{od.form_data.event_title || od.template_name}</p>
-                      <p className="text-xs text-gray-500">{od.form_data.from_date} — {od.form_data.host_institution_name || 'N/A'}</p>
-                    </div>
-                  </div>
-                  {expandedOD === od.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </div>
-                {expandedOD === od.id && (
-                  <div className="border-t px-4 py-3 bg-gray-50/50 grid grid-cols-2 gap-2 text-sm">
-                    {Object.entries(od.form_data).filter(([, v]) => v).map(([k, v]) => (
-                      <div key={k}><span className="text-gray-500">{EVENT_FIELD_LABELS[k] || k}:</span> <span className="font-medium text-gray-800">{String(v)}</span></div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+      {/* Mode Toggle */}
+      <div className="flex bg-gray-100 p-1 rounded-lg w-fit">
+        <button 
+          onClick={() => setFormMode('od')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${formMode === 'od' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+        >
+          <Link2 size={16} /> Link to Approved On Duty Form
+        </button>
+        <button 
+          onClick={() => setFormMode('manual')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${formMode === 'manual' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+        >
+          <FileText size={16} /> Apply New Expense Form (Direct)
+        </button>
       </div>
 
-      {selectedOD && (
+      {/* OD Form Selection */}
+      {formMode === 'od' && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <h3 className="text-base font-semibold text-gray-800 mb-3">Select Approved On Duty Form</h3>
+          {availableODs.length === 0 ? (
+            <p className="text-sm text-gray-500 bg-gray-50 rounded-lg p-4">No approved On Duty forms available for expense submission.</p>
+          ) : (
+            <div className="space-y-2">
+              {availableODs.map(od => (
+                <div key={od.id} className={`border rounded-xl transition-all ${selectedOD?.id === od.id ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300 bg-white'}`}>
+                  <div className="flex items-center justify-between p-3 cursor-pointer" onClick={() => { setSelectedOD(od); setExpandedOD(expandedOD === od.id ? null : od.id); }}>
+                    <div className="flex items-center gap-3">
+                      <input type="radio" checked={selectedOD?.id === od.id} readOnly className="w-4 h-4 text-blue-600" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{od.form_data.event_title || od.template_name}</p>
+                        <p className="text-xs text-gray-500">{od.form_data.from_date} — {od.form_data.host_institution_name || 'N/A'}</p>
+                      </div>
+                    </div>
+                    {expandedOD === od.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </div>
+                  {expandedOD === od.id && (
+                    <div className="border-t px-4 py-3 bg-gray-50/50 grid grid-cols-2 gap-2 text-sm">
+                      {Object.entries(od.form_data).filter(([, v]) => v).map(([k, v]) => (
+                        <div key={k}><span className="text-gray-500">{EVENT_FIELD_LABELS[k] || k}:</span> <span className="font-medium text-gray-800">{String(v)}</span></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Manual Event Details */}
+      {formMode === 'manual' && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+          <h3 className="text-base font-semibold text-gray-800 mb-2 border-b pb-2">Event Details</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">OD Type <span className="text-red-500">*</span></label>
+              <select value={eventDetails.type} onChange={e => setEventDetails(p => ({ ...p, type: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                <option value="">Select OD Type...</option>
+                <option value="ODB - Basic">ODB - Basic</option>
+                <option value="ODR - Research">ODR - Research</option>
+                <option value="ODP - Professional">ODP - Professional</option>
+                <option value="ODO - Out Reach">ODO - Out Reach</option>
+              </select>
+            </div>
+            
+            <Input label="Reason" value={eventDetails.reason} onChange={v => setEventDetails(p => ({ ...p, reason: v }))} required />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Input label="From Date" type="date" value={eventDetails.from_date} onChange={v => setEventDetails(p => ({ ...p, from_date: v }))} required />
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">From Noon <span className="text-red-500">*</span></label>
+              <select value={eventDetails.from_noon} onChange={e => setEventDetails(p => ({ ...p, from_noon: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                <option value="">Select...</option>
+                <option value="Full Day ">Full Day</option>
+                <option value="FN ">FN</option>
+                <option value="AN">AN</option>
+              </select>
+            </div>
+            <Input label="To Date" type="date" value={eventDetails.to_date} onChange={v => setEventDetails(p => ({ ...p, to_date: v }))} />
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">To Noon</label>
+              <select value={eventDetails.to_noon} onChange={e => setEventDetails(p => ({ ...p, to_noon: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                <option value="">Select...</option>
+                <option value="Full Day ">Full Day</option>
+                <option value="FN ">FN</option>
+                <option value="AN">AN</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            <Input label="Event Title" value={eventDetails.event_title} onChange={v => setEventDetails(p => ({ ...p, event_title: v }))} />
+            <Input label="Host Institution Name" value={eventDetails.host_institution_name} onChange={v => setEventDetails(p => ({ ...p, host_institution_name: v }))} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Mode of Event</label>
+              <select value={eventDetails.mode_of_event} onChange={e => setEventDetails(p => ({ ...p, mode_of_event: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                <option value="">Select Mode...</option>
+                <option value="Offline">Offline</option>
+                <option value="Online">Online</option>
+                <option value="Hybrid">Hybrid</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Nature of Event</label>
+              <select value={eventDetails.nature_of_event} onChange={e => setEventDetails(p => ({ ...p, nature_of_event: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                <option value="">Select Nature...</option>
+                <option value="Seminar">Seminar</option>
+                <option value="Workshop">Workshop</option>
+                <option value="FDP">FDP</option>
+                <option value="STTP">STTP</option>
+                <option value="Conference">Conference</option>
+                <option value="Online course">Online course</option>
+                <option value="Others">Others</option>
+              </select>
+            </div>
+            <Input label="Platform (if Online)" value={eventDetails.platform_if_online} onChange={v => setEventDetails(p => ({ ...p, platform_if_online: v }))} />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+            <Input label="Purpose" value={eventDetails.purpose} onChange={v => setEventDetails(p => ({ ...p, purpose: v }))} />
+            <Input label="KSS Link" value={eventDetails.kss_link} onChange={v => setEventDetails(p => ({ ...p, kss_link: v }))} required />
+          </div>
+          
+          <div className="pt-2">
+             <label className="block text-xs font-bold text-gray-700 mb-1">Expected Outcome</label>
+             <textarea 
+               value={eventDetails.expected_outcome} 
+               onChange={e => setEventDetails(p => ({ ...p, expected_outcome: e.target.value }))}
+               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500"
+               rows={2}
+             />
+          </div>
+
+          <div className="pt-2 border-t mt-4">
+             <label className="block text-xs font-bold text-gray-700 mb-2">Upload Event Proof <span className="text-red-500">*</span></label>
+             <DragDropFileInput fileKey="event_proof" files={files} onChange={handleFileChange} />
+             <p className="text-xs text-gray-500 mt-1">Required: Upload brochure, invitation, or certificate</p>
+          </div>
+        </div>
+      )}
+
+      {showExpenses && (
         <>
           {/* Travel Expenses */}
           <Section title="Travel Expenses" total={travelTotal}>
@@ -232,10 +408,10 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
             </div>
           </div>
 
-          {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>}
-          {success && <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">{success}</div>}
+          {error && <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex gap-2"><AlertTriangle size={18} /> {error}</div>}
+          {success && <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex gap-2"><CheckCircle size={18} /> {success}</div>}
 
-          <button onClick={handleSubmit} disabled={submitting} className="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors">
+          <button onClick={handleSubmit} disabled={submitting} className="w-full py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-md">
             {submitting ? 'Submitting...' : 'Submit Event Attending Form'}
           </button>
         </>

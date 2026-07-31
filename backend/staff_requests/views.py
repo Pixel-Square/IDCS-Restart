@@ -7185,17 +7185,27 @@ class EventAttendingViewSet(viewsets.ViewSet):
         # Parse data — support both multipart and JSON
         data = request.data
         on_duty_request_id = data.get('on_duty_request_id')
-        if not on_duty_request_id:
-            return Response({'error': 'on_duty_request_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        event_details_str = data.get('event_details')
 
-        try:
-            od_request = StaffRequest.objects.get(id=on_duty_request_id, applicant=request.user, status='approved')
-        except StaffRequest.DoesNotExist:
-            return Response({'error': 'On Duty request not found or not approved'}, status=status.HTTP_404_NOT_FOUND)
+        od_request = None
+        custom_event_details = None
 
-        # Check if already submitted
-        if EventAttendingForm.objects.filter(on_duty_request=od_request).exists():
-            return Response({'error': 'Event Attending form already submitted for this On Duty request'}, status=status.HTTP_400_BAD_REQUEST)
+        if on_duty_request_id:
+            try:
+                od_request = StaffRequest.objects.get(id=on_duty_request_id, applicant=request.user, status='approved')
+            except StaffRequest.DoesNotExist:
+                return Response({'error': 'On Duty request not found or not approved'}, status=status.HTTP_404_NOT_FOUND)
+
+            # Check if already submitted
+            if EventAttendingForm.objects.filter(on_duty_request=od_request).exists():
+                return Response({'error': 'Event Attending form already submitted for this On Duty request'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            if not event_details_str:
+                return Response({'error': 'Either on_duty_request_id or event_details is required'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                custom_event_details = json.loads(event_details_str)
+            except Exception:
+                return Response({'error': 'Invalid event_details JSON'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Parse JSON fields
         def parse_json_field(val):
@@ -7219,6 +7229,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
         temp_form = EventAttendingForm(
             staff=request.user,
             on_duty_request=od_request,
+            custom_event_details=custom_event_details,
             travel_expenses=travel_expenses,
             food_expenses=food_expenses,
             other_expenses=other_expenses,
@@ -7227,7 +7238,10 @@ class EventAttendingViewSet(viewsets.ViewSet):
         )
 
         # Budget validation
-        nature = (od_request.form_data or {}).get('nature_of_event', '')
+        if od_request:
+            nature = (od_request.form_data or {}).get('nature_of_event', '')
+        else:
+            nature = (custom_event_details or {}).get('nature_of_event', '')
         is_conf = nature.strip().lower() == 'conference'
 
         try:
@@ -7250,6 +7264,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
         event_form = EventAttendingForm.objects.create(
             staff=request.user,
             on_duty_request=od_request,
+            custom_event_details=custom_event_details,
             travel_expenses=travel_expenses,
             food_expenses=food_expenses,
             other_expenses=other_expenses,
@@ -7260,10 +7275,15 @@ class EventAttendingViewSet(viewsets.ViewSet):
 
         # Handle file uploads
         for key in request.FILES:
-            # Keys like: travel_proof_0, food_proof_1, other_proof_0, fees_proof
+            # Keys like: travel_proof_0, food_proof_1, other_proof_0, fees_proof, event_proof
             f = request.FILES[key]
             if f.size > 30 * 1024 * 1024:
                 continue  # Skip oversized files
+
+            if key == 'event_proof':
+                event_form.event_proof = f
+                event_form.save()
+                continue
 
             parts = key.split('_')
             if len(parts) >= 3 and parts[0] in ('travel', 'food', 'other'):
@@ -7573,7 +7593,10 @@ class EventAttendingViewSet(viewsets.ViewSet):
             staff=request.user, status='approved',
         ).select_related('on_duty_request')
         for f in forms:
-            nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
+            if f.on_duty_request:
+                nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
+            else:
+                nature = (f.custom_event_details or {}).get('nature_of_event', '')
             if nature.strip().lower() == 'conference':
                 conf_used += f.grand_total
             else:
@@ -7590,5 +7613,204 @@ class EventAttendingViewSet(viewsets.ViewSet):
             'conference_used': round(conf_used, 2),
             'normal_available': round(float(decl.normal_events_budget), 2),
             'conference_available': round(float(decl.conference_budget), 2),
+        })
+
+    # ── IQAC Budget Conditions ────────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def event_budget_conditions(self, request):
+        """List all IQAC-defined event budget conditions."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can access budget conditions'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import EventBudgetCondition
+        from .serializers import EventBudgetConditionSerializer
+
+        conditions = EventBudgetCondition.objects.all().order_by('event_type', 'designation', 'exp_value')
+        serializer = EventBudgetConditionSerializer(conditions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def save_event_budget_conditions(self, request):
+        """
+        IQAC: Replace all event budget conditions and auto-apply matching
+        budgets to StaffEventDeclaration records.
+
+        exp_value encoding: integer = years, one decimal digit = months.
+        E.g. 2.2 = 2 years 2 months. The comparison is done in total months.
+
+        For each matching staff member, the last matching condition wins
+        (conditions are processed in ascending exp_value order so higher
+        thresholds overwrite lower ones, giving most-specific-match semantics).
+        """
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can edit budget conditions'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import EventBudgetCondition, StaffEventDeclaration
+        from .serializers import EventBudgetConditionSerializer
+        from django.utils import timezone
+
+        conditions_data = request.data.get('conditions', [])
+        if not isinstance(conditions_data, list):
+            return Response({'error': 'conditions must be an array'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate each condition
+        required_fields = ['event_type', 'designation', 'exp_condition', 'exp_value', 'amount', 'from_date', 'to_date']
+        for i, item in enumerate(conditions_data):
+            for f in required_fields:
+                if f not in item:
+                    return Response({'error': f'Condition #{i+1} missing field: {f}'}, status=status.HTTP_400_BAD_REQUEST)
+            if item['event_type'] not in ('normal', 'conference'):
+                return Response({'error': f'Condition #{i+1}: event_type must be normal or conference'}, status=status.HTTP_400_BAD_REQUEST)
+            if item['exp_condition'] not in ('>', '>=', '<', '<=', '=='):
+                return Response({'error': f'Condition #{i+1}: invalid exp_condition'}, status=status.HTTP_400_BAD_REQUEST)
+
+        def _exp_to_months(val):
+            """Convert float exp_value to total months. 2.2 → 26 months (2*12+2)."""
+            val = float(val)
+            years = int(val)
+            months = round((val - years) * 10)  # 2.2 → 2 months
+            return years * 12 + months
+
+        def _compare(staff_months, condition, threshold_months):
+            if condition == '>':   return staff_months > threshold_months
+            if condition == '>=':  return staff_months >= threshold_months
+            if condition == '<':   return staff_months < threshold_months
+            if condition == '<=':  return staff_months <= threshold_months
+            if condition == '==':  return staff_months == threshold_months
+            return False
+
+        try:
+            with transaction.atomic():
+                # Replace all existing conditions
+                EventBudgetCondition.objects.all().delete()
+                saved_conditions = []
+                for item in conditions_data:
+                    c = EventBudgetCondition.objects.create(
+                        event_type=item['event_type'],
+                        designation=str(item['designation']).strip(),
+                        exp_condition=item['exp_condition'],
+                        exp_value=float(item['exp_value']),
+                        amount=float(item['amount']),
+                        from_date=item['from_date'],
+                        to_date=item['to_date'],
+                        is_active=bool(item.get('is_active', True)),
+                        created_by=request.user,
+                    )
+                    saved_conditions.append(c)
+
+                # ── Auto-apply to StaffEventDeclaration ──────────────────────────
+                User = get_user_model()
+                today = timezone.localdate()
+
+                # Only apply conditions that are currently valid (today within range)
+                valid_conditions = [
+                    c for c in saved_conditions
+                    if c.is_active and c.from_date <= today <= c.to_date
+                ]
+
+                if valid_conditions:
+                    staff_users = User.objects.filter(
+                        staff_profile__isnull=False,
+                        staff_profile__status='ACTIVE',
+                    ).select_related('staff_profile', 'staff_profile__department')
+
+                    for u in staff_users:
+                        profile = getattr(u, 'staff_profile', None)
+                        if not profile:
+                            continue
+                        designation = (profile.designation or '').strip()
+                        # Calculate experience in months
+                        doj = profile.date_of_join
+                        if doj:
+                            diff_days = (today - doj).days
+                            exp_months = int(diff_days * 12 / 365.25)
+                        else:
+                            exp_months = 0
+
+                        decl, _ = StaffEventDeclaration.objects.get_or_create(staff=u)
+                        changed = False
+
+                        # Process normal conditions (ascending exp_value so last match wins)
+                        normal_conditions = sorted(
+                            [c for c in valid_conditions if c.event_type == 'normal' and c.designation.lower() == designation.lower()],
+                            key=lambda c: c.exp_value
+                        )
+                        for cond in normal_conditions:
+                            if _compare(exp_months, cond.exp_condition, _exp_to_months(cond.exp_value)):
+                                decl.normal_events_budget = cond.amount
+                                changed = True
+
+                        # Process conference conditions
+                        conf_conditions = sorted(
+                            [c for c in valid_conditions if c.event_type == 'conference' and c.designation.lower() == designation.lower()],
+                            key=lambda c: c.exp_value
+                        )
+                        for cond in conf_conditions:
+                            if _compare(exp_months, cond.exp_condition, _exp_to_months(cond.exp_value)):
+                                decl.conference_budget = cond.amount
+                                changed = True
+
+                        if changed:
+                            decl.save(update_fields=['normal_events_budget', 'conference_budget', 'updated_at'])
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = EventBudgetConditionSerializer(saved_conditions, many=True)
+        return Response({
+            'message': f'Saved {len(saved_conditions)} conditions and applied to matching staff.',
+            'conditions': serializer.data,
+        })
+
+    @action(detail=False, methods=['get'])
+    def active_academic_calendar(self, request):
+        """
+        Return the active AcademicCalendar's from_date and to_date for
+        prefilling the Conditions tab date fields.
+        Returns 404-style empty dict if no active calendar.
+        """
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can access this'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            from academic_calendar.models import AcademicCalendar
+            cal = AcademicCalendar.objects.filter(is_active=True).order_by('-from_date').first()
+            if not cal:
+                return Response({'from_date': None, 'to_date': None, 'name': None})
+            return Response({
+                'from_date': str(cal.from_date),
+                'to_date': str(cal.to_date),
+                'name': cal.name,
+                'academic_year': cal.academic_year,
+            })
+        except Exception as e:
+            return Response({'from_date': None, 'to_date': None, 'name': None, 'error': str(e)})
+
+    @action(detail=False, methods=['get'])
+    def check_condition_expiry(self, request):
+        """
+        Check if IQAC's event budget conditions have all expired.
+        Returns { expired: bool, last_to_date: str|null } for the dashboard reminder.
+        """
+        if not self._is_iqac(request.user):
+            return Response({'expired': False})
+
+        from .models import EventBudgetCondition
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        conditions = EventBudgetCondition.objects.filter(is_active=True)
+        if not conditions.exists():
+            # No conditions ever set — treat as needing setup (expired=True)
+            return Response({'expired': True, 'last_to_date': None, 'count': 0})
+
+        latest_to_date = conditions.order_by('-to_date').values_list('to_date', flat=True).first()
+        expired = (latest_to_date < today) if latest_to_date else True
+
+        return Response({
+            'expired': expired,
+            'last_to_date': str(latest_to_date) if latest_to_date else None,
+            'count': conditions.count(),
         })
 

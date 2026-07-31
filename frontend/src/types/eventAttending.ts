@@ -73,9 +73,10 @@ export interface EventAttendingFormDetail {
     department?: string;
     staff_id?: string;
   };
-  on_duty_request_id: number;
+  on_duty_request_id?: number | null;
   on_duty_form_data: Record<string, any>;
-  on_duty_template_name: string;
+  on_duty_template_name?: string;
+  custom_event_details?: Record<string, any> | null;
   travel_expenses: TravelExpenseRow[];
   food_expenses: FoodExpenseRow[];
   other_expenses: OtherExpenseRow[];
@@ -114,6 +115,8 @@ export interface EventAttendingFormListItem {
   grand_total: number;
   balance: number;
   on_duty_form_data: Record<string, any>;
+  custom_event_details?: Record<string, any> | null;
+  event_proof?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -146,4 +149,38 @@ export interface MyEventBudget {
   conference_used: number;
   normal_available: number;
   conference_available: number;
+}
+
+// ── IQAC Budget Conditions ────────────────────────────────────────────
+
+export type ExpCondition = '>' | '>=' | '<' | '<=' | '==';
+export type EventType = 'normal' | 'conference';
+
+export interface EventBudgetCondition {
+  id?: number;
+  event_type: EventType;
+  designation: string;
+  exp_condition: ExpCondition;
+  /** Float: integer part = years, one decimal digit = months. E.g. 2.2 = 2 yrs 2 months */
+  exp_value: number;
+  /** Budget amount in INR */
+  amount: number;
+  from_date: string;   // ISO date string
+  to_date: string;     // ISO date string
+  is_active?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AcademicCalendarInfo {
+  from_date: string | null;
+  to_date: string | null;
+  name: string | null;
+  academic_year?: string | null;
+}
+
+export interface ConditionExpiryStatus {
+  expired: boolean;
+  last_to_date: string | null;
+  count?: number;
 }

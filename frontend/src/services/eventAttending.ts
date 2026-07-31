@@ -105,3 +105,33 @@ export async function applyAllDeclaration(
   const res = await apiClient.post(`${BASE}/apply_all_declaration/`, { column, value });
   return res.data;
 }
+
+// ── IQAC Budget Conditions ──────────────────────────────────────────
+
+import type {
+  EventBudgetCondition,
+  AcademicCalendarInfo,
+  ConditionExpiryStatus,
+} from '../types/eventAttending';
+
+export async function fetchEventBudgetConditions(): Promise<EventBudgetCondition[]> {
+  const res = await apiClient.get(`${BASE}/event_budget_conditions/`);
+  return res.data;
+}
+
+export async function saveEventBudgetConditions(
+  conditions: EventBudgetCondition[]
+): Promise<{ message: string; conditions: EventBudgetCondition[] }> {
+  const res = await apiClient.post(`${BASE}/save_event_budget_conditions/`, { conditions });
+  return res.data;
+}
+
+export async function fetchActiveAcademicCalendar(): Promise<AcademicCalendarInfo> {
+  const res = await apiClient.get(`${BASE}/active_academic_calendar/`);
+  return res.data;
+}
+
+export async function checkConditionExpiry(): Promise<ConditionExpiryStatus> {
+  const res = await apiClient.get(`${BASE}/check_condition_expiry/`);
+  return res.data;
+}

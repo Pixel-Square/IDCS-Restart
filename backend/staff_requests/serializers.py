@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog,
     EventAttendingForm, EventAttendingFile, EventAttendingApprovalLog,
-    EventAttendingApprovalWorkflow, StaffEventDeclaration,
+    EventAttendingApprovalWorkflow, StaffEventDeclaration, EventBudgetCondition,
 )
 
 User = get_user_model()
@@ -439,7 +439,9 @@ class EventAttendingFormListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_on_duty_form_data(self, obj):
-        return obj.on_duty_request.form_data if obj.on_duty_request else {}
+        if obj.on_duty_request:
+            return obj.on_duty_request.form_data
+        return obj.custom_event_details or {}
 
 
 class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
@@ -460,6 +462,7 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
         model = EventAttendingForm
         fields = [
             'id', 'applicant', 'on_duty_request_id', 'on_duty_form_data', 'on_duty_template_name',
+            'custom_event_details', 'event_proof',
             'travel_expenses', 'food_expenses', 'other_expenses',
             'total_fees_spend', 'advance_amount_received', 'advance_date',
             'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
@@ -470,7 +473,9 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_on_duty_form_data(self, obj):
-        return obj.on_duty_request.form_data if obj.on_duty_request else {}
+        if obj.on_duty_request:
+            return obj.on_duty_request.form_data
+        return obj.custom_event_details or {}
 
     def get_current_approver_role(self, obj):
         step = obj.get_current_approval_step()
@@ -558,4 +563,17 @@ class StaffEventDeclarationSerializer(serializers.ModelSerializer):
             return round(diff.days / 365.25, 1)
         except Exception:
             return 0
+
+
+class EventBudgetConditionSerializer(serializers.ModelSerializer):
+    """Serializer for IQAC-defined event budget conditions."""
+
+    class Meta:
+        model = EventBudgetCondition
+        fields = [
+            'id', 'event_type', 'designation', 'exp_condition',
+            'exp_value', 'amount', 'from_date', 'to_date',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
