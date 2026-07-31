@@ -5,7 +5,9 @@ import { apiClient } from '../../services/auth';
 
 interface AttendanceRecord {
   id: number;
-  user_id: number;
+  user?: number;
+  user_id?: number;
+  user_name?: string;
   staff_id?: string;
   full_name: string;
   date: string;
@@ -40,9 +42,28 @@ interface Department {
   short_name: string;
 }
 
+interface FacultyDirectoryStaff {
+  user_id: number | null;
+  staff_id?: string | null;
+  user?: {
+    username?: string;
+    first_name?: string;
+    last_name?: string;
+  } | null;
+}
+
+interface FacultyDirectoryDepartment {
+  staffs?: FacultyDirectoryStaff[];
+}
+
+interface FacultyDirectoryResponse {
+  results?: FacultyDirectoryDepartment[];
+}
+
 export default function PSStaffAttendanceViewPage() {
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [facultyNameByUserId, setFacultyNameByUserId] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(false);
   const [loadingDepts, setLoadingDepts] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +84,7 @@ export default function PSStaffAttendanceViewPage() {
   // Fetch available departments
   useEffect(() => {
     fetchDepartments();
+    fetchFacultyDirectoryNames();
   }, []);
 
   // Fetch attendance when date/department changes
@@ -91,6 +113,37 @@ export default function PSStaffAttendanceViewPage() {
       console.error('Failed to fetch departments:', err);
     } finally {
       setLoadingDepts(false);
+    }
+  };
+
+  const fetchFacultyDirectoryNames = async () => {
+    try {
+      const url = `${getApiBase()}/api/academics/staffs-page/`;
+      const response = await apiClient.get(url);
+      const data: FacultyDirectoryResponse = response.data || {};
+      const map: Record<number, string> = {};
+
+      (data.results || []).forEach((dept) => {
+        (dept.staffs || []).forEach((staff) => {
+          const userId = Number(staff.user_id || 0);
+          if (!userId) return;
+
+          const firstName = String(staff.user?.first_name || '').trim();
+          const lastName = String(staff.user?.last_name || '').trim();
+          const fullName = `${firstName} ${lastName}`.trim();
+          const username = String(staff.user?.username || '').trim();
+          const staffId = String(staff.staff_id || '').trim();
+
+          const displayName = fullName || username || staffId;
+          if (displayName) {
+            map[userId] = displayName;
+          }
+        });
+      });
+
+      setFacultyNameByUserId(map);
+    } catch (err) {
+      console.error('Failed to fetch faculty directory names:', err);
     }
   };
 
@@ -131,7 +184,9 @@ export default function PSStaffAttendanceViewPage() {
 
         const mergedRecords = Array.from(mergedById.values()).sort((a, b) => {
           const dateDiff = b.date.localeCompare(a.date);
-          return dateDiff !== 0 ? dateDiff : a.user_id - b.user_id;
+          const aUserId = Number(a.user_id || a.user || 0);
+          const bUserId = Number(b.user_id || b.user || 0);
+          return dateDiff !== 0 ? dateDiff : aUserId - bUserId;
         });
 
         const mergedSummary: AttendanceSummary = {
@@ -297,11 +352,20 @@ export default function PSStaffAttendanceViewPage() {
   };
 
   const getDisplayName = (record: AttendanceRecord): string => {
+    const recordUserId = Number(record.user_id || record.user || 0);
+    if (recordUserId && facultyNameByUserId[recordUserId]) {
+      return facultyNameByUserId[recordUserId];
+    }
+
     const fullName = (record.full_name || '').trim();
     if (fullName) return fullName;
+
+    const userName = (record.user_name || '').trim();
+    if (userName) return userName;
+
     const staffId = (record.staff_id || '').trim();
     if (staffId) return staffId;
-    return `Staff ${record.user_id}`;
+    return recordUserId ? `Staff ${recordUserId}` : 'Unknown Staff';
   };
 
 
