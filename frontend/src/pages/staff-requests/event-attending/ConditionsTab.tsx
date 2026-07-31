@@ -5,15 +5,29 @@ import {
   fetchEventBudgetConditions,
   saveEventBudgetConditions,
   fetchActiveAcademicCalendar,
-  fetchStaffDeclarations
 } from '../../../services/eventAttending';
 
 const EXP_CONDITIONS: ExpCondition[] = ['>', '>=', '<', '<=', '=='];
 
+/** Roles available in the system. 'All' targets every staff member. */
+const ROLES = [
+  { value: 'All',     label: '🌐 All Staff' },
+  { value: 'STAFF',   label: 'Staff' },
+  { value: 'FACULTY', label: 'Faculty' },
+  { value: 'AHOD',    label: 'AHOD' },
+  { value: 'HOD',     label: 'HOD' },
+  { value: 'IQAC',    label: 'IQAC' },
+  { value: 'HR',      label: 'HR' },
+  { value: 'PS',      label: 'PS' },
+  { value: 'CFSW',    label: 'CFSW' },
+  { value: 'EDC',     label: 'EDC' },
+  { value: 'COE',     label: 'COE' },
+  { value: 'HAA',     label: 'HAA' },
+];
+
 export default function ConditionsTab() {
   const [conditions, setConditions] = useState<EventBudgetCondition[]>([]);
   const [academicCal, setAcademicCal] = useState<AcademicCalendarInfo | null>(null);
-  const [designations, setDesignations] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -22,15 +36,12 @@ export default function ConditionsTab() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [conds, cal, stf] = await Promise.all([
+      const [conds, cal] = await Promise.all([
         fetchEventBudgetConditions(),
         fetchActiveAcademicCalendar(),
-        fetchStaffDeclarations()
       ]);
       setConditions(conds);
       setAcademicCal(cal);
-      const desigs = Array.from(new Set(stf.map(d => d.designation).filter(Boolean))).sort();
-      setDesignations(desigs.length > 0 ? desigs : ['PROFESSOR', 'ASSOCIATE PROFESSOR', 'ASSISTANT PROFESSOR']);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load data');
     } finally {
@@ -47,9 +58,10 @@ export default function ConditionsTab() {
       ...conditions,
       {
         event_type: type,
-        designation: designations[0] || '',
-        exp_condition: '>=',
-        exp_value: 0,
+        designation: 'All',
+        exp_from: 0,
+        exp_condition: '<',
+        exp_value: 5,
         amount: 0,
         from_date,
         to_date,
@@ -77,7 +89,7 @@ export default function ConditionsTab() {
     for (let i = 0; i < conditions.length; i++) {
       const c = conditions[i];
       if (!c.designation) {
-        setError(`Condition #${i + 1} is missing a designation.`);
+        setError(`Condition #${i + 1} is missing a role.`);
         setSaving(false);
         return;
       }
@@ -128,9 +140,10 @@ export default function ConditionsTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b">
-                <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500">Designation</th>
+                <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500">Role</th>
+                <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-28">From Exp (Yrs)</th>
                 <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-24">Operator</th>
-                <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-32">Experience (Yrs)</th>
+                <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-28">To Exp (Yrs)</th>
                 <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-32">Amount (₹)</th>
                 <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-40">From Date</th>
                 <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-40">To Date</th>
@@ -143,15 +156,40 @@ export default function ConditionsTab() {
                 return (
                   <tr key={idx} className="border-b hover:bg-gray-50/50 transition-colors">
                     <td className="px-3 py-2">
-                      <select 
-                        value={c.designation} 
+                      <select
+                        value={c.designation}
                         onChange={e => updateCondition(idx, { designation: e.target.value })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                       >
-                        <option value="">Select Designation...</option>
-                        {designations.map(d => <option key={d} value={d}>{d}</option>)}
+                        <option value="">Select Role...</option>
+                        {ROLES.map(r => (
+                          <option key={r.value} value={r.value}>{r.label}</option>
+                        ))}
                       </select>
+                      {c.designation === 'All' && (
+                        <p className="text-[10px] text-blue-500 mt-0.5 pl-0.5">Applies to all staff</p>
+                      )}
                     </td>
+
+                    {/* From Exp (lower bound, inclusive) */}
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1">
+                        <input 
+                          type="number" step="0.1" min="0"
+                          value={c.exp_from ?? ''}
+                          placeholder="0"
+                          onChange={e => {
+                            const raw = e.target.value;
+                            updateCondition(idx, { exp_from: raw === '' ? null : Number(raw) });
+                          }}
+                          className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                          title="Lower-bound experience (inclusive). Leave blank for open-ended."
+                        />
+                        <span className="text-gray-400 text-xs font-mono shrink-0">≤ exp</span>
+                      </div>
+                    </td>
+
+                    {/* Operator — applies to the upper/exact bound (To Exp) */}
                     <td className="px-3 py-2">
                       <select 
                         value={c.exp_condition} 
@@ -161,13 +199,15 @@ export default function ConditionsTab() {
                         {EXP_CONDITIONS.map(cond => <option key={cond} value={cond}>{cond}</option>)}
                       </select>
                     </td>
+
+                    {/* To Exp (upper / exact bound) */}
                     <td className="px-3 py-2">
                       <input 
-                        type="number" step="0.1"
+                        type="number" step="0.1" min="0"
                         value={c.exp_value} 
                         onChange={e => updateCondition(idx, { exp_value: Number(e.target.value) || 0 })}
                         className="w-full px-2 py-1.5 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                        title="e.g. 2.2 for 2 years 2 months"
+                        title="Upper-bound / exact experience (e.g. 5 for '< 5 yrs', 2.2 for 2 yrs 2 months)"
                       />
                     </td>
                     <td className="px-3 py-2">
@@ -222,8 +262,10 @@ export default function ConditionsTab() {
             Rule-Based Budget Conditions
           </h3>
           <p className="text-xs text-gray-500 mt-1">
-            Define conditions based on designation and experience to automatically apply budgets to staff members. 
-            Higher experience thresholds will override lower ones for the same designation.
+            Define experience <strong>ranges</strong> using <em>From Exp</em> · <em>Operator</em> · <em>To Exp</em>. 
+            Example: <code className="bg-gray-100 px-1 rounded">0 ≤ exp &lt; 5</code> → ₹5,000 &nbsp;|&nbsp; 
+            <code className="bg-gray-100 px-1 rounded">5 ≤ exp &lt; 8</code> → ₹8,000 &nbsp;|&nbsp; 
+            <code className="bg-gray-100 px-1 rounded">exp &gt; 8</code> → ₹10,000. Leave <em>From Exp</em> blank for open-ended conditions.
           </p>
         </div>
         
