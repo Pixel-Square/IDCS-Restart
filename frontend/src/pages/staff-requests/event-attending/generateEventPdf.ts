@@ -144,7 +144,7 @@ function buildMainContent(
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`Date : ${formatDate(new Date())}`, W - 12, 14, { align: 'right' });
+  doc.text(`Date : ${formatDate(form.created_at)}`, W - 12, 14, { align: 'right' });
 
   // ── Faculty Details (compact: 2 per row) ──────────────────────────
   const applicantName = getApplicantName(form.applicant);
@@ -200,6 +200,7 @@ function buildMainContent(
     to_date: 'To Date',
     from_noon: 'From Session',
     to_noon: 'To Session',
+    kss_link: 'KSS Link',
   };
 
   const rawData = form.on_duty_form_data || {};
@@ -245,10 +246,10 @@ function buildMainContent(
     body: pairedRows,
     styles: { fontSize: 9, cellPadding: 3 },
     columnStyles: {
-      0: { cellWidth: 38 },
-      1: { cellWidth: 'auto' },
-      2: { cellWidth: 38 },
-      3: { cellWidth: 'auto' },
+      0: { cellWidth: 40 },
+      1: { cellWidth: 55 },
+      2: { cellWidth: 40 },
+      3: { cellWidth: 55 },
     },
     theme: 'grid',
     tableLineColor: [180, 180, 180],
@@ -385,30 +386,72 @@ function buildMainContent(
   curY = ((doc as any).lastAutoTable?.finalY ?? curY + 24) + 10;
 
   // ── Signature block (horizontal, 2 rows) ─────────────────────────
-  curY += 8;
+  // Need ~70mm for both sig rows + footer clearance. Only break if truly no space.
+  const H = doc.internal.pageSize.getHeight();
+  if (curY + 70 > H - 15) {
+      doc.addPage();
+      curY = 20;
+  }
+  
+  curY += 12; // Extra padding for names above the line
   const balanceLabel = form.balance >= 0 ? 'Balance Received' : 'Refunded';
+  
+  const getSigData = (role: string) => {
+      if (role === 'Faculty') {
+          return { name: applicantName, date: formatDate(form.created_at) };
+      }
+      const step = form.workflow_progress?.find(s => s.approver_role === role && s.is_completed && s.status === 'approved');
+      if (step) {
+          const approverName = (step.approver as any)?.full_name || (step.approver as any)?.name || 'Approved';
+          return {
+              name: approverName,
+              date: step.action_date ? new Date(step.action_date).toLocaleString('en-IN') : 'Approved'
+          };
+      }
+      return null;
+  };
 
   // Helper: draw one horizontal signature row with evenly-spaced labels
-  function drawHorizSigRow(labels: string[], y: number) {
+  function drawHorizSigRow(roles: string[], y: number) {
     const usableW = W - 20;
-    const colW = usableW / labels.length;
+    const colW = usableW / roles.length;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
     doc.setDrawColor(80, 80, 80);
     doc.setLineWidth(0.4);
-    labels.forEach((lbl, i) => {
+    
+    roles.forEach((role, i) => {
       const cx = 10 + i * colW + colW / 2;
       const lineHalfW = Math.min(colW * 0.7, 28) / 2;
+      
+      const isAutoSign = ['Faculty', 'HOD', 'HAA'].includes(role);
+      const sigData = isAutoSign ? getSigData(role) : null;
+      
+      if (sigData) {
+          doc.text(sigData.name, cx, y - 2, { align: 'center', maxWidth: colW - 4 });
+      }
+      
       doc.line(cx - lineHalfW, y, cx + lineHalfW, y);
-      doc.text(lbl, cx, y + 5, { align: 'center', maxWidth: colW - 4 });
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text(role, cx, y + 4, { align: 'center', maxWidth: colW - 4 });
+      doc.setFont('helvetica', 'normal');
+      
+      if (sigData && sigData.date) {
+          doc.setFontSize(7);
+          doc.setTextColor(80, 80, 80);
+          doc.text(sigData.date, cx, y + 8, { align: 'center', maxWidth: colW - 4 });
+          doc.setFontSize(8);
+          doc.setTextColor(0, 0, 0);
+      }
     });
   }
 
-  // Row 1: Faculty | HOD | IQAC | HAA | PRINCIPAL
-  drawHorizSigRow(['Faculty', 'HOD', 'IQAC', 'HAA', 'PRINCIPAL'], curY);
+  // Row 1: Faculty | HOD | HAA | IQAC | PRINCIPAL
+  drawHorizSigRow(['Faculty', 'HOD', 'HAA', 'IQAC', 'PRINCIPAL'], curY);
   // Row 2: Administrative Officer / Manager | Balance Received
-  drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], curY + 18);
+  drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], curY + 22);
 }
 
 // ── Pages 2+: Proof Documents ─────────────────────────────────────────
@@ -506,13 +549,25 @@ export async function generateEventPdf(form: EventAttendingFormDetail): Promise<
   buildMainContent(doc, form, logoBase64);
   await buildProofPages(doc, form, logoBase64);
 
-  // Page numbers footer on every page
+  // Page numbers and download date footer on every page
   const totalPages = (doc as any).internal.getNumberOfPages();
+  const downloadDateStr = `Downloaded: ${new Date().toLocaleString('en-IN')}`;
+  
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(120, 120, 120);
+    
+    // Left footer
+    doc.text(
+      downloadDateStr,
+      10,
+      doc.internal.pageSize.getHeight() - 5,
+      { align: 'left' }
+    );
+    
+    // Center footer
     doc.text(
       `Page ${i} of ${totalPages}  |  ${INSTITUTION}`,
       doc.internal.pageSize.getWidth() / 2,

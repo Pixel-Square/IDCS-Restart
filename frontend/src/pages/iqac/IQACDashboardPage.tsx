@@ -7,6 +7,10 @@ import {
 } from 'recharts';
 import fetchWithAuth from '../../services/fetchAuth';
 import type { ObeProgressResponse, ObeProgressTA } from '../obe/progressTypes';
+import { checkConditionExpiry } from '../../services/eventAttending';
+import type { ConditionExpiryStatus } from '../../types/eventAttending';
+import { AlertTriangle, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 /* ─────────── Types from backend analytics endpoint ─────────── */
 
@@ -129,6 +133,8 @@ export default function IQACDashboardPage(): JSX.Element {
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [expiryStatus, setExpiryStatus] = useState<ConditionExpiryStatus | null>(null);
+  const [showExpiryPopup, setShowExpiryPopup] = useState(true);
 
   const [deptFilter, setDeptFilter] = useState<number | 'ALL'>('ALL');
   const [classTypeFilter, setClassTypeFilter] = useState<ClassTypeFilter>('ALL');
@@ -141,9 +147,10 @@ export default function IQACDashboardPage(): JSX.Element {
       const analyticsUrl = deptId === 'ALL'
         ? '/api/obe/iqac/dashboard-analytics'
         : `/api/obe/iqac/dashboard-analytics?department_id=${encodeURIComponent(String(deptId))}`;
-      const [pRes, aRes] = await Promise.all([
+      const [pRes, aRes, expiryData] = await Promise.all([
         fetchWithAuth('/api/obe/progress'),
         fetchWithAuth(analyticsUrl),
+        checkConditionExpiry().catch(() => null)
       ]);
       if (!pRes.ok) throw new Error(`Progress HTTP ${pRes.status}`);
       if (!aRes.ok) throw new Error(`Analytics HTTP ${aRes.status}`);
@@ -151,6 +158,7 @@ export default function IQACDashboardPage(): JSX.Element {
       const aJs: AnalyticsResponse = await aRes.json();
       setProgress(pJs);
       setAnalytics(aJs);
+      if (expiryData) setExpiryStatus(expiryData);
     } catch (e: any) {
       setError(e?.message || 'Failed to load dashboard');
     } finally {
@@ -233,6 +241,63 @@ export default function IQACDashboardPage(): JSX.Element {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Expiry Popup Reminder */}
+      {expiryStatus?.expired && showExpiryPopup && (
+        <div style={{
+          background: 'linear-gradient(to right, #fffbeb, #fef3c7)',
+          borderLeft: '4px solid #f59e0b',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <AlertTriangle color="#d97706" size={24} />
+            <div>
+              <h4 style={{ margin: 0, color: '#92400e', fontSize: '15px', fontWeight: 700 }}>
+                Action Required: Event Budget Conditions Expired
+              </h4>
+              <p style={{ margin: '4px 0 0 0', color: '#b45309', fontSize: '13px' }}>
+                {expiryStatus.count === 0 
+                  ? 'No event budget conditions have been set up yet.' 
+                  : `The current event budget conditions expired on ${expiryStatus.last_to_date || 'a past date'}.`}
+                {' '}Please review and update the conditions for the new academic period.
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Link 
+              to="/staff-requests/event-attending"
+              onClick={() => {
+                // Ideally this would link directly to the tab, but since the tab state is inside EventAttendingPage,
+                // clicking this will just navigate to the page where they can select the tab.
+              }}
+              style={{
+                background: '#d97706',
+                color: 'white',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '13px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              Update Conditions
+            </Link>
+            <button 
+              onClick={() => setShowExpiryPopup(false)}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#b45309' }}
+              title="Dismiss"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header bar */}
       <div className="obe-card" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ flex: '1 1 240px' }}>

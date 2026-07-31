@@ -830,8 +830,10 @@ def calendars(request):
     if request.method == 'GET':
         qs = AcademicCalendar.objects.order_by('-from_date')
         if str(request.query_params.get('current') or '').lower() in ('1', 'true', 'yes', 'on'):
-            today = date.today()
-            cal = qs.filter(from_date__lte=today, to_date__gte=today).first() or qs.first()
+            cal = qs.filter(is_active=True).first()
+            if not cal:
+                today = date.today()
+                cal = qs.filter(from_date__lte=today, to_date__gte=today).first() or qs.first()
             if not cal:
                 return Response({'calendar': None})
             return Response({'calendar': _calendar_payload(cal)})
@@ -845,6 +847,7 @@ def calendars(request):
                         'from_date': c.from_date.isoformat(),
                         'to_date': c.to_date.isoformat(),
                         'academic_year': c.academic_year,
+                        'is_active': c.is_active,
                         'created_at': c.created_at.isoformat() if c.created_at else None,
                         'updated_at': c.updated_at.isoformat() if c.updated_at else None,
                     }
@@ -961,6 +964,27 @@ def calendar_detail(request, calendar_id):
         pass
 
     return Response({'calendar': _calendar_payload(cal)})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def calendar_toggle_active(request, calendar_id):
+    if not _is_iqac_user(request.user):
+        return Response({'error': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        cal = AcademicCalendar.objects.get(id=calendar_id)
+    except AcademicCalendar.DoesNotExist:
+        return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if cal.is_active:
+        cal.is_active = False
+        cal.save(update_fields=['is_active'])
+    else:
+        with transaction.atomic():
+            AcademicCalendar.objects.exclude(id=cal.id).update(is_active=False)
+            cal.is_active = True
+            cal.save(update_fields=['is_active'])
+
+    return Response({'success': True, 'is_active': cal.is_active})
 
 
 @api_view(['GET'])

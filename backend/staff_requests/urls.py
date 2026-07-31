@@ -56,3 +56,7 @@ urlpatterns = [
 # POST   /api/staff-requests/event-attending/save_staff_declaration/      - IQAC: save budget
 # POST   /api/staff-requests/event-attending/apply_all_declaration/       - IQAC: apply to all
 # GET    /api/staff-requests/event-attending/my_event_budget/             - User's budget info
+# GET    /api/staff-requests/event-attending/event_budget_conditions/     - IQAC: list conditions
+# POST   /api/staff-requests/event-attending/save_event_budget_conditions/ - IQAC: save & auto-apply conditions
+# GET    /api/staff-requests/event-attending/active_academic_calendar/    - IQAC: active cal dates for prefill
+# GET    /api/staff-requests/event-attending/check_condition_expiry/      - IQAC: check if conditions expired

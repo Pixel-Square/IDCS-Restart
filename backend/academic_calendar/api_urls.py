@@ -17,6 +17,7 @@ urlpatterns = [
     path('calendar/template/', api_views.calendar_template_download, name='academic_calendar_template_download'),
     path('calendars/', api_views.calendars, name='academic_calendar_calendars'),
     path('calendars/<uuid:calendar_id>/', api_views.calendar_detail, name='academic_calendar_calendar_detail'),
+    path('calendars/<uuid:calendar_id>/toggle-active/', api_views.calendar_toggle_active, name='academic_calendar_toggle_active'),
     path('upload/parse/', api_views.upload_parse, name='academic_calendar_upload_parse'),
     path('upload/import/', api_views.upload_import, name='academic_calendar_upload_import'),
 

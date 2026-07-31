@@ -569,6 +569,15 @@ class EventAttendingForm(models.Model):
         StaffRequest,
         on_delete=models.CASCADE,
         related_name='event_attending_forms',
+        null=True, blank=True,
+    )
+    custom_event_details = models.JSONField(
+        null=True, blank=True,
+        help_text='Stores manual event details if not linked to OD form'
+    )
+    event_proof = models.FileField(
+        upload_to='event_proofs/', null=True, blank=True,
+        help_text='Proof document for standalone event forms'
     )
 
     # Itemised expenses stored as JSON arrays
@@ -767,3 +776,81 @@ class StaffEventDeclaration(models.Model):
 
     def __str__(self):
         return f"{self.staff.get_full_name() or self.staff.username} — Normal: {self.normal_events_budget}, Conf: {self.conference_budget}"
+
+
+class EventBudgetCondition(models.Model):
+    """
+    IQAC-defined rule-based budget conditions for event reimbursement.
+    When IQAC saves conditions, the system auto-applies matching budgets
+    to StaffEventDeclaration for all staff matching the designation + experience criteria.
+
+    exp_value uses a float where the integer part is years and the decimal
+    is months (e.g. 2.2 = 2 years 2 months). Only 0–11 months are valid.
+
+    The from_date / to_date define the validity period (prefilled from the
+    active AcademicCalendar). If all conditions are expired, IQAC sees a
+    popup reminder on the dashboard.
+    """
+
+    EVENT_TYPE_CHOICES = [
+        ('normal', 'Normal Events'),
+        ('conference', 'Conference Events'),
+    ]
+    CONDITION_CHOICES = [
+        ('>', '>'),
+        ('>=', '>='),
+        ('<', '<'),
+        ('<=', '<='),
+        ('==', '=='),
+    ]
+
+    event_type = models.CharField(
+        max_length=20,
+        choices=EVENT_TYPE_CHOICES,
+        help_text="Normal Events or Conference Events",
+    )
+    designation = models.CharField(
+        max_length=200,
+        help_text="Staff designation this condition applies to",
+    )
+    exp_condition = models.CharField(
+        max_length=2,
+        choices=CONDITION_CHOICES,
+        default='>=',
+        help_text="Comparison operator for experience",
+    )
+    exp_value = models.FloatField(
+        default=0,
+        help_text="Experience threshold in years (2.2 = 2 yrs 2 months)",
+    )
+    amount = models.FloatField(
+        default=0,
+        help_text="Budget amount in INR to apply to matching staff",
+    )
+    from_date = models.DateField(
+        help_text="Condition validity start date (auto-filled from active Academic Calendar)",
+    )
+    to_date = models.DateField(
+        help_text="Condition validity end date (auto-filled from active Academic Calendar)",
+    )
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='event_budget_conditions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['event_type', 'designation', 'exp_value']
+        verbose_name = 'Event Budget Condition'
+        verbose_name_plural = 'Event Budget Conditions'
+
+    def __str__(self):
+        return (
+            f"[{self.get_event_type_display()}] {self.designation} "
+            f"exp {self.exp_condition} {self.exp_value} → ₹{self.amount} "
+            f"({self.from_date} – {self.to_date})"
+        )
