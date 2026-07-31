@@ -571,8 +571,9 @@ class EventBudgetConditionSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventBudgetCondition
         fields = [
-            'id', 'event_type', 'designation', 'exp_condition',
-            'exp_value', 'amount', 'from_date', 'to_date',
+            'id', 'event_type', 'designation',
+            'exp_from', 'exp_condition', 'exp_value',
+            'amount', 'from_date', 'to_date',
             'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

@@ -813,15 +813,25 @@ class EventBudgetCondition(models.Model):
         max_length=200,
         help_text="Staff designation this condition applies to",
     )
+    exp_from = models.FloatField(
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "Optional lower-bound experience in years (inclusive). "
+            "E.g. exp_from=5, exp_condition='<', exp_value=8 → 5 ≤ exp < 8. "
+            "Leave blank for open-ended conditions like '> 8 years'."
+        ),
+    )
     exp_condition = models.CharField(
         max_length=2,
         choices=CONDITION_CHOICES,
         default='>=',
-        help_text="Comparison operator for experience",
+        help_text="Comparison operator applied to exp_value (upper/exact bound)",
     )
     exp_value = models.FloatField(
         default=0,
-        help_text="Experience threshold in years (2.2 = 2 yrs 2 months)",
+        help_text="Experience upper/exact bound in years (2.2 = 2 yrs 2 months)",
     )
     amount = models.FloatField(
         default=0,

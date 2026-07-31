@@ -7639,9 +7639,16 @@ class EventAttendingViewSet(viewsets.ViewSet):
         exp_value encoding: integer = years, one decimal digit = months.
         E.g. 2.2 = 2 years 2 months. The comparison is done in total months.
 
-        For each matching staff member, the last matching condition wins
-        (conditions are processed in ascending exp_value order so higher
-        thresholds overwrite lower ones, giving most-specific-match semantics).
+        Range conditions: supply exp_from (lower bound, inclusive) together
+        with exp_condition + exp_value (upper bound). E.g.:
+          exp_from=0, exp_condition='<', exp_value=5  →  0 ≤ exp < 5 yrs
+          exp_from=5, exp_condition='<', exp_value=8  →  5 ≤ exp < 8 yrs
+          exp_from=None, exp_condition='>', exp_value=8 →  exp > 8 yrs
+
+        Conditions without exp_from continue to work as open-ended.
+        For each matching staff the last matching condition wins (sorted
+        by exp_value ascending), but with proper ranges conditions are
+        naturally mutually exclusive so order does not matter.
         """
         if not self._is_iqac(request.user):
             return Response({'error': 'Only IQAC can edit budget conditions'}, status=status.HTTP_403_FORBIDDEN)
@@ -7680,15 +7687,33 @@ class EventAttendingViewSet(viewsets.ViewSet):
             if condition == '==':  return staff_months == threshold_months
             return False
 
+        def _matches_condition(staff_months, cond):
+            """Check if staff_months satisfies the condition (with optional lower-bound)."""
+            # Upper/exact bound check (the primary operator)
+            upper_ok = _compare(staff_months, cond.exp_condition, _exp_to_months(cond.exp_value))
+            if not upper_ok:
+                return False
+            # Lower bound check: staff must be >= exp_from (inclusive) when set
+            if cond.exp_from is not None:
+                lower_months = _exp_to_months(cond.exp_from)
+                if staff_months < lower_months:
+                    return False
+            return True
+
         try:
             with transaction.atomic():
                 # Replace all existing conditions
                 EventBudgetCondition.objects.all().delete()
                 saved_conditions = []
                 for item in conditions_data:
+                    # Parse optional exp_from (lower bound)
+                    raw_exp_from = item.get('exp_from')
+                    exp_from_val = float(raw_exp_from) if raw_exp_from not in (None, '', 'null') else None
+
                     c = EventBudgetCondition.objects.create(
                         event_type=item['event_type'],
                         designation=str(item['designation']).strip(),
+                        exp_from=exp_from_val,
                         exp_condition=item['exp_condition'],
                         exp_value=float(item['exp_value']),
                         amount=float(item['amount']),
@@ -7704,23 +7729,63 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 today = timezone.localdate()
 
                 # Only apply conditions that are currently valid (today within range)
-                valid_conditions = [
-                    c for c in saved_conditions
-                    if c.is_active and c.from_date <= today <= c.to_date
-                ]
+                from datetime import datetime
+                valid_conditions = []
+                for c in saved_conditions:
+                    if not c.is_active:
+                        continue
+                    
+                    # Convert to date if it's still a string from the request payload
+                    c_from = datetime.strptime(c.from_date, "%Y-%m-%d").date() if isinstance(c.from_date, str) else c.from_date
+                    c_to = datetime.strptime(c.to_date, "%Y-%m-%d").date() if isinstance(c.to_date, str) else c.to_date
+                    
+                    if c_from and c_to and c_from <= today <= c_to:
+                        valid_conditions.append(c)
 
                 if valid_conditions:
                     staff_users = User.objects.filter(
                         staff_profile__isnull=False,
                         staff_profile__status='ACTIVE',
-                    ).select_related('staff_profile', 'staff_profile__department')
+                    ).select_related(
+                        'staff_profile', 'staff_profile__department'
+                    ).prefetch_related('user_roles__role')
+
+                    def _matches_role(cond_designation, user_role_names):
+                        """
+                        Return True if this condition targets the given user.
+                        'All' → every staff member.
+                        Any other value (HOD, IQAC, HR …) → only users who
+                        carry that role (case-insensitive).
+                        """
+                        target = str(cond_designation or '').strip().upper()
+                        if target == 'ALL':
+                            return True
+                        return target in user_role_names
+
+                    def _cond_sort_key(c):
+                        """
+                        Sort 'All' conditions first so that role-specific
+                        conditions always override them for the same staff member
+                        when both match the same experience range.
+                        """
+                        is_all = str(c.designation or '').strip().upper() == 'ALL'
+                        return (0 if is_all else 1, c.exp_value)
 
                     for u in staff_users:
                         profile = getattr(u, 'staff_profile', None)
                         if not profile:
                             continue
-                        designation = (profile.designation or '').strip()
-                        # Calculate experience in months
+
+                        # Resolve the user's roles (uppercase set for fast lookup)
+                        user_role_names = {
+                            r.role.name.strip().upper()
+                            for r in u.user_roles.all()
+                            if r.role and r.role.name
+                        }
+                        if not user_role_names:
+                            user_role_names = {'STAFF'}
+
+                        # Calculate experience in months from date of joining
                         doj = profile.date_of_join
                         if doj:
                             diff_days = (today - doj).days
@@ -7731,23 +7796,32 @@ class EventAttendingViewSet(viewsets.ViewSet):
                         decl, _ = StaffEventDeclaration.objects.get_or_create(staff=u)
                         changed = False
 
-                        # Process normal conditions (ascending exp_value so last match wins)
+                        # Process normal conditions
+                        # Sort: 'All' first (base), then role-specific (overrides All)
                         normal_conditions = sorted(
-                            [c for c in valid_conditions if c.event_type == 'normal' and c.designation.lower() == designation.lower()],
-                            key=lambda c: c.exp_value
+                            [
+                                c for c in valid_conditions
+                                if c.event_type == 'normal'
+                                and _matches_role(c.designation, user_role_names)
+                            ],
+                            key=_cond_sort_key
                         )
                         for cond in normal_conditions:
-                            if _compare(exp_months, cond.exp_condition, _exp_to_months(cond.exp_value)):
+                            if _matches_condition(exp_months, cond):
                                 decl.normal_events_budget = cond.amount
                                 changed = True
 
                         # Process conference conditions
                         conf_conditions = sorted(
-                            [c for c in valid_conditions if c.event_type == 'conference' and c.designation.lower() == designation.lower()],
-                            key=lambda c: c.exp_value
+                            [
+                                c for c in valid_conditions
+                                if c.event_type == 'conference'
+                                and _matches_role(c.designation, user_role_names)
+                            ],
+                            key=_cond_sort_key
                         )
                         for cond in conf_conditions:
-                            if _compare(exp_months, cond.exp_condition, _exp_to_months(cond.exp_value)):
+                            if _matches_condition(exp_months, cond):
                                 decl.conference_budget = cond.amount
                                 changed = True
 

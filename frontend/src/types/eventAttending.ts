@@ -160,8 +160,10 @@ export interface EventBudgetCondition {
   id?: number;
   event_type: EventType;
   designation: string;
+  /** Optional lower-bound experience in years (inclusive). E.g. exp_from=5 means exp >= 5 yrs */
+  exp_from?: number | null;
   exp_condition: ExpCondition;
-  /** Float: integer part = years, one decimal digit = months. E.g. 2.2 = 2 yrs 2 months */
+  /** Float: upper/exact bound. Integer part = years, one decimal digit = months. E.g. 2.2 = 2 yrs 2 months */
   exp_value: number;
   /** Budget amount in INR */
   amount: number;
