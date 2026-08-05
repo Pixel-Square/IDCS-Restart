@@ -9788,7 +9788,7 @@ class AdvisorMyStudentsView(APIView):
                 return Response({'results': []})
 
             advisor_qs = SectionAdvisor.objects.filter(
-                advisor=staff_profile, is_active=True, academic_year__is_active=True
+                advisor=staff_profile, is_active=True
             ).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__regulation')
             sections = [a.section for a in advisor_qs]
             if not sections:

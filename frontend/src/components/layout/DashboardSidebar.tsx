@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, RefreshCw } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, RefreshCw, Award } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -82,6 +82,10 @@ import { fetchAllQueries } from '../../services/queries';
   coe_retrival: FileText,
   coe_one_page_report: FileText,
   system_transitions: RefreshCw,
+  certificates_upload: FileText,
+  certificates_review: FileText,
+  certificates_achievements: Award,
+  certificates_reports: BarChart2,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -483,6 +487,22 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Staff assigned subjects page
   if (flags.is_staff && (permsLower.includes('academics.view_assigned_subjects') || rolesUpper.includes('HOD'))) {
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
+  }
+
+  if (flags.is_student) {
+    items.push({ key: 'certificates_upload', label: 'My Certificates', to: '/student/certificates' });
+  }
+
+  if (flags.can_review_certificates || permsLower.includes('certificates.review') || rolesUpper.includes('MENTOR') || Boolean(entry.certificates_review)) {
+    items.push({ key: 'certificates_review', label: 'Certificate Reviews', to: '/certificates/review' });
+  }
+
+  if (flags.can_view_certificate_achievements || permsLower.includes('certificates.view_mentee_achievements') || permsLower.includes('certificates.view_advisee_achievements') || permsLower.includes('certificates.view_department_achievements') || permsLower.includes('certificates.view_all_achievements')) {
+    items.push({ key: 'certificates_achievements', label: 'Achievements', to: '/certificates/achievements' });
+  }
+
+  if (rolesUpper.includes('IQAC') && (flags.can_view_achievement_reports || permsLower.includes('certificates.export_reports'))) {
+    items.push({ key: 'certificates_reports', label: 'Achievement Reports', to: '/iqac/achievement-reports' });
   }
 
 

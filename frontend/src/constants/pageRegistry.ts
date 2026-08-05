@@ -21,6 +21,7 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { path: '/student/timetable',          label: 'Timetable',                     icon: 'Clock',         group: 'Student',  roles: ['STUDENT'] },
   { path: '/student/attendance',         label: 'Attendance',                    icon: 'CalendarCheck', group: 'Student',  roles: ['STUDENT'] },
   { path: '/student/academics',          label: 'Academics',                     icon: 'BookOpen',      group: 'Student',  roles: ['STUDENT'] },
+  { path: '/student/certificates',       label: 'My Certificates',               icon: 'Award',         group: 'Student',  roles: ['STUDENT'] },
   { path: '/student/calendar',           label: 'Academic Calendar',             icon: 'CalendarDays',  group: 'Student',  roles: ['STUDENT'] },
   { path: '/student/feedback',           label: 'Feedback',                      icon: 'Star',          group: 'Student',  roles: ['STUDENT'] },
 
@@ -60,6 +61,7 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { path: '/iqac/calendar',              label: 'Academic Calendar',             icon: 'CalendarDays',  group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/timetable',             label: 'Timetable',                     icon: 'Clock',         group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/academic-controller',   label: 'Academic Controller',           icon: 'Settings',      group: 'IQAC',     roles: ['IQAC'] },
+  { path: '/iqac/achievement-reports',   label: 'Achievement Reports',           icon: 'BarChart2',     group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/staff-attendance',      label: 'Staff Attendance',              icon: 'UserCheck',     group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/obe-requests',          label: 'OBE Requests',                  icon: 'ClipboardList', group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/event-approvals',       label: 'Event Approvals',               icon: 'CheckSquare',   group: 'IQAC',     roles: ['IQAC'] },
@@ -69,6 +71,8 @@ export const PAGE_REGISTRY: PageEntry[] = [
   // ── Advisor ───────────────────────────────────────────────────────────────
   { path: '/advisor/timetable',          label: 'Timetable',                     icon: 'Clock',         group: 'Advisor',  roles: ['ADVISOR'] },
   { path: '/advisor/mentor',             label: 'Mentor Assign',                 icon: 'UserPlus',      group: 'Advisor',  roles: ['ADVISOR'] },
+  { path: '/certificates/review',        label: 'Certificate Reviews',           icon: 'Award',         group: 'Advisor',  roles: ['MENTOR', 'ADVISOR', 'HOD', 'IQAC'] },
+  { path: '/certificates/achievements',  label: 'Achievements',                 icon: 'Award',         group: 'Advisor',  roles: ['MENTOR', 'ADVISOR', 'HOD', 'IQAC'] },
 
   // ── RFID / Security / Library ─────────────────────────────────────────────
   { path: '/idscan/test',                label: 'RFID Scanner Test',             icon: 'ScanLine',      group: 'RFID',     roles: ['SECURITY'] },
