@@ -974,6 +974,26 @@ class ProfileUpdateView(APIView):
                 staff_profile.personal_email = normalized_personal_email
                 staff_profile.save(update_fields=['personal_email'])
 
+        # Student profile fields — editable by the student themselves
+        student_detail_fields = ['father_name', 'father_phone', 'mother_name', 'mother_phone', 'address']
+        student_detail_data = {f: request.data.get(f) for f in student_detail_fields if request.data.get(f) is not None}
+        if student_detail_data:
+            student_profile = getattr(user, 'student_profile', None)
+            if student_profile is None:
+                return Response({'detail': 'Student profile not found.'}, status=status.HTTP_400_BAD_REQUEST)
+            update_fields = []
+            for field, value in student_detail_data.items():
+                setattr(student_profile, field, str(value).strip())
+                update_fields.append(field)
+            if update_fields:
+                try:
+                    from academics.models import StudentProfile as SP
+                    SP.objects.filter(pk=student_profile.pk).update(**{f: getattr(student_profile, f) for f in update_fields})
+                    updated = True
+                except Exception:
+                    log.exception('Failed to update student profile fields (user_id=%s)', getattr(user, 'id', None))
+                    return Response({'detail': 'Failed to update student details.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         # Do not mark name/email as permanently edited; allow subsequent edits.
 
         if username is not None:
@@ -1065,8 +1085,10 @@ class ProfileUpdateView(APIView):
                 return Response({'detail': 'Failed to update profile.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
-            # Return updated user data
-            serializer = MeSerializer(user)
+            # Refresh user from DB to clear stale cached reverse relationships
+            User = get_user_model()
+            fresh_user = User.objects.get(pk=user.pk)
+            serializer = MeSerializer(fresh_user)
             return Response({'ok': True, 'user': serializer.data}, status=status.HTTP_200_OK)
         except Exception as e:
             # Log full exception to help debug unexpected serialization errors
