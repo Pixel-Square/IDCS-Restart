@@ -240,11 +240,16 @@ class MeSerializer(serializers.Serializer):
         return f'/media/{cleaned}'
 
     def get_permissions(self, obj):
-        from .utils import get_user_permissions
+        try:
+            from .utils import get_user_permissions
 
-        perms = get_user_permissions(obj)
-        # return sorted list for consistency
-        return sorted(perms)
+            perms = get_user_permissions(obj)
+            # return sorted list for consistency
+            return sorted(perms)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f'Error fetching permissions for user {obj.id}')
+            return []
 
     def get_profile_type(self, obj):
         # Explicit profile type for frontend
@@ -260,49 +265,90 @@ class MeSerializer(serializers.Serializer):
         return None
 
     def get_profile(self, obj):
-        profile_image_url = self.get_profile_image(obj)
-        # Minimal profile payload to avoid touching academic serializers
-        sp = self._safe_related_profile(obj, 'student_profile')
-        if sp is not None:
-            # prefer the active assignment (current_section) over legacy `section` field
-            cur_sec = None
-            try:
-                cur_sec = sp.current_section
-            except Exception:
-                cur_sec = getattr(sp, 'section', None)
+        try:
+            profile_image_url = self.get_profile_image(obj)
+            # Minimal profile payload to avoid touching academic serializers
+            sp = self._safe_related_profile(obj, 'student_profile')
+            if sp is not None:
+                # prefer the active assignment (current_section) over legacy `section` field
+                cur_sec = None
+                try:
+                    cur_sec = sp.current_section
+                except Exception:
+                    cur_sec = getattr(sp, 'section', None)
 
-            sec_obj = cur_sec
-            batch = getattr(sec_obj, 'batch', None)
-            course = getattr(batch, 'course', None) if batch else None
-            department = getattr(course, 'department', None) if course else None
+                sec_obj = cur_sec
+                batch = getattr(sec_obj, 'batch', None)
+                course = getattr(batch, 'course', None) if batch else None
+                department = getattr(course, 'department', None) if course else None
 
-            return {
-                'reg_no': sp.reg_no,
-                'student_id': sp.reg_no,  # Alias for consistency
-                'profile_image': profile_image_url,
-                'profile_image_updated': self.get_profile_image_updated(obj),
-                'rfid_uid': getattr(sp, 'rfid_uid', ''),
-                'mobile_number': getattr(sp, 'mobile_number', '') or '',
-                'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
-                'section_id': getattr(sec_obj, 'id', None),
-                'section': getattr(sec_obj, 'name', None),
-                'batch': getattr(batch, 'name', sp.batch),
-                'department': {
-                    'id': getattr(department, 'id', None),
-                    'code': getattr(department, 'code', None),
-                    'short_name': getattr(department, 'short_name', None),
-                    'name': getattr(department, 'name', None),
-                } if department else None,
-                'status': sp.status,
-                # Parent / Guardian details
-                'father_name': getattr(sp, 'father_name', '') or '',
-                'father_phone': getattr(sp, 'father_phone', '') or '',
-                'mother_name': getattr(sp, 'mother_name', '') or '',
-                'mother_phone': getattr(sp, 'mother_phone', '') or '',
-                'address': getattr(sp, 'address', '') or '',
-            }
-        st = self._safe_related_profile(obj, 'staff_profile')
-        if st is not None:
+                return {
+                    'reg_no': sp.reg_no,
+                    'student_id': sp.reg_no,  # Alias for consistency
+                    'profile_image': profile_image_url,
+                    'profile_image_updated': self.get_profile_image_updated(obj),
+                    'rfid_uid': getattr(sp, 'rfid_uid', ''),
+                    'mobile_number': getattr(sp, 'mobile_number', '') or '',
+                    'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
+                    'section_id': getattr(sec_obj, 'id', None),
+                    'section': getattr(sec_obj, 'name', None),
+                    'batch': getattr(batch, 'name', sp.batch),
+                    'department': {
+                        'id': getattr(department, 'id', None),
+                        'code': getattr(department, 'code', None),
+                        'short_name': getattr(department, 'short_name', None),
+                        'name': getattr(department, 'name', None),
+                    } if department else None,
+                    'status': sp.status,
+                    # Parent / Guardian details
+                    'father_name': getattr(sp, 'father_name', '') or '',
+                    'father_phone': getattr(sp, 'father_phone', '') or '',
+                    'mother_name': getattr(sp, 'mother_name', '') or '',
+                    'mother_phone': getattr(sp, 'mother_phone', '') or '',
+                    'address': getattr(sp, 'address', '') or '',
+                }
+            st = self._safe_related_profile(obj, 'staff_profile')
+            if st is not None:
+                return {
+                    'staff_id': st.staff_id,
+                    'date_of_join': st.date_of_join.isoformat() if getattr(st, 'date_of_join', None) else None,
+                    'personal_email': getattr(st, 'personal_email', '') or '',
+                    'profile_image': profile_image_url,
+                    'profile_image_updated': self.get_profile_image_updated(obj),
+                    'rfid_uid': getattr(st, 'rfid_uid', ''),
+                    'mobile_number': getattr(st, 'mobile_number', '') or '',
+                    'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
+                    'department': {
+                        'code': getattr(st.department, 'code', None),
+                        'name': getattr(st.department, 'name', None),
+                        'short_name': getattr(st.department, 'short_name', None),
+                    },
+                    'designation': st.designation,
+                    'status': st.status,
+                }
+
+            ext = self._safe_related_profile(obj, 'ext_staff_profile')
+            if ext is not None:
+                mobile_value = str(getattr(ext, 'mobile', '') or getattr(obj, 'mobile_no', '') or '')
+                return {
+                    'staff_id': getattr(ext, 'external_id', '') or getattr(ext, 'faculty_id', ''),
+                    'profile_image': profile_image_url,
+                    'profile_image_updated': self.get_profile_image_updated(obj),
+                    'mobile_number': mobile_value,
+                    'mobile_verified': bool(mobile_value),
+                    'department': {
+                        'code': None,
+                        'name': str(getattr(ext, 'department', '') or ''),
+                        'short_name': None,
+                    },
+                    'designation': str(getattr(ext, 'designation', '') or ''),
+                    'status': 'ACTIVE' if bool(getattr(ext, 'is_active', True)) else 'INACTIVE',
+                }
+            return None
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(f'Error fetching profile for user {obj.id}')
+            return None
             return {
                 'staff_id': st.staff_id,
                 'date_of_join': st.date_of_join.isoformat() if getattr(st, 'date_of_join', None) else None,

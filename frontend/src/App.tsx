@@ -129,7 +129,6 @@ import CollegeDetailPage from './pages/colleges/CollegeDetailPage';
 import CollegeUsersPage from './pages/colleges/CollegeUsersPage';
 import CollegeFeaturesPage from './pages/colleges/CollegeFeaturesPage';
 import RolesPage from './pages/roles/RolesPage';
-import BackupsLogsPage from './pages/backups/BackupsLogsPage';
 import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
 import RegulationsPage from './pages/colleges/RegulationsPage';
@@ -319,10 +318,6 @@ export default function App() {
                 <Route
                   path="/roles"
                   element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RolesPage />} />}
-                />
-                <Route
-                  path="/backups-logs"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<BackupsLogsPage />} />}
                 />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route

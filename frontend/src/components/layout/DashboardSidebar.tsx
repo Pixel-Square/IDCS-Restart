@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, RefreshCw, Award, Building2, Archive, Landmark, Layers, ScrollText } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, RefreshCw, Award, Building2, Landmark, Layers, ScrollText } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -91,7 +91,6 @@ import { fetchAllQueries } from '../../services/queries';
   batches: Layers,
   regulations: ScrollText,
   roles: Shield,
-  backups_logs: Archive,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -572,10 +571,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Roles management – Super Admin only
   if (isSuperAdmin && !items.some((item) => item.key === 'roles')) {
     items.push({ key: 'roles', label: 'Roles', to: '/roles' });
-  }
-  // Backups & Logs management - Super Admin only
-  if (isSuperAdmin && !items.some((item) => item.key === 'backups_logs')) {
-    items.push({ key: 'backups_logs', label: 'Backups & Logs', to: '/backups-logs' });
   }
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
   const isSecurity = rolesUpper.includes('SECURITY');

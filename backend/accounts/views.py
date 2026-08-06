@@ -63,10 +63,25 @@ class MeView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
     def get(self, request):
-        serializer = MeSerializer(request.user)
-        data = serializer.data
-        data['must_change_password'] = bool(getattr(request.user, 'must_change_password', False))
-        return Response(data)
+        try:
+            serializer = MeSerializer(request.user)
+            data = serializer.data
+            data['must_change_password'] = bool(getattr(request.user, 'must_change_password', False))
+            return Response(data)
+        except Exception as e:
+            log.exception('Error in MeView for user %s (id=%s): %s', 
+                         getattr(request.user, 'username', 'unknown'),
+                         getattr(request.user, 'id', 'unknown'),
+                         str(e))
+            # Return a minimal response to avoid cascading errors
+            return Response(
+                {
+                    'detail': 'Error retrieving user information',
+                    'user_id': getattr(request.user, 'id', None),
+                    'username': getattr(request.user, 'username', None),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 def _normalize_mobile_number(raw: str) -> str:

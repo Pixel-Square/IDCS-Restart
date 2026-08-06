@@ -115,8 +115,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
         is_iqac_main = False
 
     Permission = models.Permission
-    perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
-    perm_codes = sorted({p.code for p in perms_qs})
+    try:
+        perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
+        perm_codes = sorted({p.code for p in perms_qs})
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception('Error fetching permissions for user')
+        perm_codes = []
 
     grouped: Dict[str, List[str]] = {}
     for code in perm_codes:

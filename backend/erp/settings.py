@@ -90,7 +90,6 @@ INSTALLED_APPS = [
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
 INSTALLED_APPS.append('staff_salary')
-INSTALLED_APPS.append('backups_logs')
 INSTALLED_APPS.append('django_celery_results')
 
 MIDDLEWARE = [
