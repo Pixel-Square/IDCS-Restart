@@ -13,6 +13,7 @@ export interface UserQuery {
   created_at: string;
   updated_at: string;
   admin_notes: string;
+  forwarded_to_super_admin?: boolean;
 }
 
 export interface UserQueryListItem {
@@ -89,7 +90,7 @@ export async function fetchAllQueries(
 
 export async function updateQuery(
   id: number,
-  updates: { status?: string; admin_notes?: string }
+  updates: { status?: string; admin_notes?: string; forwarded_to_super_admin?: boolean }
 ): Promise<UserQuery> {
   const res = await fetchWithAuth(`/api/accounts/queries/${id}/update/`, {
     method: 'PATCH',

@@ -60,7 +60,7 @@ export default function QueriesPage() {
         {activeTab === 'my-queries' ? (
           <UserQueriesComponent user={user} />
         ) : (
-          <QueriesReceiverComponent />
+          <QueriesReceiverComponent user={user} />
         )}
       </div>
     </div>

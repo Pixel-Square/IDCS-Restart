@@ -48,7 +48,9 @@ urlpatterns = [
     path('api/reporting/', include('reporting.urls')),
     # College search API (public for external staff registration)
     path('api/colleges/', include('college.urls')),
+    path('api/college/', include('college.urls')),
     path('api/lms/', include('lms.urls')),
+    path('api/backups-logs/', include('backups_logs.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

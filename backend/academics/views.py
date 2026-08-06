@@ -11191,6 +11191,22 @@ class DepartmentStudentsView(APIView):
                         'department_name': getattr(shared_dept, 'name', None) if shared_dept else None,
                         'is_shared_section': True,
                     })
+
+                # Check for unassigned students in user's departments
+                unassigned_count = StudentProfile.objects.filter(
+                    section__isnull=True, home_department_id__in=dept_ids
+                ).count()
+                if unassigned_count > 0:
+                    section_list.append({
+                        'section_id': 0,
+                        'section_name': 'Unassigned',
+                        'batch_name': 'N/A',
+                        'department_code': 'N/A',
+                        'department_short_name': 'N/A',
+                        'department_name': 'Unassigned',
+                        'is_shared_section': False,
+                    })
+
                 return Response({'sections': section_list})
 
             # ── Single section students mode ─────────────────────────────────
@@ -11199,45 +11215,52 @@ class DepartmentStudentsView(APIView):
             except ValueError:
                 return Response({'error': 'Invalid section_id'}, status=400)
 
-            if section_id_int not in all_accessible_ids:
-                return Response({'error': 'Section not found or not in your departments'}, status=404)
-
-            is_shared = section_id_int in shared_section_ids
-
-            # Fetch the section object
-            sec = (shared_sections if is_shared else own_sections).filter(id=section_id_int).first()
-            if not sec:
-                return Response({'error': 'Section not found or not in your departments'}, status=404)
-
-            batch = getattr(sec, 'batch', None)
-            course = getattr(batch, 'course', None) if batch else None
-            dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
-
-            # For shared sections only return students belonging to the user's home departments
-            if is_shared:
-                assign_qs = StudentSectionAssignment.objects.filter(
-                    section_id=section_id_int,
-                    end_date__isnull=True,
-                    student__home_department_id__in=dept_ids,
-                ).select_related('student__user', 'student__home_department')
-                legacy_qs = StudentProfile.objects.filter(
-                    section_id=section_id_int,
-                    home_department_id__in=dept_ids,
+            # Handle Unassigned section
+            if section_id_int == 0:
+                studs = StudentProfile.objects.filter(
+                    section__isnull=True, home_department_id__in=dept_ids
                 ).select_related('user', 'home_department')
+                is_shared = False
+                sec = type('obj', (object,), {'id': 0, 'name': 'Unassigned'})()
+                batch = type('obj', (object,), {'name': 'N/A'})()
+                dept = None
             else:
-                assign_qs = StudentSectionAssignment.objects.filter(
-                    section_id=section_id_int, end_date__isnull=True
-                ).select_related('student__user')
-                legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
+                if section_id_int not in all_accessible_ids:
+                    return Response({'error': 'Section not found or not in your departments'}, status=404)
 
-            studs = []
-            for a in assign_qs:
-                studs.append(a.student)
+                is_shared = section_id_int in shared_section_ids
+                sec = (shared_sections if is_shared else own_sections).filter(id=section_id_int).first()
+                if not sec:
+                    return Response({'error': 'Section not found or not in your departments'}, status=404)
 
-            present_pks = {s.pk for s in studs}
-            for s in legacy_qs:
-                if s.pk not in present_pks:
-                    studs.append(s)
+                batch = getattr(sec, 'batch', None)
+                course = getattr(batch, 'course', None) if batch else None
+                dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+
+                if is_shared:
+                    assign_qs = StudentSectionAssignment.objects.filter(
+                        section_id=section_id_int,
+                        end_date__isnull=True,
+                        student__home_department_id__in=dept_ids,
+                    ).select_related('student__user', 'student__home_department')
+                    legacy_qs = StudentProfile.objects.filter(
+                        section_id=section_id_int,
+                        home_department_id__in=dept_ids,
+                    ).select_related('user', 'home_department')
+                else:
+                    assign_qs = StudentSectionAssignment.objects.filter(
+                        section_id=section_id_int, end_date__isnull=True
+                    ).select_related('student__user')
+                    legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
+
+                studs = []
+                for a in assign_qs:
+                    studs.append(a.student)
+
+                present_pks = {s.pk for s in studs}
+                for s in legacy_qs:
+                    if s.pk not in present_pks:
+                        studs.append(s)
 
             students_out = []
             for st in studs:
@@ -11327,6 +11350,19 @@ class AllStudentsView(APIView):
                         'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
                         'department_name': getattr(dept, 'name', None) if dept else None,
                     })
+
+                # Check for unassigned students
+                unassigned_count = StudentProfile.objects.filter(section__isnull=True).count()
+                if unassigned_count > 0:
+                    section_list.append({
+                        'section_id': 0,
+                        'section_name': 'Unassigned',
+                        'batch_name': 'N/A',
+                        'department_code': 'N/A',
+                        'department_short_name': 'N/A',
+                        'department_name': 'Unassigned',
+                    })
+
                 return Response({'sections': section_list})
 
             # ── Single section students mode ─────────────────────────────────
@@ -11335,26 +11371,33 @@ class AllStudentsView(APIView):
             except ValueError:
                 return Response({'error': 'Invalid section_id'}, status=400)
 
-            sec = sections.filter(id=section_id_int).first()
-            if not sec:
-                return Response({'error': 'Section not found'}, status=404)
+            # Handle Unassigned section
+            if section_id_int == 0:
+                studs = StudentProfile.objects.filter(section__isnull=True).select_related('user')
+                sec = type('obj', (object,), {'id': 0, 'name': 'Unassigned'})()
+                batch = type('obj', (object,), {'name': 'N/A'})()
+                dept = None
+            else:
+                sec = sections.filter(id=section_id_int).first()
+                if not sec:
+                    return Response({'error': 'Section not found'}, status=404)
 
-            batch = getattr(sec, 'batch', None)
-            course = getattr(batch, 'course', None) if batch else None
-            dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
+                batch = getattr(sec, 'batch', None)
+                course = getattr(batch, 'course', None) if batch else None
+                dept = (getattr(course, 'department', None) if course else None) or getattr(batch, 'department', None)
 
-            studs = []
-            assign_qs = StudentSectionAssignment.objects.filter(
-                section_id=section_id_int, end_date__isnull=True
-            ).select_related('student__user')
-            for a in assign_qs:
-                studs.append(a.student)
+                studs = []
+                assign_qs = StudentSectionAssignment.objects.filter(
+                    section_id=section_id_int, end_date__isnull=True
+                ).select_related('student__user')
+                for a in assign_qs:
+                    studs.append(a.student)
 
-            legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
-            present_pks = {s.pk for s in studs}
-            for s in legacy_qs:
-                if s.pk not in present_pks:
-                    studs.append(s)
+                legacy_qs = StudentProfile.objects.filter(section_id=section_id_int).select_related('user')
+                present_pks = {s.pk for s in studs}
+                for s in legacy_qs:
+                    if s.pk not in present_pks:
+                        studs.append(s)
 
             students_out = []
             for st in studs:

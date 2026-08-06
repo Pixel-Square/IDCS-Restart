@@ -1,4 +1,4 @@
-﻿# Added 'OBE.apps.ObeConfig', on 2026-01-27
+# Added 'OBE.apps.ObeConfig', on 2026-01-27
 # Added backend.OBE.apps.ObeConfig on 2026-01-27
 import os
 import sys
@@ -39,16 +39,18 @@ RUNNING_RUNSERVER = 'runserver' in sys.argv
 ALLOWED_HOSTS = (
     ['*'] if DEBUG else [
         'cloud.krgi.co.in',    # Frontend domain via tunnel
-        'db.krgi.co.in',       # Your new database domain
-        'idcs.krgi.co.in',     # Your new frontend domain
+        'db.krgi.co.in',       # Database/admin domain (IDCS Restart)
+        'idcs.krgi.co.in',     # Frontend domain (IDCS Restart)
+        'idcs3.krgi.co.in',    # Frontend domain (IDCS 3.0)
+        'db3.krgi.co.in',      # Backend/admin domain (IDCS 3.0)
         'krgi.co.in',
         '.krgi.co.in',         # Allow all campus subdomains through Cloudflare
         '192.168.40.253',      # Your local IP
         'localhost',
         '127.0.0.1',
         '0.0.0.0',
-        '.db.krgi.co.in',      # Allow all subdomains for the new domain
-        '.idcs.krgi.co.in',    # Allow all subdomains for the new domain
+        '.db.krgi.co.in',
+        '.idcs.krgi.co.in',
     ]
 )
 
@@ -88,6 +90,8 @@ INSTALLED_APPS = [
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')
 INSTALLED_APPS.append('staff_salary')
+INSTALLED_APPS.append('backups_logs')
+INSTALLED_APPS.append('django_celery_results')
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -190,6 +194,25 @@ CACHES = {
 # Keep sessions mostly in cache to reduce DB pressure during concurrent auth traffic.
 SESSION_ENGINE = os.getenv('SESSION_ENGINE', 'django.contrib.sessions.backends.cached_db')
 SESSION_CACHE_ALIAS = 'default'
+
+# ── Celery Configuration ───────────────────────────────────────────────────────
+# Broker: Redis DB 2 (separate from cache on DB 1 to avoid key collisions)
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/2')
+# Results stored in Django DB via django-celery-results (no extra infra needed)
+CELERY_RESULT_BACKEND = 'django-db'
+CELERY_CACHE_BACKEND = 'default'
+CELERY_RESULT_EXTENDED = True  # Store task args/kwargs/name for debugging
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TIMEZONE = 'Asia/Kolkata'
+CELERY_ENABLE_UTC = True
+# Keep task results for 7 days
+CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 7
+# Limits per task to avoid runaway operations
+CELERY_TASK_SOFT_TIME_LIMIT = 300   # 5 min soft kill → raises SoftTimeLimitExceeded
+CELERY_TASK_TIME_LIMIT = 360        # 6 min hard kill
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True  # suppress Celery 6.0 deprecation warning
 
 AUTH_PASSWORD_VALIDATORS = []
 
@@ -345,6 +368,8 @@ _PROD_WEB_ORIGINS = [
     'https://db.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
+    'https://idcs3.krgi.co.in',   # IDCS 3.0 frontend
+    'https://db3.krgi.co.in',     # IDCS 3.0 backend/admin
 ]
 
 # CSRF trusted origins must be absolute http(s) origins in Django 4+.
@@ -353,6 +378,8 @@ _PROD_CSRF_ORIGINS = [
     'https://db.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
+    'https://idcs3.krgi.co.in',   # IDCS 3.0 frontend
+    'https://db3.krgi.co.in',     # IDCS 3.0 backend/admin
 ]
 
 _DEFAULT_DEBUG_ORIGINS = [
@@ -416,13 +443,16 @@ if DEBUG:
 # Always allow the production dashboard hostname if not already present
 if 'https://db.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://db.krgi.co.in')
-# Always allow the production frontend hostname if not already present
 if 'https://idcs.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://idcs.krgi.co.in')
 if 'https://cloud.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://cloud.krgi.co.in')
 if 'https://coe.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append('https://coe.krgi.co.in')
+if 'https://idcs3.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://idcs3.krgi.co.in')
+if 'https://db3.krgi.co.in' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://db3.krgi.co.in')
 
 CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
 

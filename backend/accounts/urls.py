@@ -35,6 +35,7 @@ from .views import (
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
 from .api.roles import RolesListView
+from .api.roles_management import RolesManagementListCreateView, RoleDetailView, PermissionsListView, FeaturesListView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -77,4 +78,9 @@ urlpatterns = [
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
     # Login lockdown toggle (read: any auth, write: superuser only)
     path('login-lockdown/', LoginLockdownView.as_view(), name='login_lockdown'),
+    # Roles management (IQAC)
+    path('roles/manage/', RolesManagementListCreateView.as_view(), name='roles_manage_list_create'),
+    path('roles/manage/<int:pk>/', RoleDetailView.as_view(), name='roles_manage_detail'),
+    path('permissions/', PermissionsListView.as_view(), name='permissions_list'),
+    path('features/', FeaturesListView.as_view(), name='features_list'),
 ]
