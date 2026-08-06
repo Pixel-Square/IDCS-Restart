@@ -284,12 +284,6 @@ class MeSerializer(serializers.Serializer):
                     'name': getattr(department, 'name', None),
                 } if department else None,
                 'status': sp.status,
-                # Parent / Guardian details
-                'father_name': getattr(sp, 'father_name', '') or '',
-                'father_phone': getattr(sp, 'father_phone', '') or '',
-                'mother_name': getattr(sp, 'mother_name', '') or '',
-                'mother_phone': getattr(sp, 'mother_phone', '') or '',
-                'address': getattr(sp, 'address', '') or '',
             }
         st = self._safe_related_profile(obj, 'staff_profile')
         if st is not None:

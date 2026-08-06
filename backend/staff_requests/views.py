@@ -229,45 +229,68 @@ def is_user_approver_for_request(user, staff_request, approver_role):
     if user.is_superuser:
         return True
         
-    # 2. Check for Global Roles (HR, PRINCIPAL, IQAC, PS, etc.)
-    if approver_role in ['HR', 'PRINCIPAL', 'IQAC', 'PS', 'ADMIN']:
+    # 2. Check for Global Roles (HR, PRINCIPAL, IQAC, PS, ADMIN, HAA, etc.)
+    if approver_role not in ['HOD', 'AHOD']:
         if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
             return True
             
-    # 3. Check for Department-Specific Roles (HOD)
-    if approver_role == 'HOD':
+    # 3. Check for Department-Specific Roles (HOD / AHOD)
+    if approver_role in ['HOD', 'AHOD']:
         try:
+            import logging
             from academics.models import DepartmentRole, AcademicYear
-            
+
+            _log = logging.getLogger(__name__)
+
             # Get the applicant's department
             applicant_profile = getattr(staff_request.applicant, 'staff_profile', None)
             if not applicant_profile or not applicant_profile.department:
+                _log.warning(
+                    '[is_user_approver] Applicant %s has no staff_profile or no department.',
+                    staff_request.applicant_id,
+                )
                 return False
             applicant_dept = applicant_profile.department
-            
+
             # Get the approver's profile
             user_profile = getattr(user, 'staff_profile', None)
             if not user_profile:
+                _log.warning(
+                    '[is_user_approver] Approver user %s has no staff_profile.', user.id
+                )
                 return False
-                
-            # Check active academic year
-            current_year = AcademicYear.objects.filter(is_active=True).first()
-            if not current_year:
-                return False
-                
-            # Check if the current user is the HOD for the applicant's department
-            is_hod_of_dept = DepartmentRole.objects.filter(
+
+            base_qs = DepartmentRole.objects.filter(
                 staff=user_profile,
                 department=applicant_dept,
-                role__in=['HOD', 'AHOD'],  # Include AHOD if they are also allowed to approve
-                academic_year=current_year,
-                is_active=True
-            ).exists()
-            
-            return is_hod_of_dept
-            
+                role__in=['HOD', 'AHOD'],
+                is_active=True,
+            )
+
+            # First try: restrict to currently active academic year
+            current_year = AcademicYear.objects.filter(is_active=True).first()
+            if current_year and base_qs.filter(academic_year=current_year).exists():
+                return True
+
+            # Fallback: DepartmentRole rows may still reference the previous semester's
+            # AcademicYear (e.g. EVEN) while the active flag has already flipped to ODD.
+            # Trust is_active=True on the DepartmentRole row itself instead of re-filtering
+            # by the active AcademicYear, so that HOD approvals keep working across semester
+            # transitions without needing an admin to re-assign department roles every cycle.
+            if base_qs.exists():
+                _log.info(
+                    '[is_user_approver] Matched HOD/AHOD via fallback (no active-year filter) '
+                    'for user=%s dept=%s', user.id, applicant_dept,
+                )
+                return True
+
+            return False
+
         except Exception as e:
-            print(f"Error checking HOD role: {e}")
+            import logging
+            logging.getLogger(__name__).exception(
+                '[is_user_approver] Error checking HOD role for user=%s: %s', user.id, e
+            )
             return False
             
     return False
@@ -3155,7 +3178,10 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Permission check: Only approvers can access this endpoint
-        approver_roles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']
+        # Dynamically get all roles that are designated as approvers in any workflow
+        from .models import ApprovalStep
+        approver_roles = set(ApprovalStep.objects.values_list('approver_role', flat=True).distinct())
+        
         user_roles = set()
         
         if hasattr(user, 'user_roles'):
@@ -3163,7 +3189,21 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                 user.user_roles.values_list('role__name', flat=True).distinct()
             )
         
+        # HOD and AHOD might not be in user_roles directly but through DepartmentRole
         has_approver_role = any(role.upper() in [r.upper() for r in approver_roles] for role in user_roles)
+        
+        # Also check if they have department roles (HOD/AHOD)
+        if not has_approver_role:
+            try:
+                from academics.models import DepartmentRole
+                has_approver_role = DepartmentRole.objects.filter(
+                    staff__user=user, 
+                    role__in=['HOD', 'AHOD'],
+                    is_active=True
+                ).exists()
+            except Exception:
+                pass
+
         has_permission = user.has_perm('staff_requests.approve_requests')
         
         if not (has_approver_role or has_permission or user.is_superuser):

@@ -43,7 +43,6 @@ import AdvisorAssignments from './pages/hod/AdvisorAssignments';
 import TeachingAssignmentsPage from './pages/hod/TeachingAssignments';
 import ObeEditRequestsPage from './pages/hod/ObeEditRequestsPage';
 import StudentsPage from './pages/staff/Students';
-import StudentCertificatesPage from './pages/staff/StudentCertificatesPage';
 import StudentTimetable from './pages/student/TimetableView';
 import StaffTimetable from './pages/staff/TimetableView';
 import AssignedSubjectsPage from './pages/staff/AssignedSubjects';
@@ -120,10 +119,6 @@ import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
-import CertificateUploadPage from './pages/certificates/CertificateUploadPage';
-import CertificateReviewPage from './pages/certificates/CertificateReviewPage';
-import AchievementsPage from './pages/certificates/AchievementsPage';
-import AchievementsReportPage from './pages/certificates/AchievementsReportPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -526,10 +521,6 @@ export default function App() {
                   path="/iqac/system-transitions"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<SystemTransitionsPage />} />}
                 />
-                <Route
-                  path="/iqac/achievement-reports"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["certificates.export_reports"]} element={<AchievementsReportPage user={user} />} />}
-                />
                 {/* PBAS IQAC route removed */}
                 <Route
                   path="/faculty/attendance"
@@ -603,14 +594,6 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_mentor"]} element={<MentorAssign />} />}
                 />
                 <Route
-                  path="/certificates/review"
-                  element={<ProtectedRoute user={user} requiredRoles={["MENTOR", "ADVISOR", "HOD", "IQAC"]} requiredPermissions={["certificates.review"]} element={<CertificateReviewPage user={user} />} />}
-                />
-                <Route
-                  path="/certificates/achievements"
-                  element={<ProtectedRoute user={user} requiredRoles={["MENTOR", "ADVISOR", "HOD", "IQAC"]} requiredPermissions={["certificates.view_mentee_achievements", "certificates.view_advisee_achievements", "certificates.view_department_achievements", "certificates.view_all_achievements"]} element={<AchievementsPage user={user} />} />}
-                />
-                <Route
                   path="/student/timetable"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["timetable.view"]} element={<StudentTimetable />} />}
                 />
@@ -621,10 +604,6 @@ export default function App() {
                 <Route
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
-                />
-                <Route
-                  path="/student/certificates"
-                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<CertificateUploadPage user={user} />} />}
                 />
                 {/* Student PBAS route removed */}
                 {/* Attendance pages removed */}
@@ -640,10 +619,6 @@ export default function App() {
 
                   path="/staff/students"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
-                />
-                <Route
-                  path="/staff/students/:studentId/certificates"
-                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<StudentCertificatesPage />} />}
                 />
                 {/* Staff PBAS route removed */}
                 <Route

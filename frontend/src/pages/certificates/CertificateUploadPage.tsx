@@ -6,6 +6,7 @@ import {
   FileUp,
   Loader2,
   RefreshCw,
+  Sparkles,
   Upload,
   X,
 } from 'lucide-react'
@@ -47,6 +48,7 @@ export default function CertificateUploadPage({ user }: Props) {
     issuing_organization: '',
     issue_date: '',
     expiry_date: '',
+    custom_achievement: '',
   })
 
   const studentName = useMemo(() => {
@@ -83,13 +85,21 @@ export default function CertificateUploadPage({ user }: Props) {
       setError('Please fill all required fields.')
       return
     }
+    if (form.certificate_type === 'OTHER' && !form.custom_achievement.trim()) {
+      setError('Please specify what kind of achievement you have earned.')
+      return
+    }
     setSubmitting(true)
     setError('')
     setSuccess('')
     try {
       const body = new FormData()
       body.append('certificate_type', form.certificate_type)
-      body.append('title', form.title.trim())
+      const titleToSubmit =
+        form.certificate_type === 'OTHER' && form.custom_achievement.trim()
+          ? `${form.title.trim()} (${form.custom_achievement.trim()})`
+          : form.title.trim()
+      body.append('title', titleToSubmit)
       body.append('issuing_organization', form.issuing_organization.trim())
       body.append('issue_date', form.issue_date)
       if (form.expiry_date) body.append('expiry_date', form.expiry_date)
@@ -102,7 +112,14 @@ export default function CertificateUploadPage({ user }: Props) {
       }
       setSuccess('Certificate submitted for mentor review.')
       setFile(null)
-      setForm({ certificate_type: 'CERTIFICATION', title: '', issuing_organization: '', issue_date: '', expiry_date: '' })
+      setForm({
+        certificate_type: 'CERTIFICATION',
+        title: '',
+        issuing_organization: '',
+        issue_date: '',
+        expiry_date: '',
+        custom_achievement: '',
+      })
       await loadData()
     } catch (e: any) {
       setError(e?.message || 'Upload failed')
@@ -175,6 +192,24 @@ export default function CertificateUploadPage({ user }: Props) {
                   {certificateTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
                 </select>
               </div>
+              {form.certificate_type === 'OTHER' && (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-amber-50/80 to-indigo-50/80 border border-indigo-200/80 shadow-sm space-y-2 transition-all duration-200">
+                  <div className="flex items-center gap-2 text-indigo-950 font-semibold text-sm">
+                    <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <span>Achievement Type & Details</span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Describe the specific achievement or recognition you have earned for mentor verification.
+                  </p>
+                  <input
+                    type="text"
+                    value={form.custom_achievement}
+                    onChange={(e) => setForm((p) => ({ ...p, custom_achievement: e.target.value }))}
+                    className="w-full px-4 py-2.5 rounded-xl border border-indigo-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm shadow-sm"
+                    placeholder="e.g. Patent Grant, Research Paper Publication, Fellowship, National Award..."
+                  />
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
