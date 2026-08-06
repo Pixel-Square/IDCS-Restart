@@ -64,6 +64,10 @@ class User(AbstractUser):
     profile_image = models.CharField(max_length=500, blank=True, default='')
     profile_image_updated = models.BooleanField(default=False)
     name_email_edited = models.BooleanField(default=False)
+    must_change_password = models.BooleanField(
+        default=False,
+        help_text='When True, the user is forced to change their password on next login.',
+    )
 
     def __str__(self):
         full_name = f"{self.first_name} {self.last_name}".strip()
@@ -200,6 +204,12 @@ class Role(models.Model):
     """
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+    features = models.ManyToManyField(
+        'college.FeatureCatalog',
+        blank=True,
+        related_name='roles',
+        help_text='Features assigned to this role'
+    )
 
     def __str__(self):
         return self.name
@@ -296,6 +306,40 @@ def _user_roles_changed(sender, instance, action, reverse, model, pk_set, **kwar
             raise ValidationError('User must have at least one role; cannot remove all roles.')
 
 
+@receiver(m2m_changed, sender=Role.features.through)
+def _role_features_changed(sender, instance, action, reverse, model, pk_set, **kwargs):
+    """
+    When features are assigned to a Role, automatically collect all associated
+    permissions and map them to the Role.
+    """
+    if action in ('post_add', 'post_remove', 'post_clear'):
+        if reverse:
+            return  # we only care about Role -> Feature mapping
+            
+        # Get all features currently assigned to the role
+        features = instance.features.all().prefetch_related('permissions')
+        
+        # Collect all required permissions
+        required_permissions = set()
+        for feature in features:
+            for perm in feature.permissions.all():
+                required_permissions.add(perm)
+                
+        # Get current permissions assigned to the role
+        from .models import RolePermission
+        
+        # Wipe old permissions
+        RolePermission.objects.filter(role=instance).delete()
+        
+        # Assign new permissions
+        new_role_permissions = [
+            RolePermission(role=instance, permission=perm)
+            for perm in required_permissions
+        ]
+        RolePermission.objects.bulk_create(new_role_permissions)
+
+
+
 class NotificationTemplate(models.Model):
     """Configurable message templates for OTP/alerts.
 
@@ -344,6 +388,10 @@ class UserQuery(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     admin_notes = models.TextField(blank=True, default='', help_text='Response or notes from admin (visible to user)')
+    forwarded_to_super_admin = models.BooleanField(
+        default=False,
+        help_text='Indicates if this query was escalated/forwarded to the Super Admin'
+    )
     
     class Meta:
         ordering = ['-created_at']

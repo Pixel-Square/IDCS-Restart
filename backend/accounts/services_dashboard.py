@@ -71,6 +71,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
     roles_qs = user.roles.all()
     role_names = [r.name for r in roles_qs]
 
+    if getattr(user, 'is_superuser', False) and 'SUPER_ADMIN' not in {str(x).upper() for x in role_names}:
+        role_names.append('SUPER_ADMIN')
+
     # Department roles (HOD/AHOD) are modeled in academics.DepartmentRole,
     # not necessarily as accounts.Role. Expose them as effective roles so the
     # frontend can show HOD pages in the sidebar.
@@ -112,8 +115,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
         is_iqac_main = False
 
     Permission = models.Permission
-    perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
-    perm_codes = sorted({p.code for p in perms_qs})
+    try:
+        perms_qs = Permission.objects.filter(permission_roles__role__in=roles_qs).distinct()
+        perm_codes = sorted({p.code for p in perms_qs})
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception('Error fetching permissions for user')
+        perm_codes = []
 
     grouped: Dict[str, List[str]] = {}
     for code in perm_codes:
@@ -220,6 +228,49 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'elective_poll': bool(flags.get('can_manage_elective_poll') or flags.get('can_choose_elective') or flags.get('can_hod_elective_manage')),
     }
 
+    # ── College Feature Flags ──────────────────────────────────────────────────
+    # Determine which college this user belongs to (via their profile).
+    # Returns the list of enabled feature codes for that college.
+    # If the user has no college (e.g. SUPER_ADMIN), return empty list so the
+    # sidebar shows all items it would normally show via role/perm checks.
+    college_features: List[str] = []
+    try:
+        college_id: Optional[int] = None
+        _sp = getattr(user, 'student_profile', None)
+        if _sp is not None:
+            college_id = getattr(_sp, 'college_id', None)
+        if college_id is None:
+            _st = getattr(user, 'staff_profile', None)
+            if _st is not None:
+                college_id = getattr(_st, 'college_id', None)
+
+        if college_id is not None:
+            from college.models import CollegeFeature
+            college_features = list(
+                CollegeFeature.objects.filter(
+                    college_id=college_id,
+                    is_enabled=True,
+                ).values_list('feature__code', flat=True)
+            )
+    except Exception:
+        college_features = []
+
+    # ── Role-assigned Feature Flags ───────────────────────────────────────────
+    # Collect all features assigned to the user's roles.
+    # This lets the frontend check "does this user's role have feature X?"
+    # independently from the college-level feature toggle.
+    role_features: List[str] = []
+    try:
+        role_features = list(
+            models.Role.objects.filter(
+                user_roles__user=user
+            ).values_list('features__code', flat=True).distinct()
+        )
+        # filter out None values (roles with no features assigned)
+        role_features = [f for f in role_features if f]
+    except Exception:
+        role_features = []
+
     return {
         'username': str(getattr(user, 'username', '') or ''),
         'email': str(getattr(user, 'email', '') or ''),
@@ -231,6 +282,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'capabilities': grouped,
         'flags': flags,
         'entry_points': entry_points,
+        'college_features': college_features,
+        'role_features': role_features,
     }
 
 

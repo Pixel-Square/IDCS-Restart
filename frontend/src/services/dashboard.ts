@@ -8,6 +8,8 @@ export type DashboardResponse = {
   capabilities: Record<string, string[]>;
   flags: Record<string, boolean>;
   entry_points: Record<string, boolean>;
+  /** Enabled feature codes for the user's college. Empty = no college (show all). */
+  college_features?: string[];
 };
 
 import fetchWithAuth from './fetchAuth'

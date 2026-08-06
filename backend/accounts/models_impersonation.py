@@ -25,14 +25,14 @@ class SuperuserImpersonationLog(models.Model):
     # The superuser performing the impersonation
     superuser = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='impersonations_performed'
     )
     
     # The target user being impersonated
     target_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='impersonations_received',
         null=True,
         blank=True

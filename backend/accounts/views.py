@@ -63,8 +63,25 @@ class MeView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
 
     def get(self, request):
-        serializer = MeSerializer(request.user)
-        return Response(serializer.data)
+        try:
+            serializer = MeSerializer(request.user)
+            data = serializer.data
+            data['must_change_password'] = bool(getattr(request.user, 'must_change_password', False))
+            return Response(data)
+        except Exception as e:
+            log.exception('Error in MeView for user %s (id=%s): %s', 
+                         getattr(request.user, 'username', 'unknown'),
+                         getattr(request.user, 'id', 'unknown'),
+                         str(e))
+            # Return a minimal response to avoid cascading errors
+            return Response(
+                {
+                    'detail': 'Error retrieving user information',
+                    'user_id': getattr(request.user, 'id', None),
+                    'username': getattr(request.user, 'username', None),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 def _normalize_mobile_number(raw: str) -> str:
@@ -539,8 +556,9 @@ class ChangePasswordView(APIView):
         if len(new_password) < 6:
             return Response({'detail': 'New password must be at least 6 characters long.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Set new password
+        # Set new password and clear must_change_password flag
         request.user.set_password(new_password)
+        request.user.must_change_password = False
         request.user.save()
 
         return Response({'ok': True, 'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
@@ -1726,13 +1744,41 @@ class AllQueriesListView(APIView):
             'user__staff_profile__department',
             'user__student_profile__section__batch__course__department'
         ).all()
+
+        viewer = request.user
+        is_super_admin = viewer.is_superuser or viewer.roles.filter(name='SUPER_ADMIN').exists()
+        is_college_admin = viewer.roles.filter(name='COLLEGE ADMIN').exists()
+
+        from django.db.models import Q
+
+        if is_super_admin:
+            queries = queries.filter(
+                Q(forwarded_to_super_admin=True) | 
+                Q(user__user_roles__role__name='COLLEGE ADMIN')
+            )
+        elif is_college_admin:
+            viewer_college_id = None
+            if hasattr(viewer, 'staff_profile') and viewer.staff_profile.college_id:
+                viewer_college_id = viewer.staff_profile.college_id
+            elif hasattr(viewer, 'student_profile') and viewer.student_profile.college_id:
+                viewer_college_id = viewer.student_profile.college_id
+
+            if viewer_college_id:
+                queries = queries.filter(
+                    Q(user__staff_profile__college_id=viewer_college_id) |
+                    Q(user__student_profile__college_id=viewer_college_id)
+                ).exclude(
+                    Q(forwarded_to_super_admin=True) |
+                    Q(user__user_roles__role__name='COLLEGE ADMIN')
+                )
+            else:
+                queries = queries.none()
         
         if status_filter:
             queries = queries.filter(status=status_filter)
         
         # Department filter
         if dept_filter:
-            from django.db.models import Q
             queries = queries.filter(
                 Q(user__staff_profile__department_id=dept_filter) |
                 Q(user__student_profile__section__batch__course__department_id=dept_filter)
@@ -1780,6 +1826,8 @@ class QueryUpdateView(APIView):
             query.status = request.data['status']
         if 'admin_notes' in request.data:
             query.admin_notes = request.data['admin_notes']
+        if 'forwarded_to_super_admin' in request.data:
+            query.forwarded_to_super_admin = bool(request.data['forwarded_to_super_admin'])
         
         query.save()
         serializer = UserQuerySerializer(query)

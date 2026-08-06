@@ -119,6 +119,19 @@ import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
 import LmsPage from './pages/lms/LmsPage';
 import FilePreviewPage from './pages/lms/FilePreviewPage';
+import CertificateUploadPage from './pages/certificates/CertificateUploadPage';
+import CertificateReviewPage from './pages/certificates/CertificateReviewPage';
+import AchievementsPage from './pages/certificates/AchievementsPage';
+import AchievementsReportPage from './pages/certificates/AchievementsReportPage';
+import CollegesPage from './pages/colleges/CollegesPage';
+import CollegeDetailPage from './pages/colleges/CollegeDetailPage';
+import CollegeUsersPage from './pages/colleges/CollegeUsersPage';
+import CollegeFeaturesPage from './pages/colleges/CollegeFeaturesPage';
+import RolesPage from './pages/roles/RolesPage';
+import DepartmentsPage from './pages/colleges/DepartmentsPage';
+import BatchesPage from './pages/colleges/BatchesPage';
+import RegulationsPage from './pages/colleges/RegulationsPage';
+import ForcePasswordChangeModal from './components/ForcePasswordChangeModal';
 
 type RoleObj = { name: string };
 type Me = {
@@ -128,8 +141,10 @@ type Me = {
   roles?: string[];
   role?: string;
   permissions?: string[];
+  role_features?: string[];
   profile_type?: string | null;
   profile?: any | null;
+  must_change_password?: boolean;
 };
 
 export default function App() {
@@ -141,7 +156,8 @@ export default function App() {
     if (!currentUser) return false;
     const email = String(currentUser.email || '').toLowerCase().trim();
     const perms = (currentUser.permissions || []).map((p) => String(p || '').toLowerCase());
-    return email === 'coe@krct.ac.in' || perms.includes('coe.portal.access');
+    const features = (currentUser.role_features || []).map((f: string) => String(f || '').toLowerCase());
+    return email === 'coe@krct.ac.in' || perms.includes('coe.portal.access') || features.includes('coe');
   };
 
   const isBrandingUser = Boolean(
@@ -257,24 +273,64 @@ export default function App() {
               collapsed ? 'lg:pl-20' : 'lg:pl-64'
             }`}
           >
+            {user?.must_change_password && (
+              <ForcePasswordChangeModal
+                onComplete={() => {
+                  // Refresh the user data after password change
+                  setUser(prev => prev ? { ...prev, must_change_password: false } : prev);
+                }}
+              />
+            )}
             <UCGate user={user}>
             <div className="app-main-zoom">
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/credits" element={<CreditsPage />} />
+                <Route
+                  path="/colleges"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegesPage />} />}
+                />
+                <Route
+                  path="/colleges/:id"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeDetailPage />} />}
+                />
+                <Route
+                  path="/colleges/:id/users"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeUsersPage />} />}
+                />
+                <Route
+                  path="/colleges/:id/features"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeFeaturesPage />} />}
+                />
+                <Route
+                  path="/departments"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<DepartmentsPage />} />}
+                />
+                <Route
+                  path="/batches"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<BatchesPage />} />}
+                />
+                <Route
+                  path="/regulations"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RegulationsPage />} />}
+                />
+                <Route
+                  path="/roles"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RolesPage />} />}
+                />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
                   path="/settings"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<SettingsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} requiredFeatures={['settings']} element={<SettingsPage />} />}
                 />
                 <Route
                   path="/settings/whatsapp-sender"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<WhatsAppSenderPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} requiredFeatures={['settings']} element={<WhatsAppSenderPage />} />}
                 />
                 <Route
                   path="/settings/under-construction"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<UnderConstructionManagerPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} requiredFeatures={['settings']} element={<UnderConstructionManagerPage />} />}
                 />
                 <Route
                   path="/settings/notification-templates"
@@ -286,7 +342,7 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/applications-admin"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ApplicationsAdminPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} requiredFeatures={['applications_admin']} element={<ApplicationsAdminPage />} />}
                 />
                 <Route
                   path="/applications"
@@ -348,11 +404,11 @@ export default function App() {
                 <Route path="/notifications" element={<NotificationsPage />} />
                 <Route
                   path="/announcements"
-                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} requiredFeatures={['announcements']} element={<AnnouncementsPage user={user} />} />}
                 />
                 <Route
                   path="/announcements/sent"
-                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} requiredFeatures={['announcements']} element={<AnnouncementsPage user={user} />} />}
                 />
                 <Route
                   path="/lms"
@@ -368,11 +424,11 @@ export default function App() {
                 />
                 <Route
                   path="/feedback"
-                  element={<ProtectedRoute user={user} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["feedback.feedback_page"]} requiredFeatures={['feedback']} element={<FeedbackPage />} />}
                 />
                 <Route
                   path="/student/feedback"
-                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["feedback.feedback_page"]} element={<FeedbackPage />} />}
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} requiredPermissions={["feedback.feedback_page"]} requiredFeatures={['feedback']} element={<FeedbackPage />} />}
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
@@ -407,7 +463,7 @@ export default function App() {
 
                 <Route
                   path="/curriculum/elective-import"
-                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} element={<ElectiveImport />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} requiredFeatures={['curriculum_master']} element={<ElectiveImport />} />}
                 />
                 <Route
                   path="/curriculum/elective-poll"
@@ -425,7 +481,7 @@ export default function App() {
 
                 <Route
                   path="/hod/advisors"
-                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} element={<AdvisorAssignments />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD"]} requiredPermissions={["academics.assign_advisor"]} requiredFeatures={['faculty_directory']} element={<AdvisorAssignments />} />}
                 />
                 <Route
                   path="/hod/obe-requests"
@@ -433,7 +489,7 @@ export default function App() {
                 />
                 <Route
                   path="/hod/result-analysis"
-                  element={<ProtectedRoute user={user} requiredRoles={["HOD", "ADVISOR"]} element={<HodResultAnalysisPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["HOD", "ADVISOR"]} requiredFeatures={['result_analysis']} element={<HodResultAnalysisPage />} />}
                 />
                 <Route
                   path="/hod/events"
@@ -479,7 +535,7 @@ export default function App() {
                 />
                 <Route
                   path="/advisor/teaching"
-                  element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_teaching"]} element={<TeachingAssignmentsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["ADVISOR"]} requiredPermissions={["academics.assign_teaching"]} requiredFeatures={['faculty_directory']} element={<TeachingAssignmentsPage />} />}
                 />
                 <Route
                   path="/iqac/timetable"
@@ -491,15 +547,15 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/academic-controller"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} requiredFeatures={['obe_admin']} element={<AcademicControllerPage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCoursePage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} requiredFeatures={['obe_admin']} element={<AcademicControllerCoursePage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/marks/:taId"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseMarksPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} requiredFeatures={['obe_admin']} element={<AcademicControllerCourseMarksPage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/lca/:taId"
@@ -507,11 +563,11 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<InternalMarkPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} requiredFeatures={['obe_admin']} element={<InternalMarkPage />} />}
                 />
                 <Route
                   path="/iqac/academic-controller/course/:courseCode/obe/:taId/*"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseOBEPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} requiredFeatures={['obe_admin']} element={<AcademicControllerCourseOBEPage />} />}
                 />
                 <Route
                   path="/iqac/obe-requests"
@@ -569,21 +625,22 @@ export default function App() {
                     <ProtectedRoute
                       user={user}
                       requiredRoles={["IQAC"]}
+                      requiredFeatures={['rf_reader']}
                       element={<Navigate to="/iqac/rf-reader/create-gate" replace />}
                     />
                   }
                 />
                 <Route
                   path="/iqac/rf-reader/create-gate"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderCreateGatePage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredFeatures={['rf_reader']} element={<RFReaderCreateGatePage />} />}
                 />
                 <Route
                   path="/iqac/rf-reader/test-students"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderTestStudentsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredFeatures={['rf_reader']} element={<RFReaderTestStudentsPage />} />}
                 />
                 <Route
                   path="/iqac/rf-reader/add-students-rf"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<RFReaderAddStudentsRFPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredFeatures={['rf_reader']} element={<RFReaderAddStudentsRFPage />} />}
                 />
                 <Route
                   path="/advisor/timetable"
@@ -616,9 +673,8 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
                 />
                 <Route
-
                   path="/staff/students"
-                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} requiredFeatures={['student_directory']} element={<StudentsPage user={user} />} />}
                 />
                 {/* Staff PBAS route removed */}
                 <Route
@@ -634,6 +690,7 @@ export default function App() {
                     <ProtectedRoute
                       user={user}
                       requiredRoles={['HOD', 'IQAC']}
+                      requiredFeatures={['attendance_analytics']}
                       requiredPermissions={[
                         'academics.view_all_attendance',
                         'academics.view_attendance_overall',
@@ -683,7 +740,7 @@ export default function App() {
                 
                 <Route
                   path="/iqac/external-management"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ExtStaffProfilesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} requiredFeatures={['external_management']} element={<ExtStaffProfilesPage />} />}
                 />
 
                 {/* Staff Requests Routes */}

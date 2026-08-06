@@ -445,6 +445,11 @@ class StudentProfile(models.Model):
         on_delete=models.CASCADE,
         related_name='student_profile'
     )
+    college = models.ForeignKey(
+        'college.College', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='student_profiles',
+        help_text='College this student belongs to.',
+    )
     reg_no = models.CharField(max_length=64, unique=True, db_index=True)
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     batch = models.CharField(max_length=32, blank=True)
@@ -739,11 +744,18 @@ class StaffProfile(models.Model):
         on_delete=models.CASCADE,
         related_name='staff_profile'
     )
+    college = models.ForeignKey(
+        'college.College', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='staff_profiles',
+        help_text='College this staff member belongs to.',
+    )
     internal_id = models.CharField(
         max_length=6,
         unique=True,
         db_index=True,
         editable=False,
+        null=True,
+        blank=True,
         help_text='Auto-generated 6-digit numeric unique ID.',
     )
     staff_id = models.CharField(

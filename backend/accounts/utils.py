@@ -14,5 +14,11 @@ def get_user_permissions(user) -> Set[str]:
     if user is None:
         return set()
 
-    qs = RolePermission.objects.filter(role__user_roles__user=user).values_list('permission__code', flat=True).distinct()
-    return {str(p).strip().rstrip('.') for p in qs if p}
+    try:
+        qs = RolePermission.objects.filter(role__user_roles__user=user).values_list('permission__code', flat=True).distinct()
+        return {str(p).strip().rstrip('.') for p in qs if p}
+    except Exception:
+        # If there's any error fetching permissions (DB issue, missing columns, etc), return empty set
+        import logging
+        logging.getLogger(__name__).exception(f'Error fetching permissions for user {user.id}')
+        return set()

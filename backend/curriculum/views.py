@@ -103,8 +103,22 @@ class MasterImportView(APIView):
 
     def post(self, request):
         user = request.user
-        # permission: superuser or IQAC/HAA groups
-        if not (user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists()):
+        
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+            
+        perms = get_user_permissions(user)
+        
+        has_perm = (
+            user.is_superuser or 
+            user.groups.filter(name__in=['IQAC', 'HAA']).exists() or
+            bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'}) or
+            bool(perms & {'curriculum.master.edit', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH', 'curriculum.master.publish'})
+        )
+        
+        if not has_perm:
             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         uploaded = request.FILES.get('csv_file')

@@ -87,6 +87,13 @@ class StaffProfileInline(admin.StackedInline):
         return ()
 
 
+class UserRoleInline(admin.TabularInline):
+    model = UserRole
+    extra = 1
+    verbose_name = 'Role'
+    verbose_name_plural = 'Roles'
+
+
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     # Use custom forms so that:
@@ -96,7 +103,7 @@ class UserAdmin(DjangoUserAdmin):
     add_form = CustomUserCreationForm
 
     list_display = ('username', 'email', 'mobile_no', 'is_staff', 'get_roles', 'get_profile_status')
-    inlines = (StudentProfileInline, StaffProfileInline)
+    inlines = (StudentProfileInline, StaffProfileInline, UserRoleInline)
     actions = ('deactivate_users', 'delete_and_purge_users')
     change_list_template = 'admin/accounts/user/change_list.html'
 
@@ -834,7 +841,12 @@ class UserAdmin(DjangoUserAdmin):
 
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
-    list_display = ('name', 'description', 'get_permissions')
+    list_display = ('name', 'description', 'get_features', 'get_permissions')
+    filter_horizontal = ('features',)
+    
+    def get_features(self, obj):
+        return ", ".join([f.code for f in obj.features.all()])
+    get_features.short_description = 'Features'
 
     def get_permissions(self, obj):
         return ", ".join([rp.permission.code for rp in obj.role_permissions.all()])
