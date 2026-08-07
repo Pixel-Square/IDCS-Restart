@@ -89,11 +89,12 @@ export interface EventAttendingFormDetail {
   grand_total: number;
   balance: number;
   status: 'pending' | 'approved' | 'rejected';
-  current_step: number;
+  current_step: number | null;
   current_approver_role: string | null;
-  files: EventAttendingFile[];
-  approval_logs: ApprovalLogEntry[];
-  workflow_progress: WorkflowStep[];
+  files?: EventAttendingFile[];
+  workflow_progress?: WorkflowStep[];
+  full_workflow?: { step_order: number; approver_role: string; is_active: boolean }[];
+  approval_logs?: ApprovalLogEntry[];
   created_at: string;
   updated_at: string;
 }

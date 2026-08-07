@@ -7313,6 +7313,26 @@ class EventAttendingViewSet(viewsets.ViewSet):
             advance_date=advance_date if advance_date else None,
         )
 
+        with transaction.atomic():
+            first_step = event_form.get_applicable_workflow_steps().first()
+            if first_step:
+                event_form.current_step = first_step.step_order
+                event_form.save(update_fields=['current_step'])
+            else:
+                event_form.status = 'approved'
+                event_form.save(update_fields=['status'])
+                from .models import StaffEventDeclaration
+                try:
+                    is_conf = self._is_conference(event_form)
+                    decl = StaffEventDeclaration.objects.select_for_update().get(staff=event_form.staff)
+                    if is_conf:
+                        decl.conference_budget = max(0, float(decl.conference_budget) - event_form.grand_total)
+                    else:
+                        decl.normal_events_budget = max(0, float(decl.normal_events_budget) - event_form.grand_total)
+                    decl.save(update_fields=['normal_events_budget', 'conference_budget', 'updated_at'])
+                except StaffEventDeclaration.DoesNotExist:
+                    pass
+
         # Handle file uploads
         for key in request.FILES:
             # Keys like: travel_proof_0, food_proof_1, other_proof_0, fees_proof, event_proof
@@ -7480,8 +7500,14 @@ class EventAttendingViewSet(viewsets.ViewSet):
                     except StaffEventDeclaration.DoesNotExist:
                         pass
                 else:
-                    form.current_step += 1
-                    form.save(update_fields=['current_step', 'updated_at'])
+                    steps = form.get_applicable_workflow_steps()
+                    next_steps = steps.filter(step_order__gt=form.current_step)
+                    if next_steps.exists():
+                        form.current_step = next_steps.first().step_order
+                        form.save(update_fields=['current_step', 'updated_at'])
+                    else:
+                        form.status = 'approved'
+                        form.save(update_fields=['status', 'updated_at'])
 
         form.refresh_from_db()
         serializer = EventAttendingFormDetailSerializer(form, context={'request': request})
@@ -7532,6 +7558,153 @@ class EventAttendingViewSet(viewsets.ViewSet):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({'message': 'Workflow settings saved successfully'})
+
+    # ── Dynamic Approver Role Check ───────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def my_event_approver_roles(self, request):
+        """Return the list of active approver roles the current user can act as in any event workflow."""
+        from .models import EventAttendingApprovalWorkflow
+        user = request.user
+        user_roles = self._user_approver_roles(user)
+        active_approver_roles = set(
+            EventAttendingApprovalWorkflow.objects.filter(
+                is_active=True,
+                approver_role__in=user_roles,
+            ).values_list('approver_role', flat=True)
+        )
+        # Also include department-level HOD/AHOD check
+        if 'HOD' in user_roles or 'AHOD' in user_roles:
+            if EventAttendingApprovalWorkflow.objects.filter(is_active=True, approver_role='HOD').exists():
+                active_approver_roles.add('HOD')
+        return Response({'roles': list(active_approver_roles), 'is_approver': bool(active_approver_roles)})
+
+    # ── IQAC Analytics ────────────────────────────────────────────────
+
+    @action(detail=False, methods=['get'])
+    def event_analytics(self, request):
+        """IQAC analytics: all approved event forms with filters and optional Excel export."""
+        if not self._is_iqac(request.user):
+            return Response({'error': 'Only IQAC can access analytics'}, status=status.HTTP_403_FORBIDDEN)
+
+        from .models import EventAttendingForm
+        from academics.models import Department
+
+        qs = EventAttendingForm.objects.filter(status='approved').select_related(
+            'staff', 'staff__staff_profile', 'staff__staff_profile__department',
+            'on_duty_request', 'on_duty_request__template',
+        ).prefetch_related('approval_logs__approver').order_by('-updated_at')
+
+        # Filters
+        dept_id = request.query_params.get('department')
+        from_date = request.query_params.get('from_date')
+        to_date = request.query_params.get('to_date')
+
+        if dept_id:
+            qs = qs.filter(staff__staff_profile__department_id=dept_id)
+        if from_date:
+            qs = qs.filter(updated_at__date__gte=from_date)
+        if to_date:
+            qs = qs.filter(updated_at__date__lte=to_date)
+
+        # Build rows — only the 6 columns needed
+        rows = []
+        for form in qs:
+            staff_profile = getattr(form.staff, 'staff_profile', None)
+            dept_name = getattr(getattr(staff_profile, 'department', None), 'name', '—')
+            od_type = '—'
+            try:
+                fd = form.on_duty_request.form_data if form.on_duty_request else form.custom_event_details or {}
+                # 'type' is the OD/event type field; fall back chain
+                od_type = (
+                    fd.get('type')
+                    or fd.get('nature_of_event')
+                    or fd.get('event_title')
+                    or (form.on_duty_request.template.name if form.on_duty_request else '—')
+                ) or '—'
+            except Exception:
+                pass
+            rows.append({
+                'id': form.id,
+                'staff_name': form.staff.get_full_name() or form.staff.username,
+                'department': dept_name,
+                'od_type': od_type,
+                'grand_total': float(form.grand_total),
+                'approved_at': form.updated_at.strftime('%d/%m/%Y') if form.updated_at else '—',
+            })
+
+        # Summary totals
+        total_amount = sum(r['grand_total'] for r in rows)
+
+        # Excel export
+        if request.query_params.get('export') == 'excel':
+            try:
+                import openpyxl
+                from openpyxl.styles import Font, PatternFill, Alignment
+                from django.http import HttpResponse
+                import io
+
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = 'Event Analytics'
+
+                headers = ['S.No', 'Staff Name', 'Department', 'OD Type', 'Approved Amount (Rs.)', 'Approved Date']
+                header_fill = PatternFill(start_color='1E3A5F', end_color='1E3A5F', fill_type='solid')
+                header_font = Font(color='FFFFFF', bold=True)
+
+                for col_idx, h in enumerate(headers, 1):
+                    cell = ws.cell(row=1, column=col_idx, value=h)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', wrap_text=True)
+
+                for row_idx, row in enumerate(rows, 2):
+                    ws.cell(row=row_idx, column=1, value=row_idx - 1)
+                    ws.cell(row=row_idx, column=2, value=row['staff_name'])
+                    ws.cell(row=row_idx, column=3, value=row['department'])
+                    ws.cell(row=row_idx, column=4, value=row['od_type'])
+                    ws.cell(row=row_idx, column=5, value=row['grand_total'])
+                    ws.cell(row=row_idx, column=6, value=row['approved_at'])
+
+                # Totals row
+                total_row = len(rows) + 2
+                ws.cell(row=total_row, column=1, value='TOTAL')
+                ws.cell(row=total_row, column=5, value=total_amount)
+                for c in [1, 5]:
+                    ws.cell(row=total_row, column=c).font = Font(bold=True)
+
+                # Auto-size columns
+                for col in ws.columns:
+                    max_len = max((len(str(cell.value or '')) for cell in col), default=10)
+                    ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+                buf = io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                response = HttpResponse(
+                    buf.getvalue(),
+                    content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                )
+                response['Content-Disposition'] = 'attachment; filename="event_analytics.xlsx"'
+                return response
+            except ImportError:
+                return Response({'error': 'openpyxl not installed'}, status=500)
+
+        # Departments for filter dropdown — derived from the full unfiltered approved set
+        all_approved = EventAttendingForm.objects.filter(status='approved')
+        dept_ids_with_data = all_approved.values_list(
+            'staff__staff_profile__department_id', flat=True
+        ).distinct()
+        departments = list(Department.objects.filter(
+            id__in=[d for d in dept_ids_with_data if d],
+        ).values('id', 'name', 'short_name').order_by('name'))
+
+        return Response({
+            'forms': rows,
+            'total_count': len(rows),
+            'total_amount': total_amount,
+            'departments': departments,
+        })
 
     # ── IQAC Staff Declarations ───────────────────────────────────────
 

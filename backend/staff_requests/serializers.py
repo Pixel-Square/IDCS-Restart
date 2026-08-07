@@ -456,6 +456,7 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
     grand_total = serializers.FloatField(read_only=True)
     balance = serializers.FloatField(read_only=True)
     workflow_progress = serializers.SerializerMethodField()
+    full_workflow = serializers.SerializerMethodField()
     current_approver_role = serializers.SerializerMethodField()
 
     class Meta:
@@ -467,7 +468,7 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
             'total_fees_spend', 'advance_amount_received', 'advance_date',
             'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
             'status', 'current_step', 'current_approver_role',
-            'files', 'approval_logs', 'workflow_progress',
+            'files', 'approval_logs', 'workflow_progress', 'full_workflow',
             'created_at', 'updated_at',
         ]
         read_only_fields = fields
@@ -506,6 +507,21 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
                 })
             result.append(info)
         return result
+
+    def get_full_workflow(self, obj):
+        from .models import _resolve_staff_primary_role, EventAttendingApprovalWorkflow
+        role = _resolve_staff_primary_role(obj.staff)
+        steps = EventAttendingApprovalWorkflow.objects.filter(
+            applicant_role__iexact=role
+        ).order_by('step_order')
+        return [
+            {
+                'step_order': step.step_order,
+                'approver_role': step.approver_role,
+                'is_active': step.is_active,
+            }
+            for step in steps
+        ]
 
 
 class EventAttendingApprovalWorkflowSerializer(serializers.ModelSerializer):

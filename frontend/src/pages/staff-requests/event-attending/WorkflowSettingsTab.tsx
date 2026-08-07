@@ -1,19 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import type { EventWorkflowRule } from '../../../types/eventAttending';
 import { fetchEventWorkflowSettings, saveEventWorkflowSettings } from '../../../services/eventAttending';
-import { Plus, Trash2, Save, RefreshCw, Settings } from 'lucide-react';
-
-const ROLE_OPTIONS = ['STAFF', 'AHOD', 'HOD', 'IQAC', 'HAA', 'PRINCIPAL', 'HR', 'PS', 'ADMIN'];
+import { fetchRoles } from '../../../services/accounts';
+import { Plus, Trash2, Save, RefreshCw, Settings, ArrowUp, ArrowDown } from 'lucide-react';
 
 export default function WorkflowSettingsTab() {
   const [rules, setRules] = useState<EventWorkflowRule[]>([]);
+  const [roleOptions, setRoleOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
 
   const load = async () => {
     setLoading(true);
-    try { setRules(await fetchEventWorkflowSettings()); } catch { }
+    try {
+      const [fetchedRules, fetchedRoles] = await Promise.all([
+        fetchEventWorkflowSettings(),
+        fetchRoles().catch(() => [])
+      ]);
+      setRules(fetchedRules);
+      if (fetchedRoles.length > 0) setRoleOptions(fetchedRoles);
+    } catch { }
     finally { setLoading(false); }
   };
 
@@ -35,6 +42,34 @@ export default function WorkflowSettingsTab() {
   };
 
   const removeRule = (idx: number) => setRules(rules.filter((_, i) => i !== idx));
+
+  const moveRuleUp = (applicantRole: string, globalIdx: number) => {
+    const roleRules = rules.filter(r => r.applicant_role === applicantRole).sort((a, b) => a.step_order - b.step_order);
+    const rule = rules[globalIdx];
+    const groupIdx = roleRules.findIndex(r => r === rule);
+    if (groupIdx <= 0) return;
+    const prevRule = roleRules[groupIdx - 1];
+    const prevGlobalIdx = rules.findIndex(r => r === prevRule);
+    const newRules = [...rules];
+    const temp = newRules[globalIdx].step_order;
+    newRules[globalIdx].step_order = newRules[prevGlobalIdx].step_order;
+    newRules[prevGlobalIdx].step_order = temp;
+    setRules(newRules);
+  };
+
+  const moveRuleDown = (applicantRole: string, globalIdx: number) => {
+    const roleRules = rules.filter(r => r.applicant_role === applicantRole).sort((a, b) => a.step_order - b.step_order);
+    const rule = rules[globalIdx];
+    const groupIdx = roleRules.findIndex(r => r === rule);
+    if (groupIdx < 0 || groupIdx >= roleRules.length - 1) return;
+    const nextRule = roleRules[groupIdx + 1];
+    const nextGlobalIdx = rules.findIndex(r => r === nextRule);
+    const newRules = [...rules];
+    const temp = newRules[globalIdx].step_order;
+    newRules[globalIdx].step_order = newRules[nextGlobalIdx].step_order;
+    newRules[nextGlobalIdx].step_order = temp;
+    setRules(newRules);
+  };
 
   const handleSave = async () => {
     setSaving(true); setMsg('');
@@ -76,7 +111,7 @@ export default function WorkflowSettingsTab() {
             <button onClick={() => addRule(applicantRole)} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"><Plus size={12} /> Add Step</button>
           </div>
           <div className="space-y-2">
-            {roleRules.sort((a, b) => a.step_order - b.step_order).map(rule => {
+            {roleRules.sort((a, b) => a.step_order - b.step_order).map((rule, idx) => {
               const globalIdx = rules.findIndex(r => r === rule);
               return (
                 <div key={globalIdx} className="flex items-center gap-3 bg-gray-50 rounded-lg p-2">
@@ -85,13 +120,17 @@ export default function WorkflowSettingsTab() {
                   <select value={rule.approver_role} onChange={e => updateRule(globalIdx, { approver_role: e.target.value })}
                     className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-blue-500">
                     <option value="">Select role...</option>
-                    {ROLE_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                    {roleOptions.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <label className="flex items-center gap-1 text-xs text-gray-600">
                     <input type="checkbox" checked={rule.is_active} onChange={e => updateRule(globalIdx, { is_active: e.target.checked })} className="w-3.5 h-3.5" />
                     Active
                   </label>
-                  <button onClick={() => removeRule(globalIdx)} className="p-1 text-red-400 hover:text-red-600"><Trash2 size={14} /></button>
+                  <div className="flex items-center gap-0.5 ml-2 border-l pl-2 border-gray-200">
+                    <button onClick={() => moveRuleUp(applicantRole, globalIdx)} disabled={idx === 0} className={`p-1 ${idx === 0 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ArrowUp size={14} /></button>
+                    <button onClick={() => moveRuleDown(applicantRole, globalIdx)} disabled={idx === roleRules.length - 1} className={`p-1 ${idx === roleRules.length - 1 ? 'text-gray-300' : 'text-gray-500 hover:text-blue-600'}`}><ArrowDown size={14} /></button>
+                    <button onClick={() => removeRule(globalIdx)} className="p-1 text-red-400 hover:text-red-600 ml-1"><Trash2 size={14} /></button>
+                  </div>
                 </div>
               );
             })}

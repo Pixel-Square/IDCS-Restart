@@ -135,3 +135,53 @@ export async function checkConditionExpiry(): Promise<ConditionExpiryStatus> {
   const res = await apiClient.get(`${BASE}/check_condition_expiry/`);
   return res.data;
 }
+
+// ── Dynamic Approver Role Check ─────────────────────────────────────
+
+export async function fetchMyEventApproverRoles(): Promise<{ roles: string[]; is_approver: boolean }> {
+  const res = await apiClient.get(`${BASE}/my_event_approver_roles/`);
+  return res.data;
+}
+
+// ── IQAC Analytics ──────────────────────────────────────────────────
+
+export interface EventAnalyticsRow {
+  id: number;
+  staff_name: string;
+  department: string;
+  od_type: string;
+  grand_total: number;
+  approved_at: string;
+}
+
+export interface EventAnalyticsResponse {
+  forms: EventAnalyticsRow[];
+  total_count: number;
+  total_amount: number;
+  departments: { id: number; name: string; short_name: string }[];
+}
+
+export async function fetchEventAnalytics(params: {
+  department?: string;
+  from_date?: string;
+  to_date?: string;
+}): Promise<EventAnalyticsResponse> {
+  const p = new URLSearchParams();
+  if (params.department) p.set('department', params.department);
+  if (params.from_date) p.set('from_date', params.from_date);
+  if (params.to_date) p.set('to_date', params.to_date);
+  const res = await apiClient.get(`${BASE}/event_analytics/?${p.toString()}`);
+  return res.data;
+}
+
+export function getEventAnalyticsExcelUrl(params: {
+  department?: string;
+  from_date?: string;
+  to_date?: string;
+}): string {
+  const p = new URLSearchParams({ export: 'excel' });
+  if (params.department) p.set('department', params.department);
+  if (params.from_date) p.set('from_date', params.from_date);
+  if (params.to_date) p.set('to_date', params.to_date);
+  return `${BASE}/event_analytics/?${p.toString()}`;
+}

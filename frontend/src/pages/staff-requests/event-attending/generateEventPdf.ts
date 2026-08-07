@@ -425,8 +425,7 @@ function buildMainContent(
       const cx = 10 + i * colW + colW / 2;
       const lineHalfW = Math.min(colW * 0.7, 28) / 2;
       
-      const isAutoSign = ['Faculty', 'HOD', 'HAA'].includes(role);
-      const sigData = isAutoSign ? getSigData(role) : null;
+      const sigData = getSigData(role);
       
       if (sigData) {
           doc.text(sigData.name, cx, y - 2, { align: 'center', maxWidth: colW - 4 });
@@ -448,8 +447,14 @@ function buildMainContent(
     });
   }
 
-  // Row 1: Faculty | HOD | HAA | IQAC | PRINCIPAL
-  drawHorizSigRow(['Faculty', 'HOD', 'HAA', 'IQAC', 'PRINCIPAL'], curY);
+  // Dynamically extract roles from workflow (including inactive steps)
+  const workflowRoles = (form.full_workflow || form.workflow_progress || [])
+    .sort((a: any, b: any) => a.step_order - b.step_order)
+    .map((step: any) => step.approver_role);
+
+  // Row 1: Faculty | <dynamic roles from workflow>
+  const firstRowRoles = ['Faculty', ...workflowRoles];
+  drawHorizSigRow(firstRowRoles, curY);
   // Row 2: Administrative Officer / Manager | Balance Received
   drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], curY + 22);
 }

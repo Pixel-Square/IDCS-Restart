@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { fetchApprovedODForms, fetchMyEventForms, fetchMyEventBudget, fetchPendingEventApprovals, fetchProcessedEventApprovals, fetchEventFormDetail } from '../../services/eventAttending';
+import {
+  fetchApprovedODForms, fetchMyEventForms, fetchMyEventBudget,
+  fetchPendingEventApprovals, fetchProcessedEventApprovals,
+  fetchEventFormDetail, fetchMyEventApproverRoles,
+} from '../../services/eventAttending';
 import type { ApprovedODForm, EventAttendingFormListItem, EventAttendingFormDetail, MyEventBudget } from '../../types/eventAttending';
 import ExpenseFormTab from './event-attending/ExpenseFormTab';
 import ApprovalsTab from './event-attending/ApprovalsTab';
 import StaffDeclarationTab from './event-attending/StaffDeclarationTab';
 import WorkflowSettingsTab from './event-attending/WorkflowSettingsTab';
+import AnalyticsTab from './event-attending/AnalyticsTab';
 import { generateEventPdf } from './event-attending/generateEventPdf';
 import ConditionsTab from './event-attending/ConditionsTab';
-import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus } from 'lucide-react';
+import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus, BarChart3 } from 'lucide-react';
 
 export default function EventAttendingPage() {
-  const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'conditions' | 'settings'>('forms');
+  const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'conditions' | 'settings' | 'analytics'>('forms');
   const [odForms, setOdForms] = useState<ApprovedODForm[]>([]);
   const [myForms, setMyForms] = useState<EventAttendingFormListItem[]>([]);
   const [budget, setBudget] = useState<MyEventBudget | null>(null);
@@ -20,27 +25,41 @@ export default function EventAttendingPage() {
   const [expandedForm, setExpandedForm] = useState<number | null>(null);
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
-  // Simple role check from localStorage
+  // Dynamic role checks
+  const [isApprover, setIsApprover] = useState(false);
+
   const userStr = localStorage.getItem('me');
   const user = userStr ? JSON.parse(userStr) : null;
   const userRoles: string[] = (user?.roles || []).map((r: any) => typeof r === 'string' ? r.toUpperCase() : (r?.name || '').toUpperCase());
   const isIQAC = userRoles.includes('IQAC');
-  const isApprover = ['HOD', 'AHOD', 'IQAC', 'HAA', 'PRINCIPAL', 'HR'].some(r => userRoles.includes(r));
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      // Check dynamic approver status from backend (based on active workflow roles)
+      let approver = false;
+      try {
+        const approverInfo = await fetchMyEventApproverRoles();
+        approver = approverInfo.is_approver;
+        setIsApprover(approver);
+      } catch {
+        // Fallback to static check on error
+        approver = ['HOD', 'AHOD', 'IQAC', 'HAA', 'PRINCIPAL', 'HR'].some(r => userRoles.includes(r));
+        setIsApprover(approver);
+      }
+
       const [od, forms, b] = await Promise.all([
         fetchApprovedODForms(),
         fetchMyEventForms(),
         fetchMyEventBudget(),
       ]);
       setOdForms(od); setMyForms(forms); setBudget(b);
-      if (isApprover) {
-        try { 
+
+      if (approver) {
+        try {
           const [pending, processed] = await Promise.all([
             fetchPendingEventApprovals(),
-            fetchProcessedEventApprovals()
+            fetchProcessedEventApprovals(),
           ]);
           setPendingApprovals(pending);
           setProcessedApprovals(processed);
@@ -48,7 +67,7 @@ export default function EventAttendingPage() {
       }
     } catch { }
     finally { setLoading(false); }
-  }, [isApprover]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -75,6 +94,7 @@ export default function EventAttendingPage() {
     { key: 'approvals' as const, label: 'Approvals', icon: <CheckSquare size={16} />, show: isApprover, badge: pendingApprovals.length },
     { key: 'declarations' as const, label: 'Staff Declaration', icon: <BookOpen size={16} />, show: isIQAC },
     { key: 'conditions' as const, label: 'Conditions', icon: <ListPlus size={16} />, show: isIQAC },
+    { key: 'analytics' as const, label: 'Analytics', icon: <BarChart3 size={16} />, show: isIQAC },
     { key: 'settings' as const, label: 'Settings', icon: <Settings size={16} />, show: isIQAC },
   ];
 
@@ -190,10 +210,10 @@ export default function EventAttendingPage() {
           {activeTab === 'approvals' && <ApprovalsTab pendingForms={pendingApprovals} processedForms={processedApprovals} onProcessed={loadData} />}
           {activeTab === 'declarations' && <StaffDeclarationTab />}
           {activeTab === 'conditions' && <ConditionsTab />}
+          {activeTab === 'analytics' && <AnalyticsTab />}
           {activeTab === 'settings' && <WorkflowSettingsTab />}
         </>
       )}
     </div>
   );
 }
-
