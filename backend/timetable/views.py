@@ -139,6 +139,58 @@ def _apply_shared_section_student_dept_filter(qs, sec, student_profile):
         return qs
 
 
+def _resolve_section_curriculum_department_ids(sec):
+    """Resolve the curriculum department(s) that should drive a section's subject list.
+
+    Preference order:
+    1. Regular course department.
+    2. Explicit batch department when it is not the shared S&H manager.
+    3. Explicit managing department when it is not the shared S&H manager.
+    4. For shared sections, a single observed home_department across active PRIMARY students.
+
+    Returns a list of department IDs. An empty list means the caller should fall back
+    to the shared-section union logic.
+    """
+    try:
+        batch = getattr(sec, 'batch', None)
+        course = getattr(batch, 'course', None) if batch else None
+        if course is not None:
+            dept_id = getattr(course, 'department_id', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        batch_dept = getattr(batch, 'department', None) if batch else None
+        if batch_dept is not None and not getattr(batch_dept, 'is_sh_main', False):
+            dept_id = getattr(batch_dept, 'pk', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        managing_dept = getattr(sec, 'managing_department', None)
+        if managing_dept is not None and not getattr(managing_dept, 'is_sh_main', False):
+            dept_id = getattr(managing_dept, 'pk', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        if getattr(batch, 'course_id', None) is None:
+            from academics.models import StudentSectionAssignment
+
+            home_dept_ids = list(
+                StudentSectionAssignment.objects.filter(
+                    section=sec,
+                    end_date__isnull=True,
+                    section_type='PRIMARY',
+                    student__home_department__isnull=False,
+                ).values_list('student__home_department_id', flat=True).distinct()
+            )
+            unique_home_dept_ids = sorted({int(dept_id) for dept_id in home_dept_ids if dept_id})
+            if len(unique_home_dept_ids) == 1:
+                return unique_home_dept_ids
+    except Exception:
+        pass
+
+    return []
+
+
 class CurriculumBySectionView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -218,6 +270,35 @@ class CurriculumBySectionView(APIView):
         # Shared section: batch has no course (e.g. S&H Year-1).  Derive curriculum
         # from the home-departments of students currently enrolled in this section.
         if getattr(sec.batch, 'course_id', None) is None:
+            curriculum_dept_ids = _resolve_section_curriculum_department_ids(sec)
+            if curriculum_dept_ids:
+                try:
+                    from curriculum.models import CurriculumDepartment
+
+                    qs = CurriculumDepartment.objects.filter(
+                        department_id__in=curriculum_dept_ids,
+                        semester__number=sem_num,
+                    )
+
+                    data = []
+                    for c in qs:
+                        data.append({
+                            'id': c.pk,
+                            'course_code': c.course_code,
+                            'course_name': c.course_name,
+                            'c': getattr(c, 'c', None),
+                            'total_hours': getattr(c, 'total_hours', None),
+                            'effective_class_hours': _get_effective_class_hours(c),
+                            'regulation': c.regulation,
+                            'class_type': _normalize_class_type(c.class_type, c),
+                            'is_elective': c.is_elective,
+                            'is_dept_core': getattr(c, 'is_dept_core', False),
+                            'department_id': c.department_id,
+                            'department_code': getattr(c.department, 'code', None),
+                        })
+                    return Response({'results': self._finalize_results(data, sem_num)})
+                except Exception:
+                    return Response({'results': []})
             return self._shared_section_curriculum(sec, sem_num)
 
         dept = getattr(sec.batch.course, 'department', None)
@@ -865,8 +946,11 @@ class SectionSubjectsStaffView(APIView):
 
             active_ay = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
 
-            # Shared section (S&H-type): derive dept curriculum from enrolled students' home depts
+            # Shared section (S&H-type): prefer a single explicit curriculum department
+            # when the section is already anchored to one; otherwise fall back to the
+            # union of enrolled students' home departments.
             if getattr(sec.batch, 'course_id', None) is None:
+                curriculum_dept_ids = _resolve_section_curriculum_department_ids(sec)
                 from academics.models import StudentSectionAssignment
                 home_dept_ids = list(
                     StudentSectionAssignment.objects.filter(
@@ -952,14 +1036,20 @@ class SectionSubjectsStaffView(APIView):
                     batch_dept_id2 = sec.batch.department_id
                 except Exception:
                     pass
-                all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
-                if not all_ids:
-                    return Response({'results': []})
-                # Union of all dept curriculum rows, deduplicated by course_code or course_name
-                qs_all = CurriculumDepartment.objects.filter(
-                    department_id__in=all_ids,
-                    semester__number=sem_num,
-                ).order_by('course_code', 'department_id')
+                if curriculum_dept_ids:
+                    qs_all = CurriculumDepartment.objects.filter(
+                        department_id__in=curriculum_dept_ids,
+                        semester__number=sem_num,
+                    ).order_by('course_code', 'department_id')
+                else:
+                    all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
+                    if not all_ids:
+                        return Response({'results': []})
+                    # Union of all dept curriculum rows, deduplicated by course_code or course_name
+                    qs_all = CurriculumDepartment.objects.filter(
+                        department_id__in=all_ids,
+                        semester__number=sem_num,
+                    ).order_by('course_code', 'department_id')
                 seen: dict = {}
                 for c in qs_all:
                     key = f'code:{c.course_code}' if c.course_code else f'name:{(c.course_name or "").strip().lower()}' or f'pk:{c.pk}'

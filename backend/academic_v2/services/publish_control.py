@@ -148,6 +148,7 @@ def check_publish_control(exam_assignment) -> dict:
         'is_editable': True,
         'is_locked': False,
         'publish_control_enabled': False,
+        'faculty_edit_enabled': True,
         'due_at': None,
         'time_remaining': None,
         'is_past_due': False,
@@ -173,6 +174,8 @@ def check_publish_control(exam_assignment) -> dict:
     
     if semester_config:
         result['publish_control_enabled'] = semester_config.publish_control_enabled
+        result['faculty_edit_enabled'] = bool(getattr(semester_config, 'faculty_edit_enabled', True))
+        result['auto_publish_on_due'] = getattr(semester_config, 'auto_publish_on_due', False)
         result['due_at'] = semester_config.due_at
         result['seal_animation_enabled'] = bool(getattr(semester_config, 'seal_animation_enabled', False))
         result['seal_watermark_enabled'] = bool(getattr(semester_config, 'seal_watermark_enabled', False))
@@ -614,6 +617,7 @@ def check_cqi_publish_control(cqi_attained) -> dict:
         'is_editable': is_editable,
         'is_locked': is_locked,
         'publish_control_enabled': publish_control_enabled,
+        'faculty_edit_enabled': True,
         'due_at': None,
         'open_from': None,
         'is_past_due': False,
@@ -633,6 +637,7 @@ def check_cqi_publish_control(cqi_attained) -> dict:
     }
 
     if semester_config:
+        result['faculty_edit_enabled'] = bool(getattr(semester_config, 'faculty_edit_enabled', True))
         result['due_at'] = semester_config.due_at.isoformat() if semester_config.due_at else None
         result['open_from'] = semester_config.open_from.isoformat() if semester_config.open_from else None
         if semester_config.due_at and now > semester_config.due_at:

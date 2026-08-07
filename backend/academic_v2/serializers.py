@@ -6,8 +6,11 @@ import base64
 from django.core.files.base import ContentFile
 from django.utils.crypto import get_random_string
 from rest_framework import serializers
+from academics.models import Semester
 from .models import (
     AcV2SemesterConfig,
+    AcV2SemesterGroup,
+    AcV2SemesterGroupMembership,
     AcV2ClassType,
     AcV2CqiExam,
     Weigthts,
@@ -127,6 +130,129 @@ class AcV2SemesterConfigSerializer(serializers.ModelSerializer):
         if remaining:
             return int(remaining.total_seconds())
         return None
+
+
+class AcV2SemesterGroupSerializer(serializers.ModelSerializer):
+    semesters = serializers.SerializerMethodField()
+    semester_ids = serializers.PrimaryKeyRelatedField(
+        source='semesters',
+        queryset=Semester.objects.all(),
+        many=True,
+        required=False,
+        write_only=True,
+    )
+    seal_image_base64 = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    seal_image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AcV2SemesterGroup
+        fields = [
+            'id', 'title', 'description',
+            'semester_ids', 'semesters',
+            'publish_control_enabled', 'faculty_edit_enabled', 'approval_workflow', 'approval_window_minutes',
+            'edit_request_validity_hours', 'approval_until_publish',
+            'open_from', 'due_at', 'auto_publish_on_due',
+            'seal_animation_enabled', 'seal_watermark_enabled', 'seal_image_url', 'seal_image_base64',
+            'updated_by', 'updated_at', 'created_at',
+        ]
+        read_only_fields = ['id', 'updated_at', 'created_at']
+
+    def _apply_seal_image_base64(self, instance: AcV2SemesterGroup, raw: str | None):
+        if raw is None:
+            return
+
+        data = str(raw)
+        if data == '':
+            if instance.seal_image:
+                instance.seal_image.delete(save=False)
+            instance.seal_image = None
+            return
+
+        if data.startswith('http://') or data.startswith('https://') or data.startswith('/'):
+            return
+
+        mime = None
+        b64 = data
+        if data.startswith('data:') and ';base64,' in data:
+            header, b64 = data.split(';base64,', 1)
+            mime = header.split(':', 1)[1] if ':' in header else None
+
+        try:
+            decoded = base64.b64decode(b64, validate=True)
+        except Exception:
+            raise serializers.ValidationError({'seal_image_base64': 'Invalid base64 image data'})
+
+        if len(decoded) > 2 * 1024 * 1024:
+            raise serializers.ValidationError({'seal_image_base64': 'Image size must be less than 2MB'})
+
+        ext = 'png'
+        if mime:
+            m = mime.lower()
+            if 'jpeg' in m or 'jpg' in m:
+                ext = 'jpg'
+            elif 'webp' in m:
+                ext = 'webp'
+            elif 'gif' in m:
+                ext = 'gif'
+            elif 'png' in m:
+                ext = 'png'
+
+        if instance.seal_image:
+            instance.seal_image.delete(save=False)
+
+        filename = f"seal_group_{instance.id}_{get_random_string(8)}.{ext}"
+        instance.seal_image.save(filename, ContentFile(decoded), save=False)
+
+    def get_semesters(self, obj):
+        return [
+            {
+                'id': str(semester.id),
+                'name': f"Sem {semester.number}",
+                'number': semester.number,
+                'year': None,
+                'term': None,
+                'status': getattr(semester, 'status', ''),
+            }
+            for semester in obj.semesters.all().order_by('number', 'id')
+        ]
+
+    def get_seal_image_url(self, obj):
+        return obj.seal_image.url if getattr(obj, 'seal_image', None) else None
+
+    def create(self, validated_data):
+        semesters = validated_data.pop('semesters', [])
+        instance = super().create(validated_data)
+        instance.semesters.set(semesters)
+        return instance
+
+    def update(self, instance, validated_data):
+        semesters = validated_data.pop('semesters', None)
+        instance = super().update(instance, validated_data)
+        if semesters is not None:
+            instance.semesters.set(semesters)
+        return instance
+
+    def validate_semester_ids(self, value):
+        semester_ids = [s.id for s in value]
+        qs = AcV2SemesterGroupMembership.objects.filter(semester_id__in=semester_ids)
+        if self.instance is not None:
+            qs = qs.exclude(group=self.instance)
+
+        conflicts = list(qs.select_related('group', 'semester'))
+        if conflicts:
+            messages = []
+            seen = set()
+            for conflict in conflicts:
+                sid = str(conflict.semester_id)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                semester_label = f"Sem {getattr(conflict.semester, 'number', sid)}"
+                messages.append(
+                    f"Semester '{semester_label}' is already assigned to group '{conflict.group.title}'."
+                )
+            raise serializers.ValidationError(messages)
+        return value
 
 
 class AcV2ClassTypeSerializer(serializers.ModelSerializer):
@@ -372,7 +498,7 @@ class AcV2ExamAssignmentSerializer(serializers.ModelSerializer):
             'id', 'section', 'section_info',
             'exam', 'exam_display_name', 'name', 'qp_type',
             'max_marks', 'weight', 'covered_cos',
-            'qp_pattern', 'pattern', 'allow_customize',
+            'qp_pattern', 'allow_customize',
             'status', 'draft_data', 'published_data',
             'published_at', 'published_by',
             'has_pending_edit_request', 'edit_window_until',
@@ -735,8 +861,10 @@ class AcV2AcademicNotificationSettingSerializer(serializers.ModelSerializer):
             'notify_on_first_publish',
             'notify_on_row_edits_only',
             'notify_on_every_publish_click',
+            'notify_on_row_filled',
             'first_publish_template',
             'edited_rows_template',
+            'row_filled_template',
             'every_publish_template',
             'cqi_announce_enabled',
             'cqi_announce_template',

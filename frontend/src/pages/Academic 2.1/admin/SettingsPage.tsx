@@ -54,8 +54,10 @@ interface AcademicNotificationSetting {
   notify_on_first_publish: boolean;
   notify_on_row_edits_only: boolean;
   notify_on_every_publish_click: boolean;
+  notify_on_row_filled: boolean;
   first_publish_template: string;
   edited_rows_template: string;
+  row_filled_template: string;
   every_publish_template: string;
   cqi_announce_enabled: boolean;
   cqi_announce_template: string;
@@ -324,15 +326,17 @@ function AcademicNotificationsSection() {
   const [firstEnabled, setFirstEnabled] = useState(true);
   const [editedEnabled, setEditedEnabled] = useState(true);
   const [everyEnabled, setEveryEnabled] = useState(false);
+  const [rowFilledEnabled, setRowFilledEnabled] = useState(false);
 
   const [tplFirst, setTplFirst] = useState('');
   const [tplEdited, setTplEdited] = useState('');
+  const [tplRowFilled, setTplRowFilled] = useState('');
   const [tplEvery, setTplEvery] = useState('');
 
   const [cqiAnnounceEnabled, setCqiAnnounceEnabled] = useState(false);
   const [tplCqiAnnounce, setTplCqiAnnounce] = useState('');
 
-  const [activeTpl, setActiveTpl] = useState<'first' | 'edited' | 'every' | 'cqi' | null>(null);
+  const [activeTpl, setActiveTpl] = useState<'first' | 'edited' | 'row' | 'every' | 'cqi' | null>(null);
 
   const tokensCourse: TokenDef[] = useMemo(() => ([
     { key: '{course_code}', label: 'course_code' },
@@ -365,6 +369,7 @@ function AcademicNotificationsSection() {
     };
     if (activeTpl === 'first') setTplFirst(apply);
     if (activeTpl === 'edited') setTplEdited(apply);
+    if (activeTpl === 'row') setTplRowFilled(apply);
     if (activeTpl === 'every') setTplEvery(apply);
     if (activeTpl === 'cqi') setTplCqiAnnounce(apply);
   };
@@ -381,8 +386,10 @@ function AcademicNotificationsSection() {
       setFirstEnabled(Boolean(data.notify_on_first_publish));
       setEditedEnabled(Boolean(data.notify_on_row_edits_only));
       setEveryEnabled(Boolean(data.notify_on_every_publish_click));
+      setRowFilledEnabled(Boolean(data.notify_on_row_filled));
       setTplFirst(String(data.first_publish_template || ''));
       setTplEdited(String(data.edited_rows_template || ''));
+      setTplRowFilled(String(data.row_filled_template || ''));
       setTplEvery(String(data.every_publish_template || ''));
       setCqiAnnounceEnabled(Boolean(data.cqi_announce_enabled));
       setTplCqiAnnounce(String(data.cqi_announce_template || ''));
@@ -408,8 +415,10 @@ function AcademicNotificationsSection() {
           notify_on_first_publish: firstEnabled,
           notify_on_row_edits_only: editedEnabled,
           notify_on_every_publish_click: everyEnabled,
+          notify_on_row_filled: rowFilledEnabled,
           first_publish_template: tplFirst,
           edited_rows_template: tplEdited,
+          row_filled_template: tplRowFilled,
           every_publish_template: tplEvery,
           cqi_announce_enabled: cqiAnnounceEnabled,
           cqi_announce_template: tplCqiAnnounce,
@@ -441,14 +450,14 @@ function AcademicNotificationsSection() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-900">Student Academic Notifications</div>
-            <div className="text-xs text-gray-500 mt-0.5">Send WhatsApp messages when faculty publishes marks for exams inside a course.</div>
+            <div className="text-xs text-gray-500 mt-0.5">Send WhatsApp messages when faculty publishes marks for exams inside a course or when a student row is first filled with a mark.</div>
           </div>
           <div className="flex items-center gap-2">
             <AndroidSwitch checked={studentEnabled} onChange={setStudentEnabled} />
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
             <span className="text-sm text-gray-700">First time published</span>
             <AndroidSwitch disabled={!studentEnabled} checked={firstEnabled} onChange={setFirstEnabled} />
@@ -460,6 +469,10 @@ function AcademicNotificationsSection() {
           <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
             <span className="text-sm text-gray-700">Every publish click</span>
             <AndroidSwitch disabled={!studentEnabled} checked={everyEnabled} onChange={setEveryEnabled} />
+          </div>
+          <div className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm text-gray-700">Row filled</span>
+            <AndroidSwitch disabled={!studentEnabled} checked={rowFilledEnabled} onChange={setRowFilledEnabled} />
           </div>
         </div>
 
@@ -493,6 +506,22 @@ function AcademicNotificationsSection() {
               className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Sample will be used if empty"
               disabled={!studentEnabled || !editedEnabled}
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-gray-600">Message template — Row filled</label>
+              <button type="button" onClick={() => setActiveTpl('row')} className={`text-xs px-2 py-1 rounded border ${activeTpl === 'row' ? 'bg-gray-100' : 'bg-white'}`}>Insert tokens</button>
+            </div>
+            <textarea
+              value={tplRowFilled}
+              onFocus={() => setActiveTpl('row')}
+              onChange={e => setTplRowFilled(e.target.value)}
+              rows={4}
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Sample will be used if empty"
+              disabled={!studentEnabled || !rowFilledEnabled}
             />
           </div>
 

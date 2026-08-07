@@ -3,7 +3,29 @@ import { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Edit, Check, X, Save, RefreshCw, Copy } from 'lucide-react';
+
+// Inline lightweight SVG icons to avoid importing the whole icon library
+const Icon = ({ children, className }: any) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">{children}</svg>
+);
+const Edit = (props: any) => (
+  <Icon {...props}><path d="M3 21v-3.75L14.06 6.19l3.75 3.75L6.75 21H3zM20.71 7.04a31 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/></Icon>
+);
+const Check = (props: any) => (
+  <Icon {...props}><path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const X = (props: any) => (
+  <Icon {...props}><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const Save = (props: any) => (
+  <Icon {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></Icon>
+);
+const RefreshCw = (props: any) => (
+  <Icon {...props}><path d="M23 4v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M20.49 15a9 9 0 1 1-1.5-8.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const Copy = (props: any) => (
+  <Icon {...props}><rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></Icon>
+);
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
@@ -32,6 +54,7 @@ export default function DeptList() {
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(null);
   const [selectedSem, setSelectedSem] = useState<number | null>(null);
+  const [currentDept, setCurrentDept] = useState<number | null>(null);
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
 
   useEffect(() => {
@@ -44,9 +67,17 @@ export default function DeptList() {
     if (selectedSem == null && sems.length === 1) setSelectedSem(sems[0]);
   }, [rows]);
   useEffect(() => {
-    fetchDeptRows().then(r => setRows(r)).catch(console.error).finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
+
+  // Fetch rows whenever filters (department / regulation / semester / batch) change
+  useEffect(() => {
+    setLoading(true);
+    fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined })
+      .then(r => setRows(r))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [currentDept, selectedReg, selectedSem, selectedBatch]);
 
   useEffect(() => {
     fetchWithAuth('/api/curriculum/qp-types/')
@@ -113,10 +144,10 @@ export default function DeptList() {
     setRefreshing(true);
     try {
       const [freshRows, depsRes, by] = await Promise.all([
-        fetchDeptRows(),
-        fetchWithAuth('/api/curriculum/departments/'),
-        fetchBatchYears(),
-      ]);
+          fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined }),
+          fetchWithAuth('/api/curriculum/departments/'),
+          fetchBatchYears(),
+        ]);
       setRows(freshRows);
       const depsData = await depsRes.json();
       setAllDepartments(depsData.results || []);
@@ -225,17 +256,18 @@ export default function DeptList() {
     try{
       await approveDeptRow(rowId, action);
       // refresh all rows
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       alert('OK');
     }catch(e:any){ alert(String(e)); }
   }
 
-  const [currentDept, setCurrentDept] = useState<number | null>(null);
-
   useEffect(() => {
-    if (uniqueDepts.length === 1) setCurrentDept(uniqueDepts[0]);
-    else if (!uniqueDepts.includes(currentDept || -1)) setCurrentDept(uniqueDepts[0] ?? null);
+    if (uniqueDepts.length === 1) {
+      setCurrentDept(uniqueDepts[0]);
+    } else if (currentDept != null && !uniqueDepts.includes(currentDept)) {
+      setCurrentDept(uniqueDepts[0] ?? null);
+    }
   }, [rows]);
 
   // derive elective options from department rows
@@ -303,7 +335,7 @@ export default function DeptList() {
       if (!payload.course_code) delete payload.course_code;
       if (!payload.course_name) delete payload.course_name;
       await createElective(payload);
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       // refresh elective subjects for UI
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
@@ -333,7 +365,7 @@ export default function DeptList() {
       });
       if (!res.ok) throw new Error(await res.text());
       // refresh data
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);

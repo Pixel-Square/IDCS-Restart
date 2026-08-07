@@ -1,6 +1,4 @@
-"""
-Academic 2.1 Django Admin Configuration
-"""
+"""Academic 2.1 Django Admin Configuration."""
 
 from django.contrib import admin
 from .models import (

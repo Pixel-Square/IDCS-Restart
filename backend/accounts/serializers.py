@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.core.files.storage import default_storage
 from .models import Role, UserRole, Permission, RolePermission, NotificationTemplate, UserQuery
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers_impersonation import (
@@ -10,6 +11,26 @@ from .serializers_impersonation import (
 from typing import Optional
 
 User = get_user_model()
+
+
+def _normalize_media_storage_path(value: str) -> str:
+    raw = str(value or '').strip()
+    if not raw:
+        return ''
+    normalized = raw.replace('\\', '/').lstrip('/')
+    if normalized.startswith('media/'):
+        normalized = normalized[len('media/'):]
+    return normalized
+
+
+def _is_existing_local_media(value: str) -> bool:
+    path = _normalize_media_storage_path(value)
+    if not path:
+        return False
+    try:
+        return bool(default_storage.exists(path))
+    except Exception:
+        return False
 
 
 def _compute_effective_role_names(user) -> list[str]:
@@ -225,8 +246,11 @@ class MeSerializer(serializers.Serializer):
         if value.startswith('http://') or value.startswith('https://'):
             return value
 
+        if not _is_existing_local_media(value):
+            return ''
+
         # Normalize stored relative media path to URL path.
-        cleaned = value.lstrip('/')
+        cleaned = _normalize_media_storage_path(value)
         return f'/media/{cleaned}'
 
     def get_permissions(self, obj):

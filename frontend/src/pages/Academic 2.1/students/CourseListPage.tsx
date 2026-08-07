@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, BookOpen, ChevronRight, Loader2, UserRound } from 'lucide-react';
+import { AlertCircle, BookOpen, ChevronRight, Loader2, Medal, UserRound } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import RequirementsPage from '../../settings/RequirementsPage';
 import MyMarksLayout from './MyMarksLayout';
@@ -23,6 +23,13 @@ type CourseItem = {
   obtained_weight: number;
   max_weight: number;
   entered_weight_pct: number | null;
+  top_students?: LeaderboardStudent[];
+};
+type LeaderboardStudent = {
+  student_id: number;
+  student_name: string;
+  average_pct: number | null;
+  rank: number;
 };
 
 function pctTextColor(pct: number | null) {
@@ -131,37 +138,53 @@ export default function CourseListPage() {
               key={course.ta_id}
               type="button"
               onClick={() => navigate(`/academic-v2/student/course/${course.ta_id}`)}
-              className="group w-full rounded-xl border border-gray-200 bg-white p-5 text-left shadow-sm transition hover:border-indigo-200 hover:shadow-md"
+              className="group w-full rounded-3xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-indigo-200 hover:shadow-md"
             >
-              {/* Top row: name + percentage */}
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-base font-bold text-gray-900 group-hover:text-indigo-700 sm:text-lg">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0 flex-1 text-left">
+                  <span className="rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-700">
+                    {course.course_code}
+                  </span>
+                  <h2 className="mt-4 text-lg font-bold text-gray-900 group-hover:text-indigo-700 sm:text-xl">
                     {course.course_name}
                   </h2>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                    <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
-                      {course.course_code}
-                    </span>
-                    {course.class_type && (
-                      <span className="text-xs text-gray-400">{course.class_type}</span>
-                    )}
+                  <div className="mt-2 flex items-center gap-2 text-sm text-gray-500">
+                    <UserRound className="h-4 w-4 text-gray-400" />
+                    <span>{course.faculty_name || 'Faculty not assigned'}</span>
                   </div>
                 </div>
-                <div className="shrink-0 text-right">
-                  <span
-                    className={`inline-block rounded-lg px-3 py-1.5 text-2xl font-black sm:text-3xl ${pctBadgeBg(course.entered_weight_pct)}`}
-                  >
-                    {course.entered_weight_pct !== null
-                      ? `${Math.round(course.entered_weight_pct)}%`
-                      : '—'}
-                  </span>
-                  <p className="mt-1 text-[11px] text-gray-400">entered score</p>
+
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6 lg:items-center">
+                  {course.top_students && course.top_students.length > 0 ? (
+                    <div className="w-full max-w-[240px] rounded-2xl border border-indigo-100 bg-indigo-50 p-3 text-left sm:w-[240px]">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-700">Top Performers</p>
+                      <div className="mt-3 space-y-2 text-sm text-gray-800">
+                        {course.top_students.slice(0, 3).map((student) => (
+                          <div key={student.student_id} className="flex items-center gap-2">
+                            <Medal className="h-4 w-4 text-indigo-500 flex-shrink-0" />
+                            <span className="truncate">{student.student_name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="flex min-w-0 flex-col items-start gap-1 sm:items-end">
+                    <div
+                      className={`rounded-full px-3 py-1.5 text-2xl font-black sm:text-3xl ${pctBadgeBg(
+                        course.entered_weight_pct,
+                      )}`}
+                    >
+                      {course.entered_weight_pct !== null
+                        ? `${Math.round(course.entered_weight_pct)}%`
+                        : '—'}
+                    </div>
+                    <p className="text-[11px] text-gray-400">entered score</p>
+                  </div>
                 </div>
               </div>
 
-              {/* Progress bar */}
-              <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-100">
+              <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-gray-100">
                 <div
                   className={`h-full rounded-full transition-all duration-700 ${pctBarColor(course.entered_weight_pct)}`}
                   style={{
@@ -173,20 +196,13 @@ export default function CourseListPage() {
                 />
               </div>
 
-              {/* Bottom row: faculty + weight + CTA */}
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-gray-600">
-                  <UserRound className="h-4 w-4 shrink-0 text-gray-400" />
-                  <span className="truncate">{course.faculty_name || 'Faculty not assigned'}</span>
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-gray-500">
+                  {course.exams_entered} exam{course.exams_entered === 1 ? '' : 's'} · {course.obtained_weight.toFixed(1)}/{course.max_weight.toFixed(1)} wt
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="hidden text-xs text-gray-400 sm:inline">
-                    {course.exams_entered} exam{course.exams_entered === 1 ? '' : 's'} · {course.obtained_weight.toFixed(1)}/{course.max_weight.toFixed(1)} wt
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition group-hover:bg-indigo-700 group-hover:shadow-md">
-                    View Marks
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </span>
+                <div className="inline-flex w-full items-center justify-center rounded-2xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition group-hover:bg-indigo-700 sm:w-auto">
+                  View Marks
+                  <ChevronRight className="ml-2 h-4 w-4" />
                 </div>
               </div>
             </button>

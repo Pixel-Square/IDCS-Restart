@@ -42,6 +42,50 @@ class AcV2GoogleSheetsOAuthCredential(models.Model):
         return self.google_user_email or 'Google Sheets OAuth Credential'
 
 
+class AcV2GoogleSheetLink(models.Model):
+    """Persistent mapping between an Academic v2 section and an existing Google Sheet."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    section = models.OneToOneField(
+        'AcV2Section',
+        on_delete=models.CASCADE,
+        related_name='google_sheet_link',
+    )
+    sheet_url = models.URLField(max_length=1024)
+    spreadsheet_id = models.CharField(max_length=255)
+    # exam_configs shape:
+    # {
+    #   "<exam_assignment_uuid>": {
+    #     "sheetTab": "SSA 1",
+    #     "regNoColumn": "A",
+    #     "nameColumn": "B",
+    #     "questionColumns": {"Q1": "C", "Q2": "D"}
+    #   }
+    # }
+    exam_configs = models.JSONField(default=dict, blank=True)
+    is_active = models.BooleanField(default=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_google_sheet_links_updated',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_google_sheet_link'
+        verbose_name = 'Google Sheet Link'
+        verbose_name_plural = 'Google Sheet Links'
+        indexes = [
+            models.Index(fields=['spreadsheet_id']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f'{self.section} -> {self.spreadsheet_id}'
+
+
 # ============================================================================
 # SEMESTER CONFIGURATION (Due dates, Publish control)
 # ============================================================================
@@ -135,6 +179,95 @@ class AcV2SemesterConfig(models.Model):
     def get_approval_stages(self):
         """Get list of approval stages."""
         return self.approval_workflow or []
+
+
+class AcV2SemesterGroup(models.Model):
+    """
+    Publish control group for one or more semesters.
+    A semester can belong to only a single group.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    semesters = models.ManyToManyField(
+        'academics.Semester',
+        through='AcV2SemesterGroupMembership',
+        related_name='acv2_semester_groups',
+        blank=True,
+    )
+
+    publish_control_enabled = models.BooleanField(default=True)
+    faculty_edit_enabled = models.BooleanField(default=True)
+    approval_workflow = models.JSONField(default=list, blank=True)
+    approval_window_minutes = models.IntegerField(default=120)
+    edit_request_validity_hours = models.IntegerField(default=24)
+    approval_until_publish = models.BooleanField(default=False)
+
+    open_from = models.DateTimeField(null=True, blank=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    auto_publish_on_due = models.BooleanField(default=True)
+
+    seal_animation_enabled = models.BooleanField(default=False)
+    seal_watermark_enabled = models.BooleanField(default=False)
+    seal_image = models.ImageField(upload_to='academic_v2/seals/', null=True, blank=True)
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='acv2_semester_groups_updated'
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'acv2_semester_group'
+        verbose_name = 'Semester Group'
+        verbose_name_plural = 'Semester Groups'
+
+    def __str__(self):
+        return f"Group: {self.title}"
+
+    def is_open(self):
+        now = timezone.now()
+        if self.open_from and now < self.open_from:
+            return False
+        if self.due_at and now > self.due_at:
+            return False
+        return True
+
+    def time_remaining(self):
+        if not self.due_at:
+            return None
+        now = timezone.now()
+        if now > self.due_at:
+            return timedelta(0)
+        return self.due_at - now
+
+
+class AcV2SemesterGroupMembership(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    group = models.ForeignKey(
+        AcV2SemesterGroup,
+        on_delete=models.CASCADE,
+        related_name='members'
+    )
+    semester = models.OneToOneField(
+        'academics.Semester',
+        on_delete=models.CASCADE,
+        related_name='acv2_semester_group'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'acv2_semester_group_membership'
+        verbose_name = 'Semester Group Membership'
+        verbose_name_plural = 'Semester Group Memberships'
+
+    def __str__(self):
+        return f"{self.semester} in {self.group.title}"
 
 
 # ============================================================================
@@ -563,7 +696,11 @@ class AcV2ExamAssignment(models.Model):
     def get_semester_config(self):
         """Get semester config for due date and publish control."""
         try:
-            return self.section.course.semester.acv2_config
+            semester = self.section.course.semester
+            membership = getattr(semester, 'acv2_semester_group', None)
+            if membership is not None and getattr(membership, 'group', None) is not None:
+                return membership.group
+            return semester.acv2_config
         except Exception:
             return None
 
@@ -586,6 +723,13 @@ class AcV2ExamAssignment(models.Model):
         try:
             if config is not None and not bool(getattr(config, 'publish_control_enabled', False)):
                 return True
+        except Exception:
+            pass
+
+        # If the publish group explicitly disables faculty editing, block all faculty edits.
+        try:
+            if config is not None and not bool(getattr(config, 'faculty_edit_enabled', True)):
+                return False
         except Exception:
             pass
 
@@ -1599,7 +1743,11 @@ class AcV2CqiAttained(models.Model):
                 'course__semester__acv2_config'
             ).first()
             if sec:
-                return sec.course.semester.acv2_config
+                semester = sec.course.semester
+                membership = getattr(semester, 'acv2_semester_group', None)
+                if membership is not None and getattr(membership, 'group', None) is not None:
+                    return membership.group
+                return semester.acv2_config
         except Exception:
             pass
         return None
@@ -2061,6 +2209,7 @@ class AcV2AcademicNotificationSetting(models.Model):
     notify_on_first_publish = models.BooleanField(default=True)
     notify_on_row_edits_only = models.BooleanField(default=True)
     notify_on_every_publish_click = models.BooleanField(default=False)
+    notify_on_row_filled = models.BooleanField(default=False)
 
     first_publish_template = models.TextField(default=(
         '✅ {course_code} - {course_name}\n'
@@ -2073,6 +2222,12 @@ class AcV2AcademicNotificationSetting(models.Model):
         '{exam_name} marks were updated by {faculty_name}.\n'
         'Student: {student_name} ({register_number})\n'
         'Updated Mark: {mark}/{max_mark}'
+    ))
+    row_filled_template = models.TextField(default=(
+        '📝 {course_code} - {course_name}\n'
+        '{exam_name} marks row was filled by {faculty_name}.\n'
+        'Student: {student_name} ({register_number})\n'
+        'Mark: {mark}/{max_mark}'
     ))
     every_publish_template = models.TextField(default=(
         '📢 {course_code} - {course_name}\n'

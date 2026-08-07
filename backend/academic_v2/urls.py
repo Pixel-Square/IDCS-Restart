@@ -7,6 +7,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     AcV2SemesterConfigViewSet,
+    AcV2SemesterGroupViewSet,
     AcV2ClassTypeViewSet,
     AcV2CycleViewSet,
     AcV2QpTypeViewSet,
@@ -30,6 +31,9 @@ from .views import (
     google_sheets_create,
     google_sheets_sync_to_sheet,
     google_sheets_sync_from_sheet,
+    google_sheets_pull_live,
+    google_sheets_inject_script,
+    google_sheets_webhook,
     google_sheets_oauth_status,
     google_sheets_oauth_start,
     google_sheets_oauth_callback,
@@ -58,6 +62,8 @@ from .views import (
     student_my_marks_config,
     student_my_courses,
     student_my_course_detail,
+    student_my_class_leaderboard,
+    student_my_course_top_students,
     # Bypass API
     bypass_start,
     bypass_end,
@@ -78,6 +84,7 @@ app_name = 'academic_v2'
 
 router = DefaultRouter()
 router.register(r'semester-configs', AcV2SemesterConfigViewSet, basename='semester-config')
+router.register(r'semester-groups', AcV2SemesterGroupViewSet, basename='semester-group')
 router.register(r'class-types', AcV2ClassTypeViewSet, basename='class-type')
 router.register(r'cycles', AcV2CycleViewSet, basename='cycle')
 router.register(r'qp-types', AcV2QpTypeViewSet, basename='qp-type')
@@ -104,6 +111,9 @@ urlpatterns = [
     path('google-sheets/create/', google_sheets_create, name='google-sheets-create'),
     path('google-sheets/sync-to-sheet/', google_sheets_sync_to_sheet, name='google-sheets-sync-to-sheet'),
     path('google-sheets/sync-from-sheet/', google_sheets_sync_from_sheet, name='google-sheets-sync-from-sheet'),
+    path('google-sheets/pull-live/', google_sheets_pull_live, name='google-sheets-pull-live'),
+    path('google-sheets/inject-script/', google_sheets_inject_script, name='google-sheets-inject-script'),
+    path('google-sheets/webhook/', google_sheets_webhook, name='google-sheets-webhook'),
     path('google-sheets/oauth/status/', google_sheets_oauth_status, name='google-sheets-oauth-status'),
     path('google-sheets/oauth/start/', google_sheets_oauth_start, name='google-sheets-oauth-start'),
     path('google-sheets/oauth/callback/', google_sheets_oauth_callback, name='google-sheets-oauth-callback'),
@@ -135,6 +145,8 @@ urlpatterns = [
     path('student/my-marks-config/', student_my_marks_config, name='student-my-marks-config'),
     path('student/my-courses/', student_my_courses, name='student-my-courses'),
     path('student/my-courses/<int:ta_id>/', student_my_course_detail, name='student-my-course-detail'),
+    path('student/my-class-leaderboard/', student_my_class_leaderboard, name='student-my-class-leaderboard'),
+    path('student/my-courses/<int:ta_id>/top-students/', student_my_course_top_students, name='student-my-course-top-students'),
 
     # Admin CourseManager
     path('admin/courses/', admin_courses_list, name='admin-courses-list'),

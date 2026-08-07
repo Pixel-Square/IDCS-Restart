@@ -224,14 +224,15 @@ export default function WeightagePage() {
       setQpPatterns(Array.isArray(ptData) ? ptData : (ptData.results || []));
       setQpTypeRecords(Array.isArray(qtData) ? qtData : (qtData.results || []));
       const coRows = Array.isArray(coData) ? coData : (coData.results || []);
-      const coNums = Array.from(
-        new Set(
-          coRows
-            .filter((row: any) => row?.is_active !== false)
-            .map((row: any) => Number(row?.number))
-            .filter((n: number) => Number.isFinite(n) && n > 0),
-        ),
-      ).sort((a, b) => a - b);
+      const coNumsSet = new Set<number>();
+      for (const row of coRows) {
+        if (row?.is_active === false) continue;
+        const n = Number(row?.number);
+        if (Number.isFinite(n) && n > 0) {
+          coNumsSet.add(n);
+        }
+      }
+      const coNums = Array.from(coNumsSet).sort((a, b) => a - b);
       setCourseOutcomeNumbers(coNums);
     } catch {
       setMessage({ type: 'error', text: 'Failed to load data' });
@@ -465,7 +466,7 @@ export default function WeightagePage() {
                           <div>
                             <div className="text-[10px] text-gray-500 mb-1.5 font-medium uppercase tracking-wide">Without Exam</div>
                             <div className="flex flex-wrap gap-1.5">
-                              {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
+                              {courseOutcomeNumbers.map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_without_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -524,7 +525,7 @@ export default function WeightagePage() {
                                 />
                                 Same for each CO
                               </label>
-                              {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
+                              {courseOutcomeNumbers.map(co => {
                                 const coKey = String(co);
                                 const coWeight = (exam.mm_co_weights_with_exam || {})[coKey] ?? 0;
                                 const avg = exam.co_averages?.[coKey];
@@ -556,7 +557,7 @@ export default function WeightagePage() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap gap-1.5">
-                          {(exam.default_cos && exam.default_cos.length > 0 ? exam.default_cos : courseOutcomeNumbers).map(co => {
+                          {courseOutcomeNumbers.map(co => {
                             const coKey = String(co);
                             const coWeight = (exam.co_weights || {})[coKey] ?? 0;
                             return (

@@ -145,6 +145,150 @@ class SectionTimetableViewIntegrationTests(SimpleTestCase):
         self.assertEqual(staff_data.get("name"), "Praveenkumar T, Swethabharathi R")
 
 
+<<<<<<< HEAD
+=======
+class CurriculumBySectionViewIntegrationTests(SimpleTestCase):
+    def test_returns_credits_for_section_curriculum_rows(self):
+        section = SimpleNamespace(
+            id=41,
+            semester=SimpleNamespace(number=1),
+            batch=SimpleNamespace(
+                course_id=100,
+                course=SimpleNamespace(department=SimpleNamespace(id=1)),
+            ),
+        )
+        curriculum_row = SimpleNamespace(
+            id=499,
+            pk=499,
+            course_code="ADI1151",
+            course_name="Foundations of Python Programming and SQL",
+            c=3,
+            regulation="R2023",
+            class_type="THEORY",
+            is_elective=False,
+            department_id=1,
+            department=SimpleNamespace(code="CSE"),
+        )
+
+        request = APIRequestFactory().get("/api/timetable/curriculum-for-section/?section_id=41")
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+        section_chain = MagicMock()
+        section_chain.get.return_value = section
+
+        with patch("timetable.views.Section.objects.select_related", return_value=section_chain), patch(
+            "curriculum.models.CurriculumDepartment.objects.filter",
+            return_value=_FakeQuerySet([curriculum_row]),
+        ):
+            response = CurriculumBySectionView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get("results", [])
+        self.assertTrue(results)
+        self.assertEqual(results[0].get("c"), 3)
+
+    def test_includes_lab_hours_in_effective_class_hours(self):
+        section = SimpleNamespace(
+            id=42,
+            semester=SimpleNamespace(number=2),
+            batch=SimpleNamespace(
+                course_id=101,
+                course=SimpleNamespace(department=SimpleNamespace(id=2)),
+            ),
+        )
+        curriculum_row = SimpleNamespace(
+            id=500,
+            pk=500,
+            course_code="CSL1201",
+            course_name="DBMS Lab",
+            c=1,
+            l=0,
+            t=0,
+            p=2,
+            s=0,
+            total_hours=2,
+            regulation="R2023",
+            class_type="LAB",
+            is_elective=False,
+            department_id=2,
+            department=SimpleNamespace(code="CSE"),
+        )
+
+        request = APIRequestFactory().get("/api/timetable/curriculum-for-section/?section_id=42")
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+        section_chain = MagicMock()
+        section_chain.get.return_value = section
+
+        with patch("timetable.views.Section.objects.select_related", return_value=section_chain), patch(
+            "curriculum.models.CurriculumDepartment.objects.filter",
+            return_value=_FakeQuerySet([curriculum_row]),
+        ):
+            response = CurriculumBySectionView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get("results", [])
+        self.assertTrue(results)
+        self.assertEqual(results[0].get("total_hours"), 2)
+        self.assertEqual(results[0].get("effective_class_hours"), 2)
+
+    def test_shared_section_uses_explicit_batch_department_curriculum(self):
+        physics_dept = SimpleNamespace(pk=11, code="PHY", short_name="Physics", is_sh_main=False)
+        chemistry_dept = SimpleNamespace(pk=12, code="CHEM", short_name="Chemistry", is_sh_main=False)
+        section = SimpleNamespace(
+            id=43,
+            semester=SimpleNamespace(number=1),
+            batch=SimpleNamespace(
+                course_id=None,
+                department=physics_dept,
+                batch_year_id=2025,
+                regulation_id=1,
+            ),
+            managing_department=SimpleNamespace(pk=99, code="S&H", short_name="S&H", is_sh_main=True),
+        )
+        physics_row = SimpleNamespace(
+            id=600,
+            pk=600,
+            course_code="PHY1101",
+            course_name="Engineering Physics",
+            c=3,
+            total_hours=3,
+            regulation="R2023",
+            class_type="THEORY",
+            is_elective=False,
+            is_dept_core=False,
+            department_id=physics_dept.pk,
+            department=physics_dept,
+        )
+
+        request = APIRequestFactory().get("/api/timetable/curriculum-for-section/?section_id=43")
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+        section_chain = MagicMock()
+        section_chain.get.return_value = section
+
+        def curriculum_filter_side_effect(*args, **kwargs):
+            if kwargs.get("department_id__in") == [physics_dept.pk]:
+                return _FakeQuerySet([physics_row])
+            if kwargs.get("department_id__in") == [chemistry_dept.pk]:
+                return _FakeQuerySet([])
+            return _FakeQuerySet([])
+
+        with patch("timetable.views.Section.objects.select_related", return_value=section_chain), patch(
+            "curriculum.models.CurriculumDepartment.objects.filter",
+            side_effect=curriculum_filter_side_effect,
+        ) as curriculum_filter:
+            response = CurriculumBySectionView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get("results", [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].get("course_code"), "PHY1101")
+        self.assertEqual(results[0].get("department_code"), "PHY")
+        self.assertTrue(curriculum_filter.called)
+
+
+>>>>>>> 4c2ca77 (naveen6)
 class SectionSubjectsStaffViewIntegrationTests(SimpleTestCase):
     def test_shared_section_returns_multi_faculty_assigned_staff(self):
         section = SimpleNamespace(
@@ -315,6 +459,9 @@ class SectionSubjectsStaffViewIntegrationTests(SimpleTestCase):
             return_value=_FakeQuerySet([ta_one]),
         ), patch(
             "timetable.models.TimetableAssignment.objects.filter",
+            return_value=_FakeQuerySet([]),
+        ), patch(
+            "curriculum.models.ElectiveSubject.objects.filter",
             return_value=_FakeQuerySet([]),
         ):
             response = SectionSubjectsStaffView.as_view()(request, section_id=42)

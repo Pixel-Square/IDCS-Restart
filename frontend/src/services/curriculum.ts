@@ -141,10 +141,18 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
   }
 }
 
-export async function fetchDeptRows(): Promise<DeptRow[]> {
-  const res = await fetchWithAuth('/api/curriculum/department/');
+export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }): Promise<DeptRow[]> {
+  const qs = new URLSearchParams();
+  if (params?.department_id) qs.set('department_id', String(params.department_id));
+  if (params?.regulation) qs.set('regulation', params.regulation);
+  if (params?.semester) qs.set('semester', String(params.semester));
+  if (params?.batch_id) qs.set('batch_id', String(params.batch_id));
+  qs.set('page_size', '0');
+  const url = `/api/curriculum/department/?${qs.toString()}`;
+  const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch dept rows');
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.results || []);
 }
 
 export async function fetchDeptRow(id: number): Promise<DeptRow> {

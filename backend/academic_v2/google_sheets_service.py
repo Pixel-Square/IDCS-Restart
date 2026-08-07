@@ -72,6 +72,7 @@ def _get_access_token(
         [
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/script.projects',
         ],
         impersonated_user_email=impersonated_user_email,
     )
@@ -272,6 +273,24 @@ def _read_sheet_values(
     return payload.get('values') or []
 
 
+def _column_label_to_index(label: str | None) -> int | None:
+    """Convert spreadsheet column label (A, B, AA) to zero-based index."""
+    text = str(label or '').strip().upper()
+    if not text or not re.fullmatch(r'[A-Z]+', text):
+        return None
+
+    index = 0
+    for ch in text:
+        index = index * 26 + (ord(ch) - ord('A') + 1)
+    return index - 1
+
+
+def _safe_row_value(row: list[Any], index: int | None) -> Any:
+    if index is None or index < 0 or index >= len(row):
+        return None
+    return row[index]
+
+
 def _get_qp_specs_for_exam(exam_assignment) -> list[dict[str, Any]]:
     pattern = getattr(exam_assignment, 'qp_pattern', None) or {}
     if not isinstance(pattern, dict):
@@ -387,6 +406,7 @@ def sync_google_sheet_to_backend(
     spreadsheet_id: str,
     config: dict[str, Any],
     sheet_name: str | None = None,
+    column_mapping: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from academics.models import StudentProfile
     from .models import AcV2StudentMark
@@ -405,12 +425,26 @@ def sync_google_sheet_to_backend(
     if not questions:
         return {'spreadsheetId': spreadsheet_id, 'sheetName': sheet_title, 'updatedRows': 0}
 
+    reg_column_index = _column_label_to_index((column_mapping or {}).get('regNoColumn') or (column_mapping or {}).get('reg_no_column') or 'A')
+    name_column_index = _column_label_to_index((column_mapping or {}).get('nameColumn') or (column_mapping or {}).get('name_column') or 'B')
+    raw_question_columns = (column_mapping or {}).get('questionColumns') or (column_mapping or {}).get('question_columns') or {}
+
+    title_to_column_index: dict[str, int] = {}
+    if isinstance(raw_question_columns, dict):
+        for title, column_label in raw_question_columns.items():
+            column_index = _column_label_to_index(str(column_label or ''))
+            if column_index is None:
+                continue
+            normalized_title = str(title or '').strip().lower()
+            if normalized_title:
+                title_to_column_index[normalized_title] = column_index
+
     updated_count = 0
     for row in values[1:]:
         if not row:
             continue
-        reg_no = str(row[0] or '').strip() if len(row) > 0 else ''
-        student_name = str(row[1] or '').strip() if len(row) > 1 else ''
+        reg_no = str(_safe_row_value(row, reg_column_index) or '').strip()
+        student_name = str(_safe_row_value(row, name_column_index) or '').strip()
         if not reg_no:
             continue
 
@@ -420,10 +454,10 @@ def sync_google_sheet_to_backend(
 
         question_marks = {}
         for index, question in enumerate(questions):
-            col_index = index + 2
-            if col_index >= len(row):
-                continue
-            raw_value = row[col_index]
+            question_title_key = str(question.get('title') or '').strip().lower()
+            mapped_col_index = title_to_column_index.get(question_title_key)
+            col_index = mapped_col_index if mapped_col_index is not None else (index + 2)
+            raw_value = _safe_row_value(row, col_index)
             if raw_value in ('', None):
                 continue
             try:
@@ -433,18 +467,8 @@ def sync_google_sheet_to_backend(
             question_marks[question['id']] = value
 
         total_value = None
-        if len(row) > len(questions) + 2:
-            raw_total = row[len(questions) + 2]
-            if raw_total not in ('', None):
-                try:
-                    total_value = float(raw_total)
-                except (TypeError, ValueError):
-                    total_value = None
 
         absent_value = False
-        if len(row) > len(questions) + 3:
-            raw_absent = row[len(questions) + 3]
-            absent_value = str(raw_absent).strip().lower() in {'1', 'true', 'yes', 'y'}
 
         mark_obj, _ = AcV2StudentMark.objects.update_or_create(
             exam_assignment=exam_assignment,
@@ -685,3 +709,253 @@ def create_google_spreadsheet(
         'sheetUrl': f'https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit',
         'title': title,
     }
+
+
+def _build_apps_script_source(
+    *,
+    backend_url: str,
+    section_id: str,
+    exam_configs: list[dict[str, Any]],
+) -> str:
+    """Build the Google Apps Script source code (.gs) tailored to this section's exam assignments.
+
+    The generated script:
+    - Reads each exam assignment's sheet tab (from CONFIG)
+    - Finds student rows by register number (column A by default, or configured)
+    - POSTs the full section data to our backend webhook on edit + hourly trigger
+    """
+    configs_json = json.dumps(exam_configs, separators=(',', ':'))
+
+    return f"""
+// ============================================================
+// AUTO-GENERATED BY IDCS ERP — DO NOT EDIT MANUALLY
+// Section ID: {section_id}
+// ============================================================
+
+var BACKEND_URL = "{backend_url}";
+var SECTION_ID = "{section_id}";
+var EXAM_CONFIGS = {configs_json};
+
+// ---------- Triggers ----------
+
+function setupTriggers() {{
+  // Remove all existing triggers first to avoid duplicates
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {{
+    ScriptApp.deleteTrigger(triggers[i]);
+  }}
+  // On every edit, push data
+  ScriptApp.newTrigger('onSheetEdit').forSpreadsheet(SpreadsheetApp.getActive()).onEdit().create();
+  // Also push every hour automatically
+  ScriptApp.newTrigger('pushAllData').timeBased().everyHours(1).create();
+}}
+
+function onSheetEdit(e) {{
+  var sheet = e ? e.range.getSheet() : null;
+  if (!sheet) return;
+  var sheetName = sheet.getName();
+  // Find matching exam config
+  for (var i = 0; i < EXAM_CONFIGS.length; i++) {{
+    var cfg = EXAM_CONFIGS[i];
+    if ((cfg.sheetTab || cfg.examId) === sheetName) {{
+      pushExamData(cfg);
+      break;
+    }}
+  }}
+}}
+
+function pushAllData() {{
+  for (var i = 0; i < EXAM_CONFIGS.length; i++) {{
+    pushExamData(EXAM_CONFIGS[i]);
+  }}
+}}
+
+// ---------- Core push ----------
+
+function pushExamData(cfg) {{
+  var ss = SpreadsheetApp.getActive();
+  var tabName = cfg.sheetTab || cfg.examId || '';
+  if (!tabName) return;
+
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet) return;
+
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return;
+
+  var allValues = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var headerRow = allValues[0];
+
+  // Determine register column (0-based index from column letter, default A=0)
+  var regColIdx = letterToIndex(cfg.regNoColumn || 'A');
+  var nameColIdx = letterToIndex(cfg.nameColumn || 'B');
+
+  // Build question column map: question title -> 0-based index
+  var questionCols = cfg.questionColumns || {{}};
+
+  var rows = [];
+  for (var r = 1; r < allValues.length; r++) {{
+    var row = allValues[r];
+    var regNo = String(row[regColIdx] || '').trim();
+    if (!regNo) continue;
+
+    var studentName = nameColIdx >= 0 && nameColIdx < row.length ? String(row[nameColIdx] || '').trim() : '';
+    var marks = {{}};
+
+    for (var qKey in questionCols) {{
+      var colLetter = questionCols[qKey];
+      var colIdx = letterToIndex(colLetter);
+      if (colIdx >= 0 && colIdx < row.length) {{
+        var val = row[colIdx];
+        if (val !== '' && val !== null && val !== undefined) {{
+          marks[qKey] = val;
+        }}
+      }}
+    }}
+
+    rows.push({{ regNo: regNo, name: studentName, marks: marks }});
+  }}
+
+  if (rows.length === 0) return;
+
+  var payload = {{
+    sectionId: SECTION_ID,
+    examAssignmentId: cfg.examId,
+    sheetTab: tabName,
+    rows: rows
+  }};
+
+  try {{
+    UrlFetchApp.fetch(BACKEND_URL + '/api/academic-v2/google-sheets/webhook/', {{
+      method: 'POST',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    }});
+  }} catch (err) {{
+    Logger.log('IDCS push error: ' + err.toString());
+  }}
+}}
+
+// ---------- Helpers ----------
+
+function letterToIndex(letter) {{
+  if (!letter) return 0;
+  letter = String(letter).trim().toUpperCase();
+  var idx = 0;
+  for (var i = 0; i < letter.length; i++) {{
+    idx = idx * 26 + (letter.charCodeAt(i) - 64);
+  }}
+  return idx - 1;
+}}
+"""
+
+
+def inject_apps_script_to_sheet(
+    *,
+    spreadsheet_id: str,
+    section_id: str,
+    exam_configs: list[dict[str, Any]],
+    backend_url: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Create (or update) a Google Apps Script project bound to the given spreadsheet.
+
+    IMPORTANT: The Apps Script REST API only accepts user OAuth 2.0 tokens —
+    service account JWT tokens are rejected with 401 UNAUTHENTICATED.
+    The admin MUST authorize Google via the Connect tab first.
+
+    Returns a dict with 'scriptId' and 'success'.
+    """
+    # Apps Script API requires a user OAuth token — service account JWT won't work.
+    oauth_headers = _get_db_oauth_headers()
+    if oauth_headers is None:
+        raise GoogleSheetsServiceError(
+            'Google Apps Script injection requires a Google account authorization. '
+            'Go to the Connect tab and click "Authorize Google" to grant access, then retry.'
+        )
+
+    # Verify the token has the script.projects scope.
+    from .models import AcV2GoogleSheetsOAuthCredential
+    credential = AcV2GoogleSheetsOAuthCredential.objects.filter(is_active=True).order_by('-updated_at').first()
+    stored_scopes = credential.scopes if credential else []
+    has_script_scope = any('script.projects' in str(s) for s in (stored_scopes or []))
+    if not has_script_scope:
+        raise GoogleSheetsServiceError(
+            'The saved Google authorization does not include the Apps Script scope. '
+            'Go to the Connect tab and click "Re-authorize Google" to grant the updated permissions, then retry.'
+        )
+
+    headers = oauth_headers
+    script_source = _build_apps_script_source(
+        backend_url=backend_url,
+        section_id=section_id,
+        exam_configs=exam_configs,
+    )
+
+    # Step 1: Create a new Apps Script project bound to the spreadsheet
+    create_resp = requests.post(
+        'https://script.googleapis.com/v1/projects',
+        headers={**headers, 'Content-Type': 'application/json'},
+        json={
+            'title': f'IDCS Marks Sync – {section_id}',
+            'parentId': spreadsheet_id,
+        },
+        timeout=30,
+    )
+
+    if not create_resp.ok:
+        raise GoogleSheetsServiceError(
+            f'Apps Script project creation failed ({create_resp.status_code}): {create_resp.text}'
+        )
+
+    script_id = create_resp.json().get('scriptId') or ''
+    if not script_id:
+        raise GoogleSheetsServiceError('Apps Script API did not return a scriptId.')
+
+    # Step 2: Upload the script content
+    update_resp = requests.put(
+        f'https://script.googleapis.com/v1/projects/{script_id}/content',
+        headers={**headers, 'Content-Type': 'application/json'},
+        json={
+            'files': [
+                {
+                    'name': 'Code',
+                    'type': 'SERVER_JS',
+                    'source': script_source,
+                },
+                {
+                    'name': 'appsscript',
+                    'type': 'JSON',
+                    'source': json.dumps({
+                        'timeZone': 'Asia/Kolkata',
+                        'dependencies': {},
+                        'exceptionLogging': 'STACKDRIVER',
+                        'runtimeVersion': 'V8',
+                        'oauthScopes': [
+                            'https://www.googleapis.com/auth/spreadsheets',
+                            'https://www.googleapis.com/auth/script.external_request',
+                            'https://www.googleapis.com/auth/script.scriptapp',
+                        ],
+                    }),
+                },
+            ]
+        },
+        timeout=30,
+    )
+
+    if not update_resp.ok:
+        raise GoogleSheetsServiceError(
+            f'Apps Script content upload failed ({update_resp.status_code}): {update_resp.text}'
+        )
+
+    return {
+        'scriptId': script_id,
+        'success': True,
+        'message': (
+            'Apps Script injected successfully. Open the spreadsheet → Extensions → '
+            'Apps Script → Run setupTriggers() once to activate automatic sync.'
+        ),
+    }
+

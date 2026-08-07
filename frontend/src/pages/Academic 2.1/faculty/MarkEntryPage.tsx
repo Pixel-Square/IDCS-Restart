@@ -1,19 +1,20 @@
 /**
  * Mark Entry Page
  * Enter marks for a specific exam with CO mapping
- * Toolbar: Load/Refresh, Reset Marks, Show Absentees, Export CSV, Export Excel,
- *          Import Excel, Download PDF, Save Draft, Publish
+ * Toolbar: Load/Refresh, Reset Marks, Show Absentees, Export CSV,
+ *          Export Excel Template, Import Filled Template, Save Draft, Publish
  * Info bar: Course, Batch, Last Saved, Published status
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Upload, Download, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2, ShieldAlert } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Trash2, Eye, FileSpreadsheet, Save, Send, Search, Settings2, CheckCircle, X, AlertTriangle, Edit3, Clock, Edit2, ShieldAlert } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { getApiBase } from '../../../services/apiBase';
 import krlogo from '../../../assets/krlogo.png';
 import { BYPASS_SESSION_KEY } from '../admin/bypass/BypassContext';
+import ExamTableToolbar from '../components/ExamTableToolbar';
 
 type MarkEntryCachePayload = {
   ts: number;
@@ -83,6 +84,8 @@ interface ExamInfo {
     is_editable?: boolean;
     is_locked?: boolean;
     publish_control_enabled?: boolean;
+    faculty_edit_enabled?: boolean;
+    auto_publish_on_due?: boolean;
     due_at?: string | null;
     open_from?: string | null;
     is_open?: boolean;
@@ -304,6 +307,41 @@ function PublishProgressPanel({ duration, totalCells, emptyCellCount }: {
 // ---------------------------------------------------------------------------
 // Published success panel — horizontal compact card with improved animation
 // ---------------------------------------------------------------------------
+function BottomRightToast({ message, onDismiss }: {
+  message: { type: 'success' | 'error'; text: string };
+  onDismiss: () => void;
+}) {
+  const [progress, setProgress] = React.useState(100);
+
+  React.useEffect(() => {
+    const frame = window.setTimeout(() => setProgress(0), 50);
+    const hide = window.setTimeout(onDismiss, 3000);
+    return () => {
+      window.clearTimeout(frame);
+      window.clearTimeout(hide);
+    };
+  }, [onDismiss]);
+
+  return (
+    <div className="fixed bottom-4 right-4 z-[80] w-[min(92vw,24rem)] rounded-xl border border-slate-200 bg-white/95 shadow-[0_16px_40px_-16px_rgba(15,23,42,0.45)] backdrop-blur">
+      <div className={`px-4 py-3 ${message.type === 'success' ? 'text-emerald-700' : 'text-red-700'}`}>
+        <div className="flex items-start gap-2">
+          <div className={`mt-0.5 h-2.5 w-2.5 rounded-full flex-shrink-0 ${message.type === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-5">{message.text}</p>
+          </div>
+        </div>
+      </div>
+      <div className="h-1 overflow-hidden rounded-b-xl bg-slate-100">
+        <div
+          className={`h-full transition-all duration-[3000ms] ease-linear ${message.type === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PublishSuccessPanel({ onClose, studentCount, marksCount }: {
   onClose: () => void;
   studentCount: number;
@@ -511,8 +549,30 @@ export default function MarkEntryPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [questionBtls, setQuestionBtls] = useState<Record<string, number | null>>({});
+  const normalizeQuestionBtlValue = (value: unknown) => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    const rounded = Math.round(parsed);
+    return rounded >= 1 && rounded <= 6 ? rounded : null;
+  };
+  const normalizeQuestionBtlsMap = (value: unknown) => {
+    if (!value || typeof value !== 'object') return {} as Record<string, number | null>;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [String(key), normalizeQuestionBtlValue(item)])) as Record<string, number | null>;
+  };
+  const getQuestionBtlValue = (questionId: string | number | null | undefined) => {
+    const key = String(questionId ?? '');
+    return questionBtls[key] ?? null;
+  };
+  const handleQuestionBtlChange = (questionId: string | number, value: string) => {
+    const normalized = value === '' ? null : normalizeQuestionBtlValue(value);
+    setQuestionBtls(prev => ({ ...prev, [String(questionId)]: normalized }));
+    setHasChanges(true);
+    triggerAutoSave();
+  };
   const [showAbsentOnly, setShowAbsentOnly] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [processingAction, setProcessingAction] = useState<string | null>(null);
@@ -530,7 +590,6 @@ export default function MarkEntryPage() {
   const [editingCell, setEditingCell] = useState<{ key: string; value: string } | null>(null);
 
   // Cell labels/warnings state: tracks which cells have import/edit warnings
-  const [importedCells, setImportedCells] = useState<Set<string>>(new Set()); // Set of "studentId:questionId" or "studentId:mark"
   const [concurrentEditCells, setConcurrentEditCells] = useState<Set<string>>(new Set()); // Future: tracks concurrent edits
 
   // Auto-save state
@@ -585,6 +644,82 @@ export default function MarkEntryPage() {
   const [emptyCellKeys, setEmptyCellKeys] = useState<Set<string>>(new Set());
   const [emptyCellCount, setEmptyCellCount] = useState(0);
   const pendingEmptyCellKeysRef = useRef<Set<string>>(new Set());
+  const normalizeQuestionKey = (value: unknown) => String(value ?? '').trim().toLowerCase();
+
+  const normalizeQuestionMarks = (marks: unknown, qs: Question[]) => {
+    const lookup = new Map<string, string>();
+    qs.forEach((q) => {
+      const candidates = [q.id, q.question_number, (q as any).title];
+      candidates.forEach((candidate) => {
+        const normalized = normalizeQuestionKey(candidate);
+        if (normalized && !lookup.has(normalized)) {
+          lookup.set(normalized, q.id);
+        }
+      });
+    });
+
+    const normalizedMarks: Record<string, number | null> = {};
+    if (!marks || typeof marks !== 'object') return normalizedMarks;
+
+    const rawKeys = Object.keys(marks as Record<string, unknown>).map((k) => normalizeQuestionKey(k));
+    const hasQ0 = rawKeys.includes('q0');
+    const hasNum0 = rawKeys.includes('0');
+
+    const resolveByIndexToken = (token: string): string | null => {
+      const match = /^q?(\d+)$/i.exec(token);
+      if (!match) return null;
+      const raw = Number(match[1]);
+      if (!Number.isFinite(raw)) return null;
+
+      const hasQPrefix = token.startsWith('q');
+      const zeroBased = hasQPrefix ? hasQ0 : hasNum0;
+
+      if (zeroBased) {
+        if (raw >= 0 && raw < qs.length) {
+          return qs[raw]?.id || null;
+        }
+      } else {
+        if (raw >= 1 && raw <= qs.length) {
+          return qs[raw - 1]?.id || null;
+        }
+      }
+      return null;
+    };
+
+    for (const [rawKey, rawValue] of Object.entries(marks as Record<string, unknown>)) {
+      const normalizedRawKey = normalizeQuestionKey(rawKey);
+      const isIndexFormat = /^q?\d+$/i.test(normalizedRawKey);
+      const mappedKey =
+        (isIndexFormat ? resolveByIndexToken(normalizedRawKey) : null)
+        || lookup.get(normalizedRawKey)
+        || resolveByIndexToken(normalizedRawKey)
+        || String(rawKey);
+      if (rawValue === null || rawValue === undefined || rawValue === '') {
+        normalizedMarks[mappedKey] = null;
+        continue;
+      }
+      const numeric = Number(rawValue);
+      normalizedMarks[mappedKey] = Number.isFinite(numeric) ? numeric : null;
+    }
+
+    return normalizedMarks;
+  };
+
+  const getQuestionMarkValue = (student: Student, question: Question, qIdx?: number) => {
+    const marks = student.co_marks || {};
+    const indexBased = typeof qIdx === 'number'
+      ? (marks[`q${qIdx}` as keyof typeof marks]
+          ?? marks[`q${qIdx + 1}` as keyof typeof marks]
+          ?? marks[String(qIdx) as keyof typeof marks]
+          ?? marks[String(qIdx + 1) as keyof typeof marks])
+      : null;
+    return marks[question.id]
+      ?? marks[question.question_number]
+      ?? marks[(question as any).title]
+      ?? indexBased
+      ?? null;
+  };
+
   // Set to true after "Close & Fix" is chosen — prevents auto-refresh until the faculty
   // starts a new publish attempt. Cleared in confirmPublish().
   const suppressAutoRefreshAfterWarningRef = useRef(false);
@@ -656,6 +791,7 @@ export default function MarkEntryPage() {
     unfilled_rows?: Array<{ roll_number: string; name: string; row_number: number }>;
     students: Array<{ student_id: string; roll_number: string; name: string; mark: number | null; co_marks: Record<string, number>; is_absent: boolean }>;
   } | null>(null);
+  const excelFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Check if we need to show mark manager setup
   const needsMarkManagerSetup = examInfo
@@ -813,13 +949,15 @@ export default function MarkEntryPage() {
         const u = updatesByStudentId.get(s.id);
         if (!u) return s;
         if (u.nextCoMarks) {
-          const total = Object.values(u.nextCoMarks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
-          return { ...s, co_marks: u.nextCoMarks as any, mark: total, saved: false };
+          const sanitizedCoMarks = getSanitizedCoMarks(u.nextCoMarks as Record<string, number | null | undefined>);
+          const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+          return { ...s, co_marks: sanitizedCoMarks as any, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
         }
-        return { ...s, mark: u.nextMark ?? null, saved: false };
+        const normalizedMark = normalizeMarkInputValue(u.nextMark ?? null);
+        return { ...s, mark: normalizedMark, saved: false };
       });
     });
-  
+
     setEditingCell(null);
     setHasChanges(true);
     triggerAutoSave();
@@ -917,6 +1055,21 @@ export default function MarkEntryPage() {
     };
   }, [examId, hasChanges, showPublishConfirm]);
 
+  useEffect(() => {
+    if (!examId) return;
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (hasChanges) return;
+      if (showPublishConfirm) return;
+      if (suppressAutoRefreshAfterWarningRef.current) return;
+      if (autoSaveStatus === 'saving') return;
+      loadDataRef.current?.().catch(() => undefined);
+    }, 2000);
+
+    return () => window.clearInterval(intervalId);
+  }, [examId, hasChanges, showPublishConfirm, autoSaveStatus]);
+
   const loadData = async () => {
     try {
       if (!examId) return;
@@ -938,7 +1091,7 @@ export default function MarkEntryPage() {
           setExamInfo(cached.examInfo);
           examInfoRef.current = cached.examInfo;
           setStudents(cached.students || []);
-          setQuestionBtls(cached.questionBtls || {});
+          setQuestionBtls(normalizeQuestionBtlsMap(cached.questionBtls || {}));
 
           const pc = (cached.examInfo as any)?.publish_control || {};
           setSealImageUrl(resolveMediaUrl(pc?.seal_image));
@@ -966,7 +1119,7 @@ export default function MarkEntryPage() {
       }
       setExamInfo(examData);
       examInfoRef.current = examData;
-      setQuestionBtls(examData.question_btls || {});
+      setQuestionBtls(normalizeQuestionBtlsMap(examData.question_btls || {}));
 
       // Seal settings come from publish_control (server already resolves semester config)
       const pc = (examData as any)?.publish_control || {};
@@ -989,7 +1142,11 @@ export default function MarkEntryPage() {
       const marksRes = await marksPromise;
       if (marksRes.ok) {
         const marksData = await marksRes.json();
-        const nextStudents = marksData.students || [];
+        const examQuestions = Array.isArray(examData?.qp_pattern?.questions) ? examData.qp_pattern.questions : [];
+        const nextStudents = (marksData.students || []).map((student: Student) => ({
+          ...student,
+          co_marks: normalizeQuestionMarks(student.co_marks, examQuestions),
+        }));
         setStudents(nextStudents);
         writeMarkEntryCache({
           ts: Date.now(),
@@ -1060,12 +1217,7 @@ export default function MarkEntryPage() {
         // Use refs so we always save the latest data, not the stale closure value.
         const latestStudents = studentsRef.current;
         const latestBtls = questionBtlsRef.current;
-        const marksData = latestStudents.map(s => ({
-          student_id: s.id,
-          mark: s.mark,
-          co_marks: s.co_marks,
-          is_absent: s.is_absent,
-        }));
+        const marksData = buildMarksPayload(latestStudents);
         const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1099,11 +1251,40 @@ export default function MarkEntryPage() {
   };
 
   /* ────── Mark helpers ────── */
+  const normalizeMarkInputValue = (value: number | null) => {
+    if (value === null) return null;
+    return value === 0 ? null : value;
+  };
+
+  const getSanitizedCoMarks = (coMarks: Record<string, number | null | undefined>) => {
+    const nextCoMarks: Record<string, number> = {};
+    Object.entries(coMarks || {}).forEach(([key, value]) => {
+      if (value === null || value === undefined || (value as any) === '' || Number(value) === 0) return;
+      const numValue = Number(value);
+      if (Number.isFinite(numValue)) nextCoMarks[key] = numValue;
+    });
+    return nextCoMarks;
+  };
+
+  const buildMarksPayload = (sourceStudents: Student[]) => sourceStudents.map(s => {
+    const sanitizedCoMarks = getSanitizedCoMarks(s.co_marks);
+    const totalFromCoMarks = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+    const normalizedMark = normalizeMarkInputValue(s.mark);
+    const finalMark = normalizedMark !== null ? normalizedMark : (Object.keys(sanitizedCoMarks).length > 0 ? totalFromCoMarks : null);
+    return {
+      student_id: s.id,
+      mark: finalMark,
+      co_marks: sanitizedCoMarks,
+      is_absent: s.is_absent,
+    };
+  });
+
   const updateMark = (studentId: string, value: string) => {
     const numValue = value === '' ? null : (wholeNumber ? parseInt(value, 10) : parseFloat(value));
     if (numValue !== null && (isNaN(numValue) || (examInfo && numValue > examInfo.max_marks))) return;
+    const normalizedValue = normalizeMarkInputValue(numValue);
     setStudents(prev => prev.map(s =>
-      s.id === studentId ? { ...s, mark: numValue, saved: false } : s
+      s.id === studentId ? { ...s, mark: normalizedValue, saved: false } : s
     ));
     setHasChanges(true);
     triggerAutoSave();
@@ -1113,14 +1294,15 @@ export default function MarkEntryPage() {
     const q = questions.find(x => x.id === qId);
     if (!q) return;
 
-    // Allow clearing to blank
-    if (value === '') {
+    // Allow clearing to blank or zero
+    if (value === '' || value === '0') {
       setStudents(prev => prev.map(s => {
         if (s.id !== studentId) return s;
         const co_marks = { ...s.co_marks };
         delete co_marks[qId];
-        const total = Object.values(co_marks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
-        return { ...s, co_marks, mark: total, saved: false };
+        const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
+        const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
       }));
       setHasChanges(true);
       triggerAutoSave();
@@ -1130,12 +1312,27 @@ export default function MarkEntryPage() {
     const numValue = wholeNumber ? parseInt(value, 10) : parseFloat(value);
     if (isNaN(numValue)) return;
     if (numValue > q.max_marks) return;
+    const normalizedValue = normalizeMarkInputValue(numValue);
+    if (normalizedValue === null) {
+      setStudents(prev => prev.map(s => {
+        if (s.id !== studentId) return s;
+        const co_marks = { ...s.co_marks };
+        delete co_marks[qId];
+        const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
+        const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+        return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
+      }));
+      setHasChanges(true);
+      triggerAutoSave();
+      return;
+    }
 
     setStudents(prev => prev.map(s => {
       if (s.id !== studentId) return s;
-      const co_marks = { ...s.co_marks, [qId]: numValue };
-      const total = Object.values(co_marks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
-      return { ...s, co_marks, mark: total, saved: false };
+      const co_marks = { ...s.co_marks, [qId]: normalizedValue };
+      const sanitizedCoMarks = getSanitizedCoMarks(co_marks);
+      const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+      return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
     }));
     setHasChanges(true);
     triggerAutoSave();
@@ -1213,8 +1410,9 @@ export default function MarkEntryPage() {
         const u = updatesByStudentId.get(s.id);
         if (!u) return s;
         if (u.nextCoMarks) {
-          const total = Object.values(u.nextCoMarks).reduce((sum, m) => sum + (typeof m === 'number' ? m : 0), 0);
-          return { ...s, co_marks: u.nextCoMarks as any, mark: total, saved: false };
+          const sanitizedCoMarks = getSanitizedCoMarks(u.nextCoMarks as Record<string, number | null | undefined>);
+          const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+          return { ...s, co_marks: sanitizedCoMarks as any, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
         }
         return { ...s, mark: u.nextMark ?? null, saved: false };
       });
@@ -1279,15 +1477,21 @@ export default function MarkEntryPage() {
       if (!qId) return;
       const q = questions.find(x => x.id === qId);
       if (!q) return;
-      const numValue = rawValue === '' ? 0 : (wholeNumber ? parseInt(rawValue, 10) : parseFloat(rawValue));
-      if (isNaN(numValue)) return;
-      if (numValue > q.max_marks) return;
+      const trimmed = rawValue.trim();
+      const numValue = trimmed === '' ? null : (wholeNumber ? parseInt(trimmed, 10) : parseFloat(trimmed));
+      if (numValue !== null && (isNaN(numValue) || numValue > q.max_marks)) return;
       flushSync(() => {
         setStudents(prev => prev.map(s => {
           if (s.id !== studentId) return s;
-          const co_marks = { ...s.co_marks, [qId]: numValue };
-          const total = Object.values(co_marks).reduce((sum, m) => sum + (m || 0), 0);
-          return { ...s, co_marks, mark: total, saved: false };
+          const nextCoMarks = { ...s.co_marks };
+          if (numValue === null) {
+            delete nextCoMarks[qId];
+          } else {
+            nextCoMarks[qId] = numValue;
+          }
+          const sanitizedCoMarks = getSanitizedCoMarks(nextCoMarks);
+          const total = Object.values(sanitizedCoMarks).reduce((sum, m) => sum + m, 0);
+          return { ...s, co_marks: sanitizedCoMarks, mark: Object.keys(sanitizedCoMarks).length > 0 ? total : null, saved: false };
         }));
       });
       setHasChanges(true);
@@ -1568,12 +1772,7 @@ export default function MarkEntryPage() {
   const saveMarks = async (publish = false) => {
     try {
       publish ? setPublishing(true) : setSaving(true);
-      const marksData = students.map(s => ({
-        student_id: s.id,
-        mark: s.mark,
-        co_marks: s.co_marks,
-        is_absent: s.is_absent,
-      }));
+      const marksData = buildMarksPayload(students);
       const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/marks/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1590,11 +1789,19 @@ export default function MarkEntryPage() {
         const text = await response.text().catch(() => '');
         throw new Error(text?.trim() || 'Save failed');
       }
+      const payload = await response.json().catch(() => ({})) as { row_filled_notifications_sent?: number };
+      const rowFilledCount = Number(payload?.row_filled_notifications_sent || 0);
       setStudents(prev => prev.map(s => ({ ...s, saved: true })));
       setHasChanges(false);
       const now = new Date().toLocaleString();
       setLastSaved(now);
       setMessage({ type: 'success', text: publish ? 'Draft saved. Publishing...' : 'Draft saved successfully' });
+      if (rowFilledCount > 0) {
+        setToastMessage({
+          type: 'success',
+          text: `${rowFilledCount} row-filled WhatsApp message${rowFilledCount === 1 ? '' : 's'} sent successfully.`,
+        });
+      }
       if (publish) {
         await publishExam();
       }
@@ -1635,7 +1842,7 @@ export default function MarkEntryPage() {
     URL.revokeObjectURL(url);
   };
 
-  const exportExcel = async () => {
+  const exportExcelTemplate = async () => {
     try {
       const response = await fetchWithAuth(`/api/academic-v2/exams/${examId}/export-template/`);
       if (!response.ok) throw new Error('Export failed');
@@ -1646,8 +1853,10 @@ export default function MarkEntryPage() {
       a.download = `${examInfo?.course_code}_${examInfo?.name}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
+      setMessage({ type: 'success', text: 'Template exported. Fill question/total cells and import the same file.' });
+      setTimeout(() => setMessage(null), 3000);
     } catch {
-      setMessage({ type: 'error', text: 'Failed to export Excel' });
+      setMessage({ type: 'error', text: 'Failed to export template' });
     }
   };
 
@@ -1655,6 +1864,12 @@ export default function MarkEntryPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
+
+    const lower = file.name.toLowerCase();
+    if (!(lower.endsWith('.xlsx') || lower.endsWith('.xls'))) {
+      setMessage({ type: 'error', text: 'Please select the exported Excel template (.xlsx or .xls).' });
+      return;
+    }
 
     // Phase 1: Show loading preloader for 3 seconds while uploading
     setImportPhase('loading');
@@ -1681,85 +1896,31 @@ export default function MarkEntryPage() {
     }
   };
 
-  // Helper: Generate cell label info (warnings, indicators like "Max Exceeded", "Imported (Empty)", "Editing...")
-  const getCellLabel = (studentId: string, fieldType: 'mark' | 'question', fieldId?: string): { type: string; label: string; color: string } | null => {
-    const cellKey = fieldType === 'mark' ? `${studentId}:mark` : `${studentId}:${fieldId}`;
-    const student = students.find(s => s.id === studentId);
-    if (!student) return null;
-
-    // 1. Check if cell was imported but is empty (HIGHEST PRIORITY - show not filled warning)
-    if (importedCells.has(cellKey)) {
-      if (fieldType === 'mark' && student.mark === null) {
-        return { type: 'not_filled', label: 'Not filled in Excel', color: 'gray' };
-      }
-      if (fieldType === 'question' && fieldId && (student.co_marks[fieldId] === null || student.co_marks[fieldId] === undefined)) {
-        return { type: 'not_filled', label: 'Not filled in Excel', color: 'gray' };
-      }
-    }
-
-    // 2. Check if mark exceeds max (HIGH PRIORITY - shows even if imported)
-    if (fieldType === 'mark' && examInfo && student.mark !== null && student.mark > examInfo.max_marks) {
-      return { type: 'max_exceeded', label: 'Max Exceeded', color: 'red' };
-    }
-    if (fieldType === 'question' && fieldId) {
-      const q = questions.find(qu => qu.id === fieldId);
-      if (q && student.co_marks[fieldId] !== null && student.co_marks[fieldId] !== undefined && student.co_marks[fieldId] > q.max_marks) {
-        return { type: 'max_exceeded', label: 'Max Exceeded', color: 'red' };
-      }
-    }
-
-    // 3. Check if cell was imported with valid value
-    if (importedCells.has(cellKey)) {
-      if (fieldType === 'mark' && student.mark !== null) {
-        return { type: 'imported', label: 'Imported', color: 'blue' };
-      }
-      if (fieldType === 'question' && fieldId && student.co_marks[fieldId] !== null && student.co_marks[fieldId] !== undefined) {
-        return { type: 'imported', label: 'Imported', color: 'blue' };
-      }
-    }
-
-    // 4. Check for concurrent edits (future feature)
-    if (concurrentEditCells.has(cellKey)) {
-      return { type: 'concurrent_edit', label: 'Editing...', color: 'blue' };
-    }
-
-    return null;
-  };
-
   const confirmImport = () => {
     if (!importPreview) return;
     // Apply imported data to students state
     const importMap = new Map(importPreview.students.map(s => [s.student_id, s]));
-    const newImportedCells = new Set<string>();
     
     setStudents(prev => prev.map(student => {
       const imported = importMap.get(student.id);
       if (!imported) return student;
-      
-      // Track ALL cells that were imported (including empty ones)
-      // Mark field
-      if (imported.mark !== undefined) {
-        newImportedCells.add(`${student.id}:mark`);
-      }
-      // Question fields
-      if (imported.co_marks) {
-        Object.keys(imported.co_marks).forEach(qId => {
-          if (imported.co_marks[qId] !== undefined) {
-            newImportedCells.add(`${student.id}:${qId}`);
-          }
-        });
-      }
+
+      const normalizedCoMarks = normalizeQuestionMarks(imported.co_marks, questions);
+      const derivedMark = imported.mark ?? (
+        Object.values(normalizedCoMarks).some((value) => typeof value === 'number' && value !== null)
+          ? Object.values(normalizedCoMarks).reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0)
+          : null
+      );
       
       return {
         ...student,
-        mark: imported.mark,
-        co_marks: imported.co_marks,
+        mark: derivedMark,
+        co_marks: normalizedCoMarks,
         is_absent: imported.is_absent,
         saved: false,
       };
     }));
-    
-    setImportedCells(newImportedCells);
+
     setHasChanges(true);
     setImportPhase('success');
     setTimeout(() => {
@@ -1931,13 +2092,14 @@ export default function MarkEntryPage() {
 
   const pc = examInfo.publish_control;
   const publishControlEnabled = !!pc?.publish_control_enabled;
+  const facultyEditEnabled = pc?.faculty_edit_enabled !== false;
 
-  // Admin bypass: all locks and restrictions are lifted
+  // Admin bypass: all locks and restrictions are lifted unless the publish group disables faculty edits.
   const bypassSession = readBypassSession();
   const isBypassMode = !!bypassSession;
 
-  const isEditable = isBypassMode ? true : (pc?.is_editable ?? !examInfo.is_locked);
-  const isLocked = isBypassMode ? false : (pc?.is_locked ?? examInfo.is_locked);
+  const isEditable = facultyEditEnabled && (isBypassMode ? true : (pc?.is_editable ?? !examInfo.is_locked));
+  const isLocked = facultyEditEnabled ? (isBypassMode ? false : (pc?.is_locked ?? examInfo.is_locked)) : true;
   const hasPending = !!(examInfo.has_pending_edit_request || pc?.has_pending_request);
 
   const nowMs = Date.now();
@@ -2018,43 +2180,31 @@ export default function MarkEntryPage() {
         </div>
       )}
 
+      {toastMessage && <BottomRightToast message={toastMessage} onDismiss={() => setToastMessage(null)} />}
+
+      {!facultyEditEnabled && (
+        <div className="px-4 py-2 rounded-lg text-sm shrink-0 border border-red-200 bg-red-50 text-red-700">
+          Faculty editing is disabled for this publish group. No faculty can edit marks right now.
+        </div>
+      )}
+
       {/* ───── Toolbar + Table (hidden during Mark Manager setup) ───── */}
       {!(needsMarkManagerSetup && mmSetup) && (<>
       <div className="bg-white rounded-xl shadow-sm border shrink-0">
 
-        {/* Publish control timers (above the table) */}
-        {(openRemainingSec > 0 || (publishControlEnabled && dueRemainingSec !== null) || (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0))) && (
-          <div className="px-4 py-2 border-b bg-blue-50/40 text-sm flex flex-wrap items-center gap-4">
-            {openRemainingSec > 0 && (
-              <span className="inline-flex items-center gap-1.5 text-blue-700">
-                <AlertTriangle className="w-4 h-4" />
-                Opens in <strong>{formatRemaining(openRemainingSec)}</strong>
-              </span>
-            )}
-            {publishControlEnabled && dueRemainingSec !== null && (
-              <span className={`inline-flex items-center gap-1.5 ${dueRemainingSec <= 0 ? 'text-red-700' : 'text-gray-700'}`}>
-                <Clock className="w-4 h-4" />
-                {dueRemainingSec <= 0 ? 'Due time passed' : <>Due in <strong>{formatRemaining(dueRemainingSec)}</strong></>}
-              </span>
-            )}
+        {/* Publish control timers moved to toolbar */}
 
-            {(pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0)) && (
-              <span className="inline-flex items-center gap-1.5 text-teal-700">
-                <Edit2 className="w-4 h-4" />
-                {pc?.edit_window_until_publish
-                  ? <>Edit window: <strong>until Publish</strong></>
-                  : <>Edit window ends in <strong>{formatRemaining(editWindowRemainingSec || 0)}</strong></>
-                }
-              </span>
-            )}
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-          {/* Left group */}
-          <button onClick={loadData} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
-            <RefreshCw className="w-3.5 h-3.5" /> Load/Refresh Roster
-          </button>
+        <ExamTableToolbar
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder="Search by roll number or name..."
+          onRefresh={loadData}
+          onExport={exportExcelTemplate}
+          onImport={canImport ? () => excelFileInputRef.current?.click() : undefined}
+          exportLabel="Export Excel"
+          importLabel="Import Excel"
+          isLoading={loading}
+        >
           {canImport && (
             <button onClick={resetMarks} className="px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 flex items-center gap-1.5">
               <Trash2 className="w-3.5 h-3.5" /> Reset Marks
@@ -2076,25 +2226,18 @@ export default function MarkEntryPage() {
             <Settings2 className="w-3.5 h-3.5" /> Sort/Filter
           </button>
 
-          <div className="w-px h-6 bg-gray-200 mx-1" />
-
           <button onClick={exportCSV} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
             <FileSpreadsheet className="w-3.5 h-3.5" /> Export CSV
           </button>
-          <button onClick={exportExcel} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
-            <FileSpreadsheet className="w-3.5 h-3.5" /> Export Excel
-          </button>
           {canImport && (
-            <>
-              <button onClick={() => fileInputRef.current?.click()} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
-                <Upload className="w-3.5 h-3.5" /> Import Excel
-              </button>
-              <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportExcel} className="hidden" />
-            </>
+            <input
+              ref={excelFileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              style={{ display: 'none' }}
+              onChange={handleImportExcel}
+            />
           )}
-          <button onClick={exportCSV} className="px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 flex items-center gap-1.5">
-            <Download className="w-3.5 h-3.5" /> Download
-          </button>
 
           {/* Mark Manager edit (user_define mode, already confirmed) */}
           {canImport && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && examInfo.mark_manager?.confirmed && (
@@ -2103,8 +2246,7 @@ export default function MarkEntryPage() {
             </button>
           )}
 
-          {/* Right group — pushed to end */}
-          <div className="flex-1" />
+          {/* Publish / save buttons */}
           {canImport && (
             <>
               <style>{`
@@ -2123,6 +2265,57 @@ export default function MarkEntryPage() {
                   animation: slideOutSave 0.3s cubic-bezier(0.4, 0, 0.6, 1);
                 }
               `}</style>
+              
+              {/* Publish Control Timers (Toolbar label) */}
+              {(openRemainingSec > 0 || dueRemainingSec !== null || (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0))) && (
+                <div className={`relative flex items-center gap-2 mr-2 text-xs font-medium border px-3 py-1.5 rounded-lg shadow-sm overflow-hidden ${
+                  openRemainingSec > 0 
+                    ? 'bg-blue-50 border-blue-200 text-blue-700' 
+                    : dueRemainingSec !== null && dueRemainingSec > 0
+                      ? (publishControlEnabled ? 'bg-red-50 border-red-200 text-red-700' : 'bg-orange-50 border-orange-200 text-orange-800')
+                      : dueRemainingSec !== null && dueRemainingSec <= 0
+                        ? 'bg-red-50 border-red-200 text-red-700'
+                        : 'bg-gray-50 border-gray-200 text-gray-700'
+                }`}>
+                  <span className="absolute inset-0 opacity-20 bg-gradient-to-r from-white via-transparent to-white animate-pulse" />
+                  <span className="relative flex items-center gap-1.5">
+                    <span className="relative flex items-center justify-center">
+                      <span className="absolute inline-flex h-2.5 w-2.5 rounded-full bg-current opacity-30 animate-ping" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-current" />
+                    </span>
+                    {openRemainingSec > 0 && (
+                      <>
+                        <Clock className="w-3.5 h-3.5 animate-pulse" />
+                        <span>Opens in <span className="font-bold">{formatRemaining(openRemainingSec)}</span></span>
+                      </>
+                    )}
+                    
+                    {openRemainingSec <= 0 && dueRemainingSec !== null && (
+                      <>
+                        <Clock className="w-3.5 h-3.5 animate-pulse" />
+                        {dueRemainingSec <= 0 && <span className="font-bold">Closed</span>}
+                        {dueRemainingSec > 0 && pc?.auto_publish_on_due && <span>Auto-publishes in <span className="font-bold">{formatRemaining(dueRemainingSec)}</span></span>}
+                        {dueRemainingSec > 0 && !pc?.auto_publish_on_due && publishControlEnabled && <span>Locks in <span className="font-bold">{formatRemaining(dueRemainingSec)}</span></span>}
+                        {dueRemainingSec > 0 && !pc?.auto_publish_on_due && !publishControlEnabled && <span>Closes in <span className="font-bold">{formatRemaining(dueRemainingSec)}</span></span>}
+                      </>
+                    )}
+                    
+                    {/* Edit Window Timer (if applicable) */}
+                    {openRemainingSec <= 0 && (pc?.edit_window_until_publish || (editWindowRemainingSec !== null && editWindowRemainingSec > 0)) && (
+                      <>
+                        <div className="w-px h-3 bg-current opacity-30 mx-1" />
+                        <Edit2 className="w-3.5 h-3.5 animate-pulse" />
+                        <span>
+                          {pc?.edit_window_until_publish 
+                            ? <>Edit window: <span className="font-bold">until Publish</span></>
+                            : <>Edit window ends in <span className="font-bold">{formatRemaining(editWindowRemainingSec || 0)}</span></>}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
+
               <button
                 onClick={() => saveMarks(false)}
                 disabled={autoSaveStatus === 'saving' || autoSaveStatus === 'saved' || saving}
@@ -2191,7 +2384,7 @@ export default function MarkEntryPage() {
               Request Generate
             </button>
           )}
-        </div>
+        </ExamTableToolbar>
 
       {/* Publish Confirmation Modal */}
       {showPublishConfirm && (
@@ -2629,30 +2822,7 @@ export default function MarkEntryPage() {
         </div>
       </div>
 
-      {/* Search + mode toggle */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search by roll number or name..."
-            className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        {hasQ && (
-          <div className="flex items-center border rounded-lg overflow-hidden text-sm">
-            <button type="button" className="sr-only" aria-hidden="true" />
-            <button
-              onClick={() => {/* no-op, always show CO columns */}}
-              className="px-3 py-2 bg-blue-600 text-white text-xs font-medium"
-            >
-              CO-wise Entry
-            </button>
-          </div>
-        )}
-      </div>
+
 
       </>)}
 
@@ -2850,18 +3020,18 @@ export default function MarkEntryPage() {
                       <div className="text-[10px] text-indigo-500 font-normal">BT{q.btl_level}</div>
                     ) : (
                       <div className="relative">
-                        {!questionBtls[q.id] && (
+                        {!getQuestionBtlValue(q.id) && (
                           <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                         )}
                         <select
-                          value={questionBtls[q.id] ?? ''}
-                          onChange={e => setQuestionBtls(prev => ({ ...prev, [q.id]: e.target.value ? Number(e.target.value) : null }))}
+                          value={getQuestionBtlValue(q.id) ?? ''}
+                          onChange={e => handleQuestionBtlChange(q.id, e.target.value)}
                           className={`mt-0.5 text-[10px] border rounded px-1 py-0.5 w-full transition-colors ${
-                            !questionBtls[q.id]
+                            !getQuestionBtlValue(q.id)
                               ? 'border-amber-400 bg-amber-50 text-amber-700 font-semibold animate-pulse'
                               : 'border-indigo-300 bg-indigo-50 text-indigo-700'
                           }`}
-                          title={!questionBtls[q.id] ? 'Select BTL level to enable mark entry for this column' : undefined}
+                          title={!getQuestionBtlValue(q.id) ? 'Select BTL level to enable mark entry for this column' : undefined}
                         >
                           <option value="">BTL?</option>
                           {[1,2,3,4,5,6].map(l => <option key={l} value={l}>BT{l}</option>)}
@@ -2892,16 +3062,16 @@ export default function MarkEntryPage() {
                     <td className="px-3 py-1.5 text-sm text-gray-600">{student.department || 'N/A'}</td>
                   )}
                   {hasQ && questions.map((q, qIdx) => {
-                    const cellLabel = getCellLabel(student.id, 'question', q.id);
                     const labelColors = {
                       red: 'bg-red-100 text-red-700 border-red-200',
                       gray: 'bg-gray-100 text-gray-600 border-gray-200',
                       blue: 'bg-blue-100 text-blue-700 border-blue-200',
                     };
                     const cellKey = `${student.id}:question:${q.id}`;
-                    const displayValue = editingCell?.key === cellKey ? editingCell.value : (student.co_marks[q.id] ?? '');
+                    const questionValue = getQuestionMarkValue(student, q, qIdx);
+                    const displayValue = editingCell?.key === cellKey ? editingCell.value : (questionValue ?? '');
                     const selected = isCellInSelection(index, qIdx);
-                    const btlNotSelected = q.btl_level === null && !questionBtls[q.id];
+                    const btlNotSelected = q.btl_level === null && !getQuestionBtlValue(q.id);
                     const isEmptyHighlight = emptyCellKeys.has(cellKey);
                     return (
                       <td key={q.id} className={`px-1 py-1 relative ${selected ? 'bg-blue-50' : ''} ${btlNotSelected ? 'bg-amber-50/40' : ''} ${isEmptyHighlight ? 'bg-red-50/60' : ''}`}>
@@ -2947,11 +3117,6 @@ export default function MarkEntryPage() {
                               <span className="text-[9px] text-amber-500 font-bold opacity-60">BTL?</span>
                             </div>
                           )}
-                          {cellLabel && (
-                            <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
-                              {cellLabel.label}
-                            </div>
-                          )}
                         </div>
                       </td>
                     );
@@ -2959,56 +3124,43 @@ export default function MarkEntryPage() {
                   <td className="px-2 py-1 relative">
                     <div className="relative group w-full">
                       {(() => {
-                        const cellLabel = getCellLabel(student.id, 'mark');
-                        const labelColors = {
-                          red: 'bg-red-100 text-red-700 border-red-200',
-                          gray: 'bg-gray-100 text-gray-600 border-gray-200',
-                          blue: 'bg-blue-100 text-blue-700 border-blue-200',
-                        };
                         const totalCol = questions.length > 0 ? questions.length : 0;
                         const selected = isCellInSelection(index, totalCol);
                         return (
-                          <>
-                            <input
-                              type="number"
-                              data-student-id={student.id}
-                              data-field-type="mark"
-                              value={(() => {
-                                const key = `${student.id}:mark`;
-                                return editingCell?.key === key ? editingCell.value : (student.mark ?? '');
-                              })()}
-                              onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
-                              onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
-                              onFocus={e => {
-                                const key = `${student.id}:mark`;
-                                setEditingCell({ key, value: e.currentTarget.value ?? '' });
-                              }}
-                              onChange={e => {
-                                const key = `${student.id}:mark`;
-                                const v = e.target.value;
-                                setEditingCell({ key, value: v });
-                                updateMark(student.id, v);
-                              }}
-                              onBlur={e => {
-                                const key = `${student.id}:mark`;
-                                const v = e.currentTarget.value;
-                                updateMark(student.id, v);
-                                setEditingCell(prev => (prev?.key === key ? null : prev));
-                              }}
-                              onPaste={e => handleCellPaste(e, { studentId: student.id, fieldType: 'mark' })}
-                              onKeyDown={handleCellKeyDown}
-                              disabled={!canImport || student.is_absent || hasQ}
-                              min="0"
-                              max={examInfo.max_marks}
-                              step={wholeNumber ? '1' : '0.01'}
-                              className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''} ${selected ? 'ring-2 ring-blue-400' : ''}`}
-                            />
-                            {cellLabel && (
-                              <div className={`absolute top-1 right-1 px-2 py-1 text-[10px] font-bold rounded-full border-2 shadow-md whitespace-nowrap z-20 ${labelColors[cellLabel.color as keyof typeof labelColors]}`}>
-                                {cellLabel.label}
-                              </div>
-                            )}
-                          </>
+                          <input
+                            type="number"
+                            data-student-id={student.id}
+                            data-field-type="mark"
+                            value={(() => {
+                              const key = `${student.id}:mark`;
+                              return editingCell?.key === key ? editingCell.value : (student.mark ?? '');
+                            })()}
+                            onMouseDown={e => handleCellMouseDown(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
+                            onMouseEnter={e => handleCellMouseEnter(e, { studentId: student.id, fieldType: 'mark', disabled: !canImport || student.is_absent || hasQ })}
+                            onFocus={e => {
+                              const key = `${student.id}:mark`;
+                              setEditingCell({ key, value: e.currentTarget.value ?? '' });
+                            }}
+                            onChange={e => {
+                              const key = `${student.id}:mark`;
+                              const v = e.target.value;
+                              setEditingCell({ key, value: v });
+                              updateMark(student.id, v);
+                            }}
+                            onBlur={e => {
+                              const key = `${student.id}:mark`;
+                              const v = e.currentTarget.value;
+                              updateMark(student.id, v);
+                              setEditingCell(prev => (prev?.key === key ? null : prev));
+                            }}
+                            onPaste={e => handleCellPaste(e, { studentId: student.id, fieldType: 'mark' })}
+                            onKeyDown={handleCellKeyDown}
+                            disabled={!canImport || student.is_absent || hasQ}
+                            min="0"
+                            max={examInfo.max_marks}
+                            step={wholeNumber ? '1' : '0.01'}
+                            className={`w-full px-1.5 py-1 border rounded text-center text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-400 ${hasQ ? 'font-semibold bg-gray-50' : ''} ${selected ? 'ring-2 ring-blue-400' : ''}`}
+                          />
                         );
                       })()}
                     </div>
@@ -3030,26 +3182,15 @@ export default function MarkEntryPage() {
 
         {/* Watermark overlay - single centered seal on published exams */}
         {examInfo?.status === 'PUBLISHED' && sealWatermarkEnabled && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            <div
-              className="w-56 h-56"
-              style={{ opacity: 0.12 }}
-            >
-              {sealImageUrl ? (
-                <img
-                  src={sealImageUrl}
-                  alt="Watermark"
-                  className="w-full h-full object-contain"
-                  style={{ filter: 'grayscale(20%)' }}
-                />
-              ) : (
-                <svg viewBox="0 0 200 200" className="w-full h-full text-slate-500">
-                  <circle cx="100" cy="100" r="95" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.8" />
-                  <circle cx="100" cy="100" r="60" fill="currentColor" opacity="0.95" />
-                  <polyline points="80,100 95,115 125,75" fill="none" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-                </svg>
-              )}
-            </div>
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden">
+            {sealImageUrl ? (
+              <img
+                src={sealImageUrl}
+                alt="Watermark"
+                className="w-[min(32vw,18rem)] h-[min(32vw,18rem)] max-w-[18rem] max-h-[18rem] object-contain object-center opacity-[0.12]"
+                style={{ filter: 'grayscale(10%)' }}
+              />
+            ) : null}
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, BookOpen, GraduationCap, Loader2, Sparkles, TrendingUp, Zap } from 'lucide-react';
+import { AlertTriangle, Award, BookOpen, ChevronRight, GraduationCap, Loader2, Medal, Sparkles, TrendingUp, Trophy, UserRound, X, Zap } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 import RequirementsPage from '../../settings/RequirementsPage';
 import MyMarksLayout from './MyMarksLayout';
@@ -23,6 +23,17 @@ type CourseCard = {
   obtained_weight: number;
   max_weight: number;
   entered_weight_pct: number | null;
+};
+type LeaderboardStudent = {
+  student_id: number;
+  student_name: string;
+  average_pct: number | null;
+  rank: number;
+};
+type ClassLeaderboard = {
+  top_students: LeaderboardStudent[];
+  current_student: LeaderboardStudent | null;
+  course_count: number;
 };
 type CyclePoint = { name: string; pct: number | null };
 
@@ -322,6 +333,8 @@ export default function DashboardPage() {
   const [courses, setCourses] = useState<CourseCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [cycleMap, setCycleMap] = useState<Record<number, CyclePoint[]>>({});
+  const [leaderboard, setLeaderboard] = useState<ClassLeaderboard | null>(null);
+  const [showRanksModal, setShowRanksModal] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -331,12 +344,17 @@ export default function DashboardPage() {
         if (!res.ok) return { courses: [] };
         return res.json();
       }),
+      fetchWithAuth('/api/academic-v2/student/my-class-leaderboard/').then(async (res) => {
+        if (!res.ok) return null;
+        return res.json();
+      }),
     ])
-      .then(([cfg, courseResp]) => {
+      .then(([cfg, courseResp, leaderboardResp]) => {
         if (!mounted) return;
         setConfig(cfg);
         const list: CourseCard[] = Array.isArray(courseResp?.courses) ? courseResp.courses : [];
         setCourses(list);
+        setLeaderboard(leaderboardResp ?? null);
 
         // Fetch cycle data for sparklines (async, non-blocking)
         if (list.length > 0) {
@@ -408,6 +426,109 @@ export default function DashboardPage() {
         <StatCard icon={GraduationCap} iconBg="bg-amber-50" iconColor="text-amber-600" label="Best Subject" value={best ? `${Math.round(best.entered_weight_pct!)}%` : '—'} note={best?.course_code ?? '—'} />
       </div>
 
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-500" />
+                <p className="text-base font-bold text-gray-900">Class Leaderboard</p>
+              </div>
+              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
+                {leaderboard?.course_count ?? 0} courses
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">Average performance for your cohort across enrolled courses.</p>
+
+            {leaderboard?.top_students?.length ? (
+              <div className="mt-8 flex items-end justify-center gap-6 pb-6 pt-4">
+                {/* 3rd Place (Priya K. style - left side) */}
+                {leaderboard.top_students[2] && (
+                  <div className="flex flex-col items-center">
+                    <div className="relative flex h-20 w-20 items-center justify-center rounded-full border-[3px] border-amber-600/70 bg-blue-50/50 shadow-md">
+                      <UserRound className="h-9 w-9 text-amber-700/60" />
+                      <div className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-amber-600 text-[10px] font-bold text-white shadow">
+                        3
+                      </div>
+                    </div>
+                    <span className="mt-3 text-xs font-bold text-gray-800 truncate max-w-[80px]">
+                      {leaderboard.top_students[2].student_name}
+                    </span>
+                    <span className="text-[11px] font-black text-indigo-600">
+                      {leaderboard.top_students[2].average_pct !== null ? `${Math.round(leaderboard.top_students[2].average_pct)}%` : '—'}
+                    </span>
+                  </div>
+                )}
+
+                {/* 1st Place (Sarah J. style - center, larger) */}
+                {leaderboard.top_students[0] && (
+                  <div className="flex flex-col items-center -translate-y-3">
+                    <div className="relative flex h-28 w-28 items-center justify-center rounded-full border-[4px] border-yellow-400 bg-amber-50 shadow-lg ring-4 ring-yellow-400/10">
+                      <Award className="h-14 w-14 text-yellow-500" />
+                      <div className="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-yellow-400 text-xs font-black text-amber-950 shadow ring-2 ring-white">
+                        1
+                      </div>
+                    </div>
+                    <span className="mt-3 text-sm font-extrabold text-gray-900 truncate max-w-[100px]">
+                      {leaderboard.top_students[0].student_name}
+                    </span>
+                    <span className="text-xs font-black text-indigo-700">
+                      {leaderboard.top_students[0].average_pct !== null ? `${Math.round(leaderboard.top_students[0].average_pct)}%` : '—'}
+                    </span>
+                  </div>
+                )}
+
+                {/* 2nd Place (Alex M. style - right side) */}
+                {leaderboard.top_students[1] && (
+                  <div className="flex flex-col items-center">
+                    <div className="relative flex h-20 w-20 items-center justify-center rounded-full border-[3px] border-slate-300 bg-blue-50/50 shadow-md">
+                      <UserRound className="h-9 w-9 text-slate-400" />
+                      <div className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-slate-400 text-[10px] font-bold text-white shadow">
+                        2
+                      </div>
+                    </div>
+                    <span className="mt-3 text-xs font-bold text-gray-800 truncate max-w-[80px]">
+                      {leaderboard.top_students[1].student_name}
+                    </span>
+                    <span className="text-[11px] font-black text-indigo-600">
+                      {leaderboard.top_students[1].average_pct !== null ? `${Math.round(leaderboard.top_students[1].average_pct)}%` : '—'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-6 rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+                Class leaderboard will update once internal marks are entered for your section.
+              </div>
+            )}
+          </div>
+
+          {leaderboard?.top_students?.length ? (
+            <div className="mt-4 border-t border-gray-100 pt-4 text-center">
+              <button
+                onClick={() => setShowRanksModal(true)}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 inline-flex items-center gap-1 transition"
+              >
+                View all ranks <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Top Subjects Performance</p>
+              <p className="mt-1 text-xs text-gray-500">Your internal percentages by course.</p>
+            </div>
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">{courses.length} courses</span>
+          </div>
+          <div className="mt-4">
+            <HorizontalBars courses={courses} />
+          </div>
+        </div>
+      </div>
+
       {courses.length === 0 ? (
         <div className="mt-8 rounded-xl border-2 border-dashed border-gray-200 py-16 text-center">
           <BookOpen className="mx-auto h-10 w-10 text-gray-300" />
@@ -469,7 +590,73 @@ export default function DashboardPage() {
           )}
 
         </div>
+      )}      {showRanksModal && leaderboard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b pb-4">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-500" />
+                <h3 className="text-lg font-bold text-gray-900">All Section Ranks</h3>
+              </div>
+              <button
+                onClick={() => setShowRanksModal(false)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 overflow-y-auto flex-1 pr-1">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                    <th className="py-3 px-4">Rank</th>
+                    <th className="py-3 px-4">Name</th>
+                    <th className="py-3 px-4 text-right">Average Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboard.top_students.map((student) => {
+                    const isMe = student.student_id === leaderboard.current_student?.student_id;
+                    return (
+                      <tr
+                        key={student.student_id}
+                        className={`border-b text-sm transition hover:bg-gray-50/80 ${
+                          isMe ? 'bg-indigo-50/70 font-semibold text-indigo-900' : 'text-gray-700'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4">
+                          {student.rank === 1 ? <span className="text-base mr-1">🥇</span> : null}
+                          {student.rank === 2 ? <span className="text-base mr-1">🥈</span> : null}
+                          {student.rank === 3 ? <span className="text-base mr-1">🥉</span> : null}
+                          {student.rank > 3 ? <span className="text-gray-400 w-5 inline-block text-center">{student.rank}</span> : null}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {student.student_name}
+                          {isMe && <span className="ml-2 text-[10px] bg-indigo-100 text-indigo-700 py-0.5 px-1.5 rounded-full font-bold">You</span>}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-black">
+                          {student.average_pct !== null ? `${Math.round(student.average_pct)}%` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-6 border-t pt-4 flex justify-end">
+              <button
+                onClick={() => setShowRanksModal(false)}
+                className="rounded-xl bg-gray-100 hover:bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
+
     </MyMarksLayout>
   );
 }

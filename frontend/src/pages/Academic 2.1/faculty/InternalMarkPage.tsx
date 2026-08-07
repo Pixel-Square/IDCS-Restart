@@ -164,14 +164,15 @@ export default function InternalMarkPage() {
         if (!res.ok) throw new Error('Failed to load course outcomes');
         const data = await res.json();
         const rows = Array.isArray(data) ? data : (data.results || []);
-        const nums = Array.from(
-          new Set(
-            rows
-              .filter((row: any) => row?.is_active !== false)
-              .map((row: any) => Number(row?.number))
-              .filter((n: number) => Number.isFinite(n) && n > 0),
-          ),
-        ).sort((a, b) => a - b);
+        const numsSet = new Set<number>();
+        for (const row of rows) {
+          if (row?.is_active === false) continue;
+          const n = Number(row?.number);
+          if (Number.isFinite(n) && n > 0) {
+            numsSet.add(n);
+          }
+        }
+        const nums = Array.from(numsSet).sort((a, b) => a - b);
         setCourseOutcomeNumbers(nums);
       } catch {
         setCourseOutcomeNumbers([]);

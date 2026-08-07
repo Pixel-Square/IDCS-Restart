@@ -1,10 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronRight, Users, BookOpen, AlertCircle, Loader, X, Plus } from 'lucide-react';
 import { SearchableDropdown } from '../../../components/ui/SearchableDropdown';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 interface Props {
   facultyOptions: { label: string; value: string }[];
+  onSectionSnapshot?: (snapshot: {
+    sectionKey: string;
+    sectionId: number;
+    sectionName: string;
+    subjects: any[];
+    assignments: any[];
+    advisors: any[];
+    subjectStaff: any[];
+  }) => void;
 }
 
 interface SectionData {
@@ -16,7 +25,7 @@ interface SectionData {
   department_short_name: string | null;
 }
 
-export default function TeachingAssignSection({ facultyOptions }: Props) {
+export default function TeachingAssignSection({ facultyOptions, onSectionSnapshot }: Props) {
   const [expandedYear, setExpandedYear] = useState<string | null>(null);
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
@@ -29,6 +38,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
   const [savingState, setSavingState] = useState<Record<string, boolean>>({});
   const [saveMessage, setSaveMessage] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
   const [sectionSubjectStaff, setSectionSubjectStaff] = useState<Record<string, any[]>>({});
+  const preloadRequestedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const fetchSections = async () => {
@@ -130,6 +140,10 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
       let deptSections;
       if (yearNum === 1 && dept.name === 'S&H') {
         deptSections = filtered.filter(s => {
+          const nameUpper = String(s.name).toUpperCase().trim();
+          const allowedSecs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+          if (!allowedSecs.includes(nameUpper)) return false;
+
           const dName = (s.department_short_name || '').toLowerCase().trim();
           if (!dName) return true;
           const shNames = deptMapping['S&H'] || [];
@@ -225,17 +239,32 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
           fetchWithAuth('/api/academics/section-advisors/?page_size=0'),
           fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`)
         ]);
+        let refreshedAssignments: any[] = assignments;
+        let refreshedAdvisors: any[] = advisors;
         if (assignRes.ok) {
           const data = await assignRes.json();
-          setAssignments(data.results || data);
+          refreshedAssignments = data.results || data;
+          setAssignments(refreshedAssignments);
         }
         if (advisorRes.ok) {
           const data = await advisorRes.json();
-          setAdvisors(data.results || data);
+          refreshedAdvisors = data.results || data;
+          setAdvisors(refreshedAdvisors);
         }
         if (subjectStaffRes.ok) {
           const data = await subjectStaffRes.json();
-          setSectionSubjectStaff(prev => ({ ...prev, [sectionKey]: data.results || data || [] }));
+          const resolvedSubjectStaff = data.results || data || [];
+          setSectionSubjectStaff(prev => ({ ...prev, [sectionKey]: resolvedSubjectStaff }));
+
+          onSectionSnapshot?.({
+            sectionKey,
+            sectionId,
+            sectionName: sectionKey,
+            subjects: sectionCurriculum[sectionKey] || [],
+            assignments: refreshedAssignments,
+            advisors: refreshedAdvisors,
+            subjectStaff: resolvedSubjectStaff,
+          });
         }
       } catch (err) {
         console.error('Failed to refresh data:', err);
@@ -286,6 +315,67 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
     };
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (!onSectionSnapshot || sectionsData.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const preloadSnapshots = async () => {
+      for (const year of years) {
+        if (cancelled) return;
+
+        const departmentsForYear = getDynamicDepartments(year);
+        const yearNum = year === '1st Year' ? 1 : year === '2nd Year' ? 2 : year === '3rd Year' ? 3 : 4;
+        for (const dept of departmentsForYear) {
+          if (cancelled) return;
+
+          for (const section of dept.sections) {
+            if (cancelled) return;
+
+            const sectionKey = `${yearNum}-${dept.name}-${section.name}`;
+            if (sectionSubjectStaff[sectionKey] || preloadRequestedRef.current.has(sectionKey)) {
+              continue;
+            }
+
+            preloadRequestedRef.current.add(sectionKey);
+
+            try {
+              const res = await fetchWithAuth(`/api/timetable/section/${section.id}/subjects-staff/`);
+              if (!res.ok) {
+                continue;
+              }
+
+              const data = await res.json();
+              const resolvedSubjectStaff = data.results || data || [];
+              if (cancelled) return;
+
+              setSectionSubjectStaff(prev => ({ ...prev, [sectionKey]: resolvedSubjectStaff }));
+              onSectionSnapshot({
+                sectionKey,
+                sectionId: section.id,
+                sectionName: sectionKey,
+                subjects: sectionCurriculum[sectionKey] || [],
+                assignments,
+                advisors,
+                subjectStaff: resolvedSubjectStaff,
+              });
+            } catch (err) {
+              console.error('Failed to preload section snapshot:', sectionKey, err);
+            }
+          }
+        }
+      }
+    };
+
+    preloadSnapshots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assignments, advisors, onSectionSnapshot, sectionCurriculum, sectionSubjectStaff, sectionsData]);
 
   const [autoSavingSubjects, setAutoSavingSubjects] = useState<Record<string, Set<string>>>({});
   const [autoSaveMessages, setAutoSaveMessages] = useState<Record<string, Record<string, { type: 'success' | 'error'; text: string }>>>({});
@@ -835,6 +925,11 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
             <tr>
               <th className="px-4 py-3">Subject Code</th>
               <th className="px-4 py-3">Subject Name</th>
+<<<<<<< HEAD
+=======
+              <th className="px-4 py-3">Class</th>
+              <th className="px-4 py-3">Credits</th>
+>>>>>>> 4c2ca77 (naveen6)
               <th className="px-4 py-3 min-w-[250px]">Assigned Faculty</th>
             </tr>
           </thead>
@@ -938,6 +1033,7 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                 || sub.mnemonic
                 || aggregatedRow?.mnemonic
                 || '-';
+              const fallbackClass = sub.class_type || sub.class || sub.cat || aggregatedRow?.class_type || aggregatedRow?.class || aggregatedRow?.cat || '-';
               const fallbackName = sub.course_name || sub.name || aggregatedRow?.course_name || '-';
               const effectiveAssignments = matchingAssignments.length > 0
                 ? matchingAssignments
@@ -970,6 +1066,11 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{fallbackCode}</td>
                     <td className="px-4 py-3">{fallbackName}</td>
+<<<<<<< HEAD
+=======
+                    <td className="px-4 py-3 font-medium text-gray-700">{fallbackClass}</td>
+                    <td className="px-4 py-3 font-medium text-gray-700">{fallbackCredits}</td>
+>>>>>>> 4c2ca77 (naveen6)
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-4 w-full">
                         <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
@@ -1039,10 +1140,19 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                   const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
 
                   rows.push(
+<<<<<<< HEAD
                     <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
                       <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
                       <td className="px-4 py-3">{displayName}</td>
                       <td className="px-4 py-3">
+=======
+                      <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
+                        <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
+                        <td className="px-4 py-3">{displayName}</td>
+                        <td className="px-4 py-3 font-medium text-gray-700">{fallbackClass}</td>
+                        <td className="px-4 py-3 font-medium text-gray-700">{fallbackCredits}</td>
+                        <td className="px-4 py-3">
+>>>>>>> 4c2ca77 (naveen6)
                         <div className="flex items-start gap-4 w-full">
                           <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
                             <div className="flex gap-2 items-center h-6">
@@ -1115,30 +1225,34 @@ export default function TeachingAssignSection({ facultyOptions }: Props) {
                       <div className="p-3 bg-gray-50 border-t border-gray-200 space-y-2">
                         <h5 className="text-xs font-semibold text-gray-500 uppercase ml-1">Classes / Sections</h5>
                         {dept.sections.length > 0 ? (
-                          dept.sections.map((section) => (
-                            <div key={section.name} className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                              <button
-                                onClick={() => toggleSection(`${dept.name}-${section.name}`, section.id)}
-                                className="w-full px-4 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-gray-700">Section {section.name}</span>
-                                  {sectionCurriculumLoading[`${dept.name}-${section.name}`] && (
-                                    <Loader className="w-4 h-4 animate-spin text-blue-600" />
-                                  )}
-                                  {sectionCurriculumError[`${dept.name}-${section.name}`] && (
-                                    <AlertCircle className="w-4 h-4 text-red-600" />
-                                  )}
-                                </div>
-                                {expandedSection === `${dept.name}-${section.name}` ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                              </button>
-                              {expandedSection === `${dept.name}-${section.name}` && (
-                                <div className="p-3 bg-gray-50 border-t border-gray-200">
-                                  {renderSubjectMapping(`${dept.name}-${section.name}`, section.id)}
-                                </div>
-                              )}
-                            </div>
-                          ))
+                          dept.sections.map((section) => {
+                            const yearNum = year === '1st Year' ? 1 : year === '2nd Year' ? 2 : year === '3rd Year' ? 3 : 4;
+                            const sKey = `${yearNum}-${dept.name}-${section.name}`;
+                            return (
+                              <div key={section.name} className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                                <button
+                                  onClick={() => toggleSection(sKey, section.id)}
+                                  className="w-full px-4 py-2 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-gray-700">Section {section.name}</span>
+                                    {sectionCurriculumLoading[sKey] && (
+                                      <Loader className="w-4 h-4 animate-spin text-blue-600" />
+                                    )}
+                                    {sectionCurriculumError[sKey] && (
+                                      <AlertCircle className="w-4 h-4 text-red-600" />
+                                    )}
+                                  </div>
+                                  {expandedSection === sKey ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                                </button>
+                                {expandedSection === sKey && (
+                                  <div className="p-3 bg-gray-50 border-t border-gray-200">
+                                    {renderSubjectMapping(sKey, section.id)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
                         ) : (
                           <div className="text-sm text-gray-600 px-3 py-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded">
                             <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
