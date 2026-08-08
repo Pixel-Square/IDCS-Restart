@@ -1096,6 +1096,32 @@ class SectionSubjectsStaffView(APIView):
                     keys.append(f'pk:{getattr(cd, "pk", None)}')
                 return keys
 
+            def _looks_like_lab_course(course_name):
+                return 'LAB' in str(course_name or '').upper() or 'LABORATORY' in str(course_name or '').upper()
+
+            lab_row_multipliers: dict[str, int] = {}
+            try:
+                course_codes = sorted({str(getattr(c, 'course_code', '')).strip().upper() for c in qs if getattr(c, 'course_code', None)})
+                regulations = sorted({str(getattr(c, 'regulation', '')).strip() for c in qs if getattr(c, 'regulation', None)})
+                if course_codes:
+                    lab_qs = CurriculumDepartment.objects.filter(
+                        course_code__in=course_codes,
+                        semester__number=sem_num,
+                    )
+                    if regulations:
+                        lab_qs = lab_qs.filter(regulation__in=regulations)
+
+                    for lab_row in lab_qs:
+                        normalized_type = _normalize_class_type(getattr(lab_row, 'class_type', None), lab_row)
+                        if normalized_type not in ('LAB', 'PRACTICAL', 'PURE_LAB') and not _looks_like_lab_course(getattr(lab_row, 'course_name', None)):
+                            continue
+                        code_key = str(getattr(lab_row, 'course_code', '') or '').strip().upper()
+                        if not code_key:
+                            continue
+                        lab_row_multipliers[code_key] = lab_row_multipliers.get(code_key, 0) + 1
+            except Exception:
+                lab_row_multipliers = {}
+
             # Map subject -> dict of staff profiles using course_code/name so it works
             # across departments (Program Core / shared curriculum rows) and
             # also maps elective-subject teaching assignments back to the parent.
@@ -1180,6 +1206,7 @@ class SectionSubjectsStaffView(APIView):
                     'course_name': c.course_name,
                     'regulation': c.regulation,
                     'class_type': _normalize_class_type(c.class_type, c),
+                    'lab_row_multiplier': lab_row_multipliers.get(str(c.course_code or '').strip().upper(), 1),
                     'is_elective': c.is_elective,
                     'is_dept_core': getattr(c, 'is_dept_core', False),
                     'staff': staff_val,

@@ -145,9 +145,17 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
           if (!allowedSecs.includes(nameUpper)) return false;
 
           const dName = (s.department_short_name || '').toLowerCase().trim();
-          if (!dName) return true;
+          if (!dName) return false;
+
           const shNames = deptMapping['S&H'] || [];
-          return shNames.some(allowed => dName.includes(allowed));
+          return shNames.some(allowed => {
+            if (dName === allowed) return true;
+            if (allowed.length <= 3) {
+              const parts = dName.split(/[-_\s]+/);
+              return parts.includes(allowed);
+            }
+            return dName.includes(allowed);
+          });
         }).map(s => ({ id: s.id, name: s.name }));
       } else {
         deptSections = filtered.filter(s => {
@@ -158,7 +166,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             if (dName === allowed) return true;
             
             if (allowed.length <= 3) {
-              const parts = dName.split(/[\s\-_]+/);
+              const parts = dName.split(/[-_\s]+/);
               return parts.includes(allowed);
             }
             

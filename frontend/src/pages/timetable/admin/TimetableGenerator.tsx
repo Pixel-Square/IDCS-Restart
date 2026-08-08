@@ -62,7 +62,25 @@ type GeneratedSectionTimetable = {
 };
 
 const normalizeText = (value: any) => String(value || '').trim();
-const normalizeClassType = (value: any) => normalizeText(value).toUpperCase();
+const normalizeClassType = (value: any, row?: any) => {
+  const normalized = normalizeText(value).toUpperCase();
+  if (!normalized) return 'THEORY';
+
+  if (/^\d+$/.test(normalized)) {
+    const l = Number(row?.l ?? 0) || 0;
+    const t = Number(row?.t ?? 0) || 0;
+    const p = Number(row?.p ?? 0) || 0;
+    const s = Number(row?.s ?? 0) || 0;
+    if (p > 0 || s > 0) {
+      return l > 0 || t > 0 ? 'TCPL' : 'LAB';
+    }
+    return 'THEORY';
+  }
+
+  if (normalized.includes('TCPR')) return 'TCPR';
+  if (normalized.includes('TCPL')) return 'TCPL';
+  return normalized;
+};
 
 const getFacultyNames = (row: any) => {
   const assigned = Array.isArray(row?.assigned_staff) ? row.assigned_staff : [];
@@ -75,6 +93,24 @@ const getFacultyNames = (row: any) => {
 const getFacultyKey = (staff: any) => normalizeText(staff?.id || staff?.staff_id || staff?.username);
 const getSubjectCode = (row: any) => normalizeText(row?.course_code || row?.code || row?.mnemonic);
 const getSubjectName = (row: any) => normalizeText(row?.course_name || row?.name);
+const subjectLooksLikeLab = (row: any) => /\b(LAB|LABORATORY)\b/.test(getSubjectLabel(row).toUpperCase());
+const getLectureHours = (row: any) => toNonNegativeNumber(row?.l) + toNonNegativeNumber(row?.t);
+const getPracticalHours = (row: any) => {
+  const pHours = toNonNegativeNumber(row?.p);
+  if (pHours > 0) return pHours;
+
+  const explicitLabHours = toNonNegativeNumber(row?.lab_hours);
+  if (explicitLabHours > 0) return explicitLabHours;
+
+  const effectiveHours = toNonNegativeNumber(row?.effective_class_hours);
+  const totalHours = toNonNegativeNumber(row?.total_hours);
+  const nonPracticalHours = getLectureHours(row) + toNonNegativeNumber(row?.s);
+  const inferredFromEffective = Math.max(0, effectiveHours - nonPracticalHours);
+  if (inferredFromEffective > 0) return inferredFromEffective;
+
+  const inferredFromTotal = Math.max(0, totalHours - nonPracticalHours);
+  return inferredFromTotal;
+};
 
 const getSubjectLabel = (row: any) => {
   const code = getSubjectCode(row);
@@ -82,6 +118,204 @@ const getSubjectLabel = (row: any) => {
   if (code && name) return `${code} - ${name}`;
   return code || name || 'Unnamed Subject';
 };
+
+const buildCellText = (row: any, slotKind: 'theory' | 'lab', label: string) => {
+  const subject = getSubjectLabel(row);
+  if (slotKind === 'lab') {
+    const tag = normalizeClassType(row?.class_type, row) === 'TCPL' || normalizeClassType(row?.class_type, row) === 'TCPR'
+      ? `${subject} ${label}`
+      : subject;
+    return label ? `${tag}` : tag;
+  }
+  return `${subject}${label ? ` (${label})` : ''}`;
+};
+
+const buildFacultyText = (row: any) => getFacultyNames(row).join(' / ');
+
+const isPureLabSubject = (row: any) => {
+  const type = normalizeClassType(row?.class_type, row);
+  if (subjectLooksLikeLab(row) && getPracticalHours(row) > 0) {
+    return true;
+  }
+  return type === 'LAB' || type === 'PRACTICAL' || type === 'PURE_LAB';
+};
+
+const isHybridLabSubject = (row: any) => {
+  const type = normalizeClassType(row?.class_type, row);
+  if (subjectLooksLikeLab(row)) {
+    return false;
+  }
+  return type === 'TCPL' || type === 'TCPR';
+};
+
+const getLabSubjectKey = (row: any) => {
+  const subjectCode = getSubjectCode(row);
+  const subjectName = getSubjectName(row);
+  if (subjectCode) return `code:${subjectCode.toUpperCase()}`;
+  if (subjectName) return `name:${subjectName.toLowerCase()}`;
+  return `label:${getSubjectLabel(row).toLowerCase()}`;
+};
+
+const mergeAssignedStaff = (existing: any[], incoming: any[]) => {
+  const merged = [...existing, ...incoming];
+  return Array.from(new Map(merged.map((staff) => [getFacultyKey(staff), staff])).values()).filter(Boolean);
+};
+
+const compactLabSubjects = (labSubjects: any[]) => {
+  const map = new Map<string, any>();
+  for (const subject of labSubjects) {
+    const key = getLabSubjectKey(subject);
+    if (map.has(key)) {
+      const existing = map.get(key);
+      const existingStaff = Array.isArray(existing?.assigned_staff) ? existing.assigned_staff : [];
+      const incomingStaff = Array.isArray(subject?.assigned_staff) ? subject.assigned_staff : [];
+      map.set(key, {
+        ...existing,
+        assigned_staff: mergeAssignedStaff(existingStaff, incomingStaff),
+      });
+    } else {
+      map.set(key, subject);
+    }
+  }
+  return Array.from(map.values());
+};
+
+const buildPairedLabText = (pair: any[]) => {
+  const subjects = Array.from(new Set(pair.map((row) => getSubjectLabel(row)).filter(Boolean)));
+  if (subjects.length === 0) return 'Lab';
+  if (subjects.length === 1) return subjects[0];
+  return `[${subjects.join(' / ')}]`;
+};
+
+const buildPairedLabFacultyText = (pair: any[]) => {
+  const facultyNames = pair.flatMap((row) => getFacultyNames(row));
+  return Array.from(new Set(facultyNames)).join(' / ');
+};
+
+const toNonNegativeNumber = (value: any) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return numeric;
+};
+
+const getRequiredLabBlocks = (row: any) => {
+  const overrideBlocks = toNonNegativeNumber(row?._requiredLabBlocksOverride);
+  if (overrideBlocks > 0) {
+    return Math.max(1, Math.ceil(overrideBlocks));
+  }
+
+  const classType = normalizeClassType(row?.class_type, row);
+  if (!['LAB', 'PRACTICAL', 'PURE_LAB', 'TCPL', 'TCPR'].includes(classType) && !subjectLooksLikeLab(row)) {
+    return 0;
+  }
+
+  const weeklyHours = getPracticalHours(row) || 2;
+  const baseBlocks = Math.max(1, Math.ceil(weeklyHours / 2));
+  const labRowMultiplier = Math.max(1, Math.floor(toNonNegativeNumber(row?.lab_row_multiplier) || 1));
+  // Multiplier values above 2 usually come from shared-curriculum expansion and
+  // can flood the timetable with labs. Treat those as non-multiplying rows.
+  const effectiveMultiplier = labRowMultiplier > 2 ? 1 : labRowMultiplier;
+
+  if (classType === 'LAB' || classType === 'PRACTICAL' || classType === 'PURE_LAB' || subjectLooksLikeLab(row)) {
+    return baseBlocks * effectiveMultiplier;
+  }
+
+  return baseBlocks;
+};
+
+const consolidatePureLabSubjects = (labSubjects: any[]) => {
+  const map = new Map<string, any>();
+
+  for (const subject of labSubjects) {
+    const key = getLabSubjectKey(subject);
+    const requiredBlocks = getRequiredLabBlocks(subject);
+
+    if (map.has(key)) {
+      const existing = map.get(key);
+      const existingStaff = Array.isArray(existing?.assigned_staff) ? existing.assigned_staff : [];
+      const incomingStaff = Array.isArray(subject?.assigned_staff) ? subject.assigned_staff : [];
+      map.set(key, {
+        ...existing,
+        assigned_staff: mergeAssignedStaff(existingStaff, incomingStaff),
+        _requiredLabBlocksOverride: toNonNegativeNumber(existing?._requiredLabBlocksOverride) + requiredBlocks,
+      });
+      continue;
+    }
+
+    map.set(key, {
+      ...subject,
+      _requiredLabBlocksOverride: requiredBlocks,
+    });
+  }
+
+  return Array.from(map.values());
+};
+
+const buildLabPairs = (labSubjects: any[]) => {
+  const expandedLabs = labSubjects.flatMap((subject) => {
+    const requiredBlocks = getRequiredLabBlocks(subject);
+    return Array.from({ length: requiredBlocks }, (_, index) => ({
+      ...subject,
+      _labInstance: index + 1,
+      _labSubjectKey: getLabSubjectKey(subject),
+    }));
+  });
+
+  const instancesByKey = new Map<string, any[]>();
+  expandedLabs.forEach((subject) => {
+    const key = subject._labSubjectKey;
+    const existing = instancesByKey.get(key) || [];
+    existing.push(subject);
+    instancesByKey.set(key, existing);
+  });
+
+  const pairs: any[][] = [];
+  while (instancesByKey.size > 0) {
+    const orderedKeys = Array.from(instancesByKey.keys()).sort((leftKey, rightKey) => {
+      const leftItems = instancesByKey.get(leftKey) || [];
+      const rightItems = instancesByKey.get(rightKey) || [];
+      const countDiff = rightItems.length - leftItems.length;
+      if (countDiff !== 0) return countDiff;
+      return getSubjectLabel(leftItems[0]).localeCompare(getSubjectLabel(rightItems[0]));
+    });
+
+    const firstKey = orderedKeys[0];
+    const firstQueue = instancesByKey.get(firstKey) || [];
+    const first = firstQueue.shift();
+    if (!first) {
+      instancesByKey.delete(firstKey);
+      continue;
+    }
+    if (firstQueue.length === 0) {
+      instancesByKey.delete(firstKey);
+    } else {
+      instancesByKey.set(firstKey, firstQueue);
+    }
+
+    const secondKey = orderedKeys.find((key) => key !== firstKey && (instancesByKey.get(key) || []).length > 0);
+    if (!secondKey) {
+      pairs.push([first]);
+      continue;
+    }
+
+    const secondQueue = instancesByKey.get(secondKey) || [];
+    const second = secondQueue.shift();
+    if (!second) {
+      pairs.push([first]);
+      continue;
+    }
+    if (secondQueue.length === 0) {
+      instancesByKey.delete(secondKey);
+    } else {
+      instancesByKey.set(secondKey, secondQueue);
+    }
+
+    pairs.push([first, second]);
+  }
+  return pairs;
+};
+
+const getLabPairKey = (pair: any[]) => pair.map((subject) => getSubjectCode(subject) || getSubjectLabel(subject)).join('|');
 
 const mapToStandardDept = (deptName: string): string => {
   const norm = String(deptName || '').toLowerCase().trim();
@@ -100,8 +334,28 @@ const mapToStandardDept = (deptName: string): string => {
   return deptName.toUpperCase();
 };
 
+const createSeededRng = (seed: number) => {
+  let state = Math.floor(seed) % 2147483647;
+  if (state <= 0) {
+    state += 2147483646;
+  }
+  return () => {
+    state = (state * 16807) % 2147483647;
+    return (state - 1) / 2147483646;
+  };
+};
+
+const shuffleWithRng = <T,>(items: T[], rng: () => number) => {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+};
+
 const getRequiredSlotPlan = (row: any) => {
-  const classType = normalizeClassType(row?.class_type);
+  const classType = normalizeClassType(row?.class_type, row);
   const credits = Number(row?.c ?? row?.credits ?? 0) || 0;
   
   // Weekly hours components
@@ -115,40 +369,28 @@ const getRequiredSlotPlan = (row: any) => {
   const weeklyHoursFallback = (rawHours > 0 && rawHours <= 10) ? rawHours : 0;
 
   if (classType === 'TCPL' || classType === 'TCPR') {
-    return [
-      { kind: 'theory' as const, label: 'Theory 1' },
-      { kind: 'theory' as const, label: 'Theory 2' },
-      { kind: 'theory' as const, label: 'Theory 3' },
-      { kind: 'lab' as const, label: 'Lab 1' },
-      { kind: 'lab' as const, label: 'Lab 2' },
-    ];
+    // For hybrid lab subjects, schedule only explicit lecture/tutorial hours separately.
+    const subjectLabel = getSubjectLabel(row).toUpperCase();
+    if (subjectLabel.includes('LAB')) {
+      return [];
+    }
+    const hybridTheoryHours = l + t;
+    if (hybridTheoryHours <= 0) {
+      return [];
+    }
+    const theorySlots = Math.max(1, Math.ceil(hybridTheoryHours));
+    return Array.from({ length: theorySlots }, (_, index) => ({ kind: 'theory' as const, label: `Theory ${index + 1}` }));
   }
 
   if (classType === 'LAB' || classType === 'PRACTICAL' || classType === 'PURE_LAB') {
-    // For lab, use p (practical hours per week) if available, else fallback
-    const weeklyLabHours = p || weeklyHoursFallback || credits || 2;
-    const labSlots = Math.max(1, Math.ceil(weeklyLabHours / 2));
-    return Array.from({ length: labSlots }, (_, index) => ({ kind: 'lab' as const, label: `Lab ${index + 1}` }));
+    // Pure lab subjects are paired and rendered in a single lab slot; do not reserve separate lab slots here.
+    return [];
   }
 
-  // For theory:
-  const weeklyTheoryHours = (l + t) || weeklyHoursFallback || credits || 3;
-  const theorySlots = Math.max(1, weeklyTheoryHours);
+  const baseTheoryHours = (l + t) || weeklyHoursFallback || credits || 1;
+  const theorySlots = Math.max(1, Math.ceil(baseTheoryHours + 1));
   return Array.from({ length: theorySlots }, (_, index) => ({ kind: 'theory' as const, label: `Theory ${index + 1}` }));
 };
-
-const buildCellText = (row: any, slotKind: 'theory' | 'lab', label: string) => {
-  const subject = getSubjectLabel(row);
-  if (slotKind === 'lab') {
-    const tag = normalizeClassType(row?.class_type) === 'TCPL' || normalizeClassType(row?.class_type) === 'TCPR'
-      ? `${subject} ${label}`
-      : subject;
-    return `[${tag} / ${tag}]`;
-  }
-  return `${subject}${label ? ` (${label})` : ''}`;
-};
-
-const buildFacultyText = (row: any) => getFacultyNames(row).join(' / ');
 
 const getTemplateSlots = (template: SemesterTemplate) => {
   return template.rows.flatMap((row) =>
@@ -164,44 +406,85 @@ const getTemplateSlots = (template: SemesterTemplate) => {
   );
 };
 
+const getTemplateLabBlocks = (template: SemesterTemplate) => {
+  return template.rows.flatMap((row) => {
+    const blocks: Array<{ keys: string[]; day: string; slots: Array<{ key: string; day: string; rowId: string; columnId: string; period: string }> }> = [];
+    for (let idx = 0; idx < template.columns.length - 1; idx += 1) {
+      const current = template.columns[idx];
+      const next = template.columns[idx + 1];
+      if ([current.period, next.period].every((period) => period !== 'Break' && period !== 'Lunch')) {
+        blocks.push({
+          keys: [`${row.id}-${current.id}`, `${row.id}-${next.id}`],
+          day: row.day,
+          slots: [
+            { key: `${row.id}-${current.id}`, day: row.day, rowId: row.id, columnId: current.id, period: current.period },
+            { key: `${row.id}-${next.id}`, day: row.day, rowId: row.id, columnId: next.id, period: next.period },
+          ],
+        });
+      }
+    }
+    return blocks;
+  });
+};
+
 const buildGeneratedSection = (
   snapshot: SectionSnapshot,
   template: SemesterTemplate,
-  globalFacultyUsage: Record<string, Set<string>>
+  globalFacultyUsage: Record<string, Set<string>>,
+  runSeed: number
 ): GeneratedSectionTimetable => {
   const cells: Record<string, GeneratedCell> = {};
   const warnings: string[] = [];
   const slots = getTemplateSlots(template);
   const occupied = new Set<string>();
-  let cursor = 0;
+  const rng = createSeededRng(runSeed);
 
-  const subjects = [...(snapshot.subjectStaff || [])]
-    .filter((row) => getSubjectLabel(row))
-    .sort((a, b) => {
-      const typePriority = (row: any) => {
-        const type = normalizeClassType(row?.class_type);
-        if (row?.is_dept_core) return 0;
-        if (type === 'TCPL' || type === 'TCPR') return 1;
-        if (type === 'LAB' || type === 'PRACTICAL' || type === 'PURE_LAB') return 2;
-        return 3;
-      };
-      const priorityDiff = typePriority(a) - typePriority(b);
-      if (priorityDiff !== 0) return priorityDiff;
-      return getSubjectLabel(a).localeCompare(getSubjectLabel(b));
-    });
+  const allSubjects = [...(snapshot.subjectStaff || [])].filter((row) => getSubjectLabel(row));
+  const pureLabSubjects = consolidatePureLabSubjects(allSubjects.filter(isPureLabSubject));
+  const hybridLabSubjects = allSubjects.filter(isHybridLabSubject);
+  const theoryOnlySubjects = allSubjects.filter((row) => !isPureLabSubject(row) && !isHybridLabSubject(row));
 
-  const reserveSlot = (facultyIds: string[]) => {
-    // Pass 1: Try to find a slot with NO faculty conflict
-    for (let offset = 0; offset < slots.length; offset += 1) {
-      const slot = slots[(cursor + offset) % slots.length];
-      if (occupied.has(slot.key)) continue;
+  const typePriority = (row: any) => {
+    const type = normalizeClassType(row?.class_type, row);
+    if (row?.is_dept_core) return 0;
+    if (type === 'TCPL' || type === 'TCPR') return 1;
+    if (type === 'LAB' || type === 'PRACTICAL' || type === 'PURE_LAB') return 2;
+    return 3;
+  };
 
+  const randomTieBreaker = new Map<any, number>();
+  [...theoryOnlySubjects, ...hybridLabSubjects].forEach((row) => {
+    randomTieBreaker.set(row, rng());
+  });
+
+  const theorySubjects = [...theoryOnlySubjects, ...hybridLabSubjects].sort((a, b) => {
+    const priorityDiff = typePriority(a) - typePriority(b);
+    if (priorityDiff !== 0) return priorityDiff;
+    return (randomTieBreaker.get(a) || 0) - (randomTieBreaker.get(b) || 0);
+  });
+
+  const labPairs = shuffleWithRng(buildLabPairs([...pureLabSubjects, ...hybridLabSubjects]), rng);
+
+  const subjectDayUsage: Record<string, { theory: Set<string>; lab: Set<string> }> = {};
+  const labSubjectDayUsage: Record<string, Set<string>> = {};
+  const getSubjectKey = (subject: any) => getSubjectCode(subject) || getSubjectName(subject) || getSubjectLabel(subject);
+  const labBlocks = getTemplateLabBlocks(template);
+
+  const reserveSlot = (facultyIds: string[], subjectKey: string, slotKind: 'theory' | 'lab') => {
+    const slotOrder = shuffleWithRng(slots, rng);
+
+    const canUseSlot = (slot: { key: string; day: string }) => {
+      if (occupied.has(slot.key)) return false;
+      if (subjectDayUsage[subjectKey]?.[slotKind]?.has(slot.day)) return false;
       const facultyConflict = facultyIds.some((facultyId) => {
         if (!facultyId) return false;
         return globalFacultyUsage[facultyId]?.has(slot.key) || false;
       });
-      if (facultyConflict) continue;
+      return !facultyConflict;
+    };
 
+    for (const slot of slotOrder) {
+      if (!canUseSlot(slot)) continue;
       occupied.add(slot.key);
       facultyIds.forEach((facultyId) => {
         if (!facultyId) return;
@@ -210,16 +493,19 @@ const buildGeneratedSection = (
         }
         globalFacultyUsage[facultyId].add(slot.key);
       });
-      cursor = (cursor + offset + 1) % slots.length;
+      if (!subjectDayUsage[subjectKey]) {
+        subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+      }
+      subjectDayUsage[subjectKey][slotKind].add(slot.day);
       return { slot, conflict: false };
     }
 
-    // Pass 2: Fallback - find ANY unoccupied slot in this section, even if there is a faculty conflict
-    for (let offset = 0; offset < slots.length; offset += 1) {
-      const slot = slots[(cursor + offset) % slots.length];
+    for (const slot of slotOrder) {
       if (occupied.has(slot.key)) continue;
-
-      // Occupy it
+      const facultyConflict = facultyIds.some((facultyId) => {
+        if (!facultyId) return false;
+        return globalFacultyUsage[facultyId]?.has(slot.key) || false;
+      });
       occupied.add(slot.key);
       facultyIds.forEach((facultyId) => {
         if (!facultyId) return;
@@ -228,14 +514,84 @@ const buildGeneratedSection = (
         }
         globalFacultyUsage[facultyId].add(slot.key);
       });
-      cursor = (cursor + offset + 1) % slots.length;
+      if (!subjectDayUsage[subjectKey]) {
+        subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+      }
+      subjectDayUsage[subjectKey][slotKind].add(slot.day);
       return { slot, conflict: true };
     }
 
     return null;
   };
 
-  for (const subject of subjects) {
+  const reserveLabBlock = (facultyIds: string[], subjectKeys: string[]) => {
+    const blockOrder = shuffleWithRng(labBlocks, rng);
+
+    const canUseBlock = (block: typeof labBlocks[number]) => {
+      if (block.keys.some((key) => occupied.has(key))) return false;
+      if (subjectKeys.some((subjectKey) => labSubjectDayUsage[subjectKey]?.has(block.day))) return false;
+      if (subjectKeys.some((subjectKey) => subjectDayUsage[subjectKey]?.theory?.has(block.day))) return false;
+      const facultyConflict = facultyIds.some((facultyId) => {
+        if (!facultyId) return false;
+        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
+      });
+      return !facultyConflict;
+    };
+
+    for (const block of blockOrder) {
+      if (!canUseBlock(block)) continue;
+      block.keys.forEach((key) => occupied.add(key));
+      facultyIds.forEach((facultyId) => {
+        if (!facultyId) return;
+        if (!globalFacultyUsage[facultyId]) {
+          globalFacultyUsage[facultyId] = new Set();
+        }
+        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
+      });
+      subjectKeys.forEach((subjectKey) => {
+        if (!subjectDayUsage[subjectKey]) {
+          subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+        }
+        if (!labSubjectDayUsage[subjectKey]) {
+          labSubjectDayUsage[subjectKey] = new Set();
+        }
+        subjectDayUsage[subjectKey].lab.add(block.day);
+        labSubjectDayUsage[subjectKey].add(block.day);
+      });
+      return { block, conflict: false };
+    }
+
+    for (const block of blockOrder) {
+      if (block.keys.some((key) => occupied.has(key))) continue;
+      const facultyConflict = facultyIds.some((facultyId) => {
+        if (!facultyId) return false;
+        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
+      });
+      block.keys.forEach((key) => occupied.add(key));
+      facultyIds.forEach((facultyId) => {
+        if (!facultyId) return;
+        if (!globalFacultyUsage[facultyId]) {
+          globalFacultyUsage[facultyId] = new Set();
+        }
+        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
+      });
+      subjectKeys.forEach((subjectKey) => {
+        if (!subjectDayUsage[subjectKey]) {
+          subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+        }
+        if (!labSubjectDayUsage[subjectKey]) {
+          labSubjectDayUsage[subjectKey] = new Set();
+        }
+        subjectDayUsage[subjectKey].lab.add(block.day);
+        labSubjectDayUsage[subjectKey].add(block.day);
+      });
+      return { block, conflict: facultyConflict };
+    }
+
+    return null;
+  };
+
+  for (const subject of theorySubjects) {
     const facultyNames = getFacultyNames(subject);
     const facultyIds = Array.isArray(subject?.assigned_staff)
       ? subject.assigned_staff.map((staff: any) => getFacultyKey(staff)).filter(Boolean)
@@ -245,8 +601,11 @@ const buildGeneratedSection = (
       continue;
     }
 
-    for (const entry of getRequiredSlotPlan(subject)) {
-      const reserveResult = reserveSlot(facultyIds);
+    const subjectKey = getSubjectKey(subject);
+    const slotPlan = getRequiredSlotPlan(subject).filter((entry) => entry.kind === 'theory');
+
+    for (const entry of slotPlan) {
+      const reserveResult = reserveSlot(facultyIds, subjectKey, entry.kind);
       if (!reserveResult) {
         warnings.push(`No unoccupied slot available in the template for ${getSubjectLabel(subject)} (${entry.label}).`);
         continue;
@@ -262,13 +621,44 @@ const buildGeneratedSection = (
         faculty: buildFacultyText(subject),
         kind: entry.kind,
         note: (conflict ? '⚠️ Conflict! ' : '') + 
-          (normalizeClassType(subject?.class_type) === 'TCPL' || normalizeClassType(subject?.class_type) === 'TCPR'
-            ? '3 theory + 2 lab'
-            : entry.kind === 'lab'
-              ? 'Batch-wise lab'
-              : 'Theory slot'),
+          (normalizeClassType(subject?.class_type, subject) === 'TCPL' || normalizeClassType(subject?.class_type, subject) === 'TCPR'
+            ? 'Theory slot (hybrid lab subject)'
+            : 'Theory slot'),
       };
     }
+  }
+
+  for (const pair of labPairs) {
+    const pairFacultyIds = Array.from(new Set(pair.flatMap((subject) =>
+      Array.isArray(subject?.assigned_staff)
+        ? subject.assigned_staff.map((staff: any) => getFacultyKey(staff)).filter(Boolean)
+        : []
+    )));
+
+    if (pairFacultyIds.length === 0) {
+      continue;
+    }
+
+    const pairSubjectKeys = pair.map((subject) => getLabSubjectKey(subject));
+    const reserveResult = reserveLabBlock(pairFacultyIds, pairSubjectKeys);
+    if (!reserveResult) {
+      warnings.push(`No unoccupied consecutive lab block available for paired lab ${buildPairedLabText(pair)}.`);
+      continue;
+    }
+
+    const { block, conflict } = reserveResult;
+    if (conflict) {
+      warnings.push(`⚠️ Faculty conflict for paired lab ${buildPairedLabText(pair)} in block on ${block.day}. Faculty may be double-booked.`);
+    }
+
+    block.slots.forEach((slot) => {
+      cells[slot.key] = {
+        subject: buildPairedLabText(pair),
+        faculty: buildPairedLabFacultyText(pair),
+        kind: 'lab',
+        note: (conflict ? '⚠️ Conflict! ' : '') + 'Paired lab slot',
+      };
+    });
   }
 
   return {
@@ -439,7 +829,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           setSectionsList(mapped);
 
           if (mapped.length > 0) {
-            const preferred = mapped.find((s: any) => s.year === 1 && s.name === 'A') || mapped[0];
+            const preferred = mapped.find((s: any) => s.year === 1 && s.department === 'S&H' && s.name === 'A') || mapped[0];
             setSelectedSectionKey(preferred.sectionKey);
           }
         }
@@ -490,7 +880,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
       if (year === 1) {
         const nameUpper = String(sec.name).toUpperCase().trim();
         const allowedSecs = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
-        if (allowedSecs.includes(nameUpper)) {
+        if (stdDept === 'S&H' && allowedSecs.includes(nameUpper)) {
           grouped[1]['S&H'].push(sec);
         }
       } else {
@@ -516,14 +906,27 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
       return;
     }
 
+    setIsGenerating(true);
+    setGeneratedSections([]);
+    setGenerationMessage('Loading section data from the backend...');
+    setProgressMessage('Loading sections list...');
+
     try {
-      setGenerationMessage('Loading section data from the backend...');
-      setProgressMessage('Loading sections list...');
       const res = await fetchWithAuth('/api/academics/sections/?page_size=0');
       if (res.ok) {
-        const data = await res.json();
+        let data: any;
+        try {
+          data = await res.json();
+        } catch (parseError) {
+          console.error('Failed to parse sections list response:', parseError);
+          setGenerationMessage(`Failed to parse sections list response: ${String(parseError?.message || parseError)}`);
+          setProgressMessage('');
+          setIsGenerating(false);
+          return;
+        }
         const rawSections = data.results || data || [];
         const fetchedSnapshots: SectionSnapshot[] = [];
+        const failedSectionLoads: Array<{ sectionId: number; sectionName: string; status?: number; message?: string }> = [];
         
         let count = 0;
         for (const section of rawSections) {
@@ -537,7 +940,17 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           
           try {
             const subjectsRes = await fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`);
-            if (!subjectsRes.ok) continue;
+            if (!subjectsRes.ok) {
+              let errorMessage = `HTTP ${subjectsRes.status}`;
+              try {
+                const bodyText = await subjectsRes.text();
+                if (bodyText) errorMessage += ` - ${bodyText}`;
+              } catch (_) {
+                // ignore parse errors
+              }
+              failedSectionLoads.push({ sectionId, sectionName, status: subjectsRes.status, message: errorMessage });
+              continue;
+            }
             const subjectsData = await subjectsRes.json();
             const subjectStaff = subjectsData.results || subjectsData || [];
             
@@ -582,32 +995,49 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
         }
 
         setProgressMessage('Generating timetables...');
-        const existingSnapshots = Object.values(sectionSnapshots);
+        // Start from fresh backend snapshots and apply only current-session manual overrides.
         const snapshotMap = new Map<string, SectionSnapshot>();
         fetchedSnapshots.forEach((snapshot) => snapshotMap.set(snapshot.sectionKey, snapshot));
-        existingSnapshots.forEach((snapshot) => {
-          const foundSection = sectionsList.find(s => s.sectionKey === snapshot.sectionKey);
+
+        Object.values(sectionSnapshots).forEach((snapshot) => {
+          const fromFetch = snapshotMap.get(snapshot.sectionKey);
+          const foundSection = sectionsList.find((s) => s.sectionKey === snapshot.sectionKey);
           snapshotMap.set(snapshot.sectionKey, {
             ...snapshot,
-            year: snapshot.year || foundSection?.year || null,
-            department: snapshot.department || foundSection?.department || 'SECTION'
+            year: snapshot.year || fromFetch?.year || foundSection?.year || null,
+            department: snapshot.department || fromFetch?.department || foundSection?.department || 'SECTION',
           });
         });
+
         const workingSnapshots = Array.from(snapshotMap.values());
 
         if (workingSnapshots.length === 0) {
           setGeneratedSections([]);
-          setGenerationMessage('No section data could be loaded. Verify the section API returns subjects and staff.');
+          let failureMessage = 'No section data could be loaded.';
+          if (rawSections.length === 0) {
+            failureMessage += ' The section list endpoint returned no sections.';
+          } else if (failedSectionLoads.length > 0) {
+            failureMessage += ` Loaded ${rawSections.length} sections, but subjects/staff failed for ${failedSectionLoads.length} sections.`;
+          } else {
+            failureMessage += ' Verify the section API returns subjects and staff.';
+          }
+          setGenerationMessage(failureMessage);
           setProgressMessage('');
           return;
         }
 
         const globalFacultyUsage: Record<string, Set<string>> = {};
-        const results = workingSnapshots.map((snapshot) => buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage));
+        const generationSeed = Date.now();
+        const results = workingSnapshots.map((snapshot, index) =>
+          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed + index + 1)
+        );
 
         setGeneratedSections(results);
         setIsGenerating(false);
         setProgressMessage('');
+        if (failedSectionLoads.length > 0) {
+          console.warn('Some sections failed to load subjects/staff:', failedSectionLoads);
+        }
 
         if (selectedSectionKey) {
         } else if (results.length > 0) {
@@ -619,13 +1049,21 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           ? `Timetable generated with ${warnings.length} warnings. Select sections in the navigator to view details.`
           : 'Timetable generated successfully with faculty-conflict checks applied.');
       } else {
-        setGenerationMessage('Failed to load sections from backend.');
+        let responseText = '';
+        try {
+          responseText = await res.text();
+        } catch (_) {
+          responseText = '';
+        }
+        setGenerationMessage(`Failed to load sections from backend (HTTP ${res.status})${responseText ? `: ${responseText}` : ''}`);
         setProgressMessage('');
       }
     } catch (error) {
       console.error('Auto-load failed:', error);
-      setGenerationMessage('Failed to load section data.');
+      setGenerationMessage(`Failed to load section data: ${String(error?.message || error)}`);
       setProgressMessage('');
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -656,7 +1094,11 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
               Copy Template
             </button>
             <button
-              onClick={() => setIsGenerating(true)}
+              onClick={() => {
+                setSectionSnapshots({});
+                setShowTeachingAssign(false);
+                setIsGenerating(true);
+              }}
               className="flex items-center gap-2 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-bold text-sm shadow-sm"
             >
               🎯 Generate Timetable
@@ -724,7 +1166,11 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
             <div className="mt-6 flex justify-end gap-3">
               <button 
                 className="bg-gray-200 text-gray-700 px-4 py-2 rounded hover:bg-gray-300 font-semibold transition-colors"
-                onClick={() => setIsGenerating(false)}
+                onClick={() => {
+                  setShowTeachingAssign(false);
+                  setSectionSnapshots({});
+                  setIsGenerating(false);
+                }}
               >
                 Cancel
               </button>
