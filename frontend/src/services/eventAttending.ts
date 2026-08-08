@@ -35,6 +35,11 @@ export async function fetchEventFormDetail(id: number): Promise<EventAttendingFo
   return res.data;
 }
 
+export async function deleteEventForm(id: number): Promise<{ message: string }> {
+  const res = await apiClient.delete(`${BASE}/${id}/delete_event_form/`);
+  return res.data;
+}
+
 export async function fetchMyEventBudget(): Promise<MyEventBudget> {
   const res = await apiClient.get(`${BASE}/my_event_budget/`);
   return res.data;
@@ -157,6 +162,8 @@ export interface EventAnalyticsRow {
 export interface EventAnalyticsResponse {
   forms: EventAnalyticsRow[];
   total_count: number;
+  pending_count: number;
+  rejected_count: number;
   total_amount: number;
   departments: { id: number; name: string; short_name: string }[];
 }
@@ -165,11 +172,13 @@ export async function fetchEventAnalytics(params: {
   department?: string;
   from_date?: string;
   to_date?: string;
+  type?: string;
 }): Promise<EventAnalyticsResponse> {
   const p = new URLSearchParams();
   if (params.department) p.set('department', params.department);
   if (params.from_date) p.set('from_date', params.from_date);
   if (params.to_date) p.set('to_date', params.to_date);
+  if (params.type) p.set('type', params.type);
   const res = await apiClient.get(`${BASE}/event_analytics/?${p.toString()}`);
   return res.data;
 }
@@ -178,10 +187,12 @@ export function getEventAnalyticsExcelUrl(params: {
   department?: string;
   from_date?: string;
   to_date?: string;
+  type?: string;
 }): string {
   const p = new URLSearchParams({ export: 'excel' });
   if (params.department) p.set('department', params.department);
   if (params.from_date) p.set('from_date', params.from_date);
   if (params.to_date) p.set('to_date', params.to_date);
+  if (params.type) p.set('type', params.type);
   return `${BASE}/event_analytics/?${p.toString()}`;
 }

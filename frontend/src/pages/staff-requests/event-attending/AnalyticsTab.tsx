@@ -4,7 +4,7 @@ import {
   getEventAnalyticsExcelUrl,
 } from '../../../services/eventAttending';
 import type { EventAnalyticsResponse } from '../../../services/eventAttending';
-import { BarChart3, Download, RefreshCw, FileSpreadsheet, IndianRupee, FileCheck2, Building2, ChevronDown } from 'lucide-react';
+import { BarChart3, Download, RefreshCw, FileSpreadsheet, IndianRupee, FileCheck2, Building2, ChevronDown, XCircle } from 'lucide-react';
 
 export default function AnalyticsTab() {
   const [data, setData] = useState<EventAnalyticsResponse | null>(null);
@@ -15,6 +15,7 @@ export default function AnalyticsTab() {
   const [deptFilter, setDeptFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -24,6 +25,7 @@ export default function AnalyticsTab() {
         department: deptFilter || undefined,
         from_date: fromDate || undefined,
         to_date: toDate || undefined,
+        type: typeFilter || undefined,
       });
       setData(res);
     } catch (e: any) {
@@ -32,7 +34,7 @@ export default function AnalyticsTab() {
     } finally {
       setLoading(false);
     }
-  }, [deptFilter, fromDate, toDate]);
+  }, [deptFilter, fromDate, toDate, typeFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -43,6 +45,7 @@ export default function AnalyticsTab() {
         department: deptFilter || undefined,
         from_date: fromDate || undefined,
         to_date: toDate || undefined,
+        type: typeFilter || undefined,
       });
       const { apiClient } = await import('../../../services/auth');
       const res = await apiClient.get(url, { responseType: 'blob' });
@@ -79,6 +82,20 @@ export default function AnalyticsTab() {
       icon: <FileCheck2 size={22} />,
       gradient: 'from-blue-500 to-blue-700',
       textColor: 'text-blue-50',
+    },
+    {
+      label: 'Total Forms Pending',
+      value: data?.pending_count ?? 0,
+      icon: <RefreshCw size={22} />,
+      gradient: 'from-amber-500 to-amber-700',
+      textColor: 'text-amber-50',
+    },
+    {
+      label: 'Total Forms Rejected',
+      value: data?.rejected_count ?? 0,
+      icon: <XCircle size={22} />,
+      gradient: 'from-red-500 to-red-700',
+      textColor: 'text-red-50',
     },
     {
       label: 'Total Amount Disbursed',
@@ -118,7 +135,7 @@ export default function AnalyticsTab() {
       {/* Filters card */}
       <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Filters</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Department */}
           <div className="relative">
             <label className="block text-xs text-gray-500 font-medium mb-1">Department</label>
@@ -158,6 +175,23 @@ export default function AnalyticsTab() {
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
+          {/* Type */}
+          <div className="relative">
+            <label className="block text-xs text-gray-500 font-medium mb-1">Type</label>
+            <div className="relative">
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="w-full appearance-none px-3 py-2.5 pr-8 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-gray-800"
+              >
+                <option value="">All Types</option>
+                <option value="approved">Approved</option>
+                <option value="pending">Pending</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              <ChevronDown size={14} className="absolute right-2.5 top-3 text-gray-400 pointer-events-none" />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -176,7 +210,7 @@ export default function AnalyticsTab() {
       ) : (
         <>
           {/* Summary cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             {summaryCards.map((card) => (
               <div
                 key={card.label}
@@ -209,8 +243,9 @@ export default function AnalyticsTab() {
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">Staff Name</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">Department</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider">OD Type</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider">Approved Amount</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Approved Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider">Amount</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Status</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider">Date</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -234,13 +269,22 @@ export default function AnalyticsTab() {
                           </span>
                         </td>
                         <td className="px-4 py-3.5 text-right">
-                          <span className="font-bold text-emerald-700 text-sm">
+                          <span className={`font-bold text-sm ${row.status === 'approved' ? 'text-emerald-700' : row.status === 'rejected' ? 'text-red-700' : 'text-amber-600'}`}>
                             ₹{row.grand_total.toLocaleString('en-IN')}
                           </span>
                         </td>
                         <td className="px-4 py-3.5 text-center">
+                          <span className={`text-xs px-2 py-1 rounded-lg font-bold uppercase tracking-wider ${
+                            row.status === 'approved' ? 'bg-emerald-100 text-emerald-800' 
+                            : row.status === 'rejected' ? 'bg-red-100 text-red-800' 
+                            : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-center">
                           <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-lg font-medium">
-                            {row.approved_at}
+                            {row.updated_at}
                           </span>
                         </td>
                       </tr>
@@ -250,7 +294,7 @@ export default function AnalyticsTab() {
                   <tfoot className="sticky bottom-0 bg-slate-800 text-white">
                     <tr>
                       <td colSpan={4} className="px-4 py-3 text-xs font-bold text-slate-300 text-right">
-                        TOTAL ({forms.length} {forms.length === 1 ? 'form' : 'forms'})
+                        APPROVED TOTAL
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className="font-extrabold text-emerald-300 text-base">

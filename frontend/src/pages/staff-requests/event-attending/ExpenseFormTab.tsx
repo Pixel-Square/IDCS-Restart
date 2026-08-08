@@ -1,7 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ApprovedODForm, TravelExpenseRow, FoodExpenseRow, OtherExpenseRow } from '../../../types/eventAttending';
 import type { MyEventBudget } from '../../../types/eventAttending';
 import { submitEventForm } from '../../../services/eventAttending';
+import { getActiveTemplates } from '../../../services/staffRequests';
+import type { RequestTemplate } from '../../../types/staffRequests';
+import DynamicFormRenderer from '../DynamicFormRenderer';
+import ImageCropperModal from '../../../components/ImageCropperModal';
 import { ChevronDown, ChevronUp, Plus, Trash2, Upload, CheckCircle, AlertTriangle, FileText, Link2 } from 'lucide-react';
 
 interface Props {
@@ -27,24 +31,28 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const [formMode, setFormMode] = useState<'od' | 'manual'>('od');
   const [selectedOD, setSelectedOD] = useState<ApprovedODForm | null>(null);
   const [expandedOD, setExpandedOD] = useState<number | null>(null);
+  const [odClaim, setOdClaim] = useState<'yes' | 'no'>('yes'); // for manual mode
   
   // Manual Event Details state
-  const [eventDetails, setEventDetails] = useState({
-    type: '',
-    reason: '',
-    from_date: '',
-    from_noon: '',
-    to_date: '',
-    to_noon: '',
-    event_title: '',
-    host_institution_name: '',
-    mode_of_event: '',
-    nature_of_event: '',
-    platform_if_online: '',
-    expected_outcome: '',
-    purpose: '',
-    kss_link: ''
-  });
+  const [eventDetails, setEventDetails] = useState<Record<string, any>>({});
+  const [odTemplates, setOdTemplates] = useState<RequestTemplate[]>([]);
+  const [selectedOdTemplateId, setSelectedOdTemplateId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      try {
+        const templates = await getActiveTemplates();
+        const odTmpls = templates.filter(t => t.name.startsWith('ON duty'));
+        setOdTemplates(odTmpls);
+        if (odTmpls.length > 0) {
+          setSelectedOdTemplateId(odTmpls[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to load OD templates', err);
+      }
+    };
+    fetchTemplates();
+  }, []);
 
   const [travel, setTravel] = useState<TravelExpenseRow[]>([{ ...EMPTY_TRAVEL }]);
   const [food, setFood] = useState<FoodExpenseRow[]>([{ ...EMPTY_FOOD }]);
@@ -53,9 +61,13 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const [advanceAmount, setAdvanceAmount] = useState(0);
   const [advanceDate, setAdvanceDate] = useState('');
   const [files, setFiles] = useState<Record<string, File>>({});
+  const [orientations, setOrientations] = useState<Record<string, 'portrait' | 'landscape'>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  const [activeCropperFile, setActiveCropperFile] = useState<File | null>(null);
+  const [activeCropperKey, setActiveCropperKey] = useState<string | null>(null);
 
   const travelTotal = travel.reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const foodTotal = food.reduce((s, r) => s + (Number(r.amount) || 0), 0);
@@ -66,8 +78,22 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
   const availableODs = odForms.filter(f => !f.has_event_form);
 
   const handleFileChange = (key: string, file: File | null) => {
-    if (file) setFiles(p => ({ ...p, [key]: file }));
-    else { const n = { ...files }; delete n[key]; setFiles(n); }
+    if (file) {
+      setActiveCropperKey(key);
+      setActiveCropperFile(file);
+    } else { 
+      const n = { ...files }; delete n[key]; setFiles(n); 
+      const o = { ...orientations }; delete o[key]; setOrientations(o);
+    }
+  };
+
+  const handleCropperSave = (croppedFile: File, orientation: 'portrait' | 'landscape') => {
+    if (activeCropperKey) {
+      setFiles(p => ({ ...p, [activeCropperKey]: croppedFile }));
+      setOrientations(p => ({ ...p, [activeCropperKey]: orientation }));
+    }
+    setActiveCropperFile(null);
+    setActiveCropperKey(null);
   };
 
   const isTravelEmpty = (r: TravelExpenseRow) => !r.date && !r.bill_no && !r.mode_of_travel && !r.from && !r.to && (!r.amount || Number(r.amount) === 0);
@@ -80,7 +106,12 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     }
     
     if (formMode === 'manual') {
-      if (!eventDetails.type || !eventDetails.reason || !eventDetails.from_date || !eventDetails.from_noon || !eventDetails.kss_link || !files.event_proof) {
+      const requiresOdFields = odClaim === 'yes';
+      if (requiresOdFields && (!eventDetails.type || !eventDetails.reason)) {
+        setError('Please fill OD Type and Reason fields.');
+        return;
+      }
+      if (!eventDetails.from_date || !eventDetails.kss_link || !files.event_proof) {
         setError('Please fill all required event details (*) and upload event proof in the Event Details section.');
         return;
       }
@@ -95,32 +126,42 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     const invalidOther = other.some((r, i) => !isOtherEmpty(r) && (!r.date || !r.bill_no || !r.expense_details || !r.amount || !files[`other_proof_${i}`]));
     if (invalidOther) { setError('Please fill all required fields (*) and upload proof in Other Expenses for the rows you entered.'); return; }
 
+    if (Number(advanceAmount) > 0 && !files.advance_proof) {
+      setError('Please upload an Advance Receipt Proof since you entered an advance amount.');
+      return;
+    }
+
     setError(''); setSuccess(''); setSubmitting(true);
     try {
       const fd = new FormData();
       if (formMode === 'od') {
         fd.append('on_duty_request_id', String(selectedOD!.id));
       } else {
-        fd.append('event_details', JSON.stringify(eventDetails));
+        const detailsToSend = odClaim === 'no' 
+          ? { ...eventDetails, type: '', reason: '' } 
+          : { ...eventDetails, template_id: selectedOdTemplateId };
+        fd.append('event_details', JSON.stringify(detailsToSend));
+        fd.append('od_claim', odClaim);
       }
-      
+
       fd.append('travel_expenses', JSON.stringify(travel.filter(r => !isTravelEmpty(r))));
       fd.append('food_expenses', JSON.stringify(food.filter(r => !isFoodEmpty(r))));
       fd.append('other_expenses', JSON.stringify(other.filter(r => !isOtherEmpty(r))));
       fd.append('total_fees_spend', String(feesSpend || 0));
       fd.append('advance_amount_received', String(advanceAmount || 0));
       if (advanceDate) fd.append('advance_date', advanceDate);
-      Object.entries(files).forEach(([k, f]) => fd.append(k, f));
+      Object.entries(files).forEach(([k, f]) => {
+        fd.append(k, f);
+        if (orientations[k]) fd.append(`${k}_orientation`, orientations[k]);
+      });
       
       await submitEventForm(fd);
       setSuccess('Event Attending form submitted successfully!');
-      setSelectedOD(null); 
-      setEventDetails({
-        type: '', reason: '', from_date: '', from_noon: '', to_date: '', to_noon: '', event_title: '',
-        host_institution_name: '', mode_of_event: '', nature_of_event: '', platform_if_online: '', expected_outcome: '', purpose: '', kss_link: ''
-      });
+      setSelectedOD(null);
+      setOdClaim('yes');
+      setEventDetails({});
       setTravel([{ ...EMPTY_TRAVEL }]); setFood([{ ...EMPTY_FOOD }]);
-      setOther([{ ...EMPTY_OTHER }]); setFeesSpend(0); setAdvanceAmount(0); setAdvanceDate(''); setFiles({});
+      setOther([{ ...EMPTY_OTHER }]); setFeesSpend(0); setAdvanceAmount(0); setAdvanceDate(''); setFiles({}); setOrientations({});
       onSubmitted();
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Failed to submit');
@@ -131,7 +172,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
 
   return (
     <div className="space-y-6">
-      {/* Budget Summary */}
       {budget && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div className="rounded-xl border p-4 bg-blue-50/30 border-blue-100 flex flex-col gap-2">
@@ -147,7 +187,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
               </div>
             </div>
           </div>
-          
           <div className="rounded-xl border p-4 bg-purple-50/30 border-purple-100 flex flex-col gap-2">
             <h4 className="text-sm font-semibold text-gray-800">Conference Events</h4>
             <div className="flex items-center justify-between">
@@ -164,7 +203,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         </div>
       )}
 
-      {/* Mode Toggle */}
       <div className="flex bg-gray-100 p-1 rounded-lg w-fit">
         <button 
           onClick={() => setFormMode('od')}
@@ -180,7 +218,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         </button>
       </div>
 
-      {/* OD Form Selection */}
       {formMode === 'od' && (
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <h3 className="text-base font-semibold text-gray-800 mb-3">Select Approved On Duty Form</h3>
@@ -214,106 +251,54 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         </div>
       )}
 
-      {/* Manual Event Details */}
       {formMode === 'manual' && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <h3 className="text-base font-semibold text-gray-800 mb-2 border-b pb-2">Event Details</h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">OD Type <span className="text-red-500">*</span></label>
-              <select value={eventDetails.type} onChange={e => setEventDetails(p => ({ ...p, type: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
-                <option value="">Select OD Type...</option>
-                <option value="ODB - Basic">ODB - Basic</option>
-                <option value="ODR - Research">ODR - Research</option>
-                <option value="ODP - Professional">ODP - Professional</option>
-                <option value="ODO - Out Reach">ODO - Out Reach</option>
-              </select>
-            </div>
-            
-            <Input label="Reason" value={eventDetails.reason} onChange={v => setEventDetails(p => ({ ...p, reason: v }))} required />
+
+          <div className="flex items-center gap-4 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3">
+            <span className="text-xs font-bold text-gray-700">OD Claim <span className="text-red-500">*</span></span>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="od_claim" value="yes" checked={odClaim === 'yes'} onChange={() => setOdClaim('yes')} className="w-4 h-4 text-blue-600" />
+              <span className="text-sm font-medium text-gray-700">Yes</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="od_claim" value="no" checked={odClaim === 'no'} onChange={() => setOdClaim('no')} className="w-4 h-4 text-blue-600" />
+              <span className="text-sm font-medium text-gray-700">No</span>
+            </label>
+            <span className="text-xs text-gray-500 ml-2">
+              {odClaim === 'yes' ? '✅ OD auto-submission active' : 'OD features disabled'}
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Input label="From Date" type="date" value={eventDetails.from_date} onChange={v => setEventDetails(p => ({ ...p, from_date: v }))} required />
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">From Noon <span className="text-red-500">*</span></label>
-              <select value={eventDetails.from_noon} onChange={e => setEventDetails(p => ({ ...p, from_noon: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
-                <option value="">Select...</option>
-                <option value="Full Day ">Full Day</option>
-                <option value="FN ">FN</option>
-                <option value="AN">AN</option>
+          {odClaim === 'yes' && odTemplates.length > 1 && (
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-gray-700 mb-1">Select OD Template Type <span className="text-red-500">*</span></label>
+              <select value={selectedOdTemplateId || ''} onChange={e => setSelectedOdTemplateId(Number(e.target.value))} className="w-full md:w-1/2 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
+                {odTemplates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </div>
-            <Input label="To Date" type="date" value={eventDetails.to_date} onChange={v => setEventDetails(p => ({ ...p, to_date: v }))} />
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">To Noon</label>
-              <select value={eventDetails.to_noon} onChange={e => setEventDetails(p => ({ ...p, to_noon: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
-                <option value="">Select...</option>
-                <option value="Full Day ">Full Day</option>
-                <option value="FN ">FN</option>
-                <option value="AN">AN</option>
-              </select>
-            </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-            <Input label="Event Title" value={eventDetails.event_title} onChange={v => setEventDetails(p => ({ ...p, event_title: v }))} />
-            <Input label="Host Institution Name" value={eventDetails.host_institution_name} onChange={v => setEventDetails(p => ({ ...p, host_institution_name: v }))} />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">Mode of Event</label>
-              <select value={eventDetails.mode_of_event} onChange={e => setEventDetails(p => ({ ...p, mode_of_event: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
-                <option value="">Select Mode...</option>
-                <option value="Offline">Offline</option>
-                <option value="Online">Online</option>
-                <option value="Hybrid">Hybrid</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">Nature of Event</label>
-              <select value={eventDetails.nature_of_event} onChange={e => setEventDetails(p => ({ ...p, nature_of_event: e.target.value }))} className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500">
-                <option value="">Select Nature...</option>
-                <option value="Seminar">Seminar</option>
-                <option value="Workshop">Workshop</option>
-                <option value="FDP">FDP</option>
-                <option value="STTP">STTP</option>
-                <option value="Conference">Conference</option>
-                <option value="Online course">Online course</option>
-                <option value="Others">Others</option>
-              </select>
-            </div>
-            <Input label="Platform (if Online)" value={eventDetails.platform_if_online} onChange={v => setEventDetails(p => ({ ...p, platform_if_online: v }))} />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-            <Input label="Purpose" value={eventDetails.purpose} onChange={v => setEventDetails(p => ({ ...p, purpose: v }))} />
-            <Input label="KSS Link" value={eventDetails.kss_link} onChange={v => setEventDetails(p => ({ ...p, kss_link: v }))} required />
-          </div>
-          
-          <div className="pt-2">
-             <label className="block text-xs font-bold text-gray-700 mb-1">Expected Outcome</label>
-             <textarea 
-               value={eventDetails.expected_outcome} 
-               onChange={e => setEventDetails(p => ({ ...p, expected_outcome: e.target.value }))}
-               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500"
-               rows={2}
-             />
-          </div>
+          {(() => {
+            const activeTemplate = odTemplates.find(t => t.id === selectedOdTemplateId) || odTemplates[0];
+            if (!activeTemplate) return <div className="p-4 text-sm text-gray-500">Loading form schema...</div>;
+            const schemaToRender = activeTemplate.form_schema.filter(field => {
+              if (field.name === 'proof') return false;
+              if (odClaim === 'no' && (field.name === 'type' || field.name === 'reason')) return false;
+              return true;
+            });
+            return <DynamicFormRenderer fields={schemaToRender} values={eventDetails} onChange={setEventDetails} className="grid grid-cols-1 md:grid-cols-2 gap-x-4" />;
+          })()}
 
           <div className="pt-2 border-t mt-4">
-             <label className="block text-xs font-bold text-gray-700 mb-2">Upload Event Proof <span className="text-red-500">*</span></label>
-             <DragDropFileInput fileKey="event_proof" files={files} onChange={handleFileChange} />
-             <p className="text-xs text-gray-500 mt-1">Required: Upload brochure, invitation, or certificate</p>
+             <label className="block text-xs font-bold text-gray-700 mb-2">Upload Event Attended Proof <span className="text-red-500">*</span></label>
+             <DragDropFileInput fileKey="event_proof" files={files} orientations={orientations} onChange={handleFileChange} />
           </div>
         </div>
       )}
 
       {showExpenses && (
         <>
-          {/* Travel Expenses */}
           <Section title="Travel Expenses" total={travelTotal}>
             {travel.map((row, i) => (
               <div key={i} className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end border border-gray-100 rounded-lg p-3 bg-white">
@@ -332,15 +317,14 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
             <button onClick={() => setTravel([...travel, { ...EMPTY_TRAVEL }])} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium mt-1"><Plus size={14} /> Add Next</button>
           </Section>
 
-          {/* Food Expenses */}
           <Section title="Food Expenses" total={foodTotal}>
             {food.map((row, i) => (
               <div key={i} className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end border border-gray-100 rounded-lg p-3 bg-white">
                 <Input label="Date" type="date" value={row.date} onChange={v => updateRow(food, setFood, i, 'date', v)} required />
                 <Input label="Bill No." value={row.bill_no} onChange={v => updateRow(food, setFood, i, 'bill_no', v)} />
-                <Input label="Breakfast" type="text" value={row.breakfast || ''} onChange={v => updateRow(food, setFood, i, 'breakfast', v)} />
-                <Input label="Lunch" type="text" value={row.lunch || ''} onChange={v => updateRow(food, setFood, i, 'lunch', v)} />
-                <Input label="Dinner" type="text" value={row.dinner || ''} onChange={v => updateRow(food, setFood, i, 'dinner', v)} />
+                <Input label="Breakfast" value={row.breakfast || ''} onChange={v => updateRow(food, setFood, i, 'breakfast', v)} />
+                <Input label="Lunch" value={row.lunch || ''} onChange={v => updateRow(food, setFood, i, 'lunch', v)} />
+                <Input label="Dinner" value={row.dinner || ''} onChange={v => updateRow(food, setFood, i, 'dinner', v)} />
                 <Input label="Amount (₹)" type="number" value={row.amount || ''} onChange={v => updateRow(food, setFood, i, 'amount', Number(v) || 0)} required />
                 <div className="flex gap-1 items-end">
                   <FileInput fileKey={`food_proof_${i}`} files={files} onChange={handleFileChange} />
@@ -351,7 +335,6 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
             <button onClick={() => setFood([...food, { ...EMPTY_FOOD }])} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium mt-1"><Plus size={14} /> Add Next</button>
           </Section>
 
-          {/* Other Expenses */}
           <Section title="Other Expenses" total={otherTotal}>
             {other.map((row, i) => (
               <div key={i} className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end border border-gray-100 rounded-lg p-3 bg-white">
@@ -369,29 +352,34 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
             <button onClick={() => setOther([...other, { ...EMPTY_OTHER, s_no: other.length + 1 }])} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium mt-1"><Plus size={14} /> Add Next</button>
           </Section>
 
-          {/* Fees & Advance */}
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">Total Fees Spend (₹)</label>
-                <input type="number" value={feesSpend || ''} onChange={e => setFeesSpend(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                <input type="number" value={feesSpend || ''} onChange={e => setFeesSpend(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">Advance Amount Received (₹)</label>
-                <input type="number" value={advanceAmount || ''} onChange={e => setAdvanceAmount(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                <input type="number" value={advanceAmount || ''} onChange={e => setAdvanceAmount(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">Advance Date</label>
-                <input type="date" value={advanceDate} onChange={e => setAdvanceDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                <input type="date" value={advanceDate} onChange={e => setAdvanceDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
             </div>
+
+            {Number(advanceAmount) > 0 && (
+              <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                <label className="block text-xs font-bold text-amber-800 mb-2">Advance Receipt Proof <span className="text-red-500">*</span></label>
+                <DragDropFileInput fileKey="advance_proof" files={files} orientations={orientations} onChange={handleFileChange} />
+              </div>
+            )}
             
             <div className="mt-2">
                <label className="block text-xs font-bold text-gray-700 mb-2">Upload Overall Event/Fees Proof</label>
-               <DragDropFileInput fileKey="fees_proof" files={files} onChange={handleFileChange} />
+               <DragDropFileInput fileKey="fees_proof" files={files} orientations={orientations} onChange={handleFileChange} />
             </div>
 
-            {/* Totals */}
             <div className="border-t pt-4 space-y-2">
               <div className="flex justify-between text-sm"><span className="text-gray-600">Travel Total</span><span className="font-semibold">₹{travelTotal.toLocaleString()}</span></div>
               <div className="flex justify-between text-sm"><span className="text-gray-600">Food Total</span><span className="font-semibold">₹{foodTotal.toLocaleString()}</span></div>
@@ -416,11 +404,18 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
           </button>
         </>
       )}
+
+      {activeCropperFile && activeCropperKey && (
+        <ImageCropperModal
+          file={activeCropperFile}
+          isOpen={true}
+          onClose={() => { setActiveCropperFile(null); setActiveCropperKey(null); }}
+          onSave={handleCropperSave}
+        />
+      )}
     </div>
   );
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────
 
 function updateRow<T>(arr: T[], setter: React.Dispatch<React.SetStateAction<T[]>>, idx: number, field: keyof T, value: any) {
   const n = [...arr]; n[idx] = { ...n[idx], [field]: value }; setter(n);
@@ -455,40 +450,78 @@ function Input({ label, value, onChange, type = 'text', readOnly = false, requir
   );
 }
 
-function FileInput({ fileKey, files, onChange, label, required }: { fileKey: string; files: Record<string, File>; onChange: (k: string, f: File | null) => void; label?: string; required?: boolean }) {
+function FileInput({ fileKey, files, onChange, label, required }: { 
+  fileKey: string; 
+  files: Record<string, File>; 
+  onChange: (k: string, f: File | null) => void; 
+  label?: string; 
+  required?: boolean;
+}) {
+  const file = files[fileKey];
   return (
-    <label className="flex items-center gap-1 text-xs text-blue-600 cursor-pointer hover:text-blue-700" title={files[fileKey]?.name || 'Upload proof'}>
-      <Upload size={14} />
-      <span className="truncate max-w-[60px]">{files[fileKey]?.name || label || 'Proof'}</span>
-      {required && <span className="text-red-500">*</span>}
-      <input type="file" className="hidden" onChange={e => onChange(fileKey, e.target.files?.[0] || null)} />
-    </label>
+    <div className="flex flex-col items-start gap-1">
+      <label className="flex items-center gap-1 text-xs text-blue-600 cursor-pointer hover:text-blue-700" title={file?.name || 'Upload proof'}>
+        <Upload size={14} />
+        <span className="truncate max-w-[120px]">{file?.name || label || 'Proof'}</span>
+        {required && <span className="text-red-500">*</span>}
+        <input 
+          key={file ? file.name + file.size : 'empty'}
+          type="file" className="hidden" accept="image/*,application/pdf"
+          onChange={e => onChange(fileKey, e.target.files?.[0] || null)} 
+        />
+      </label>
+      {file && (
+        <button type="button" onClick={() => onChange(fileKey, null)} className="text-[10px] text-red-500 hover:text-red-700 underline">Remove</button>
+      )}
+    </div>
   );
 }
 
-function DragDropFileInput({ fileKey, files, onChange, label }: { fileKey: string; files: Record<string, File>; onChange: (k: string, f: File | null) => void; label?: string }) {
+function DragDropFileInput({ fileKey, files, orientations, onChange }: { 
+  fileKey: string; 
+  files: Record<string, File>; 
+  orientations: Record<string, 'portrait' | 'landscape'>;
+  onChange: (k: string, f: File | null) => void; 
+}) {
   const file = files[fileKey];
+  const orientation = orientations[fileKey] || 'portrait';
+  
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); };
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onChange(fileKey, e.dataTransfer.files[0]);
-    }
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) onChange(fileKey, e.dataTransfer.files[0]);
   };
 
   return (
-    <label 
-      className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-blue-200 rounded-xl cursor-pointer bg-blue-50/50 hover:bg-blue-50 hover:border-blue-400 transition-colors"
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
-      <div className="flex flex-col items-center justify-center pt-5 pb-6">
-        <Upload className="w-6 h-6 mb-2 text-blue-500" />
-        <p className="text-sm text-gray-600 px-2 text-center">
-          {file ? <span className="font-medium text-blue-700 truncate max-w-full block px-2">{file.name}</span> : <span><span className="font-medium text-blue-600">Click to upload</span> or drag and drop</span>}
-        </p>
-      </div>
-      <input type="file" className="hidden" onChange={e => onChange(fileKey, e.target.files?.[0] || null)} />
-    </label>
+    <div className="flex flex-col w-full">
+      <label 
+        className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-blue-200 rounded-xl cursor-pointer bg-blue-50/50 hover:bg-blue-50 hover:border-blue-400 transition-colors"
+        onDragOver={handleDragOver} onDrop={handleDrop}
+      >
+        <div className="flex flex-col items-center justify-center pt-5 pb-6">
+          <Upload className="w-6 h-6 mb-2 text-blue-500" />
+          <p className="text-sm text-gray-600 px-2 text-center">
+            {file ? <span className="font-medium text-blue-700 truncate max-w-full block px-2">{file.name}</span> : <span><span className="font-medium text-blue-600">Click to upload</span> or drag and drop</span>}
+          </p>
+        </div>
+        <input type="file" className="hidden" onChange={e => onChange(fileKey, e.target.files?.[0] || null)} />
+      </label>
+      
+      {file && (
+        <div className="mt-2 flex items-center justify-end gap-2 pr-1">
+          <span className="text-xs text-gray-600 font-medium">Layout:</span>
+          <span className="text-xs font-semibold text-blue-700 capitalize bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+            {orientation}
+          </span>
+          <button 
+            type="button"
+            onClick={(e) => { e.preventDefault(); onChange(fileKey, null); }} 
+            className="text-xs text-red-500 hover:text-red-700 underline ml-2"
+          >
+            Remove File
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

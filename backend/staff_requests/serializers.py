@@ -195,6 +195,13 @@ class ApproverSerializer(serializers.ModelSerializer):
         read_only_fields = fields
     
     def get_full_name(self, obj):
+        try:
+            profile = getattr(obj, 'staff_profile', None)
+            if profile:
+                name = obj.get_full_name() or obj.username
+                return name
+        except Exception:
+            pass
         return obj.get_full_name() or obj.username
 
 
@@ -401,7 +408,7 @@ class EventAttendingFileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EventAttendingFile
-        fields = ['id', 'expense_type', 'expense_index', 'file', 'file_url', 'original_filename', 'uploaded_at']
+        fields = ['id', 'expense_type', 'expense_index', 'file', 'file_url', 'original_filename', 'orientation', 'uploaded_at']
         read_only_fields = ['id', 'uploaded_at']
 
     def get_file_url(self, obj):
@@ -439,9 +446,12 @@ class EventAttendingFormListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_on_duty_form_data(self, obj):
-        if obj.on_duty_request:
-            return obj.on_duty_request.form_data
-        return obj.custom_event_details or {}
+        data = {}
+        if obj.on_duty_request and obj.on_duty_request.form_data:
+            data.update(obj.on_duty_request.form_data)
+        if obj.custom_event_details:
+            data.update(obj.custom_event_details)
+        return data
 
 
 class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
@@ -458,6 +468,7 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
     workflow_progress = serializers.SerializerMethodField()
     full_workflow = serializers.SerializerMethodField()
     current_approver_role = serializers.SerializerMethodField()
+    budget_details = serializers.SerializerMethodField()
 
     class Meta:
         model = EventAttendingForm
@@ -469,14 +480,57 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
             'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
             'status', 'current_step', 'current_approver_role',
             'files', 'approval_logs', 'workflow_progress', 'full_workflow',
-            'created_at', 'updated_at',
+            'created_at', 'updated_at', 'budget_details'
         ]
         read_only_fields = fields
 
-    def get_on_duty_form_data(self, obj):
+    def get_budget_details(self, obj):
+        from .models import StaffEventDeclaration, EventAttendingForm
+        try:
+            decl = StaffEventDeclaration.objects.get(staff=obj.staff)
+        except StaffEventDeclaration.DoesNotExist:
+            return None
+            
+        nature = ''
         if obj.on_duty_request:
-            return obj.on_duty_request.form_data
-        return obj.custom_event_details or {}
+            nature = (obj.on_duty_request.form_data or {}).get('nature_of_event', '')
+        else:
+            nature = (obj.custom_event_details or {}).get('nature_of_event', '')
+        is_conf = str(nature).strip().lower() == 'conference'
+        
+        forms = EventAttendingForm.objects.filter(staff=obj.staff, status='approved').select_related('on_duty_request')
+        used = 0
+        for f in forms:
+            f_nature = ''
+            if f.on_duty_request:
+                f_nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
+            else:
+                f_nature = (f.custom_event_details or {}).get('nature_of_event', '')
+            f_is_conf = str(f_nature).strip().lower() == 'conference'
+            if f_is_conf == is_conf:
+                used += float(f.grand_total)
+                
+        if is_conf:
+            available = float(decl.conference_budget)
+            allocated = available + used
+        else:
+            available = float(decl.normal_events_budget)
+            allocated = available + used
+            
+        return {
+            'is_conference': is_conf,
+            'allocated': allocated,
+            'used': used,
+            'available': available,
+        }
+
+    def get_on_duty_form_data(self, obj):
+        data = {}
+        if obj.on_duty_request and obj.on_duty_request.form_data:
+            data.update(obj.on_duty_request.form_data)
+        if obj.custom_event_details:
+            data.update(obj.custom_event_details)
+        return data
 
     def get_current_approver_role(self, obj):
         step = obj.get_current_approval_step()
@@ -484,28 +538,54 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
 
     def get_workflow_progress(self, obj):
         steps = obj.get_applicable_workflow_steps()
-        logs = {log.step_order: log for log in obj.approval_logs.all()}
+        logs = list(obj.approval_logs.all().order_by('id'))
+        
+        def could_be_role(user, role_name):
+            if role_name == 'HOD':
+                from academics.models import DepartmentRole
+                if hasattr(user, 'staff_profile'):
+                    return DepartmentRole.objects.filter(staff=user.staff_profile, role__in=['HOD', 'AHOD']).exists()
+                return False
+            return hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=role_name).exists()
+
         result = []
         for step in steps:
+            matched_log = None
+            
+            # 1. Try to match by the approver's actual role
+            for log in logs:
+                if could_be_role(log.approver, step.approver_role):
+                    matched_log = log
+                    break
+                    
+            # 2. Fallback to step_order
+            if not matched_log:
+                for log in logs:
+                    if log.step_order == step.step_order:
+                        matched_log = log
+                        break
+
             info = {
                 'step_order': step.step_order,
                 'approver_role': step.approver_role,
                 'is_current': step.step_order == obj.current_step and obj.status == 'pending',
-                'is_completed': step.step_order in logs,
+                'is_completed': matched_log is not None,
                 'status': None,
                 'approver': None,
                 'comments': None,
                 'action_date': None,
             }
-            if step.step_order in logs:
-                log = logs[step.step_order]
+            if matched_log:
                 info.update({
-                    'status': log.action,
-                    'approver': ApproverSerializer(log.approver).data,
-                    'comments': log.comments,
-                    'action_date': log.action_date,
+                    'status': matched_log.action,
+                    'approver': ApproverSerializer(matched_log.approver).data,
+                    'comments': matched_log.comments,
+                    'action_date': matched_log.action_date,
                 })
+                logs.remove(matched_log)
+                
             result.append(info)
+            
         return result
 
     def get_full_workflow(self, obj):

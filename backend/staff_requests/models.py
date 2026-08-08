@@ -675,6 +675,12 @@ class EventAttendingFile(models.Model):
         ('food', 'Food'),
         ('other', 'Other'),
         ('fees', 'Fees'),
+        ('advance', 'Advance Receipt'),
+    ]
+
+    ORIENTATION_CHOICES = [
+        ('portrait', 'Portrait'),
+        ('landscape', 'Landscape'),
     ]
 
     event_form = models.ForeignKey(
@@ -686,6 +692,12 @@ class EventAttendingFile(models.Model):
     expense_index = models.IntegerField(default=0, help_text='Row index within the expense type')
     file = models.FileField(upload_to='event_attending_proofs/')
     original_filename = models.CharField(max_length=255)
+    orientation = models.CharField(
+        max_length=10,
+        choices=ORIENTATION_CHOICES,
+        default='portrait',
+        help_text='How to display this proof in the PDF: portrait (1 per page) or landscape (2 per page)',
+    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

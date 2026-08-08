@@ -11,7 +11,8 @@ import autoTable from 'jspdf-autotable';
 import type { EventAttendingFormDetail } from '../../../types/eventAttending';
 
 const INSTITUTION = 'K RAMAKRISHNAN GROUP OF INSTITUTION';
-const LOGO_PATH = '/favicon.png';
+const LOGO_LEFT = '/logo left indent.png';
+const LOGO_RIGHT = '/logo.png';
 
 // jsPDF built-in fonts (Helvetica/Times/Courier) do NOT include the Rs. (₹) glyph.
 // Use the ASCII-safe "Rs." prefix throughout the PDF.
@@ -79,19 +80,15 @@ function addPageHeader(
 ) {
   const W = doc.internal.pageSize.getWidth();
 
-  // Logo (top-left)
   if (logoBase64) {
     try {
-      doc.addImage(logoBase64, 'PNG', 10, 8, 18, 18);
+      doc.addImage(logoBase64, 'PNG', 10, 8, 65, 24);
     } catch { /* ignore */ }
   }
 
   // Heading block
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text(INSTITUTION, W / 2, 14, { align: 'center' });
-
-  doc.setFontSize(11);
   doc.text(title, W / 2, 22, { align: 'center' });
 
   if (subtitle) {
@@ -136,15 +133,22 @@ function addSignatureBlock(doc: jsPDF, startY: number, labels: string[]): number
 function buildMainContent(
   doc: jsPDF,
   form: EventAttendingFormDetail,
-  logoBase64: string | null,
-) {
-  addPageHeader(doc, logoBase64, 'EVENT INFORMATION', '');
+  logoLeftBase64: string | null,
+  logoRightBase64: string | null,
+): { signatureStartY: number, availableTopY: number } {
+  addPageHeader(doc, logoLeftBase64, 'EVENT SETTLEMENT', '');
 
   const W = doc.internal.pageSize.getWidth();
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text(`Date : ${formatDate(form.created_at)}`, W - 12, 14, { align: 'right' });
+  doc.text(`Date : ${formatDate(form.created_at)}`, W / 2, 28, { align: 'center' });
+  // Logo (right)
+  if (logoRightBase64) {
+    try {
+      doc.addImage(logoRightBase64, 'PNG', W - 25, 8, 12, 8);
+    } catch {}
+  }
 
   // ── Faculty Details (compact: 2 per row) ──────────────────────────
   const applicantName = getApplicantName(form.applicant);
@@ -153,37 +157,21 @@ function buildMainContent(
   const applicantDepartment = getApplicantField(form.applicant, 'department');
 
   // 2-column layout: left col = label+value, right col = label+value
-  // We use a 4-column autoTable: [label, value, label, value]
-  autoTable(doc, {
-    startY: 36,
-    body: [
-      [
-        { content: 'Name of the Faculty', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
-        { content: applicantName },
-        { content: 'Faculty ID', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
-        { content: applicantId },
-      ],
-      [
-        { content: 'Date of Joining', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
-        { content: applicantJoinDate },
-        { content: 'Department', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
-        { content: applicantDepartment },
-      ],
+  // We build a single paired array for both Faculty Details and Event Details to avoid gaps
+  const combinedRows: any[][] = [
+    [
+      { content: 'Name of the Faculty', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
+      { content: applicantName },
+      { content: 'Faculty ID', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
+      { content: applicantId },
     ],
-    styles: { fontSize: 9, cellPadding: 3 },
-    columnStyles: {
-      0: { cellWidth: 42 },
-      1: { cellWidth: 'auto' },
-      2: { cellWidth: 32 },
-      3: { cellWidth: 'auto' },
-    },
-    theme: 'grid',
-    tableLineColor: [180, 180, 180],
-    tableLineWidth: 0.3,
-    margin: { left: 10, right: 10 },
-  });
-
-  let curY = ((doc as any).lastAutoTable?.finalY ?? 60) + 6;
+    [
+      { content: 'Date of Joining', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
+      { content: applicantJoinDate },
+      { content: 'Department', styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
+      { content: applicantDepartment },
+    ],
+  ];
 
   // ── On Duty / Event Details (compact: 2 fields per row) ─────────
   const EVENT_LABELS: Record<string, string> = {
@@ -224,17 +212,16 @@ function buildMainContent(
   });
 
   // Pair into 4-column rows: [label1, value1, label2, value2]
-  const pairedRows: any[][] = [];
   for (let i = 0; i < flatRows.length; i += 2) {
     if (flatRows[i + 1]) {
-      pairedRows.push([
+      combinedRows.push([
         { content: flatRows[i][0], styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
         { content: flatRows[i][1] },
         { content: flatRows[i + 1][0], styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
         { content: flatRows[i + 1][1] },
       ]);
     } else {
-      pairedRows.push([
+      combinedRows.push([
         { content: flatRows[i][0], styles: { fontStyle: 'bold', fillColor: [245, 247, 250] } },
         { content: flatRows[i][1], colSpan: 3 },
       ]);
@@ -242,8 +229,8 @@ function buildMainContent(
   }
 
   autoTable(doc, {
-    startY: curY,
-    body: pairedRows,
+    startY: 38,
+    body: combinedRows,
     styles: { fontSize: 9, cellPadding: 3 },
     columnStyles: {
       0: { cellWidth: 40 },
@@ -257,7 +244,7 @@ function buildMainContent(
     margin: { left: 10, right: 10 },
   });
 
-  curY = ((doc as any).lastAutoTable?.finalY ?? curY + 30) + 8;
+  let curY = ((doc as any).lastAutoTable?.finalY ?? 60) + 8;
 
   // ── Expense Claim section (continuous on same page flow) ──────────
   doc.setFont('helvetica', 'bold');
@@ -361,10 +348,34 @@ function buildMainContent(
     curY += 9;
   }
 
+  const totalsStartY = curY;
+
+  // Budget details block
+  if ((form as any).budget_details) {
+    const b = (form as any).budget_details;
+    const eligibleText = b.is_conference ? 'Eligible Amount for Conference' : 'Eligible Amount for Events';
+    
+    autoTable(doc, {
+      startY: totalsStartY,
+      body: [
+        [`Available Amount\n(${eligibleText})`, rs(b.allocated)],
+        ['Amount Received During AY', rs(b.used)],
+        ['Balance Amount\n(Available Balance)', rs(b.available)],
+      ],
+      styles: { fontSize: 8, cellPadding: 2 },
+      columnStyles: {
+        0: { fontStyle: 'bold', halign: 'left', fillColor: [245, 247, 250] },
+        1: { halign: 'right' },
+      },
+      theme: 'grid',
+      tableWidth: 90,
+      margin: { left: 10 },
+    });
+  }
+
   // Totals summary — right-aligned mini table
-  curY += 4;
   autoTable(doc, {
-    startY: curY,
+    startY: totalsStartY,
     body: [
       ['Grand Total', rs(form.grand_total)],
       ['Advance Amount Received', rs(form.advance_amount_received)],
@@ -379,21 +390,26 @@ function buildMainContent(
       1: { fontStyle: 'bold', halign: 'right' },
     },
     theme: 'grid',
-    tableWidth: 100,
-    margin: { left: W - 110, right: 10 },
+    tableWidth: 90,
+    margin: { left: W - 100, right: 10 },
   });
 
   curY = ((doc as any).lastAutoTable?.finalY ?? curY + 24) + 10;
 
   // ── Signature block (horizontal, 2 rows) ─────────────────────────
-  // Need ~70mm for both sig rows + footer clearance. Only break if truly no space.
   const H = doc.internal.pageSize.getHeight();
-  if (curY + 70 > H - 15) {
+  const signatureHeight = 45; // Space needed for signature block
+  
+  let availableTopY = curY;
+  
+  if (curY + signatureHeight > H - 15) {
       doc.addPage();
-      curY = 20;
+      availableTopY = 20; // Top of the new page is available
   }
   
-  curY += 12; // Extra padding for names above the line
+  // ALWAYS place signature at the bottom of the page it lands on
+  const signatureStartY = H - signatureHeight - 15;
+  
   const balanceLabel = form.balance >= 0 ? 'Balance Received' : 'Refunded';
   
   const getSigData = (role: string) => {
@@ -454,91 +470,196 @@ function buildMainContent(
 
   // Row 1: Faculty | <dynamic roles from workflow>
   const firstRowRoles = ['Faculty', ...workflowRoles];
-  drawHorizSigRow(firstRowRoles, curY);
+  drawHorizSigRow(firstRowRoles, signatureStartY + 12);
   // Row 2: Administrative Officer / Manager | Balance Received
-  drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], curY + 22);
+  drawHorizSigRow(['Administrative Officer / Manager', balanceLabel], signatureStartY + 34);
+
+  return { signatureStartY, availableTopY };
 }
 
-// ── Pages 2+: Proof Documents ─────────────────────────────────────────
-async function buildProofPages(
+async function drawProofBlock(
   doc: jsPDF,
-  form: EventAttendingFormDetail,
-  logoBase64: string | null,
+  file: any,
+  logoLeftBase64: string | null,
+  logoRightBase64: string | null,
+  startX: number,
+  startY: number,
+  blockWidth: number,
+  blockHeight: number,
+  hideLogos: boolean = false
 ) {
-  const proofFiles = (form.files || []).filter(f => f.file_url);
-  if (!proofFiles.length) return;
+  let textY = startY + 14;
 
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
-
-  for (const file of proofFiles) {
-    doc.addPage();
-
-    // Logo top-left
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, 'PNG', 10, 8, 18, 18);
-      } catch { }
+  if (!hideLogos) {
+    if (logoLeftBase64) {
+      try { doc.addImage(logoLeftBase64, 'PNG', startX + 10, startY + 8, 55, 15); } catch { }
+    }
+    if (logoRightBase64) {
+      try { doc.addImage(logoRightBase64, 'PNG', startX + blockWidth - 25, startY + 8, 12, 12); } catch { }
     }
 
     // Page mini-header
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
+    doc.setFontSize(12);
     doc.setTextColor(0, 0, 0);
-    doc.text(INSTITUTION, W / 2, 14, { align: 'center' });
+    doc.text('EVENT SETTLEMENT', startX + (blockWidth / 2), startY + 14, { align: 'center' });
+    textY = startY + 20;
+  }
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    const expType = (file.expense_type || '').replace(/_/g, ' ').toUpperCase();
-    doc.text(`Proof Document - ${expType}`, W / 2, 20, { align: 'center' });
-    doc.text(`File: ${file.original_filename || 'attachment'}`, W / 2, 26, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  const expTypeRaw = (file.expense_type || '').toLowerCase();
+  const expTypeLabel = expTypeRaw === 'advance'
+    ? 'ADVANCE RECEIPT'
+    : expTypeRaw.replace(/_/g, ' ').toUpperCase();
+  doc.text(`Proof Document - ${expTypeLabel}`, startX + (blockWidth / 2), textY, { align: 'center' });
+  doc.text(`File: ${file.original_filename || 'attachment'}`, startX + (blockWidth / 2), textY + 6, { align: 'center' });
 
-    doc.setDrawColor(60, 60, 60);
-    doc.setLineWidth(0.4);
-    doc.line(10, 30, W - 10, 30);
+  doc.setDrawColor(60, 60, 60);
+  doc.setLineWidth(0.4);
+  doc.line(startX + 10, textY + 10, startX + blockWidth - 10, textY + 10);
+  
+  const headerSpace = textY + 13 - startY;
 
-    // Fetch the proof file
-    const fetched = await fetchFileAsBase64(file.file_url!);
-    if (!fetched) {
-      doc.setFontSize(10);
-      doc.setTextColor(180, 0, 0);
-      doc.text('(File could not be loaded)', W / 2, H / 2, { align: 'center' });
-      doc.setTextColor(0, 0, 0);
-      continue;
+  // Fetch the proof file
+  const fetched = await fetchFileAsBase64(file.file_url!);
+  if (!fetched) {
+    doc.setFontSize(10);
+    doc.setTextColor(180, 0, 0);
+    doc.text('(File could not be loaded)', startX + (blockWidth / 2), startY + (blockHeight / 2), { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    return;
+  }
+
+  const mime = fetched.mimeType.toLowerCase();
+
+  if (mime.startsWith('image/')) {
+    const imgType = mime.includes('png') ? 'PNG' : 'JPEG';
+    const maxImgW = blockWidth - 20;
+    const maxImgH = blockHeight - 40; // 30 for header, 10 for bottom padding
+    try {
+      const props = doc.getImageProperties(fetched.data);
+      let imgW = props.width;
+      let imgH = props.height;
+      let angle = 0;
+      let drawX, drawY, dw, dh;
+
+      // If the block is wide (Landscape) and the image is tall (Portrait)
+      if (maxImgW > maxImgH && imgH > imgW) {
+        // Rotate -90 degrees
+        angle = -90;
+        // Bounding box for rotated image is imgH (width) x imgW (height)
+        const ratio = Math.min(maxImgW / imgH, maxImgH / imgW);
+        dw = imgW * ratio;
+        dh = imgH * ratio;
+        
+        const boxX = startX + (blockWidth - dh) / 2;
+        const boxY = startY + headerSpace + 3 + (maxImgH - dw) / 2;
+        
+        drawX = boxX;
+        drawY = boxY + dw;
+      } else {
+        const ratio = Math.min(maxImgW / imgW, maxImgH / imgH);
+        dw = imgW * ratio;
+        dh = imgH * ratio;
+        
+        drawX = startX + (blockWidth - dw) / 2;
+        drawY = startY + headerSpace + 3 + (maxImgH - dh) / 2;
+      }
+      
+      doc.addImage(fetched.data, imgType, drawX, drawY, dw, dh, undefined, 'FAST', angle);
+    } catch {
+      doc.addImage(fetched.data, imgType, startX + 10, startY + headerSpace + 3, maxImgW, maxImgH);
     }
-
-    const mime = fetched.mimeType.toLowerCase();
-
-    if (mime.startsWith('image/')) {
-      const imgType = mime.includes('png') ? 'PNG' : 'JPEG';
-      const maxW = W - 20;
-      const maxH = H - 44; // leave room for header (30mm) + footer (14mm)
-      try {
-        const props = doc.getImageProperties(fetched.data);
-        const ratio = Math.min(maxW / props.width, maxH / props.height);
-        const dw = props.width * ratio;
-        const dh = props.height * ratio;
-        const x = (W - dw) / 2;
-        doc.addImage(fetched.data, imgType, x, 33, dw, dh);
-      } catch {
-        doc.addImage(fetched.data, imgType, 10, 33, maxW, maxH);
-      }
-    } else if (mime === 'application/pdf') {
-      // jsPDF cannot embed PDF pages directly — show a notice + link
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(60, 60, 60);
-      doc.text('(PDF proof - please open the link below)', W / 2, H / 2 - 6, { align: 'center' });
-      if (file.file_url) {
-        doc.setTextColor(0, 0, 200);
-        doc.textWithLink('Open PDF File', W / 2, H / 2 + 4, { url: file.file_url, align: 'center' } as any);
-        doc.setTextColor(0, 0, 0);
-      }
-    } else {
-      doc.setFontSize(9);
-      doc.setTextColor(60, 60, 60);
-      doc.text(`(Unsupported file type: ${mime})`, W / 2, H / 2, { align: 'center' });
+  } else if (mime === 'application/pdf') {
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(60, 60, 60);
+    doc.text('(PDF proof - please open the link below)', startX + (blockWidth / 2), startY + (blockHeight / 2) - 6, { align: 'center' });
+    if (file.file_url) {
+      doc.setTextColor(0, 0, 200);
+      doc.textWithLink('Open PDF File', startX + (blockWidth / 2), startY + (blockHeight / 2) + 4, { url: file.file_url, align: 'center' } as any);
       doc.setTextColor(0, 0, 0);
+    }
+  } else {
+    doc.setFontSize(9);
+    doc.setTextColor(60, 60, 60);
+    doc.text(`(Unsupported file type: ${mime})`, startX + (blockWidth / 2), startY + (blockHeight / 2), { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+  }
+}
+
+async function buildProofPages(
+  doc: jsPDF,
+  form: EventAttendingFormDetail,
+  logoLeftBase64: string | null,
+  logoRightBase64: string | null,
+  layout: { signatureStartY: number, availableTopY: number }
+) {
+  const proofFiles = (form.files || []).filter(f => f.file_url);
+  if (!proofFiles.length) return;
+
+  const portraitFiles = proofFiles.filter(f => f.orientation !== 'landscape');
+  const landscapeFiles = proofFiles.filter(f => f.orientation === 'landscape');
+
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  
+  let i_portrait = 0;
+  let i_landscape = 0;
+  
+  const availableSpace = layout.signatureStartY - layout.availableTopY;
+  
+  // Fill the remaining space on the signature page if large enough (e.g. > 60mm)
+  if (availableSpace > 60) {
+      if (portraitFiles.length > 0) {
+          const file = portraitFiles[0];
+          await drawProofBlock(doc, file, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, availableSpace, true);
+          i_portrait++;
+      } else if (landscapeFiles.length > 0) {
+          const file1 = landscapeFiles[0];
+          const blockH = Math.min(availableSpace, H / 2);
+          await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, layout.availableTopY, W, blockH, true);
+          i_landscape++;
+          
+          if (availableSpace >= H / 2 + blockH - 5 && landscapeFiles.length > 1) {
+              const file2 = landscapeFiles[1];
+              doc.setDrawColor(200, 200, 200);
+              doc.setLineWidth(0.2);
+              doc.line(10, layout.availableTopY + blockH, W - 10, layout.availableTopY + blockH);
+              await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, layout.availableTopY + blockH, W, availableSpace - blockH, true);
+              i_landscape++;
+          }
+      }
+  }
+
+  // Draw remaining portrait files (1 per page)
+  for (let i = i_portrait; i < portraitFiles.length; i++) {
+    doc.addPage('a4', 'portrait');
+    await drawProofBlock(doc, portraitFiles[i], logoLeftBase64, logoRightBase64, 0, 0, W, H - 14); // H-14 leaves room for footer
+  }
+
+  // Draw remaining landscape files (2 per page top-and-bottom)
+  for (let i = i_landscape; i < landscapeFiles.length; i += 2) {
+    doc.addPage('a4', 'portrait');
+    const W = doc.internal.pageSize.getWidth();
+    const H = doc.internal.pageSize.getHeight();
+    
+    const file1 = landscapeFiles[i];
+    const file2 = landscapeFiles[i + 1];
+    const halfH = H / 2;
+    
+    // Top half
+    await drawProofBlock(doc, file1, logoLeftBase64, logoRightBase64, 0, 0, W, halfH);
+    
+    // Bottom half (if there's a second file)
+    if (file2) {
+      // Separator line
+      doc.setDrawColor(200, 200, 200);
+      doc.setLineWidth(0.2);
+      doc.line(10, halfH, W - 10, halfH);
+      
+      await drawProofBlock(doc, file2, logoLeftBase64, logoRightBase64, 0, halfH, W, halfH - 14, true);
     }
   }
 }
@@ -547,12 +668,13 @@ async function buildProofPages(
 export async function generateEventPdf(form: EventAttendingFormDetail): Promise<void> {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-  // Load logo once
-  const logoBase64 = await loadImageBase64(LOGO_PATH);
+  // Load logos once
+  const logoLeftBase64 = await loadImageBase64(LOGO_LEFT);
+  const logoRightBase64 = await loadImageBase64(LOGO_RIGHT);
 
   // Build content — event info + expense claim on same continuous page flow
-  buildMainContent(doc, form, logoBase64);
-  await buildProofPages(doc, form, logoBase64);
+  const layout = buildMainContent(doc, form, logoLeftBase64, logoRightBase64);
+  await buildProofPages(doc, form, logoLeftBase64, logoRightBase64, layout);
 
   // Page numbers and download date footer on every page
   const totalPages = (doc as any).internal.getNumberOfPages();

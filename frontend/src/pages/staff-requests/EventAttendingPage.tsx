@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   fetchApprovedODForms, fetchMyEventForms, fetchMyEventBudget,
   fetchPendingEventApprovals, fetchProcessedEventApprovals,
-  fetchEventFormDetail, fetchMyEventApproverRoles,
+  fetchEventFormDetail, fetchMyEventApproverRoles, deleteEventForm
 } from '../../services/eventAttending';
 import type { ApprovedODForm, EventAttendingFormListItem, EventAttendingFormDetail, MyEventBudget } from '../../types/eventAttending';
 import ExpenseFormTab from './event-attending/ExpenseFormTab';
@@ -12,7 +12,7 @@ import WorkflowSettingsTab from './event-attending/WorkflowSettingsTab';
 import AnalyticsTab from './event-attending/AnalyticsTab';
 import { generateEventPdf } from './event-attending/generateEventPdf';
 import ConditionsTab from './event-attending/ConditionsTab';
-import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus, BarChart3 } from 'lucide-react';
+import { ClipboardList, CheckSquare, BookOpen, Settings, Clock, CheckCircle, XCircle, ChevronDown, ChevronUp, Download, Loader2, ListPlus, BarChart3, Trash2 } from 'lucide-react';
 
 export default function EventAttendingPage() {
   const [activeTab, setActiveTab] = useState<'forms' | 'approvals' | 'declarations' | 'conditions' | 'settings' | 'analytics'>('forms');
@@ -71,15 +71,26 @@ export default function EventAttendingPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const handleDownloadPdf = async (formId: number) => {
-    setDownloadingId(formId);
+  const handleDownloadPdf = async (id: number) => {
+    setDownloadingId(id);
     try {
-      const detail = await fetchEventFormDetail(formId);
+      const detail = await fetchEventFormDetail(id);
       await generateEventPdf(detail);
-    } catch (e) {
-      alert('Failed to generate PDF. Please try again.');
+    } catch (e: any) {
+      alert('Failed to generate PDF: ' + (e?.response?.data?.error || e.message));
     } finally {
       setDownloadingId(null);
+    }
+  };
+
+  const handleDeleteForm = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this pending form? This action cannot be undone.')) return;
+    try {
+      await deleteEventForm(id);
+      loadData();
+      alert('Form deleted successfully.');
+    } catch (e: any) {
+      alert('Failed to delete form: ' + (e?.response?.data?.error || e.message));
     }
   };
 
@@ -159,7 +170,16 @@ export default function EventAttendingPage() {
                                   }
                                 </button>
                               )}
-                              <div className="cursor-pointer" onClick={() => setExpandedForm(expanded ? null : form.id)}>
+                              {form.status === 'pending' && (
+                                <button
+                                  onClick={() => handleDeleteForm(form.id)}
+                                  title="Delete Pending Form"
+                                  className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
+                              <div className="cursor-pointer p-1 hover:bg-gray-100 rounded-md ml-1" onClick={() => setExpandedForm(expanded ? null : form.id)}>
                                 {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                               </div>
                             </div>

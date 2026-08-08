@@ -7119,13 +7119,13 @@ class EventAttendingViewSet(viewsets.ViewSet):
             return False
         approver_role = step.approver_role
 
-        if approver_role in ['HR', 'PRINCIPAL', 'IQAC', 'PS', 'HAA', 'ADMIN']:
-            if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
-                return True
+        # For all other generic roles, check user's global roles dynamically
+        if hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=approver_role).exists():
+            return True
 
         if approver_role == 'HOD':
             try:
-                from academics.models import DepartmentRole, AcademicYear
+                from academics.models import DepartmentRole
                 applicant_profile = getattr(event_form.staff, 'staff_profile', None)
                 if not applicant_profile or not applicant_profile.department:
                     return False
@@ -7133,12 +7133,10 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 user_profile = getattr(user, 'staff_profile', None)
                 if not user_profile:
                     return False
-                current_year = AcademicYear.objects.filter(is_active=True).first()
-                if not current_year:
-                    return False
+                # Check HOD/AHOD without academic_year restriction — HODs persist across semesters
                 return DepartmentRole.objects.filter(
                     staff=user_profile, department=applicant_dept,
-                    role__in=['HOD', 'AHOD'], academic_year=current_year, is_active=True,
+                    role__in=['HOD', 'AHOD'], is_active=True,
                 ).exists()
             except Exception:
                 return False
@@ -7246,6 +7244,35 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 custom_event_details = json.loads(event_details_str)
             except Exception:
                 return Response({'error': 'Invalid event_details JSON'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # If od_claim=yes, auto-create a StaffRequest (OD) in the calendar workflow
+            od_claim = str(data.get('od_claim', 'no')).strip().lower()
+            if od_claim == 'yes' and custom_event_details:
+                try:
+                    from .models import RequestTemplate, StaffRequest as _SR
+                    template_id = custom_event_details.get('template_id')
+                    od_template = None
+                    if template_id:
+                        od_template = RequestTemplate.objects.filter(id=template_id, name__in=['ON duty', 'ON duty - SPL']).first()
+                    if not od_template:
+                        od_template = RequestTemplate.objects.filter(name__in=['ON duty', 'ON duty - SPL']).order_by('id').first()
+
+                    if od_template:
+                        # Build form_data from event_details for the OD template
+                        od_form_data = custom_event_details.copy()
+                        od_form_data.pop('template_id', None)
+                        auto_od = _SR.objects.create(
+                            applicant=request.user,
+                            template=od_template,
+                            form_data=od_form_data,
+                            status='pending',
+                            current_step=1,
+                        )
+                        # Set od_request so event form links to it; clear custom_event_details
+                        od_request = auto_od
+                        custom_event_details = None
+                except Exception:
+                    pass  # If OD auto-creation fails, continue with custom_event_details
 
         # Parse JSON fields
         def parse_json_field(val):
@@ -7355,8 +7382,17 @@ class EventAttendingViewSet(viewsets.ViewSet):
             elif key.startswith('fees_proof'):
                 expense_type = 'fees'
                 expense_index = 0
+            elif key == 'advance_proof':
+                expense_type = 'advance'
+                expense_index = 0
             else:
                 continue
+
+            # Read orientation metadata sent as: <key>_orientation = 'portrait' | 'landscape'
+            orientation_key = f'{key}_orientation'
+            orientation = str(data.get(orientation_key, 'portrait')).strip().lower()
+            if orientation not in ('portrait', 'landscape'):
+                orientation = 'portrait'
 
             EventAttendingFile.objects.create(
                 event_form=event_form,
@@ -7364,6 +7400,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 expense_index=expense_index,
                 file=f,
                 original_filename=f.name,
+                orientation=orientation,
             )
 
         from .serializers import EventAttendingFormDetailSerializer
@@ -7407,6 +7444,22 @@ class EventAttendingViewSet(viewsets.ViewSet):
 
         serializer = EventAttendingFormDetailSerializer(form, context={'request': request})
         return Response(serializer.data)
+
+    @action(detail=True, methods=['delete'])
+    def delete_event_form(self, request, pk=None):
+        """Delete a pending event form."""
+        from .models import EventAttendingForm
+
+        try:
+            form = EventAttendingForm.objects.get(pk=pk, staff=request.user)
+        except EventAttendingForm.DoesNotExist:
+            return Response({'error': 'Form not found or you do not have permission to delete it.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if form.status != 'pending':
+            return Response({'error': 'Only pending forms can be deleted.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        form.delete()
+        return Response({'message': 'Form deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
     # ── Approval endpoints ────────────────────────────────────────────
 
@@ -7590,7 +7643,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
         from .models import EventAttendingForm
         from academics.models import Department
 
-        qs = EventAttendingForm.objects.filter(status='approved').select_related(
+        qs = EventAttendingForm.objects.filter(status__in=['approved', 'pending', 'rejected']).select_related(
             'staff', 'staff__staff_profile', 'staff__staff_profile__department',
             'on_duty_request', 'on_duty_request__template',
         ).prefetch_related('approval_logs__approver').order_by('-updated_at')
@@ -7599,6 +7652,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
         dept_id = request.query_params.get('department')
         from_date = request.query_params.get('from_date')
         to_date = request.query_params.get('to_date')
+        type_filter = request.query_params.get('type')
 
         if dept_id:
             qs = qs.filter(staff__staff_profile__department_id=dept_id)
@@ -7606,6 +7660,8 @@ class EventAttendingViewSet(viewsets.ViewSet):
             qs = qs.filter(updated_at__date__gte=from_date)
         if to_date:
             qs = qs.filter(updated_at__date__lte=to_date)
+        if type_filter and type_filter in ['approved', 'pending', 'rejected']:
+            qs = qs.filter(status=type_filter)
 
         # Build rows — only the 6 columns needed
         rows = []
@@ -7630,11 +7686,13 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 'department': dept_name,
                 'od_type': od_type,
                 'grand_total': float(form.grand_total),
-                'approved_at': form.updated_at.strftime('%d/%m/%Y') if form.updated_at else '—',
+                'status': form.status,
+                'updated_at': form.updated_at.strftime('%d/%m/%Y') if form.updated_at else '—',
             })
 
         # Summary totals
-        total_amount = sum(r['grand_total'] for r in rows)
+        total_amount = sum(r['grand_total'] for r in rows if r['status'] == 'approved')
+        total_count = sum(1 for r in rows if r['status'] == 'approved')
 
         # Excel export
         if request.query_params.get('export') == 'excel':
@@ -7648,7 +7706,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 ws = wb.active
                 ws.title = 'Event Analytics'
 
-                headers = ['S.No', 'Staff Name', 'Department', 'OD Type', 'Approved Amount (Rs.)', 'Approved Date']
+                headers = ['S.No', 'Staff Name', 'Department', 'OD Type', 'Amount (Rs.)', 'Status', 'Date']
                 header_fill = PatternFill(start_color='1E3A5F', end_color='1E3A5F', fill_type='solid')
                 header_font = Font(color='FFFFFF', bold=True)
 
@@ -7664,11 +7722,12 @@ class EventAttendingViewSet(viewsets.ViewSet):
                     ws.cell(row=row_idx, column=3, value=row['department'])
                     ws.cell(row=row_idx, column=4, value=row['od_type'])
                     ws.cell(row=row_idx, column=5, value=row['grand_total'])
-                    ws.cell(row=row_idx, column=6, value=row['approved_at'])
+                    ws.cell(row=row_idx, column=6, value=row['status'].upper())
+                    ws.cell(row=row_idx, column=7, value=row['updated_at'])
 
                 # Totals row
                 total_row = len(rows) + 2
-                ws.cell(row=total_row, column=1, value='TOTAL')
+                ws.cell(row=total_row, column=1, value='APPROVED TOTAL')
                 ws.cell(row=total_row, column=5, value=total_amount)
                 for c in [1, 5]:
                     ws.cell(row=total_row, column=c).font = Font(bold=True)
@@ -7690,18 +7749,21 @@ class EventAttendingViewSet(viewsets.ViewSet):
             except ImportError:
                 return Response({'error': 'openpyxl not installed'}, status=500)
 
-        # Departments for filter dropdown — derived from the full unfiltered approved set
-        all_approved = EventAttendingForm.objects.filter(status='approved')
-        dept_ids_with_data = all_approved.values_list(
-            'staff__staff_profile__department_id', flat=True
-        ).distinct()
+        # Departments for filter dropdown — all departments that have staff members
+        # Uses the correct related_name 'staff' from StaffProfile.department FK
         departments = list(Department.objects.filter(
-            id__in=[d for d in dept_ids_with_data if d],
-        ).values('id', 'name', 'short_name').order_by('name'))
+            staff__isnull=False,
+        ).distinct().values('id', 'name', 'short_name').order_by('name'))
+
+        # Pending and rejected counts (all forms, unfiltered by date/dept for top summary)
+        pending_count = EventAttendingForm.objects.filter(status='pending').count()
+        rejected_count = EventAttendingForm.objects.filter(status='rejected').count()
 
         return Response({
             'forms': rows,
-            'total_count': len(rows),
+            'total_count': total_count,
+            'pending_count': pending_count,
+            'rejected_count': rejected_count,
             'total_amount': total_amount,
             'departments': departments,
         })
