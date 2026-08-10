@@ -143,11 +143,8 @@ const AcV2BypassShareLandingPage = safeLazy(() => import('./pages/Academic 2.1/a
 const AcV2PassMarkSettingsPage = safeLazy(() => import('./pages/Academic 2.1/admin/SettingsPage'), 'SettingsPage');
 const AcV2GoogleSheetsPage = safeLazy(() => import('./pages/Academic 2.1/admin/GoogleSheetsPage'), 'GoogleSheetsPage');
 const AcV2CdapTemplateEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/cdap/CDAPTemplateEditorPage'), 'CDAPTemplateEditorPage');
-<<<<<<< HEAD
 const AcV2CdapTemplatesPage = AcV2CdapTemplateEditorPage;
-=======
 const AcV2LCAWorkflowPage = safeLazy(() => import('./pages/Academic 2.1/faculty/LCAWorkflowPage'), 'LCAWorkflowPage');
->>>>>>> 4c2ca77 (naveen6)
 const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
 const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
 const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
@@ -1036,8 +1033,6 @@ export default function App() {
                     />
                   }
                 />
-<<<<<<< HEAD
-=======
                 <Route
                   path="/academic-v2/course/:courseId/lca"
                   element={
@@ -1055,7 +1050,6 @@ export default function App() {
                     />
                   }
                 />
->>>>>>> 4c2ca77 (naveen6)
                 {/* Academic 2.1 Student Routes */}
                 <Route
                   path="/academic-v2/student/dashboard"

@@ -1039,7 +1039,9 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           console.warn('Some sections failed to load subjects/staff:', failedSectionLoads);
         }
 
-        if (selectedSectionKey) {
+        const selectedResult = results.find((result) => result.sectionKey === selectedSectionKey);
+        if (selectedResult) {
+          setSelectedSectionKey(selectedResult.sectionKey);
         } else if (results.length > 0) {
           setSelectedSectionKey(results[0].sectionKey);
         }

@@ -933,11 +933,6 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             <tr>
               <th className="px-4 py-3">Subject Code</th>
               <th className="px-4 py-3">Subject Name</th>
-<<<<<<< HEAD
-=======
-              <th className="px-4 py-3">Class</th>
-              <th className="px-4 py-3">Credits</th>
->>>>>>> 4c2ca77 (naveen6)
               <th className="px-4 py-3 min-w-[250px]">Assigned Faculty</th>
             </tr>
           </thead>
@@ -1074,11 +1069,6 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{fallbackCode}</td>
                     <td className="px-4 py-3">{fallbackName}</td>
-<<<<<<< HEAD
-=======
-                    <td className="px-4 py-3 font-medium text-gray-700">{fallbackClass}</td>
-                    <td className="px-4 py-3 font-medium text-gray-700">{fallbackCredits}</td>
->>>>>>> 4c2ca77 (naveen6)
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-4 w-full">
                         <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
@@ -1148,19 +1138,10 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   const displayLabel = tempSelectedValue && isSavingThisSubject ? tempSelectedFaculty : currentFacultyLabel;
 
                   rows.push(
-<<<<<<< HEAD
                     <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
                       <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
                       <td className="px-4 py-3">{displayName}</td>
                       <td className="px-4 py-3">
-=======
-                      <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
-                        <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
-                        <td className="px-4 py-3">{displayName}</td>
-                        <td className="px-4 py-3 font-medium text-gray-700">{fallbackClass}</td>
-                        <td className="px-4 py-3 font-medium text-gray-700">{fallbackCredits}</td>
-                        <td className="px-4 py-3">
->>>>>>> 4c2ca77 (naveen6)
                         <div className="flex items-start gap-4 w-full">
                           <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
                             <div className="flex gap-2 items-center h-6">
