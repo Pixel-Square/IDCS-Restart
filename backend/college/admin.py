@@ -132,133 +132,67 @@ class CollegeAdmin(admin.ModelAdmin):
             .values_list('feature__name', flat=True)
         )
 
-        sections = [
-            {
-                'title': 'Academics',
-                'icon': 'graduation-cap',
-                'color': '#417690',
-                'models': [
-                    {'label': 'Academic Years',      'count': count('academics.AcademicYear'),  'url': url('academics', 'academicyear')},
-                    {'label': 'Departments',         'count': count('academics.Department'),    'url': url('academics', 'department')},
-                    {'label': 'Batches',             'count': count('academics.Batch'),         'url': url('academics', 'batch')},
-                    {'label': 'Batch Years',         'count': count('academics.BatchYear'),     'url': url('academics', 'batchyear')},
-                    {'label': 'Sections',            'count': count('academics.Section'),       'url': url('academics', 'section')},
-                    {'label': 'Courses',             'count': count('academics.Course'),        'url': url('academics', 'course')},
-                    {'label': 'Subjects',            'count': count('academics.Subject'),       'url': url('academics', 'subject')},
-                    {'label': 'Programs',            'count': count('academics.Program'),       'url': url('academics', 'program')},
-                    {'label': 'Semesters',           'count': count('academics.Semester'),      'url': url('academics', 'semester')},
-                ],
-            },
-            {
-                'title': 'Curriculum',
-                'icon': 'book-open',
-                'color': '#205067',
-                'models': [
-                    {'label': 'Curriculum Masters',  'count': count('curriculum.CurriculumMaster'),     'url': url('curriculum', 'curriculummaster')},
-                    {'label': 'Dept Curricula',      'count': count('curriculum.CurriculumDepartment'), 'url': url('curriculum', 'curriculumdepartment')},
-                    {'label': 'Dept Groups',         'count': count('curriculum.DepartmentGroup'),      'url': url('curriculum', 'departmentgroup')},
-                    {'label': 'Elective Subjects',   'count': count('curriculum.ElectiveSubject'),      'url': url('curriculum', 'electivesubject')},
-                    {'label': 'Regulations',         'count': count('curriculum.Regulation'),           'url': url('curriculum', 'regulation')},
-                ],
-            },
-            {
-                'title': 'OBE / Marks',
-                'icon': 'chart-bar',
-                'color': '#264b5d',
-                'models': [
-                    {'label': 'CDAP Revisions',      'count': count('OBE.CDAPRevision'),              'url': url('OBE', 'cdaprevision')},
-                    {'label': 'LCA Revisions',       'count': count('OBE.LCARevision'),               'url': url('OBE', 'lcarevision')},
-                    {'label': 'CO Targets',          'count': count('OBE.COTargetRevision'),          'url': url('OBE', 'cotargetrevision')},
-                    {'label': 'Assessment Configs',  'count': count('OBE.OBEAssessmentMasterConfig'), 'url': url('OBE', 'obeassessmentmasterconfig')},
-                ],
-            },
-            {
-                'title': 'Feedback',
-                'icon': 'clipboard-list',
-                'color': '#1a7a4a',
-                'models': [
-                    {'label': 'Feedback Forms',      'count': count('feedback.FeedbackForm'),           'url': url('feedback', 'feedbackform')},
-                    {'label': 'Submissions',         'count': count('feedback.FeedbackFormSubmission'), 'url': url('feedback', 'feedbackformsubmission')},
-                ],
-            },
-            {
-                'title': 'Staff & HR',
-                'icon': 'users',
-                'color': '#6b3a7d',
-                'models': [
-                    {'label': 'Request Templates',   'count': count('staff_requests.RequestTemplate'),    'url': url('staff_requests', 'requesttemplate')},
-                    {'label': 'Staff Requests',      'count': count('staff_requests.StaffRequest'),       'url': url('staff_requests', 'staffrequest')},
-                    {'label': 'Approval Flows',      'count': count('staff_requests.ApprovalFlow'),       'url': url('staff_requests', 'approvalflow')},
-                    {'label': 'Attendance Records',  'count': count('staff_attendance.AttendanceRecord'), 'url': url('staff_attendance', 'attendancerecord')},
-                    {'label': 'Salary Records',      'count': count('staff_salary.StaffSalaryRecord'),    'url': url('staff_salary', 'staffsalaryrecord')},
-                ],
-            },
-            {
-                'title': 'Timetable',
-                'icon': 'calendar',
-                'color': '#7d4a1a',
-                'models': [
-                    {'label': 'Templates',           'count': count('timetable.TimetableTemplate'),   'url': url('timetable', 'timetabletemplate')},
-                    {'label': 'Slots',               'count': count('timetable.TimetableSlot'),       'url': url('timetable', 'timetableslot')},
-                    {'label': 'Assignments',         'count': count('timetable.TimetableAssignment'), 'url': url('timetable', 'timetableassignment')},
-                ],
-            },
-            {
-                'title': 'LMS & Announcements',
-                'icon': 'folder-open',
-                'color': '#1a5c7d',
-                'models': [
-                    {'label': 'Study Materials',     'count': count('lms.StudyMaterial'),             'url': url('lms', 'studymaterial')},
-                    {'label': 'Announcements',       'count': count('announcements.Announcement'),    'url': url('announcements', 'announcement')},
-                    {'label': 'Calendar Events',     'count': count('academic_calendar.AcademicCalendarEvent'), 'url': url('academic_calendar', 'academiccalendarevent')},
-                ],
-            },
-            {
-                'title': 'COE (Exams)',
-                'icon': 'target',
-                'color': '#7d1a1a',
-                'models': [
-                    {'label': 'Arrear Students',     'count': count('COE.CoeArrearStudent'),     'url': url('COE', 'coearrearsstudent')},
-                    {'label': 'Final Results',       'count': count('COE.CoeFinalResult'),       'url': url('COE', 'coefinalresult')},
-                    {'label': 'Assignment Stores',   'count': count('COE.CoeAssignmentStore'),   'url': url('COE', 'coeassignmentstore')},
-                ],
-            },
-            {
-                'title': 'Applications',
-                'icon': 'file-text',
-                'color': '#4a7d1a',
-                'models': [
-                    {'label': 'Application Types',   'count': count('applications.ApplicationType'),  'url': url('applications', 'applicationtype')},
-                    {'label': 'Applications',        'count': count('applications.Application'),      'url': url('applications', 'application')},
-                    {'label': 'Approval Flows',      'count': count('applications.ApprovalFlow'),     'url': url('applications', 'approvalflow')},
-                ],
-            },
-            {
-                'title': 'Certificates & PBAS',
-                'icon': 'award',
-                'color': '#7d5a1a',
-                'models': [
-                    {'label': 'Certificates',        'count': count('certificates.Certificate'),          'url': url('certificates', 'certificate')},
-                    {'label': 'PBAS Tickets',        'count': count('pbas.PBASVerificationTicket'),       'url': url('pbas', 'pbasverificationticket')},
-                ],
-            },
-            {
-                'title': 'IDCSScan',
-                'icon': 'scan-line',
-                'color': '#1a4a7d',
-                'models': [
-                    {'label': 'Fingerprint Enrollments', 'count': count('idcsscan.FingerprintEnrollment'), 'url': url('idcsscan', 'fingerprintenrollment')},
-                ],
-            },
-            {
-                'title': 'Question Bank',
-                'icon': 'help-circle',
-                'color': '#4a1a7d',
-                'models': [
-                    {'label': 'QP Titles',           'count': count('question_bank.QuestionPaperTitle'),  'url': url('question_bank', 'questionpapertitle')},
-                ],
-            },
-        ]
+        APP_CATEGORIES = {
+            'academics': {'title': 'Academics', 'icon': 'graduation-cap', 'color': '#417690'},
+            'curriculum': {'title': 'Curriculum', 'icon': 'book-open', 'color': '#205067'},
+            'OBE': {'title': 'OBE / Marks', 'icon': 'chart-bar', 'color': '#264b5d'},
+            'feedback': {'title': 'Feedback', 'icon': 'clipboard-list', 'color': '#1a7a4a'},
+            'staff_requests': {'title': 'Staff Requests', 'icon': 'users', 'color': '#6b3a7d'},
+            'staff_attendance': {'title': 'Staff Attendance', 'icon': 'clock', 'color': '#4b2a5d'},
+            'staff_salary': {'title': 'Staff Salary', 'icon': 'dollar-sign', 'color': '#2b1a3d'},
+            'timetable': {'title': 'Timetable', 'icon': 'calendar', 'color': '#7d4a1a'},
+            'lms': {'title': 'LMS', 'icon': 'folder-open', 'color': '#1a5c7d'},
+            'announcements': {'title': 'Announcements', 'icon': 'bell', 'color': '#1a5c7d'},
+            'academic_calendar': {'title': 'Academic Calendar', 'icon': 'calendar', 'color': '#1a5c7d'},
+            'COE': {'title': 'COE (Exams)', 'icon': 'target', 'color': '#7d1a1a'},
+            'applications': {'title': 'Applications', 'icon': 'file-text', 'color': '#4a7d1a'},
+            'certificates': {'title': 'Certificates', 'icon': 'award', 'color': '#7d5a1a'},
+            'pbas': {'title': 'PBAS', 'icon': 'award', 'color': '#7d5a1a'},
+            'idcsscan': {'title': 'IDCSScan', 'icon': 'scan-line', 'color': '#1a4a7d'},
+            'question_bank': {'title': 'Question Bank', 'icon': 'help-circle', 'color': '#4a1a7d'},
+            'template_api': {'title': 'Templates API', 'icon': 'image', 'color': '#4a1a7d'},
+            'reporting': {'title': 'Reporting', 'icon': 'pie-chart', 'color': '#1a5c7d'},
+            'data_import': {'title': 'Data Import', 'icon': 'upload', 'color': '#264b5d'},
+        }
+
+        sections_dict = {}
+        for model in self.admin_site._registry:
+            app_label = model._meta.app_label
+            if app_label not in APP_CATEGORIES:
+                continue
+
+            has_college = any(f.name == 'college' for f in model._meta.get_fields())
+            if not has_college:
+                continue
+
+            if app_label not in sections_dict:
+                cat_info = APP_CATEGORIES[app_label]
+                sections_dict[app_label] = {
+                    'title': cat_info['title'],
+                    'icon': cat_info['icon'],
+                    'color': cat_info['color'],
+                    'models': []
+                }
+
+            model_name = model.__name__
+            model_path = f"{app_label}.{model_name}"
+            
+            label = str(model._meta.verbose_name_plural)
+            if label.islower():
+                label = label.title()
+            elif len(label) > 0 and label[0].islower():
+                label = label[0].upper() + label[1:]
+
+            sections_dict[app_label]['models'].append({
+                'label': label,
+                'count': count(model_path),
+                'url': url(app_label, model_name)
+            })
+
+        for sec in sections_dict.values():
+            sec['models'].sort(key=lambda x: x['label'])
+
+        sections = sorted(sections_dict.values(), key=lambda x: x['title'])
 
         context = {
             **self.admin_site.each_context(request),

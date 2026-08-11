@@ -95,3 +95,29 @@ export async function fetchTransitionLogs(): Promise<TransitionLog[]> {
   if (!res.ok) throw new Error('Failed to fetch transition logs');
   return res.json();
 }
+
+export type BatchYearRow = {
+  id: number;
+  name: string;
+  start_year?: number;
+  end_year?: number;
+  is_graduated?: boolean;
+};
+
+export async function fetchBatchYears(): Promise<BatchYearRow[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/batch-years/`);
+  if (!res.ok) throw new Error('Failed to fetch batch years');
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export async function graduateBatchYear(batchYearId: number): Promise<{ message: string; is_graduated: boolean }> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/batch-years/${batchYearId}/graduate/`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to graduate batch year');
+  }
+  return res.json();
+}

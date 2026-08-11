@@ -484,7 +484,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   if (cf('mentor_assign') && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor'))) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
   if (cf('curriculum_student') && entry.student_curriculum_view) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
-  if (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')) && entry.timetable_templates) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
+  if (isIqac || (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')))) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
   const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR');
   if (cf('timetable_staff') && canAssignTimetable && entry.timetable_assignments) items.push({ key: 'timetable_assignments', label: 'Timetable Assignments', to: '/advisor/timetable' });
   if (cf('timetable_student') && flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });

@@ -5316,6 +5316,85 @@ class TeachingAssignmentViewSet(viewsets.ModelViewSet):
             'teaching_assignment_id': ta.id,
             'weights': obj.weights,
         })
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except PermissionDenied:
+            raise
+        except Exception as e:
+            import logging, traceback
+            logging.getLogger(__name__).exception('Error creating TeachingAssignment: %s', e)
+            tb = traceback.format_exc()
+            return Response({'detail': 'Failed to create teaching assignment.', 'error': str(e), 'trace': tb}, status=status.HTTP_400_BAD_REQUEST)
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        perms = get_user_permissions(user)
+
+        # Allow if explicit change permission
+        if ('academics.change_teaching' in perms) or user.has_perm('academics.change_teachingassignment'):
+            serializer.save()
+            return
+
+        # Determine whether this is for an elective or regular subject
+        is_elective = False
+        ta = getattr(serializer, 'instance', None)
+        try:
+            if 'elective_subject_id' in getattr(serializer, 'initial_data', {}) or 'elective_subject' in getattr(serializer, 'validated_data', {}):
+                is_elective = True
+            elif ta and getattr(ta, 'elective_subject', None):
+                is_elective = True
+        except Exception:
+            is_elective = False
+
+        # Elective: require elective change permission or HOD of parent dept
+        if is_elective:
+            if ('academics.change_elective_teaching' in perms) or user.has_perm('academics.change_elective_teaching'):
+                serializer.save()
+                return
+            # check HOD of elective parent department
+            try:
+                es = None
+                if 'elective_subject_id' in getattr(serializer, 'initial_data', {}):
+                    from curriculum.models import ElectiveSubject
+                    es = ElectiveSubject.objects.filter(pk=int(serializer.initial_data.get('elective_subject_id'))).select_related('parent__department').first()
+                elif ta:
+                    es = getattr(ta, 'elective_subject', None)
+                parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
+                es_dept_id = getattr(es, 'department_id', None)
+                staff_profile = getattr(user, 'staff_profile', None)
+                if staff_profile:
+                    hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
+                    # HOD of the parent dept (normal elective) OR HOD of the variant's own dept
+                    # (dept-core: parent is S&H but variant belongs to AI&DS HOD etc.)
+                    if (parent_dept_id and parent_dept_id in hod_depts) or (es_dept_id and es_dept_id in hod_depts):
+                        serializer.save()
+                        return
+            except Exception:
+                pass
+            raise PermissionDenied('You do not have permission to change this elective teaching assignment.')
+
+        # Regular subject: advisor for section required
+        staff_profile = getattr(user, 'staff_profile', None)
+        section_obj = None
+        try:
+            if 'section' in getattr(serializer, 'validated_data', {}):
+                section_obj = serializer.validated_data.get('section')
+            elif ta is not None:
+                section_obj = getattr(ta, 'section', None)
+        except Exception:
+            section_obj = getattr(ta, 'section', None) if ta is not None else None
+
+        if not section_obj:
+            raise PermissionDenied('You do not have permission to change this teaching assignment.')
+
+        is_advisor = SectionAdvisor.objects.filter(section=section_obj, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists() if staff_profile else False
+        if not is_advisor:
+            raise PermissionDenied('You do not have permission to change this teaching assignment.')
+
+        serializer.save()
+
+
 class SpecialCourseAssessmentEditRequestViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SpecialCourseAssessmentEditRequest.objects.select_related('selection', 'selection__curriculum_row', 'selection__academic_year', 'requested_by', 'reviewed_by')
     serializer_class = SpecialCourseAssessmentEditRequestSerializer
@@ -5641,85 +5720,6 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
                 'details': l.details
             })
         return Response(data)
-
-    def create(self, request, *args, **kwargs):
-        try:
-            return super().create(request, *args, **kwargs)
-        except PermissionDenied:
-            raise
-        except Exception as e:
-            import logging, traceback
-            logging.getLogger(__name__).exception('Error creating TeachingAssignment: %s', e)
-            tb = traceback.format_exc()
-            return Response({'detail': 'Failed to create teaching assignment.', 'error': str(e), 'trace': tb}, status=status.HTTP_400_BAD_REQUEST)
-
-    def perform_update(self, serializer):
-        user = self.request.user
-        perms = get_user_permissions(user)
-
-        # Allow if explicit change permission
-        if ('academics.change_teaching' in perms) or user.has_perm('academics.change_teachingassignment'):
-            serializer.save()
-            return
-
-        # Determine whether this is for an elective or regular subject
-        is_elective = False
-        ta = getattr(serializer, 'instance', None)
-        try:
-            if 'elective_subject_id' in getattr(serializer, 'initial_data', {}) or 'elective_subject' in getattr(serializer, 'validated_data', {}):
-                is_elective = True
-            elif ta and getattr(ta, 'elective_subject', None):
-                is_elective = True
-        except Exception:
-            is_elective = False
-
-        # Elective: require elective change permission or HOD of parent dept
-        if is_elective:
-            if ('academics.change_elective_teaching' in perms) or user.has_perm('academics.change_elective_teaching'):
-                serializer.save()
-                return
-            # check HOD of elective parent department
-            try:
-                es = None
-                if 'elective_subject_id' in getattr(serializer, 'initial_data', {}):
-                    from curriculum.models import ElectiveSubject
-                    es = ElectiveSubject.objects.filter(pk=int(serializer.initial_data.get('elective_subject_id'))).select_related('parent__department').first()
-                elif ta:
-                    es = getattr(ta, 'elective_subject', None)
-                parent_dept_id = getattr(getattr(es, 'parent', None), 'department_id', None)
-                es_dept_id = getattr(es, 'department_id', None)
-                staff_profile = getattr(user, 'staff_profile', None)
-                if staff_profile:
-                    hod_depts = list(DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True).values_list('department_id', flat=True))
-                    # HOD of the parent dept (normal elective) OR HOD of the variant's own dept
-                    # (dept-core: parent is S&H but variant belongs to AI&DS HOD etc.)
-                    if (parent_dept_id and parent_dept_id in hod_depts) or (es_dept_id and es_dept_id in hod_depts):
-                        serializer.save()
-                        return
-            except Exception:
-                pass
-            raise PermissionDenied('You do not have permission to change this elective teaching assignment.')
-
-        # Regular subject: advisor for section required
-        staff_profile = getattr(user, 'staff_profile', None)
-        section_obj = None
-        try:
-            if 'section' in getattr(serializer, 'validated_data', {}):
-                section_obj = serializer.validated_data.get('section')
-            elif ta is not None:
-                section_obj = getattr(ta, 'section', None)
-        except Exception:
-            section_obj = getattr(ta, 'section', None) if ta is not None else None
-
-        if not section_obj:
-            raise PermissionDenied('You do not have permission to change this teaching assignment.')
-
-        is_advisor = SectionAdvisor.objects.filter(section=section_obj, advisor=staff_profile, is_active=True, academic_year__is_active=True).exists() if staff_profile else False
-        if not is_advisor:
-            raise PermissionDenied('You do not have permission to change this teaching assignment.')
-
-        serializer.save()
-
 
 class HODSectionsView(APIView):
     permission_classes = (IsAuthenticated, IsHODOfDepartment)

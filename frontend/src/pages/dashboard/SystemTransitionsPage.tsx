@@ -5,14 +5,15 @@ import {
   Loader2, ChevronLeft, History, User, Clock 
 } from 'lucide-react';
 import { 
-  fetchAcademicYears, shiftSemester, fetchTransitionLogs, 
-  AcademicYearRow, TransitionLog 
+  fetchAcademicYears, shiftSemester, fetchTransitionLogs, fetchBatchYears, graduateBatchYear,
+  AcademicYearRow, TransitionLog, BatchYearRow 
 } from '../../services/academics';
 
 export default function SystemTransitionsPage() {
   const navigate = useNavigate();
   const [academicYears, setAcademicYears] = useState<AcademicYearRow[]>([]);
   const [logs, setLogs] = useState<TransitionLog[]>([]);
+  const [batches, setBatches] = useState<BatchYearRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,12 +27,14 @@ export default function SystemTransitionsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [ayData, logsData] = await Promise.all([
+      const [ayData, logsData, batchesData] = await Promise.all([
         fetchAcademicYears(),
-        fetchTransitionLogs()
+        fetchTransitionLogs(),
+        fetchBatchYears()
       ]);
       setAcademicYears(ayData);
       setLogs(logsData);
+      setBatches(batchesData);
     } catch (err: any) {
       setError(err.message || 'Failed to load system data');
     } finally {
@@ -54,6 +57,26 @@ export default function SystemTransitionsPage() {
       await loadData(); // refresh list and logs
     } catch (err: any) {
       setError(err.message || 'Failed to perform semester shift');
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function handleGraduate(batchId: number, batchName: string) {
+    const confirm = window.confirm(
+      `Are you sure you want to graduate the common batch year "${batchName}"?\n\nThis will globally mark all associated department batches as inactive and prevent their semesters from incrementing. This action cannot be undone here.`
+    );
+    if (!confirm) return;
+
+    setProcessing(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = await graduateBatchYear(batchId);
+      setSuccess(result.message);
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to graduate batch year');
     } finally {
       setProcessing(false);
     }
@@ -159,6 +182,55 @@ export default function SystemTransitionsPage() {
                     >
                       {ay.is_active ? 'Current Active' : 'Shift to this Year'}
                       {!ay.is_active && <ArrowRight className="w-4 h-4" />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Batch Graduation Section */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mt-8">
+            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5 text-indigo-600" />
+                  Common Batch Year Graduation
+                </h2>
+                <p className="text-xs text-slate-500">Graduate common batch years to freeze semesters and remove advisor assignments globally.</p>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="p-12 flex flex-col items-center justify-center text-slate-500">
+                <Loader2 className="w-8 h-8 animate-spin mb-3" />
+                <p>Loading active batch years...</p>
+              </div>
+            ) : batches.filter(b => !b.is_graduated).length === 0 ? (
+              <div className="p-12 text-center text-slate-500">
+                <CheckCircle className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                <p>No active batch years available for graduation.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 max-h-[400px] overflow-y-auto">
+                {batches.filter(b => !b.is_graduated).map((batch) => (
+                  <div key={batch.id} className="p-4 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-indigo-50 text-indigo-700">
+                        <CheckCircle className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900">{batch.name}</h3>
+                        <p className="text-xs text-slate-500">{batch.start_year && batch.end_year ? `${batch.start_year} - ${batch.end_year}` : 'Common Batch Year'}</p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleGraduate(batch.id, batch.name)}
+                      disabled={processing}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50"
+                    >
+                      Graduate
                     </button>
                   </div>
                 ))}

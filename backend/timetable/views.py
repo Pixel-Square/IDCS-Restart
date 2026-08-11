@@ -1368,7 +1368,8 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
         user = self.request.user
         # IQAC users or admins may see all templates; otherwise show public templates
         perms = get_user_permissions(user)
-        if 'timetable.manage_templates' in perms or user.is_staff:
+        role_names = {r.name.upper() for r in user.roles.all()}
+        if 'timetable.manage_templates' in perms or user.is_staff or 'IQAC' in role_names:
             return super().get_queryset()
         # For regular users, prefer active templates only
         return self.queryset.filter(is_active=True)

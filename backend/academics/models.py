@@ -332,6 +332,7 @@ class Batch(models.Model):
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
     regulation = models.ForeignKey('curriculum.Regulation', on_delete=models.SET_NULL, null=True, blank=True, related_name='batches', help_text='Curriculum regulation this batch follows')
     is_active = models.BooleanField(default=True, help_text='Whether this batch is currently active for this department')
+    is_graduated = models.BooleanField(default=False, help_text='True if this batch has graduated')
 
     class Meta:
         constraints = [
@@ -419,6 +420,7 @@ class BatchYear(models.Model):
     name = models.CharField(max_length=32, unique=True)
     start_year = models.PositiveSmallIntegerField(null=True, blank=True)
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_graduated = models.BooleanField(default=False, help_text='True if this common batch year has graduated')
 
     class Meta:
         ordering = ('-name',)
