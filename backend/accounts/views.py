@@ -523,22 +523,6 @@ class MobileRemoveView(APIView):
         return Response({'ok': True, 'me': serializer.data})
 
 
-class VerifyPasswordView(APIView):
-    """Verify user's password before sensitive operations like deletion."""
-    permission_classes = (permissions.IsAuthenticated,)
-
-    def post(self, request):
-        password = str((request.data or {}).get('password') or '').strip()
-        if not password:
-            return Response({'detail': 'Password is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Verify password
-        if not request.user.check_password(password):
-            return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({'ok': True, 'message': 'Password verified successfully.'}, status=status.HTTP_200_OK)
-
-
 class ChangePasswordView(APIView):
     """Allow authenticated users to change their password."""
     permission_classes = (permissions.IsAuthenticated,)

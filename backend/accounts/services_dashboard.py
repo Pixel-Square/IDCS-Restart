@@ -5,34 +5,20 @@ from . import models
 
 
 def _infer_profile_type(user) -> Optional[str]:
-    try:
-        sp = getattr(user, 'student_profile', None)
-        if sp is not None:
-            return 'STUDENT'
-    except Exception:
-        pass
-    try:
-        st = getattr(user, 'staff_profile', None)
-        if st is not None:
-            return 'STAFF'
-    except Exception:
-        pass
+    if hasattr(user, 'student_profile') and getattr(user, 'student_profile') is not None:
+        return 'STUDENT'
+    if hasattr(user, 'staff_profile') and getattr(user, 'staff_profile') is not None:
+        return 'STAFF'
     return None
 
 
 def _get_profile_status(user) -> Optional[str]:
-    try:
-        sp = getattr(user, 'student_profile', None)
-        if sp is not None:
-            return getattr(sp, 'status', None)
-    except Exception:
-        pass
-    try:
-        st = getattr(user, 'staff_profile', None)
-        if st is not None:
-            return getattr(st, 'status', None)
-    except Exception:
-        pass
+    sp = getattr(user, 'student_profile', None)
+    if sp is not None:
+        return getattr(sp, 'status', None)
+    st = getattr(user, 'staff_profile', None)
+    if st is not None:
+        return getattr(st, 'status', None)
     return None
 
 
@@ -108,16 +94,10 @@ def resolve_dashboard_capabilities(user) -> Dict:
     # not necessarily as accounts.Role. Expose them as effective roles so the
     # frontend can show HOD pages in the sidebar.
     dept_role_names = set()
-    has_active_mentor_mentees = False
-    has_active_advisee_sections = False
-    
     try:
         # Skip deriving department/mentor/advisor roles for isolated admins
         if not is_admin_isolated:
-            try:
-                staff_profile = getattr(user, 'staff_profile', None)
-            except Exception:
-                staff_profile = None
+            staff_profile = getattr(user, 'staff_profile', None)
             if staff_profile is not None:
                 from academics.models import DepartmentRole
                 from academics.models import StudentMentorMap, SectionAdvisor
@@ -134,9 +114,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
                     dept_role_names.add('MENTOR')
                 if has_active_advisee_sections:
                     dept_role_names.add('ADVISOR')
+        else:
+            has_active_mentor_mentees = False
+            has_active_advisee_sections = False
     except Exception:
-        # Variables already initialized above
-        pass
+        dept_role_names = set()
+        has_active_mentor_mentees = False
+        has_active_advisee_sections = False
 
     for r in sorted(dept_role_names):
         if r not in {str(x).upper() for x in role_names}:
@@ -280,19 +264,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
     college_features: List[str] = []
     try:
         college_id: Optional[int] = None
-        try:
-            _sp = getattr(user, 'student_profile', None)
-            if _sp is not None:
-                college_id = getattr(_sp, 'college_id', None)
-        except Exception:
-            pass
+        _sp = getattr(user, 'student_profile', None)
+        if _sp is not None:
+            college_id = getattr(_sp, 'college_id', None)
         if college_id is None:
-            try:
-                _st = getattr(user, 'staff_profile', None)
-                if _st is not None:
-                    college_id = getattr(_st, 'college_id', None)
-            except Exception:
-                pass
+            _st = getattr(user, 'staff_profile', None)
+            if _st is not None:
+                college_id = getattr(_st, 'college_id', None)
 
         if college_id is not None:
             from college.models import CollegeFeature

@@ -369,8 +369,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const emailLower = String((data as any).email || '').toLowerCase().trim();
   const flags = data.flags || {};
   const isIqac = rolesUpper.includes('IQAC');
-  const isMegaSuperAdmin = emailLower === 'admin@example.com' || (rolesUpper.includes('SUPER_ADMIN') && emailLower === 'admin@example.com');
-  const isSuperAdmin = isMegaSuperAdmin;
+  const isSuperAdmin = rolesUpper.includes('SUPER_ADMIN');
   const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
 
