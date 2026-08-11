@@ -6,7 +6,7 @@ from .models import AcademicCalendarEvent, HodColor, CalendarEventLabel, Calenda
 @admin.register(AcademicCalendarEvent)
 class AcademicCalendarEventAdmin(admin.ModelAdmin):
     list_display = ('title', 'start_date', 'end_date', 'source', 'created_by')
-    list_filter = ('source',)
+    list_filter = ('college', 'source',)
     search_fields = ('title', 'description', 'audience_department')
 
 
@@ -20,12 +20,12 @@ class HodColorAdmin(admin.ModelAdmin):
 class CalendarEventLabelAdmin(admin.ModelAdmin):
     list_display = ('title', 'color', 'semesters', 'visible_roles', 'created_by', 'created_at')
     search_fields = ('title',)
-    list_filter = ('created_by',)
+    list_filter = ('college', 'created_by',)
 
 
 @admin.register(CalendarEventAssignment)
 class CalendarEventAssignmentAdmin(admin.ModelAdmin):
     list_display = ('event', 'calendar_ref', 'start_date', 'end_date', 'created_by', 'created_at')
-    list_filter = ('event',)
+    list_filter = ('college', 'event',)
     search_fields = ('calendar_ref', 'description')
     raw_id_fields = ('event',)

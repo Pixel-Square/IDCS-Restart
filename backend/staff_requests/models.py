@@ -5,6 +5,7 @@ import json
 
 
 class RequestTemplate(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='requesttemplates')
     """
     Template for different types of staff requests (Leave, OD, Permission, etc.)
     Defines the dynamic form schema and approval workflow.
@@ -140,6 +141,7 @@ class RequestTemplate(models.Model):
 
 
 class ApprovalStep(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staff_request_approvalsteps')
     """
     Defines a step in the approval workflow for a RequestTemplate.
     Approval flows sequentially through these steps.
@@ -169,6 +171,7 @@ class ApprovalStep(models.Model):
 
 
 class StaffRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffrequests')
     """
     An actual staff request submission (Leave, OD, etc.)
     Tracks the applicant, form data, and current approval status.
@@ -267,6 +270,7 @@ class StaffRequest(models.Model):
 
 
 class StaffLeaveBalance(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffleavebalances')
     """
     Tracks leave balances for each staff member by leave type.
     Balances are updated when requests are approved.
@@ -298,6 +302,7 @@ class StaffLeaveBalance(models.Model):
 
 
 class StaffFormUsage(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffformusages')
     """
     Tracks usage count for neutral forms (like OD) per staff member.
     Used to enforce max_uses limits and track when usage exceeds allowed count.
@@ -354,6 +359,7 @@ class StaffFormUsage(models.Model):
 
 
 class VacationEntitlementRule(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='vacationentitlementrules')
     """HR-defined vacation entitlement mapping by minimum experience threshold."""
 
     CONDITION_CHOICES = [
@@ -393,6 +399,7 @@ class VacationEntitlementRule(models.Model):
 
 
 class VacationSemester(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='vacationsemesters')
     """Master semester availability window; slots are created under this entity."""
 
     name = models.CharField(max_length=80, unique=True)
@@ -417,6 +424,7 @@ class VacationSemester(models.Model):
 
 
 class VacationSlot(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='vacationslots')
     """HR-defined slot windows for semester vacation applications."""
 
     semester_ref = models.ForeignKey(
@@ -466,6 +474,7 @@ class VacationSlot(models.Model):
 
 
 class VacationConfirmSlot(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='vacationconfirmslots')
     """HR-confirmed vacation windows auto-applied for selected departments."""
 
     semester_ref = models.ForeignKey(
@@ -509,6 +518,7 @@ class VacationConfirmSlot(models.Model):
 
 
 class ApprovalLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='approvallogs')
     """
     Audit trail of all approval actions on a StaffRequest.
     Records who approved/rejected at each step and their comments.
@@ -550,6 +560,7 @@ class ApprovalLog(models.Model):
 # ══════════════════════════════════════════════════════════════════════
 
 class EventAttendingForm(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventattendingforms')
     """
     Staff expense reimbursement form linked to an approved On Duty request.
     Stores itemised travel, food, other expenses and advance details.
@@ -667,6 +678,7 @@ def _resolve_staff_primary_role(user):
 
 
 class EventAttendingFile(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventattendingfiles')
     """
     File uploads associated with an EventAttendingForm expense row.
     """
@@ -698,6 +710,7 @@ class EventAttendingFile(models.Model):
 
 
 class EventAttendingApprovalLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventattendingapprovallogs')
     """Audit trail for Event Attending form approvals/rejections."""
     ACTION_CHOICES = [
         ('approved', 'Approved'),
@@ -729,6 +742,7 @@ class EventAttendingApprovalLog(models.Model):
 
 
 class EventAttendingApprovalWorkflow(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventattendingapprovalworkflows')
     """
     Configurable approval workflow for Event Attending forms.
     Rows define which approver_role reviews at which step, per applicant_role.
@@ -755,6 +769,7 @@ class EventAttendingApprovalWorkflow(models.Model):
 
 
 class StaffEventDeclaration(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffeventdeclarations')
     """
     IQAC-managed per-staff budget allocation for event reimbursement.
     normal_events_budget covers Seminar/Workshop/FDP/STTP/Online course/Others.
@@ -779,6 +794,7 @@ class StaffEventDeclaration(models.Model):
 
 
 class EventBudgetCondition(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventbudgetconditions')
     """
     IQAC-defined rule-based budget conditions for event reimbursement.
     When IQAC saves conditions, the system auto-applies matching budgets

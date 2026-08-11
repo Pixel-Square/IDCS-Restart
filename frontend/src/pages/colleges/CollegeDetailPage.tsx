@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Building2, ArrowLeft, Users, Settings2, ChevronRight, MapPin, Phone, Mail, Globe, Calendar, Landmark } from 'lucide-react';
+import { Building2, ArrowLeft, Users, Settings2, ChevronRight, MapPin, Phone, Mail, Globe, Calendar, Landmark, Layers, ScrollText, BookOpen, FileText, ShieldCheck } from 'lucide-react';
 
 interface College {
   id: number;
@@ -24,13 +24,30 @@ interface FeatureSummary {
   enabled: number;
 }
 
+interface Counts {
+  users: number;
+  departments: number;
+  batches: number;
+  regulations: number;
+}
+
 export default function CollegeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [college, setCollege] = useState<College | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userCount, setUserCount] = useState<number | null>(null);
   const [featureSummary, setFeatureSummary] = useState<FeatureSummary | null>(null);
+  const [counts, setCounts] = useState<Counts>({ users: 0, departments: 0, batches: 0, regulations: 0 });
+
+  // Persist selected college ID so X-College-Id header follows navigation
+  useEffect(() => {
+    if (id) {
+      window.localStorage.setItem('selectedCollegeId', id);
+    }
+    return () => {
+      // Clear when leaving college context (going back to /colleges list)
+    };
+  }, [id]);
 
   useEffect(() => {
     (async () => {
@@ -40,15 +57,22 @@ export default function CollegeDetailPage() {
         if (!res.ok) throw new Error('Not found');
         setCollege(await res.json());
 
-        // Fetch user count
-        const usersRes = await fetchWithAuth(`/api/college/colleges/${id}/users/`);
-        if (usersRes.ok) {
-          const users = await usersRes.json();
-          setUserCount(Array.isArray(users) ? users.length : 0);
-        }
+        // Fetch counts in parallel
+        const [usersRes, deptRes, batchRes, regRes, featRes] = await Promise.all([
+          fetchWithAuth(`/api/college/colleges/${id}/users/`),
+          fetchWithAuth(`/api/college/departments/?college_id=${id}`),
+          fetchWithAuth(`/api/college/batches/?college_id=${id}`),
+          fetchWithAuth(`/api/college/regulations/?college_id=${id}`),
+          fetchWithAuth(`/api/college/colleges/${id}/features/`),
+        ]);
 
-        // Fetch feature summary
-        const featRes = await fetchWithAuth(`/api/college/colleges/${id}/features/`);
+        const c: Counts = { users: 0, departments: 0, batches: 0, regulations: 0 };
+        if (usersRes.ok) { const d = await usersRes.json(); c.users = d.total || 0; }
+        if (deptRes.ok) { const d = await deptRes.json(); c.departments = Array.isArray(d) ? d.length : 0; }
+        if (batchRes.ok) { const d = await batchRes.json(); c.batches = Array.isArray(d) ? d.length : 0; }
+        if (regRes.ok) { const d = await regRes.json(); c.regulations = Array.isArray(d) ? d.length : 0; }
+        setCounts(c);
+
         if (featRes.ok) {
           const feats = await featRes.json();
           setFeatureSummary({
@@ -88,7 +112,7 @@ export default function CollegeDetailPage() {
       description: 'Manage students, faculty, and staff associated with this college. Import users in bulk via Excel.',
       icon: Users,
       color: 'blue',
-      stat: userCount !== null ? `${userCount} user${userCount !== 1 ? 's' : ''}` : 'Loading...',
+      stat: `${counts.users} user${counts.users !== 1 ? 's' : ''}`,
       to: `/colleges/${college.id}/users`,
     },
     {
@@ -103,11 +127,56 @@ export default function CollegeDetailPage() {
     {
       key: 'departments',
       title: 'Departments',
-      description: 'View and manage all departments. Add, edit, or remove teaching and non-teaching departments.',
+      description: 'View and manage all departments belonging to this college. Add, edit, or remove teaching and non-teaching departments.',
       icon: Landmark,
       color: 'teal',
-      stat: 'Manage departments',
-      to: `/departments`,
+      stat: `${counts.departments} department${counts.departments !== 1 ? 's' : ''}`,
+      to: `/departments?college_id=${college.id}`,
+    },
+    {
+      key: 'batches',
+      title: 'Batches',
+      description: 'Manage student batches for this college by course or department.',
+      icon: Layers,
+      color: 'purple',
+      stat: `${counts.batches} batch${counts.batches !== 1 ? 'es' : ''}`,
+      to: `/batches?college_id=${college.id}`,
+    },
+    {
+      key: 'regulations',
+      title: 'Regulations',
+      description: 'Manage curriculum regulations specific to this college.',
+      icon: ScrollText,
+      color: 'amber',
+      stat: `${counts.regulations} regulation${counts.regulations !== 1 ? 's' : ''}`,
+      to: `/regulations?college_id=${college.id}`,
+    },
+    {
+      key: 'master_curriculum',
+      title: 'Master Curriculum',
+      description: 'View and manage the master curriculum for this college. Create, edit, and propagate curriculum entries across departments.',
+      icon: BookOpen,
+      color: 'green',
+      stat: 'Manage curriculum',
+      to: `/curriculum/master?college_id=${college.id}`,
+    },
+    {
+      key: 'department_curriculum',
+      title: 'Department Curriculum',
+      description: 'Review department-level curricula, approve or reject department submissions for this college.',
+      icon: FileText,
+      color: 'rose',
+      stat: 'Review submissions',
+      to: `/curriculum/department?college_id=${college.id}`,
+    },
+    {
+      key: 'roles',
+      title: 'Roles & Permissions',
+      description: 'Manage user roles and feature assignments for this college. Configure what each role can access.',
+      icon: ShieldCheck,
+      color: 'slate',
+      stat: 'Configure roles',
+      to: `/roles`,
     },
   ];
 
@@ -115,6 +184,11 @@ export default function CollegeDetailPage() {
     blue:   { bg: 'bg-white', iconBg: 'bg-blue-100',   iconText: 'text-blue-600',   hoverBorder: 'hover:border-blue-300',   statBg: 'bg-blue-50',   statText: 'text-blue-700' },
     indigo: { bg: 'bg-white', iconBg: 'bg-indigo-100', iconText: 'text-indigo-600', hoverBorder: 'hover:border-indigo-300', statBg: 'bg-indigo-50', statText: 'text-indigo-700' },
     teal:   { bg: 'bg-white', iconBg: 'bg-teal-100',   iconText: 'text-teal-600',   hoverBorder: 'hover:border-teal-300',   statBg: 'bg-teal-50',   statText: 'text-teal-700' },
+    purple: { bg: 'bg-white', iconBg: 'bg-purple-100', iconText: 'text-purple-600', hoverBorder: 'hover:border-purple-300', statBg: 'bg-purple-50', statText: 'text-purple-700' },
+    amber:  { bg: 'bg-white', iconBg: 'bg-amber-100',  iconText: 'text-amber-600',  hoverBorder: 'hover:border-amber-300',  statBg: 'bg-amber-50',  statText: 'text-amber-700' },
+    green:  { bg: 'bg-white', iconBg: 'bg-green-100',  iconText: 'text-green-600',  hoverBorder: 'hover:border-green-300',  statBg: 'bg-green-50',  statText: 'text-green-700' },
+    rose:   { bg: 'bg-white', iconBg: 'bg-rose-100',   iconText: 'text-rose-600',   hoverBorder: 'hover:border-rose-300',   statBg: 'bg-rose-50',   statText: 'text-rose-700' },
+    slate:  { bg: 'bg-white', iconBg: 'bg-slate-100',  iconText: 'text-slate-600',  hoverBorder: 'hover:border-slate-300',  statBg: 'bg-slate-50',  statText: 'text-slate-700' },
   };
 
   return (
@@ -129,7 +203,10 @@ export default function CollegeDetailPage() {
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
         <button
-          onClick={() => navigate('/colleges')}
+          onClick={() => {
+            window.localStorage.removeItem('selectedCollegeId');
+            navigate('/colleges');
+          }}
           className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />

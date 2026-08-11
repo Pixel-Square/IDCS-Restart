@@ -6,6 +6,7 @@ import uuid
 
 
 class Announcement(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='announcements')
     TARGET_ALL = 'ALL'
     TARGET_DEPARTMENT = 'DEPARTMENT'
     TARGET_CLASS = 'CLASS'
@@ -92,6 +93,7 @@ class Announcement(models.Model):
 
 
 class AnnouncementReadStatus(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='announcementreadstatus')
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

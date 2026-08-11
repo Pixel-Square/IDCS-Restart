@@ -95,7 +95,7 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
     change_list_template = 'admin/curriculum/master_change_list.html'
     form = CurriculumMasterAdminForm
     list_display = ('regulation', 'semester', 'batch', 'course_code', 'course_name', 'category', 'class_type', 'enabled_assessments_display', 'for_all_departments', 'editable')
-    list_filter = (RegulationFilter, 'semester', 'batch', 'for_all_departments', 'editable')
+    list_filter = ('college', RegulationFilter, 'semester', 'batch', 'for_all_departments', 'editable')
     search_fields = ('course_code', 'course_name')
     list_select_related = ('semester', 'batch')
     filter_horizontal = ('departments',)
@@ -327,7 +327,7 @@ class CurriculumDepartmentAdminForm(forms.ModelForm):
 class CurriculumDepartmentAdmin(admin.ModelAdmin):
     form = CurriculumDepartmentAdminForm
     list_display = ('department', 'regulation', 'semester', 'batch', 'course_code', 'mnemonic', 'course_name', 'question_paper_type', 'is_elective', 'is_dept_core', 'editable', 'overridden')
-    list_filter = ('department', RegulationFilter, 'semester', 'batch', 'question_paper_type', 'is_elective', 'is_dept_core', 'editable', 'overridden')
+    list_filter = ('college', 'department', RegulationFilter, 'semester', 'batch', 'question_paper_type', 'is_elective', 'is_dept_core', 'editable', 'overridden')
     search_fields = ('course_code', 'course_name', 'mnemonic')
     list_select_related = ('department', 'semester', 'batch')
     raw_id_fields = ('department', 'batch', 'master')
@@ -365,7 +365,7 @@ class ElectiveSubjectInline(admin.TabularInline):
 @admin.register(ElectiveSubject)
 class ElectiveSubjectAdmin(admin.ModelAdmin):
     list_display = ('course_code', 'course_name', 'department', 'department_group', 'batch', 'parent', 'regulation', 'semester', 'is_elective', 'editable', 'approval_status')
-    list_filter = ('department', 'department_group', 'batch', RegulationFilter, 'semester', 'is_elective', 'approval_status')
+    list_filter = ('college', 'department', 'department_group', 'batch', RegulationFilter, 'semester', 'is_elective', 'approval_status')
     search_fields = ('course_code', 'course_name')
     list_select_related = ('department', 'department_group', 'batch', 'parent', 'semester')
     raw_id_fields = ('department', 'batch', 'parent')
@@ -374,7 +374,7 @@ class ElectiveSubjectAdmin(admin.ModelAdmin):
 @admin.register(ElectiveChoice)
 class ElectiveChoiceAdmin(admin.ModelAdmin):
     list_display = ('student', 'elective_subject', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active')
+    list_filter = ('college', 'academic_year', 'is_active')
     search_fields = ('student__user__username', 'student__reg_no', 'elective_subject__course_code', 'elective_subject__course_name')
     list_select_related = ('student__user', 'elective_subject', 'academic_year')
     raw_id_fields = ('student', 'elective_subject')
@@ -384,13 +384,13 @@ class ElectiveChoiceAdmin(admin.ModelAdmin):
 @admin.register(Regulation)
 class RegulationAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'is_active')
-    list_filter = ('is_active',)
+    list_filter = ('college', 'is_active',)
 
 
 @admin.register(DepartmentGroup)
 class DepartmentGroupAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'is_active', 'created_at')
-    list_filter = ('is_active',)
+    list_filter = ('college', 'is_active',)
     search_fields = ('code', 'name', 'description')
     ordering = ('code',)
 
@@ -398,7 +398,7 @@ class DepartmentGroupAdmin(admin.ModelAdmin):
 @admin.register(DepartmentGroupMapping)
 class DepartmentGroupMappingAdmin(admin.ModelAdmin):
     list_display = ('group', 'department', 'is_active', 'created_at')
-    list_filter = ('group', 'is_active')
+    list_filter = ('college', 'group', 'is_active')
     search_fields = ('group__code', 'group__name', 'department__code', 'department__name')
     ordering = ('group', 'department')
     search_fields = ('code', 'name')
@@ -422,7 +422,7 @@ class ElectivePollSubjectInline(admin.TabularInline):
 @admin.register(ElectivePoll)
 class ElectivePollAdmin(admin.ModelAdmin):
     list_display = ('parent_elective_name', 'batch_year', 'department_group', 'is_active', 'created_at')
-    list_filter = ('is_active', 'batch_year')
+    list_filter = ('college', 'is_active', 'batch_year')
     search_fields = ('parent_elective_name',)
     list_select_related = ('batch_year', 'department_group')
     inlines = [ElectivePollSubjectInline]

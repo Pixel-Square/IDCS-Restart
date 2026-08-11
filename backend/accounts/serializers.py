@@ -29,6 +29,19 @@ def _compute_effective_role_names(user) -> list[str]:
 
     existing = {r for r in roles if r}
 
+    email_lower = str(getattr(user, 'email', '') or '').strip().lower()
+    username_lower = str(getattr(user, 'username', '') or '').strip().lower()
+    is_mega_admin = (email_lower == 'admin@example.com' or username_lower == 'admin')
+
+    if is_mega_admin:
+        if 'SUPER_ADMIN' not in existing:
+            roles.append('SUPER_ADMIN')
+        unique_sorted = sorted({r for r in roles if r})
+        if 'SUPER_ADMIN' in unique_sorted:
+            unique_sorted.remove('SUPER_ADMIN')
+            return ['SUPER_ADMIN', *unique_sorted]
+        return unique_sorted
+
     # DepartmentRole-based roles
     try:
         staff_profile = getattr(user, 'staff_profile', None)
@@ -511,8 +524,22 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
     `identifier` may be an email (contains '@') or an academic identifier
     (student `reg_no` or staff `staff_id`) resolved via the `academics` app.
     """
+    # The single platform-wide "mega" super admin account. Unlike all other
+    # accounts — including other Django superusers — this exact account is
+    # not tied to any one college and may sign in directly through the
+    # institution picker for ANY active college. No other account is exempt
+    # from the college isolation check below, regardless of its
+    # is_superuser/role status.
+    MEGA_SUPER_ADMIN_EMAIL = 'admin@example.com'
+
     identifier = serializers.CharField(write_only=True)
     password = serializers.CharField(write_only=True)
+    # Optional: id or code of the institution selected on the login screen's
+    # institution picker. When provided, the authenticating user must belong
+    # to this exact college — otherwise login is rejected. Omitted by
+    # internal re-auth flows (e.g. COE scan confirmation dialogs), which are
+    # unaffected.
+    college = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     def validate(self, attrs):
         identifier = attrs.get('identifier')
@@ -520,6 +547,18 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
 
         if not identifier or not password:
             raise serializers.ValidationError('Must include "identifier" and "password".')
+
+        # Resolve the selected institution (if the client sent one).
+        college_input = str(attrs.get('college') or '').strip()
+        selected_college = None
+        if college_input:
+            from college.models import College
+            if college_input.isdigit():
+                selected_college = College.objects.filter(pk=int(college_input), is_active=True).first()
+            else:
+                selected_college = College.objects.filter(code__iexact=college_input, is_active=True).first()
+            if selected_college is None:
+                raise serializers.ValidationError('Selected institution not found or is inactive. Please choose your institution again.')
 
         User = get_user_model()
         user = None
@@ -578,12 +617,16 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
 
         # Check for inactive or debarred students
         # NOTE: `hasattr(user, 'student_profile')` is unsafe for OneToOne reverse
-        # relations because it can raise RelatedObjectDoesNotExist (500). Use
+        # relations because it can raise RelatedObjectDoesNotExist (500) Use
         # a guarded getattr instead.
         try:
             student_profile = getattr(user, 'student_profile', None)
         except Exception:
             student_profile = None
+        try:
+            staff_profile = getattr(user, 'staff_profile', None)
+        except Exception:
+            staff_profile = None
 
         if student_profile:
             student_status = getattr(student_profile, 'status', 'ACTIVE')
@@ -591,6 +634,61 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
                 raise serializers.ValidationError('Your student account is inactive. Please contact administration.')
             if student_status == 'DEBAR':
                 raise serializers.ValidationError('Your student account has been debarred. Please contact administration.')
+
+        # --- Institution (college) isolation check ---
+        # Enforced whenever the client explicitly selected an institution
+        # (the login-page institution picker), for ALL accounts — including
+        # Django superusers — EXCEPT the single mega super admin account
+        # (see MEGA_SUPER_ADMIN_EMAIL above). A superuser's own account is
+        # still tied to one college via their staff/student profile, and
+        # direct login must respect that. Superusers who need to access
+        # another college's data must use the separate, audited
+        # impersonation flow instead (see SuperuserImpersonationSerializer),
+        # which is unaffected by this check.
+        is_mega_super_admin = bool(
+            getattr(user, 'is_superuser', False)
+            and str(getattr(user, 'email', '') or '').strip().lower() == self.MEGA_SUPER_ADMIN_EMAIL
+        )
+
+        user_college_id = None
+        if student_profile is not None and getattr(student_profile, 'college_id', None):
+            user_college_id = student_profile.college_id
+        elif staff_profile is not None and getattr(staff_profile, 'college_id', None):
+            user_college_id = staff_profile.college_id
+
+        if selected_college is not None and not is_mega_super_admin:
+            # If user has no college assignment, block login via institution picker
+            if user_college_id is None:
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        'Login blocked: user id=%s (%s) has no college assignment but attempted login at college_id=%s (%s)',
+                        getattr(user, 'id', None),
+                        getattr(user, 'username', 'unknown'),
+                        selected_college.pk,
+                        selected_college.name,
+                    )
+                except Exception:
+                    pass
+                raise serializers.ValidationError(
+                    f'This account is not registered under {selected_college.name}. '
+                    'Please select your correct institution and try again.'
+                )
+
+            # User's own college must match the selected institution.
+            if user_college_id != selected_college.pk:
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        'Login blocked: user id=%s belongs to college_id=%s but attempted login at college_id=%s',
+                        getattr(user, 'id', None), user_college_id, selected_college.pk,
+                    )
+                except Exception:
+                    pass
+                raise serializers.ValidationError(
+                    f'This account is not registered under {selected_college.name}. '
+                    'Please select your correct institution and try again.'
+                )
 
         # --- Login Lockdown check ---
         # If login_lockdown is enabled, only superusers may authenticate directly.
@@ -617,10 +715,25 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         except Exception:
             refresh['roles'] = []
 
+        # Resolve the user's own college for the response (falls back to the
+        # selected institution when the account has no profile college, e.g.
+        # a super admin previewing a specific college's portal).
+        response_college = selected_college
+        if response_college is None and user_college_id is not None:
+            try:
+                from college.models import College
+                response_college = College.objects.filter(pk=user_college_id).first()
+            except Exception:
+                response_college = None
+
         return {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
             'user_id': int(user.id),
             'name': (f"{getattr(user, 'first_name', '')} {getattr(user, 'last_name', '')}").strip() or str(getattr(user, 'username', '') or '').strip(),
             'roles': _compute_effective_role_names(user),
+            'college_id': response_college.id if response_college else None,
+            'college_name': response_college.name if response_college else None,
+            'college_code': response_college.code if response_college else None,
+            'must_change_password': bool(getattr(user, 'must_change_password', False)),
         }

@@ -3,6 +3,7 @@ from django.db import models
 
 
 class StaffSalaryDeclaration(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffsalarydeclarations')
     staff = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -28,6 +29,7 @@ class StaffSalaryDeclaration(models.Model):
 
 
 class SalaryBankDeclaration(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarybankdeclarations')
     name = models.CharField(max_length=120, unique=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=1)
@@ -41,6 +43,7 @@ class SalaryBankDeclaration(models.Model):
 
 
 class SalaryPFConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarypfconfigs')
     threshold_amount = models.FloatField(default=15000.0)
     fixed_pf_amount = models.FloatField(default=1800.0)
     percentage_rate = models.FloatField(default=12.0)
@@ -55,6 +58,7 @@ class SalaryPFConfig(models.Model):
 
 
 class SalaryFormulaConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salaryformulaconfigs')
     expressions = models.JSONField(default=dict, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -64,6 +68,7 @@ class SalaryFormulaConfig(models.Model):
 
 
 class SalaryDeductionType(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarydeductiontypes')
     MODE_CHOICES = (
         ('emi', 'EMI'),
         ('monthly', 'Monthly'),
@@ -78,6 +83,7 @@ class SalaryDeductionType(models.Model):
 
 
 class SalaryEarnType(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salaryearntypes')
     name = models.CharField(max_length=100, unique=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=1)
@@ -87,6 +93,7 @@ class SalaryEarnType(models.Model):
 
 
 class SalaryEMIPlan(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salaryemiplans')
     staff = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -108,6 +115,7 @@ class SalaryEMIPlan(models.Model):
 
 
 class SalaryMonthlyInput(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarymonthlyinputs')
     staff = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -128,6 +136,7 @@ class SalaryMonthlyInput(models.Model):
 
 
 class SalaryMonthPublish(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarymonthpublishs')
     month = models.DateField(unique=True, help_text='Use first day of month')
     is_active = models.BooleanField(default=True)
     published_by = models.ForeignKey(
@@ -144,6 +153,7 @@ class SalaryMonthPublish(models.Model):
 
 
 class SalaryPublishedReceipt(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='salarypublishedreceipts')
     month = models.DateField(help_text='Use first day of month')
     staff = models.ForeignKey(
         settings.AUTH_USER_MODEL,

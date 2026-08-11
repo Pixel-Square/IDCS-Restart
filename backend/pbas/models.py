@@ -14,6 +14,7 @@ from .utils import upload_to_pbas_submission
 
 
 class PBASCustomDepartment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='pbascustomdepartments')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255)
     # Optional 1:1 mapping to the Academics Department master table.
@@ -45,6 +46,7 @@ class PBASCustomDepartment(models.Model):
 
 
 class PBASNode(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='pbasnodes')
     class Audience(models.TextChoices):
         FACULTY = 'faculty', 'Faculty'
         STUDENT = 'student', 'Student'
@@ -151,6 +153,7 @@ class PBASSubmission(models.Model):
 
 
 class PBASVerificationTicket(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='pbasverificationtickets')
     class Status(models.TextChoices):
         DRAFT = 'draft', 'Draft'
         MENTOR_PENDING = 'mentor_pending', 'Mentor Pending'

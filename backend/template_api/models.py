@@ -65,6 +65,7 @@ class CanvaOAuthState(models.Model):
 
 
 class CanvaTemplate(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='canvatemplates')
     """
     A Canva design saved by the Branding user as a reusable event-poster template.
     Visible to all HODs in the event-creation flow.
@@ -85,6 +86,7 @@ class CanvaTemplate(models.Model):
 
 
 class EventPosterAttachment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventposterattachments')
     FORMAT_PNG = 'png'
     FORMAT_PDF = 'pdf'
     FORMAT_CHOICES = [
@@ -110,6 +112,7 @@ class EventPosterAttachment(models.Model):
 
 
 class BrandingEventLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='brandingeventlogs')
     class Status(models.TextChoices):
         INFO = 'info', 'Info'
         SUCCESS = 'success', 'Success'

@@ -3,6 +3,7 @@ from django.db import models
 
 
 class QuestionBankTitle(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='questionbanktitles')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='question_bank_titles')
     title = models.CharField(max_length=255)
     exam_type = models.CharField(max_length=64, null=True, blank=True)
@@ -16,6 +17,7 @@ class QuestionBankTitle(models.Model):
 
 
 class QuestionBankQuestion(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='questionbankquestions')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='question_bank_questions')
 
     title = models.CharField(max_length=255, blank=True, null=True)

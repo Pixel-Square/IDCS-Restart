@@ -12,6 +12,7 @@ import secrets
 
 
 class AcademicYear(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='academicyears')
     name = models.CharField(max_length=32)
     is_active = models.BooleanField(default=False)
     PARITY_CHOICES = (
@@ -74,7 +75,7 @@ def ensure_timetable_template_matches_academic_year(sender, instance: AcademicYe
 
 
 class Department(models.Model):
-    code = models.CharField(max_length=16, unique=True)
+    code = models.CharField(max_length=16)
     name = models.CharField(max_length=128)
     # Short form for display (abbreviation) e.g. 'CSE', 'EEE'
     short_name = models.CharField(max_length=32, blank=True)
@@ -96,9 +97,25 @@ class Department(models.Model):
         default=False,
         help_text='True for the S&H department that manages Year-1 sections.',
     )
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='departments',
+        help_text='College associated with this department for college-scoped management.',
+    )
 
     class Meta:
         ordering = ('code',)
+        unique_together = (('college', 'code'),)
+
+    def save(self, *args, **kwargs):
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
+        super().save(*args, **kwargs)
 
     def __str__(self):
         # Prefer short_name for compact displays when provided
@@ -107,6 +124,7 @@ class Department(models.Model):
 
 
 class Program(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='programs')
     name = models.CharField(max_length=32, unique=True)
 
     def __str__(self):
@@ -119,6 +137,7 @@ class Program(models.Model):
 
 
 class RFReaderGate(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='rfreadergates')
     name = models.CharField(max_length=64, unique=True)
     description = models.CharField(max_length=255, blank=True)
     is_active = models.BooleanField(default=True)
@@ -135,6 +154,7 @@ class RFReaderGate(models.Model):
 
 
 class RFReaderStudent(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='rfreaderstudents')
     roll_no = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=128)
     impres_code = models.CharField(max_length=64, blank=True)
@@ -153,6 +173,7 @@ class RFReaderStudent(models.Model):
 
 
 class RFReaderScan(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='rfreaderscans')
     gate = models.ForeignKey(RFReaderGate, on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
     uid = models.CharField(max_length=32)
     student = models.ForeignKey(RFReaderStudent, on_delete=models.SET_NULL, null=True, blank=True, related_name='scans')
@@ -170,6 +191,7 @@ class RFReaderScan(models.Model):
 
 
 class Course(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='courses')
     name = models.CharField(max_length=128)
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='courses')
     program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='courses')
@@ -182,6 +204,7 @@ class Course(models.Model):
 
 
 class Semester(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='semesters')
     # Semesters are numbered terms common across courses/departments (Sem 1..N).
     number = models.PositiveSmallIntegerField()
 
@@ -193,6 +216,7 @@ class Semester(models.Model):
 
 
 class Section(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='sections')
     # Sections are now batch-wise rather than semester-wise. A Batch groups students
     # (cohort) for a course; sections belong to a Batch.
     name = models.CharField(max_length=8)
@@ -270,13 +294,10 @@ class Section(models.Model):
 
 
 class Batch(models.Model):
-    """A student cohort/batch for a given course or department.
+    """A student cohort/batch.
 
-    For normal 4-year programmes: set `course` (implies department via course.department).
-    For special/S&H Year-1 batches: leave `course` blank and set `department` directly.
-
-    The `name` column is kept for ORM lookup compatibility; its value is
-    auto-populated from `batch_year.name` whenever `batch_year` is set.
+    `course`, `department`, and `regulation` are all optional.
+    A batch can be linked to a regulation, a course, a department, or just have a name/year.
     """
     batch_year = models.ForeignKey(
         'BatchYear',
@@ -291,14 +312,21 @@ class Batch(models.Model):
         on_delete=models.CASCADE,
         null=True, blank=True,
         related_name='batches',
-        help_text='Required for regular degree batches. Leave blank for S&H / dept-only batches.',
+        help_text='Optional. Course associated with this batch.',
     )
     department = models.ForeignKey(
         'Department',
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='direct_batches',
-        help_text='Set this when there is no Course (e.g. S&H Year-1 batches).',
+        help_text='Optional. Department associated with this batch.',
+    )
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='batches',
+        help_text='College associated with this batch for college-scoped management.',
     )
     start_year = models.PositiveSmallIntegerField(null=True, blank=True)
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -316,14 +344,13 @@ class Batch(models.Model):
             # Dept-only batches (S&H etc.): unique per department+name
             models.UniqueConstraint(
                 fields=['name', 'department'],
-                condition=Q(course__isnull=True),
+                condition=Q(course__isnull=True) & Q(department__isnull=False),
                 name='unique_batch_name_department',
             ),
         ]
 
     def clean(self):
-        if not self.course_id and not self.department_id:
-            raise ValidationError('Either a Course or a Department must be set on a Batch.')
+        pass
 
     @property
     def effective_department(self):
@@ -352,6 +379,12 @@ class Batch(models.Model):
                     self.batch_year = by
             except Exception:
                 pass
+        # Auto-assign college from request context if not explicitly set
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -365,12 +398,18 @@ class Batch(models.Model):
                 label = self.department.short_name
             except Exception:
                 label = '?'
+        elif self.regulation_id:
+            try:
+                label = getattr(self.regulation, 'code', None) or getattr(self.regulation, 'name', None)
+            except Exception:
+                label = '?'
         else:
-            label = '?'
-        return f"{label} - {self.name}"
+            label = ''
+        return f"{label} - {self.name}" if label else self.name
 
 
 class BatchYear(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='batchyears')
     """A common batch year label shared across all departments/courses.
 
     Use this when you want a single "2023" label that is not tied to any
@@ -410,6 +449,7 @@ def sync_batch_to_batchyear(sender, instance, **kwargs):
 
 
 class Subject(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='subjects')
     code = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=128)
     semester = models.ForeignKey(Semester, on_delete=models.CASCADE, related_name='subjects')
@@ -528,6 +568,17 @@ class StudentProfile(models.Model):
             raise ValidationError({'status': 'Student cannot have status RESIGNED. Use DEBAR instead.'})
 
     def save(self, *args, **kwargs):
+        # Auto-resolve home_department from section/course if not explicitly set
+        if not self.home_department_id:
+            sec = getattr(self, 'get_current_section', lambda: None)() or getattr(self, 'section', None)
+            if sec:
+                if getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None) and getattr(sec.batch.course, 'department', None):
+                    self.home_department = sec.batch.course.department
+                elif getattr(sec, 'batch', None) and getattr(sec.batch, 'department', None):
+                    self.home_department = sec.batch.department
+                elif getattr(sec, 'managing_department', None) and not sec.managing_department.is_sh_main:
+                    self.home_department = sec.managing_department
+
         # Immutable reg_no after creation
         if self.pk:
             try:
@@ -583,6 +634,7 @@ def _sync_section_assignment_on_profile_save(sender, instance: StudentProfile, c
 
 
 class StudentSectionAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studentsectionassignments')
     """Time-bound assignment of a student to a section.
 
     Keeps history of which section a student belonged to during time ranges.
@@ -715,6 +767,7 @@ def _sync_student_section_on_assignment_delete(sender, instance: StudentSectionA
 
 
 class StudentCourseEnrollment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studentcourseenrollments')
     """Tracks student enrollment in courses.
     
     Records which students are enrolled in which courses for academic records
@@ -862,6 +915,7 @@ class StaffProfile(models.Model):
 
 
 class StaffDepartmentAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffdepartmentassignments')
     """Time-bound assignment of a staff member to a department.
 
     Historical record of staff department affiliations.
@@ -893,6 +947,7 @@ class StaffDepartmentAssignment(models.Model):
 
 
 class RoleAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='roleassignments')
     """Term-based authority role assignment (e.g., HOD, ADVISOR) to a staff profile.
 
     This augments the logical `Role` membership which remains static; RoleAssignment
@@ -925,6 +980,7 @@ class RoleAssignment(models.Model):
 
 
 class StudentMentorMap(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studentmentormaps')
     student = models.ForeignKey(StudentProfile, on_delete=models.CASCADE, related_name='mentor_mappings')
     mentor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='mentee_mappings')
     is_active = models.BooleanField(default=True)
@@ -944,6 +1000,7 @@ class StudentMentorMap(models.Model):
 
 
 class SectionAdvisor(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='sectionadvisors')
     section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='advisor_mappings')
     advisor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='section_advisories')
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='section_advisors')
@@ -1036,6 +1093,7 @@ def _sync_advisor_role_on_delete(sender, instance: SectionAdvisor, **kwargs):
 
 
 class DepartmentRole(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='departmentroles')
     class DeptRole(models.TextChoices):
         HOD = 'HOD', 'Head of Department'
         AHOD = 'AHOD', 'Assistant HOD'
@@ -1066,6 +1124,7 @@ class DepartmentRole(models.Model):
 
 
 class TeachingAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='teachingassignments')
     """Assign a staff member to teach a subject for a section in an academic year.
 
     Ensures a staff–subject–section–academic_year tuple is unique.
@@ -1171,6 +1230,7 @@ class TeachingAssignment(models.Model):
 
 
 class SpecialCourseAssessmentSelection(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialcourseassessmentselections')
     """Global enabled assessments for SPECIAL courses.
 
     One row per curriculum_row + academic_year. Once created, the selection is
@@ -1210,6 +1270,7 @@ class SpecialCourseAssessmentSelection(models.Model):
 
 
 class SpecialCourseAssessmentEditRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialcourseassessmenteditrequests')
     """Faculty request to edit a locked special-course assessment selection.
 
     IQAC/Admin approves a request; the requester can then edit until expiry.
@@ -1269,6 +1330,7 @@ class SpecialCourseAssessmentEditRequest(models.Model):
 
 
 class StudentSubjectBatch(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studentsubjectbatchs')
     """A teacher-defined grouping of students for subject-level batching.
 
     Example: Instructor creates 'Batch 1' containing certain students for
@@ -1326,6 +1388,7 @@ PERIOD_ATTENDANCE_STATUS_CHOICES = (
 
 
 class PeriodAttendanceSession(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='periodattendancesessions')
     """Attendance for a specific period (TimetableSlot) on a date for a section.
 
     - section: which section the attendance is for
@@ -1360,6 +1423,7 @@ class PeriodAttendanceSession(models.Model):
 
 
 class PeriodAttendanceSwapRecord(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='periodattendanceswaprecords')
     """Audit trail of period attendance swap/assignment actions."""
     session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='swap_records')
     assigned_by = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='period_swaps_assigned')
@@ -1378,6 +1442,7 @@ class PeriodAttendanceSwapRecord(models.Model):
 
 
 class PeriodAttendanceRecord(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='periodattendancerecords')
     session = models.ForeignKey(PeriodAttendanceSession, on_delete=models.CASCADE, related_name='records')
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='period_attendance_records')
     status = models.CharField(max_length=8, choices=PERIOD_ATTENDANCE_STATUS_CHOICES)
@@ -1394,6 +1459,7 @@ class PeriodAttendanceRecord(models.Model):
 
 
 class AttendanceUnlockRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='attendanceunlockrequests')
     STATUS_CHOICES = (
         ('PENDING', 'Pending HOD Approval'),
         ('HOD_APPROVED', 'HOD Approved - Pending Final Approval'),
@@ -1428,6 +1494,7 @@ class AttendanceUnlockRequest(models.Model):
 
 
 class DailyAttendanceUnlockRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='dailyattendanceunlockrequests')
     STATUS_CHOICES = (
         ('PENDING', 'Pending HOD Approval'),
         ('HOD_APPROVED', 'HOD Approved - Pending Final Approval'),
@@ -1463,6 +1530,7 @@ class DailyAttendanceUnlockRequest(models.Model):
 
 
 class DailyAttendanceSession(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='dailyattendancesessions')
     """Daily overall attendance for a section (not period-specific).
     
     Used by class advisors to mark overall daily attendance for their section.
@@ -1487,6 +1555,7 @@ class DailyAttendanceSession(models.Model):
 
 
 class DailyAttendanceRecord(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='dailyattendancerecords')
     """Individual student's daily attendance record."""
     DAILY_ATTENDANCE_STATUS_CHOICES = (
         ('P', 'Present'),
@@ -1514,6 +1583,7 @@ class DailyAttendanceRecord(models.Model):
 
 
 class DailyAttendanceSwapRecord(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='dailyattendanceswaprecords')
     """Records when daily attendance sessions are swapped/assigned to different staff.
     
     Similar to how period swaps are tracked via SpecialTimetableEntry,
@@ -1535,6 +1605,7 @@ class DailyAttendanceSwapRecord(models.Model):
 
 
 class AttendanceAssignmentRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='attendanceassignmentrequests')
     """
     Tracks requests by staff to assign their daily attendance session to another staff member.
     Staff A sends a request to Staff B; Staff B can approve or reject it.
@@ -1602,6 +1673,7 @@ def _generate_external_id():
 
 
 class ExtStaffProfile(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='extstaffprofiles')
     """
     Tracks external / visiting staff who do not have a full StaffProfile.
     Each record links to an existing User account and holds a randomly generated
@@ -1674,6 +1746,7 @@ class ExtStaffProfile(models.Model):
 
 
 class ExtStaffFormSettings(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='extstaffformsettings')
     """
     Singleton model to store external staff registration form settings.
     Manages which fields are enabled, form acceptance status, and generates
@@ -1792,6 +1865,7 @@ class ExtStaffFormSettings(models.Model):
 
 
 class SystemTransitionLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='systemtransitionlogs')
     """Log of global semester shifts performed in the system."""
     academic_year = models.ForeignKey('AcademicYear', on_delete=models.CASCADE, related_name='transition_logs')
     performed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)

@@ -70,8 +70,15 @@ class Regulation(models.Model):
     access the related `Regulation` instance (created on demand).
     """
 
-    code = models.CharField(max_length=32, unique=True)
+    code = models.CharField(max_length=32)
     name = models.CharField(max_length=255, blank=True)
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='regulations',
+        help_text='College associated with this regulation for college-scoped management.',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -79,6 +86,7 @@ class Regulation(models.Model):
     class Meta:
         verbose_name = 'Regulation'
         verbose_name_plural = 'Regulations'
+        unique_together = (('college', 'code'),)
 
     def __str__(self):
         return self.code
@@ -86,22 +94,24 @@ class Regulation(models.Model):
 
 class DepartmentGroup(models.Model):
     """Group model to organize departments into logical groups.
-    
+
     This model allows departments to be grouped together for curriculum
     management purposes. For example, grouping all engineering departments
     or all science departments together.
     """
-    
-    code = models.CharField(max_length=32, unique=True)
+
+    code = models.CharField(max_length=32)
     name = models.CharField(max_length=255)
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='department_groups')
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name = 'Department Group'
         verbose_name_plural = 'Department Groups'
+        unique_together = (('college', 'code'),)
         ordering = ('code',)
     
     def __str__(self):
@@ -110,12 +120,13 @@ class DepartmentGroup(models.Model):
 
 class DepartmentGroupMapping(models.Model):
     """Mapping between department groups and individual departments.
-    
+
     This model creates a many-to-many relationship between DepartmentGroup
     and Department from the academics app. A department can belong to multiple
     groups, and a group can contain multiple departments.
     """
-    
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='departmentgroupmappings')
+
     group = models.ForeignKey(DepartmentGroup, on_delete=models.CASCADE, related_name='department_mappings')
     department = models.ForeignKey('academics.Department', on_delete=models.CASCADE, related_name='group_mappings')
     is_active = models.BooleanField(default=True)
@@ -172,6 +183,7 @@ def _normalize_assessment_keys(value) -> list[str]:
 
 class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='master_curricula')
     # Use Semester FK so curriculum entries relate to the canonical Semester model
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='master_curricula')
     batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='master_curricula', help_text='Optional batch year this curriculum applies to')
@@ -232,12 +244,17 @@ class CurriculumMaster(models.Model):
         """Return the `Regulation` instance for this row's regulation code.
 
         This will create the `Regulation` record on demand if it does not
-        already exist. Returns `None` when the regulation string is empty.
+        already exist, scoped to the row's college.
+        Returns `None` when the regulation string is empty.
         """
         code = (self.regulation or '').strip()
         if not code:
             return None
-        obj, _ = Regulation.objects.get_or_create(code=code)
+        college_id = self.college_id
+        if college_id:
+            obj, _ = Regulation.objects.get_or_create(code=code, college_id=college_id)
+        else:
+            obj, _ = Regulation.objects.get_or_create(code=code, college__isnull=True)
         return obj
 
     def clean(self):
@@ -253,11 +270,20 @@ class CurriculumMaster(models.Model):
 
 
     def save(self, *args, **kwargs):
-        # Ensure a Regulation record exists for this regulation string
+        # Auto-assign college from request context if not explicitly set
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
+        # Ensure a Regulation record exists for this regulation string (college-scoped)
         try:
             code = (self.regulation or '').strip()
             if code:
-                Regulation.objects.get_or_create(code=code)
+                if self.college_id:
+                    Regulation.objects.get_or_create(code=code, college_id=self.college_id)
+                else:
+                    Regulation.objects.get_or_create(code=code, college__isnull=True)
         except Exception:
             # defensive: don't fail saving the curriculum row if regulation creation fails
             pass
@@ -275,6 +301,7 @@ class CurriculumDepartment(models.Model):
     master = models.ForeignKey(CurriculumMaster, null=True, blank=True, on_delete=models.CASCADE, related_name='department_rows')
     department = models.ForeignKey('academics.Department', on_delete=models.CASCADE, related_name='curriculum_rows')
     regulation = models.CharField(max_length=32)
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='department_curricula')
     # link to Semester for consistent filtering with Section.semester
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='department_curricula')
     batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='department_curricula', help_text='Optional batch year this curriculum applies to')
@@ -341,7 +368,11 @@ class CurriculumDepartment(models.Model):
         code = (self.regulation or '').strip()
         if not code:
             return None
-        obj, _ = Regulation.objects.get_or_create(code=code)
+        college_id = self.college_id or (self.department.college_id if self.department_id else None)
+        if college_id:
+            obj, _ = Regulation.objects.get_or_create(code=code, college_id=college_id)
+        else:
+            obj, _ = Regulation.objects.get_or_create(code=code, college__isnull=True)
         return obj
 
     def clean(self):
@@ -356,11 +387,23 @@ class CurriculumDepartment(models.Model):
                 raise ValidationError({'enabled_assessments': 'Select at least one assessment for Special courses.'})
 
     def save(self, *args, **kwargs):
-        # Ensure a Regulation record exists for this regulation string
+        # Auto-assign college from department or request context if not explicitly set
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
+        # Fallback: derive college from department if still unset
+        if not self.college_id and self.department_id:
+            self.college_id = self.department.college_id
+        # Ensure a Regulation record exists for this regulation string (college-scoped)
         try:
             code = (self.regulation or '').strip()
             if code:
-                Regulation.objects.get_or_create(code=code)
+                if self.college_id:
+                    Regulation.objects.get_or_create(code=code, college_id=self.college_id)
+                else:
+                    Regulation.objects.get_or_create(code=code, college__isnull=True)
         except Exception:
             pass
         # Auto-calculate total_mark when internal/external provided
@@ -421,6 +464,7 @@ class ElectiveSubject(models.Model):
     department_group = models.ForeignKey(DepartmentGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_subjects')
     batch = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_subjects', help_text='Optional batch year this elective applies to')
     regulation = models.CharField(max_length=32)
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='elective_subjects')
     semester = models.ForeignKey('academics.Semester', on_delete=models.PROTECT, related_name='elective_subjects')
 
     course_code = models.CharField(max_length=64, blank=True, null=True)
@@ -478,15 +522,30 @@ class ElectiveSubject(models.Model):
         code = (self.regulation or '').strip()
         if not code:
             return None
-        obj, _ = Regulation.objects.get_or_create(code=code)
+        college_id = self.college_id or (self.department.college_id if self.department_id else None)
+        if college_id:
+            obj, _ = Regulation.objects.get_or_create(code=code, college_id=college_id)
+        else:
+            obj, _ = Regulation.objects.get_or_create(code=code, college__isnull=True)
         return obj
 
     def save(self, *args, **kwargs):
-        # Ensure a Regulation record exists for this regulation string
+        # Auto-assign college from department or request context if not explicitly set
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
+        if not self.college_id and self.department_id:
+            self.college_id = self.department.college_id
+        # Ensure a Regulation record exists for this regulation string (college-scoped)
         try:
             code = (self.regulation or '').strip()
             if code:
-                Regulation.objects.get_or_create(code=code)
+                if self.college_id:
+                    Regulation.objects.get_or_create(code=code, college_id=self.college_id)
+                else:
+                    Regulation.objects.get_or_create(code=code, college__isnull=True)
         except Exception:
             pass
         if (self.internal_mark is not None or self.external_mark is not None) and not self.total_mark:
@@ -497,6 +556,7 @@ class ElectiveSubject(models.Model):
 
 
 class ElectiveChoice(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='electivechoices')
     """Mapping of students who have chosen an elective subject for an academic year.
 
     This model records the student, the chosen `ElectiveSubject` option and the
@@ -532,7 +592,8 @@ class ElectivePoll(models.Model):
     parent_elective_name = models.CharField(max_length=255)
     batch_year = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_polls')
     department_group = models.ForeignKey(DepartmentGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_polls')
-    
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='elective_polls')
+
     is_active = models.BooleanField(default=False)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -554,6 +615,7 @@ class ElectivePollSubject(models.Model):
     """The subjects offered in a particular poll."""
     poll = models.ForeignKey(ElectivePoll, on_delete=models.CASCADE, related_name='poll_subjects')
     elective_subject = models.ForeignKey(ElectiveSubject, on_delete=models.CASCADE, related_name='poll_associations')
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='elective_poll_subjects')
     seats = models.PositiveIntegerField(null=True, blank=True)
     staff = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_poll_subjects')
     is_active = models.BooleanField(default=True)

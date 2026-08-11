@@ -136,6 +136,14 @@ export async function fetchWithAuth(input: RequestInfo | URL, init: RequestInit 
     console.warn('No access token found in localStorage')
   }
 
+  // Inject X-College-Id header for multi-college tenant scoping.
+  // Skip for auth endpoints and college management endpoints (global).
+  const collegeId = window.localStorage.getItem('selectedCollegeId')
+  const urlStr = typeof input === 'string' ? input : String(input)
+  if (collegeId && !urlStr.includes('/api/colleges/') && !urlStr.includes('/api/accounts/token')) {
+    headers['X-College-Id'] = collegeId
+  }
+
   // Normalize API requests: if caller used a leading '/api/...' path,
   // route it to the configured backend API base instead of the Vite dev server.
   // Also: if the primary base is unreachable (network error), retry on fallback.

@@ -275,9 +275,27 @@ export default function App() {
           >
             {user?.must_change_password && (
               <ForcePasswordChangeModal
-                onComplete={() => {
+                onComplete={async () => {
                   // Refresh the user data after password change
-                  setUser(prev => prev ? { ...prev, must_change_password: false } : prev);
+                  try {
+                    const updatedUser = await getMe();
+                    const normalizedUser = {
+                      ...updatedUser,
+                      roles: Array.isArray(updatedUser.roles)
+                        ? updatedUser.roles.map((role: string | RoleObj) =>
+                            typeof role === 'string' ? role : role.name,
+                          )
+                        : [],
+                      role: derivePrimaryRole(updatedUser.roles),
+                      permissions: Array.isArray(updatedUser.permissions) ? updatedUser.permissions : [],
+                      profile_type: updatedUser.profile_type || null,
+                      profile: updatedUser.profile || null,
+                    };
+                    setUser(normalizedUser as Me);
+                  } catch {
+                    // Fallback to just updating the local state
+                    setUser(prev => prev ? { ...prev, must_change_password: false } : prev);
+                  }
                 }}
               />
             )}
@@ -711,6 +729,25 @@ export default function App() {
                   path="/staff/salary"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<SalaryPage />} />}
                 />
+
+                {/* Certificate & Achievement Routes */}
+                <Route
+                  path="/student/certificates"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<CertificateUploadPage user={user} />} />}
+                />
+                <Route
+                  path="/certificates/review"
+                  element={<ProtectedRoute user={user} element={<CertificateReviewPage user={user} />} />}
+                />
+                <Route
+                  path="/certificates/achievements"
+                  element={<ProtectedRoute user={user} element={<AchievementsPage user={user} />} />}
+                />
+                <Route
+                  path="/iqac/achievement-reports"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AchievementsReportPage user={user} />} />}
+                />
+
                 
                 {/* HR Routes */}
                 <Route

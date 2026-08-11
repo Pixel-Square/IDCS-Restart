@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Plus, Pencil, Trash2, Search, X, ArrowLeft, Check, Filter } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface CurrItem {
   id: number; regulation: string; semester: number; semester_label: string;
@@ -264,14 +265,7 @@ export default function CurriculumMasterPage() {
                         <button onClick={() => openEdit(item)} className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Edit">
                           <Pencil className="w-4 h-4" />
                         </button>
-                        {deleteConfirm === item.id ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleDelete(item.id)} className="p-1.5 text-white bg-red-500 hover:bg-red-600 rounded-lg" title="Confirm"><Check className="w-4 h-4" /></button>
-                            <button onClick={() => setDeleteConfirm(null)} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg" title="Cancel"><X className="w-4 h-4" /></button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                        )}
+                        <button onClick={() => setDeleteConfirm(item.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Delete"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </td>
                   </tr>
@@ -391,6 +385,20 @@ export default function CurriculumMasterPage() {
           </div>
         </div>
       )}
+
+      {/* Double Password Confirmation Modal */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={(() => {
+          const item = items.find(i => i.id === deleteConfirm);
+          return item ? `${item.course_code} - ${item.course_name}` : '';
+        })()}
+        itemType="Curriculum Master Subject"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleDelete(deleteConfirm);
+        }}
+      />
     </div>
   );
 }

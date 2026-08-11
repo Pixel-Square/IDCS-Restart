@@ -13,7 +13,7 @@ class AnnouncementAdmin(admin.ModelAdmin):
         'expiry_date',
         'has_attachment',
     )
-    list_filter = ('target_type', 'is_active', 'created_at', 'expiry_date')
+    list_filter = ('college', 'target_type', 'is_active', 'created_at', 'expiry_date')
     search_fields = ('title', 'content', 'created_by__username')
     readonly_fields = ('id', 'created_at')
     filter_horizontal = ('target_departments',)

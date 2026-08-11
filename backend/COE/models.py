@@ -1,6 +1,7 @@
 from django.db import models
 
 class CoeExamDummy(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coeexamdummys')
     """
     Maps a Student to a specific dummy number for a given exam session (semester).
     Used for scanning barcodes that represent dummy numbers.
@@ -17,6 +18,7 @@ class CoeExamDummy(models.Model):
 
 
 class CoeArrearStudent(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coearrearstudents')
     """Stores arrear exam registrations that should appear in COE students list."""
 
     batch = models.CharField(max_length=32)
@@ -46,6 +48,7 @@ class CoeArrearStudent(models.Model):
 
 
 class CoeAssignmentStore(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coeassignmentstores')
     """Stores COE assignment data keyed by department/semester/date."""
 
     store_key = models.CharField(max_length=64, unique=True, db_index=True)
@@ -61,6 +64,7 @@ class CoeAssignmentStore(models.Model):
 
 
 class CoeCourseSelectionStore(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coecourseselectionstores')
     """
     Persists COE Course List selections (QP type, ESE type) and lock state
     per department+semester so they are available across all devices.
@@ -86,6 +90,7 @@ class CoeCourseSelectionStore(models.Model):
 
 
 class CoeKeyValueStore(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coekeyvaluestores')
     """Generic key-value store for COE page data that needs DB persistence across devices."""
 
     store_name = models.CharField(max_length=255, unique=True, db_index=True)
@@ -101,6 +106,7 @@ class CoeKeyValueStore(models.Model):
 
 
 class CoeStudentMarks(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coestudentmarks')
     """
     Row-based marks storage for COE mark entry.
     Each row stores marks for one dummy number instead of storing all marks in a single JSON blob.
@@ -122,6 +128,7 @@ class CoeStudentMarks(models.Model):
 
 
 class CoeFinalResult(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='coefinalresults')
     """
     Structured final result table.
     Each row = one student × one course, linked to the dummy that produced the marks.

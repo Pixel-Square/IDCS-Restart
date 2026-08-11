@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Search, Trash2, X, Check, Users, GraduationCap, UserCheck } from 'lucide-react';
+import { Search, Trash2, X, Check, Users, GraduationCap, UserCheck, ChevronLeft, ChevronRight } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface CollegeUser {
   id: number;
@@ -20,16 +21,27 @@ interface CollegeUser {
   created_at: string;
 }
 
+interface ApiResponse {
+  total: number;
+  total_students: number;
+  total_staff: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  results: CollegeUser[];
+}
+
 interface Props {
   collegeId: number;
 }
 
 export default function CollegeUsersList({ collegeId }: Props) {
-  const [users, setUsers] = useState<CollegeUser[]>([]);
+  const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
+  const [page, setPage] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [roles, setRoles] = useState<string[]>([]);
 
@@ -37,27 +49,31 @@ export default function CollegeUsersList({ collegeId }: Props) {
     setLoading(true);
     setError(null);
     try {
-      let url = `/api/college/colleges/${collegeId}/users/?search=${encodeURIComponent(search)}`;
+      let url = `/api/college/colleges/${collegeId}/users/?page=${page}&page_size=50`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
       if (roleFilter) url += `&role=${encodeURIComponent(roleFilter)}`;
       const res = await fetchWithAuth(url);
       if (!res.ok) throw new Error('Failed to fetch users');
-      setUsers(await res.json());
+      setData(await res.json());
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [collegeId, search, roleFilter]);
+  }, [collegeId, search, roleFilter, page]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  // Reset page when search or filter changes
+  useEffect(() => { setPage(1); }, [search, roleFilter]);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await fetchWithAuth('/api/accounts/roles/');
         if (res.ok) {
-          const data = await res.json();
-          setRoles(data.roles || []);
+          const resData = await res.json();
+          setRoles(resData.roles || []);
         }
       } catch { /* ignore */ }
     })();
@@ -74,8 +90,11 @@ export default function CollegeUsersList({ collegeId }: Props) {
     }
   };
 
-  const studentCount = users.filter(u => u.profile_type === 'STUDENT').length;
-  const staffCount = users.filter(u => u.profile_type !== 'STUDENT').length;
+  const users = data?.results || [];
+  const total = data?.total || 0;
+  const studentCount = data?.total_students || 0;
+  const staffCount = data?.total_staff || 0;
+  const totalPages = data?.total_pages || 1;
 
   return (
     <div>
@@ -84,7 +103,7 @@ export default function CollegeUsersList({ collegeId }: Props) {
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
           <div className="p-2.5 bg-blue-200 rounded-lg"><Users className="w-5 h-5 text-blue-700" /></div>
           <div>
-            <p className="text-2xl font-bold text-blue-800">{users.length}</p>
+            <p className="text-2xl font-bold text-blue-800">{total}</p>
             <p className="text-xs text-blue-600">Total Users</p>
           </div>
         </div>
@@ -142,7 +161,7 @@ export default function CollegeUsersList({ collegeId }: Props) {
           <p className="text-sm">Import users using the "Users Import" tab.</p>
         </div>
       ) : (
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden flex flex-col">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -185,7 +204,7 @@ export default function CollegeUsersList({ collegeId }: Props) {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-gray-600 text-xs">
-                      {u.department ? u.department.code : '—'}
+                      {u.department ? u.department.name : '—'}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-md ${
@@ -197,32 +216,87 @@ export default function CollegeUsersList({ collegeId }: Props) {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {deleteConfirm === u.id ? (
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => handleRemove(u.id)} className="p-1 bg-red-600 text-white rounded-md hover:bg-red-700" title="Confirm">
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => setDeleteConfirm(null)} className="p-1 bg-gray-200 text-gray-600 rounded-md hover:bg-gray-300" title="Cancel">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setDeleteConfirm(u.id)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Remove from college"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setDeleteConfirm(u.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Remove from college"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
+              <span className="text-sm text-gray-600">
+                Page {page} of {totalPages} ({total} users)
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={page === 1}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  className="p-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="flex gap-1">
+                  {/* Show max 5 page buttons */}
+                  {Array.from({ length: Math.min(5, totalPages) }).map((_, idx) => {
+                    let pageNum = page - 2 + idx;
+                    if (page <= 3) pageNum = idx + 1;
+                    else if (page >= totalPages - 2) pageNum = totalPages - 4 + idx;
+                    
+                    // Don't render if out of bounds (can happen if totalPages < 5)
+                    if (pageNum < 1 || pageNum > totalPages) return null;
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => setPage(pageNum)}
+                        className={`min-w-[32px] h-8 rounded-lg text-sm font-medium ${
+                          page === pageNum
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  disabled={page === totalPages}
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  className="p-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Double Password Confirmation Modal */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={(() => {
+          const targetUser = users.find(u => u.id === deleteConfirm);
+          if (!targetUser) return '';
+          const name = [targetUser.first_name, targetUser.last_name].filter(Boolean).join(' ') || targetUser.username;
+          return `${name} (${targetUser.email})`;
+        })()}
+        itemType="User"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleRemove(deleteConfirm);
+        }}
+      />
     </div>
   );
 }

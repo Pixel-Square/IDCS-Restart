@@ -51,6 +51,7 @@ class AchievementType(models.TextChoices):
 
 
 class Certificate(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='certificates')
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='certificates')
     mentor = models.ForeignKey('academics.StaffProfile', on_delete=models.CASCADE, related_name='mentee_certificates')
     certificate_type = models.CharField(max_length=40, choices=CertificateType.choices)
@@ -81,6 +82,7 @@ class Certificate(models.Model):
 
 
 class StudentAchievement(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studentachievements')
     student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='achievements')
     certificate = models.OneToOneField(Certificate, on_delete=models.CASCADE, related_name='achievement')
     achievement_type = models.CharField(max_length=32, choices=AchievementType.choices)
@@ -101,6 +103,7 @@ class StudentAchievement(models.Model):
 
 
 class CertificateAuditLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='certificateauditlogs')
     ACTION_UPLOADED = 'UPLOADED'
     ACTION_APPROVED = 'APPROVED'
     ACTION_REJECTED = 'REJECTED'

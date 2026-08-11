@@ -16,6 +16,7 @@ DAYS_OF_WEEK = (
 
 
 class TimetableTemplate(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='timetabletemplates')
     """A saved template that defines the days and periods (slots) for a timetable.
 
     IQAC users define a template once (days, periods, start/end times, breaks)
@@ -43,6 +44,7 @@ class TimetableTemplate(models.Model):
 
 
 class TimetableSlot(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='timetableslots')
     """A single period definition within a template.
 
     Period definitions are shared across all days within the same template so
@@ -70,6 +72,7 @@ class TimetableSlot(models.Model):
 
 
 class TimetableAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='timetableassignments')
     """An assignment of a subject/staff to a specific day+period for a section.
 
     Periods are defined per-template (shared across days). Assignments reference
@@ -101,6 +104,7 @@ class TimetableAssignment(models.Model):
 
 
 class SpecialTimetable(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialtimetables')
     """A named special timetable grouping — contains multiple date-specific entries for a section.
 
     Created by users with the special timetable permission. Intended to override the
@@ -124,6 +128,7 @@ class SpecialTimetable(models.Model):
 
 
 class SpecialTimetableEntry(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialtimetableentrys')
     """A single date+period entry within a SpecialTimetable.
 
     date: exact calendar date when this entry applies.
@@ -152,6 +157,7 @@ class SpecialTimetableEntry(models.Model):
 
 
 class PeriodSwapRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='periodswaprequests')
     """Period swap request that requires approval from the other staff member.
     
     When a staff wants to swap periods, they create a request which notifies

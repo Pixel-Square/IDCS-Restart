@@ -7,6 +7,7 @@ from django.db import models
 
 
 class AcademicCalendarEvent(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='academiccalendarevents')
     class Source(models.TextChoices):
         IQAC = 'iqac', 'IQAC'
         HOD = 'hod', 'HOD'
@@ -65,6 +66,7 @@ class AcademicCalendarEvent(models.Model):
 
 
 class HodColor(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='hodcolors')
     hod = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='hod_color')
     color = models.CharField(max_length=16)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_hod_colors')
@@ -77,6 +79,7 @@ class HodColor(models.Model):
 # ── Event Proposal Approval Workflow ─────────────────────────────────────────
 
 class EventProposal(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='eventproposals')
     """
     Multi-stage event proposal flowing through:
     Staff → Branding → HOD → HAA → Approved (notifications sent).
@@ -201,6 +204,7 @@ class EventProposal(models.Model):
 # ── Calendar Event Label + Assignment (IQAC Calendar Admin) ──────────────────
 
 class CalendarEventLabel(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='calendareventlabels')
     """
     A reusable event definition created by IQAC admin.
     Stores display metadata: title, hex color, which roles can see it,
@@ -228,6 +232,7 @@ class CalendarEventLabel(models.Model):
 
 
 class CalendarEventAssignment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='calendareventassignments')
     """
     Assigns a CalendarEventLabel to a date range within a specific academic calendar.
     calendar_ref stores the frontend calendar id (UUID/timestamp string).
@@ -264,6 +269,7 @@ class CalendarEventAssignment(models.Model):
 # ── Academic Calendar (date-wise) ───────────────────────────────────────────
 
 class AcademicCalendar(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='academiccalendars')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
     from_date = models.DateField()
@@ -289,6 +295,7 @@ class AcademicCalendar(models.Model):
 
 
 class AcademicCalendarDay(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='academiccalendardays')
     calendar = models.ForeignKey(
         AcademicCalendar, on_delete=models.CASCADE,
         related_name='days',
@@ -313,6 +320,7 @@ class AcademicCalendarDay(models.Model):
 
 
 class AcademicCalendarHoliday(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='academiccalendarholidays')
     calendar = models.ForeignKey(
         AcademicCalendar, on_delete=models.CASCADE,
         related_name='holidays',

@@ -5,6 +5,7 @@ from django.db.models import Q
 
 
 class AttendanceRecord(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='attendancerecords')
     """Records daily attendance for staff members"""
     # No choices constraint - accepts any status code from leave templates
     # Common values: 'present', 'absent', 'half_day', 'partial', 'OD', 'LEAVE', 'CL', 'ML', 'COL', etc.
@@ -292,6 +293,7 @@ class AttendanceRecord(models.Model):
 
 
 class UploadLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='uploadlogs')
     """Logs each CSV upload by PS"""
     uploader = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -320,6 +322,7 @@ class UploadLog(models.Model):
 
 
 class HalfDayRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='halfdayrequests')
     """Staff requests for period attendance access from HOD/AHOD"""
     STATUS_CHOICES = [
         ('pending', 'Pending Approval'),
@@ -368,6 +371,7 @@ class HalfDayRequest(models.Model):
 
 
 class Holiday(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='holidays')
     """Records holidays when attendance should not be marked"""
     date = models.DateField(unique=True, db_index=True)
     name = models.CharField(max_length=200, help_text="Holiday name/description")
@@ -405,6 +409,7 @@ class Holiday(models.Model):
 
 
 class AttendanceSettings(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='attendancesettings')
     """Global settings for attendance time limits and absence rules"""
     attendance_in_time_limit = models.TimeField(
         default='08:45:00',
@@ -455,6 +460,7 @@ class AttendanceSettings(models.Model):
 
 
 class DepartmentAttendanceSettings(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='departmentattendancesettings')
     """Department-specific attendance time limits (e.g., Type 1 for CSE/Mech, Type 2 for EEE/ECE)"""
     name = models.CharField(
         max_length=100,
@@ -528,6 +534,7 @@ class DepartmentAttendanceSettings(models.Model):
 
 
 class StaffAttendanceTimeLimitOverride(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffattendancetimelimitoverrides')
     """Staff-specific attendance time limits (one override per staff).
 
     Priority order during status calculation:
@@ -576,6 +583,7 @@ class StaffAttendanceTimeLimitOverride(models.Model):
 
 
 class SpecialDepartmentDateAttendanceLimit(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialdepartmentdateattendancelimits')
     """HR special attendance limits for a department/date or date-range."""
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
@@ -620,6 +628,7 @@ class SpecialDepartmentDateAttendanceLimit(models.Model):
 
 
 class StaffBiometricPunchLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffbiometricpunchlogs')
     """Stores raw biometric punches used to update staff attendance in real time."""
 
     class Direction(models.TextChoices):

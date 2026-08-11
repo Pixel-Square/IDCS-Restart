@@ -183,7 +183,7 @@ apiClient.interceptors.response.use(
   }
 )
 
-export async function login(identifier: string, password: string){
+export async function login(identifier: string, password: string, collegeId?: string | number){
   // Clear any stale cached profile/role state before establishing a new session.
   // (Fixes cases where old HOD roles linger for IQAC users.)
   try {
@@ -195,19 +195,41 @@ export async function login(identifier: string, password: string){
     // ignore
   }
 
+  // Include the institution selected on the login page (if any) so the
+  // backend can reject cross-college login attempts.
+  const payload: Record<string, unknown> = { identifier, password }
+  if (collegeId) payload.college = String(collegeId)
+
   let res
   try {
-    res = await publicClient.post('token/', { identifier, password }, { timeout: LOGIN_API_TIMEOUT })
+    res = await publicClient.post('token/', payload, { timeout: LOGIN_API_TIMEOUT })
   } catch (err: any) {
     const isTimeout =
       String(err?.code || '') === 'ECONNABORTED' ||
       String(err?.message || '').toLowerCase().includes('timeout')
     if (!isTimeout) throw err
-    res = await publicClient.post('token/', { identifier, password }, { timeout: LOGIN_API_TIMEOUT })
+    res = await publicClient.post('token/', payload, { timeout: LOGIN_API_TIMEOUT })
   }
-  const { access, refresh } = res.data
+  const { access, refresh, college_id, college_name, college_code, must_change_password } = res.data
   localStorage.setItem('access', access)
   localStorage.setItem('refresh', refresh)
+  // Persist the account's own college so subsequent API calls are scoped to
+  // it via the X-College-Id header (see fetchAuth.ts).
+  try {
+    if (college_id) {
+      localStorage.setItem('selectedCollegeId', String(college_id))
+      if (college_name) localStorage.setItem('selectedCollegeName', String(college_name))
+      if (college_code) localStorage.setItem('selectedCollegeCode', String(college_code))
+    }
+    // Store password change requirement flag
+    if (must_change_password) {
+      localStorage.setItem('must_change_password', 'true')
+    } else {
+      localStorage.removeItem('must_change_password')
+    }
+  } catch {
+    // ignore
+  }
   // prefetch user info (roles/permissions) after login
   try{
     // fetch profile asynchronously so login isn't blocked by potentially slow `me/` endpoint

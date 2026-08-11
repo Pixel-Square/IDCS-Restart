@@ -4,6 +4,7 @@ import { ModalPortal } from '../../components/ModalPortal'
 import { CalendarData } from './calendarTypes'
 import { CalendarGrid } from './CalendarGrid'
 import fetchWithAuth from '../../services/fetchAuth'
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal'
 
 const TEMPLATE_DROPDOWN_VALUES = [
   'Placement training',
@@ -580,27 +581,18 @@ export default function AcademicCalendarAdmin() {
         </ModalPortal>
       )}
 
-      {/* ── Delete Confirmation ── */}
-      {showDeleteConfirm && selectedCalendar && (
-        <ModalPortal>
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg max-w-md w-full p-6">
-              <h3 className="text-lg font-semibold mb-4">Confirm Deletion</h3>
-              {deleteError && (
-                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                  <p className="text-sm text-red-700">{deleteError}</p>
-                </div>
-              )}
-              <p className="text-gray-600 mb-4">Are you sure you want to delete "{selectedCalendar.name}"?</p>
-              <div className="flex gap-3">
-                <button onClick={() => { setShowDeleteConfirm(false); setSelectedCalendar(null); setDeleteError(null) }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-                <button onClick={handleDeleteCalendar} className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Delete</button>
-              </div>
-            </div>
-          </div>
-        </ModalPortal>
-      )}
+      {/* ── Double Password Confirmation Modal ── */}
+      <ConfirmPasswordDeleteModal
+        isOpen={showDeleteConfirm && selectedCalendar !== null}
+        itemName={selectedCalendar ? selectedCalendar.name : ''}
+        itemType="Academic Calendar"
+        onClose={() => {
+          setShowDeleteConfirm(false);
+          setSelectedCalendar(null);
+          setDeleteError(null);
+        }}
+        onConfirm={handleDeleteCalendar}
+      />
 
       {/* ── Edit Days Modal ── */}
       {showEditModal && viewingCalendar && (

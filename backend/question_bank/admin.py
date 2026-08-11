@@ -9,14 +9,14 @@ from .models import QuestionBankQuestion, QuestionBankTitle
 class QuestionBankTitleAdmin(admin.ModelAdmin):
     list_display = ('id', 'title', 'user', 'exam_type', 'exam_date', 'created_at')
     search_fields = ('title', 'user__username', 'user__email', 'faculty_identifier', 'exam_type')
-    list_filter = ('exam_type', 'exam_date', 'created_at')
+    list_filter = ('college', 'exam_type', 'exam_date', 'created_at')
 
 
 @admin.register(QuestionBankQuestion)
 class QuestionBankQuestionAdmin(admin.ModelAdmin):
     list_display = ('id', 'title_obj', 'user', 'type', 'status', 'course_code', 'semester', 'updated_at')
     search_fields = ('question_text', 'answer_text', 'title', 'course_code', 'course_name', 'user__username', 'user__email')
-    list_filter = ('type', 'status', 'excel_type', 'semester', 'updated_at')
+    list_filter = ('college', 'type', 'status', 'excel_type', 'semester', 'updated_at')
 
 
 # Register any remaining question_bank models without explicit admin classes above.

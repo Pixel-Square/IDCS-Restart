@@ -49,6 +49,13 @@ export default function ForcePasswordChangeModal({ onComplete }: Props) {
         return;
       }
 
+      // Clear the flag from localStorage
+      try {
+        localStorage.removeItem('must_change_password');
+      } catch {
+        // ignore
+      }
+
       // Re-login with new password to get fresh tokens
       // The old tokens are now invalidated
       onComplete();

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Shield, Plus, Edit2, Trash2, X, Check, Key, ChevronDown } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface RoleItem {
   id: number;
@@ -191,21 +192,6 @@ export default function RolesPage() {
                     )}
                   </div>
                 )}
-
-                {/* Delete confirm */}
-                {deleteConfirm === role.id && (
-                  <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 flex items-center justify-between">
-                    <span className="text-xs text-red-700 font-medium">Delete "{role.name}"?</span>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleDelete(role.id)} className="flex items-center gap-1 text-xs bg-red-600 text-white px-2.5 py-1 rounded-lg hover:bg-red-700">
-                        <Check className="w-3.5 h-3.5" /> Yes
-                      </button>
-                      <button onClick={() => setDeleteConfirm(null)} className="flex items-center gap-1 text-xs bg-gray-200 text-gray-700 px-2.5 py-1 rounded-lg hover:bg-gray-300">
-                        <X className="w-3.5 h-3.5" /> No
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           ))}
@@ -336,6 +322,17 @@ export default function RolesPage() {
           </div>
         </div>
       )}
+
+      {/* Double Password Confirmation Modal */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={roles.find(r => r.id === deleteConfirm)?.name || ''}
+        itemType="Role"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleDelete(deleteConfirm);
+        }}
+      />
     </div>
   );
 }

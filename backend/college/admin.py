@@ -5,7 +5,7 @@ from io import BytesIO
 from django import forms
 from django.contrib import admin, messages
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path
 
 
@@ -25,7 +25,6 @@ class CollegeUploadExcelForm(forms.Form):
 def _cell_to_str(v) -> str:
     if v is None:
         return ''
-    # Normalize common numeric cases like 12.0 -> "12"
     try:
         if isinstance(v, float) and v.is_integer():
             v = int(v)
@@ -53,14 +52,41 @@ class CollegeFeatureInline(admin.TabularInline):
     autocomplete_fields = ('feature',)
 
 
+def _safe_count(model_path: str, college) -> int:
+    """Safely get a count of records belonging to a college. Returns 0 on error."""
+    try:
+        app_label, model_name = model_path.split('.')
+        from django.apps import apps
+        Model = apps.get_model(app_label, model_name)
+        return Model.objects.filter(college=college).count()
+    except Exception:
+        return 0
+
+
+def _admin_url(app_label: str, model_name: str, college_id: int) -> str:
+    """Build a pre-filtered admin changelist URL for a college-scoped model."""
+    return f'/admin/{app_label}/{model_name.lower()}/?college__id__exact={college_id}'
+
+
 @admin.register(College)
 class CollegeAdmin(admin.ModelAdmin):
-    list_display = ('code', 'short_name', 'name', 'city', 'is_active')
+    list_display = ('code', 'short_name', 'name', 'city', 'is_active', 'dashboard_link')
     search_fields = ('code', 'short_name', 'name', 'city')
     list_filter = ('is_active', 'city')
     inlines = [CollegeFeatureInline]
 
     change_list_template = 'admin/college/college/change_list.html'
+    change_form_template = 'admin/college/college/change_form.html'
+
+    def dashboard_link(self, obj):
+        from django.utils.html import format_html
+        return format_html(
+            '<a href="/admin/college/college/{}/dashboard/" '
+            'style="background:#417690;color:#fff;padding:3px 10px;border-radius:4px;'
+            'text-decoration:none;font-size:12px;font-weight:600;">Dashboard</a>',
+            obj.pk,
+        )
+    dashboard_link.short_description = 'Dashboard'
 
     def get_urls(self):
         urls = super().get_urls()
@@ -70,8 +96,184 @@ class CollegeAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.upload_excel_view),
                 name='college_college_upload_excel',
             ),
+            path(
+                '<int:college_id>/dashboard/',
+                self.admin_site.admin_view(self.college_dashboard_view),
+                name='college_college_dashboard',
+            ),
         ]
         return my_urls + urls
+
+    # ------------------------------------------------------------------
+    # College Dashboard
+    # ------------------------------------------------------------------
+
+    def college_dashboard_view(self, request: HttpRequest, college_id: int) -> HttpResponse:
+        if not self.has_view_permission(request):
+            raise PermissionError('Forbidden')
+
+        college = get_object_or_404(College, pk=college_id)
+        cid = college.pk
+
+        def count(model_path):
+            return _safe_count(model_path, college)
+
+        def url(app, model):
+            return _admin_url(app, model, cid)
+
+        features_on = list(
+            CollegeFeature.objects.filter(college=college, is_enabled=True)
+            .select_related('feature')
+            .values_list('feature__name', flat=True)
+        )
+        features_off = list(
+            CollegeFeature.objects.filter(college=college, is_enabled=False)
+            .select_related('feature')
+            .values_list('feature__name', flat=True)
+        )
+
+        sections = [
+            {
+                'title': 'Academics',
+                'icon': 'graduation-cap',
+                'color': '#417690',
+                'models': [
+                    {'label': 'Academic Years',      'count': count('academics.AcademicYear'),  'url': url('academics', 'academicyear')},
+                    {'label': 'Departments',         'count': count('academics.Department'),    'url': url('academics', 'department')},
+                    {'label': 'Batches',             'count': count('academics.Batch'),         'url': url('academics', 'batch')},
+                    {'label': 'Batch Years',         'count': count('academics.BatchYear'),     'url': url('academics', 'batchyear')},
+                    {'label': 'Sections',            'count': count('academics.Section'),       'url': url('academics', 'section')},
+                    {'label': 'Courses',             'count': count('academics.Course'),        'url': url('academics', 'course')},
+                    {'label': 'Subjects',            'count': count('academics.Subject'),       'url': url('academics', 'subject')},
+                    {'label': 'Programs',            'count': count('academics.Program'),       'url': url('academics', 'program')},
+                    {'label': 'Semesters',           'count': count('academics.Semester'),      'url': url('academics', 'semester')},
+                ],
+            },
+            {
+                'title': 'Curriculum',
+                'icon': 'book-open',
+                'color': '#205067',
+                'models': [
+                    {'label': 'Curriculum Masters',  'count': count('curriculum.CurriculumMaster'),     'url': url('curriculum', 'curriculummaster')},
+                    {'label': 'Dept Curricula',      'count': count('curriculum.CurriculumDepartment'), 'url': url('curriculum', 'curriculumdepartment')},
+                    {'label': 'Dept Groups',         'count': count('curriculum.DepartmentGroup'),      'url': url('curriculum', 'departmentgroup')},
+                    {'label': 'Elective Subjects',   'count': count('curriculum.ElectiveSubject'),      'url': url('curriculum', 'electivesubject')},
+                    {'label': 'Regulations',         'count': count('curriculum.Regulation'),           'url': url('curriculum', 'regulation')},
+                ],
+            },
+            {
+                'title': 'OBE / Marks',
+                'icon': 'chart-bar',
+                'color': '#264b5d',
+                'models': [
+                    {'label': 'CDAP Revisions',      'count': count('OBE.CDAPRevision'),              'url': url('OBE', 'cdaprevision')},
+                    {'label': 'LCA Revisions',       'count': count('OBE.LCARevision'),               'url': url('OBE', 'lcarevision')},
+                    {'label': 'CO Targets',          'count': count('OBE.COTargetRevision'),          'url': url('OBE', 'cotargetrevision')},
+                    {'label': 'Assessment Configs',  'count': count('OBE.OBEAssessmentMasterConfig'), 'url': url('OBE', 'obeassessmentmasterconfig')},
+                ],
+            },
+            {
+                'title': 'Feedback',
+                'icon': 'clipboard-list',
+                'color': '#1a7a4a',
+                'models': [
+                    {'label': 'Feedback Forms',      'count': count('feedback.FeedbackForm'),           'url': url('feedback', 'feedbackform')},
+                    {'label': 'Submissions',         'count': count('feedback.FeedbackFormSubmission'), 'url': url('feedback', 'feedbackformsubmission')},
+                ],
+            },
+            {
+                'title': 'Staff & HR',
+                'icon': 'users',
+                'color': '#6b3a7d',
+                'models': [
+                    {'label': 'Request Templates',   'count': count('staff_requests.RequestTemplate'),    'url': url('staff_requests', 'requesttemplate')},
+                    {'label': 'Staff Requests',      'count': count('staff_requests.StaffRequest'),       'url': url('staff_requests', 'staffrequest')},
+                    {'label': 'Approval Flows',      'count': count('staff_requests.ApprovalFlow'),       'url': url('staff_requests', 'approvalflow')},
+                    {'label': 'Attendance Records',  'count': count('staff_attendance.AttendanceRecord'), 'url': url('staff_attendance', 'attendancerecord')},
+                    {'label': 'Salary Records',      'count': count('staff_salary.StaffSalaryRecord'),    'url': url('staff_salary', 'staffsalaryrecord')},
+                ],
+            },
+            {
+                'title': 'Timetable',
+                'icon': 'calendar',
+                'color': '#7d4a1a',
+                'models': [
+                    {'label': 'Templates',           'count': count('timetable.TimetableTemplate'),   'url': url('timetable', 'timetabletemplate')},
+                    {'label': 'Slots',               'count': count('timetable.TimetableSlot'),       'url': url('timetable', 'timetableslot')},
+                    {'label': 'Assignments',         'count': count('timetable.TimetableAssignment'), 'url': url('timetable', 'timetableassignment')},
+                ],
+            },
+            {
+                'title': 'LMS & Announcements',
+                'icon': 'folder-open',
+                'color': '#1a5c7d',
+                'models': [
+                    {'label': 'Study Materials',     'count': count('lms.StudyMaterial'),             'url': url('lms', 'studymaterial')},
+                    {'label': 'Announcements',       'count': count('announcements.Announcement'),    'url': url('announcements', 'announcement')},
+                    {'label': 'Calendar Events',     'count': count('academic_calendar.AcademicCalendarEvent'), 'url': url('academic_calendar', 'academiccalendarevent')},
+                ],
+            },
+            {
+                'title': 'COE (Exams)',
+                'icon': 'target',
+                'color': '#7d1a1a',
+                'models': [
+                    {'label': 'Arrear Students',     'count': count('COE.CoeArrearStudent'),     'url': url('COE', 'coearrearsstudent')},
+                    {'label': 'Final Results',       'count': count('COE.CoeFinalResult'),       'url': url('COE', 'coefinalresult')},
+                    {'label': 'Assignment Stores',   'count': count('COE.CoeAssignmentStore'),   'url': url('COE', 'coeassignmentstore')},
+                ],
+            },
+            {
+                'title': 'Applications',
+                'icon': 'file-text',
+                'color': '#4a7d1a',
+                'models': [
+                    {'label': 'Application Types',   'count': count('applications.ApplicationType'),  'url': url('applications', 'applicationtype')},
+                    {'label': 'Applications',        'count': count('applications.Application'),      'url': url('applications', 'application')},
+                    {'label': 'Approval Flows',      'count': count('applications.ApprovalFlow'),     'url': url('applications', 'approvalflow')},
+                ],
+            },
+            {
+                'title': 'Certificates & PBAS',
+                'icon': 'award',
+                'color': '#7d5a1a',
+                'models': [
+                    {'label': 'Certificates',        'count': count('certificates.Certificate'),          'url': url('certificates', 'certificate')},
+                    {'label': 'PBAS Tickets',        'count': count('pbas.PBASVerificationTicket'),       'url': url('pbas', 'pbasverificationticket')},
+                ],
+            },
+            {
+                'title': 'IDCSScan',
+                'icon': 'scan-line',
+                'color': '#1a4a7d',
+                'models': [
+                    {'label': 'Fingerprint Enrollments', 'count': count('idcsscan.FingerprintEnrollment'), 'url': url('idcsscan', 'fingerprintenrollment')},
+                ],
+            },
+            {
+                'title': 'Question Bank',
+                'icon': 'help-circle',
+                'color': '#4a1a7d',
+                'models': [
+                    {'label': 'QP Titles',           'count': count('question_bank.QuestionPaperTitle'),  'url': url('question_bank', 'questionpapertitle')},
+                ],
+            },
+        ]
+
+        context = {
+            **self.admin_site.each_context(request),
+            'college': college,
+            'features_on': features_on,
+            'features_off': features_off,
+            'sections': sections,
+            'title': f'Dashboard — {college.short_name or college.name}',
+            'opts': self.model._meta,
+        }
+        return render(request, 'admin/college/college/dashboard.html', context)
+
+    # ------------------------------------------------------------------
+    # Excel upload
+    # ------------------------------------------------------------------
 
     def upload_excel_view(self, request: HttpRequest) -> HttpResponse:
         if not self.has_change_permission(request):
@@ -143,7 +345,7 @@ class CollegeAdmin(admin.ModelAdmin):
 
 
 # ---------------------------------------------------------------------------
-# Feature Catalog — master list of all toggleable modules
+# Feature Catalog
 # ---------------------------------------------------------------------------
 
 @admin.register(FeatureCatalog)
@@ -163,13 +365,13 @@ class FeatureCatalogAdmin(admin.ModelAdmin):
         }),
         ('Mapping', {
             'fields': ('applicable_roles', 'sidebar_keys', 'permissions'),
-            'description': 'Comma-separated values linking features to user roles and sidebar keys. Plus explicit permission mapping.',
+            'description': 'Comma-separated values linking features to user roles and sidebar keys.',
         }),
     )
 
 
 # ---------------------------------------------------------------------------
-# College Feature — per-college toggle state
+# College Feature
 # ---------------------------------------------------------------------------
 
 @admin.register(CollegeFeature)

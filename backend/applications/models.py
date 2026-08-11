@@ -3,6 +3,7 @@ from django.db import models
 
 
 class ApplicationType(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationtypes')
     name = models.CharField(max_length=150)
     code = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
@@ -17,6 +18,7 @@ class ApplicationType(models.Model):
 
 
 class ApplicationField(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationfields')
     class FieldType(models.TextChoices):
         TEXT = 'TEXT', 'Text'
         DATE = 'DATE', 'Date'
@@ -49,6 +51,7 @@ class ApplicationField(models.Model):
 
 
 class Application(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applications')
     class ApplicationState(models.TextChoices):
         DRAFT = 'DRAFT', 'Draft'
         SUBMITTED = 'SUBMITTED', 'Submitted'
@@ -144,6 +147,7 @@ class Application(models.Model):
 
 
 class ApplicationData(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationdatas')
     application = models.ForeignKey(
         Application,
         on_delete=models.CASCADE,
@@ -166,6 +170,7 @@ class ApplicationData(models.Model):
 
 
 class ApprovalFlow(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='approvalflows')
     application_type = models.ForeignKey(
         ApplicationType,
         on_delete=models.CASCADE,
@@ -196,6 +201,7 @@ class ApprovalFlow(models.Model):
 
 
 class ApprovalStep(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='application_approvalsteps')
     approval_flow = models.ForeignKey(
         ApprovalFlow,
         on_delete=models.CASCADE,
@@ -245,6 +251,7 @@ class ApprovalStep(models.Model):
 
 
 class ApprovalAction(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='approvalactions')
     class Action(models.TextChoices):
         APPROVED = 'APPROVED', 'Approved'
         REJECTED = 'REJECTED', 'Rejected'
@@ -280,6 +287,7 @@ class ApprovalAction(models.Model):
 
 # Role-level permissions for application-level capabilities (configurable, not hardcoded)
 class RoleApplicationPermission(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='roleapplicationpermissions')
     role = models.ForeignKey('accounts.Role', on_delete=models.CASCADE, related_name='application_permissions')
     application_type = models.ForeignKey(ApplicationType, on_delete=models.CASCADE, related_name='role_permissions')
     can_edit_all = models.BooleanField(default=False)
@@ -293,6 +301,7 @@ class RoleApplicationPermission(models.Model):
 
 
 class ApplicationRoleHierarchy(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationrolehierarchys')
     """Manual role priority override for flow starter selection.
 
     Lower rank means higher priority.
@@ -321,6 +330,7 @@ class ApplicationRoleHierarchy(models.Model):
 
 
 class ApplicationRoleHierarchyStage(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationrolehierarchystages')
     """A stage (group) for manual role hierarchy configuration.
 
     Stages are evaluated in ascending `order`.
@@ -345,6 +355,7 @@ class ApplicationRoleHierarchyStage(models.Model):
 
 
 class ApplicationRoleHierarchyStageRole(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationrolehierarchystageroles')
     stage = models.ForeignKey(
         ApplicationRoleHierarchyStage,
         on_delete=models.CASCADE,
@@ -366,6 +377,7 @@ class ApplicationRoleHierarchyStageRole(models.Model):
 
 
 class ApplicationRoleHierarchyStageUser(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationrolehierarchystageusers')
     stage = models.ForeignKey(
         ApplicationRoleHierarchyStage,
         on_delete=models.CASCADE,
@@ -385,6 +397,7 @@ class ApplicationRoleHierarchyStageUser(models.Model):
 
 
 class ApplicationFormVersion(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationformversions')
     application_type = models.ForeignKey(
         ApplicationType,
         on_delete=models.CASCADE,
@@ -404,6 +417,7 @@ class ApplicationFormVersion(models.Model):
 
 
 class ApplicationAttachment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationattachments')
     application = models.ForeignKey(
         Application,
         on_delete=models.CASCADE,
@@ -428,6 +442,7 @@ class ApplicationAttachment(models.Model):
 
 
 class ApplicationNotificationSettings(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='applicationnotificationsettings')
     """WhatsApp notification settings per application type.
 
     Controls which notifications are sent and their message templates.

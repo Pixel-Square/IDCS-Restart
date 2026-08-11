@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Building2, Plus, Pencil, Trash2, Search, X, ArrowLeft, Check } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface Dept {
   id: number;
@@ -27,6 +28,16 @@ const emptyForm: FormData = { code: '', name: '', short_name: '', is_teaching: t
 
 export default function DepartmentsPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const collegeId = searchParams.get('college_id');
+
+  // Sync college context so X-College-Id header follows this page
+  useEffect(() => {
+    if (collegeId) {
+      window.localStorage.setItem('selectedCollegeId', collegeId);
+    }
+  }, [collegeId]);
+
   const [departments, setDepartments] = useState<Dept[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -40,11 +51,14 @@ export default function DepartmentsPage() {
   const fetchDepartments = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchWithAuth(`/api/college/departments/?search=${encodeURIComponent(search)}`);
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (collegeId) params.append('college_id', collegeId);
+      const res = await fetchWithAuth(`/api/college/departments/?${params.toString()}`);
       if (res.ok) setDepartments(await res.json());
     } catch { /* ignore */ }
     setLoading(false);
-  }, [search]);
+  }, [search, collegeId]);
 
   useEffect(() => { fetchDepartments(); }, [fetchDepartments]);
 
@@ -61,7 +75,9 @@ export default function DepartmentsPage() {
     try {
       const url = editing ? `/api/college/departments/${editing.id}/` : '/api/college/departments/';
       const method = editing ? 'PUT' : 'POST';
-      const res = await fetchWithAuth(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      const payload = { ...form } as any;
+      if (collegeId) payload.college = Number(collegeId);
+      const res = await fetchWithAuth(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.detail || 'Save failed'); setSaving(false); return; }
       setShowModal(false);
       fetchDepartments();
@@ -84,7 +100,7 @@ export default function DepartmentsPage() {
     <div className="p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
-        <button onClick={() => navigate('/colleges')} className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors">
+        <button onClick={() => navigate(collegeId ? `/colleges/${collegeId}` : '/colleges')} className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="p-3 bg-blue-100 rounded-xl">
@@ -93,6 +109,9 @@ export default function DepartmentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Departments</h1>
           <p className="text-sm text-gray-500">Manage all departments in the system</p>
+          {collegeId && (
+            <p className="text-xs text-gray-500 mt-1">College scope: <strong>{collegeId}</strong></p>
+          )}
         </div>
       </div>
 
@@ -162,20 +181,9 @@ export default function DepartmentsPage() {
                         <button onClick={() => openEdit(d)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit">
                           <Pencil className="w-4 h-4" />
                         </button>
-                        {deleteConfirm === d.id ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleDelete(d.id)} className="p-1.5 text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors" title="Confirm">
-                              <Check className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => setDeleteConfirm(null)} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors" title="Cancel">
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setDeleteConfirm(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
+                        <button onClick={() => setDeleteConfirm(d.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -245,6 +253,17 @@ export default function DepartmentsPage() {
           </div>
         </div>
       )}
+
+      {/* Double Password Confirmation Modal for Deletion */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={departments.find(d => d.id === deleteConfirm)?.name || ''}
+        itemType="Department"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleDelete(deleteConfirm);
+        }}
+      />
     </div>
   );
 }

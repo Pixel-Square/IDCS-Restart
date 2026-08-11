@@ -4,10 +4,12 @@ import fetchWithAuth from '../../services/fetchAuth';
 import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
-import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2 } from 'lucide-react';
+import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2, Building2 } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 export default function MasterList() {
+  const selectedCollegeId = window.localStorage.getItem('selectedCollegeId');
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -363,6 +365,12 @@ export default function MasterList() {
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
+        {selectedCollegeId && (
+          <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 mb-6 flex items-center gap-2 text-indigo-800">
+            <Building2 className="w-5 h-5 text-indigo-600" />
+            <span className="text-sm font-medium">Viewing curriculum scoped to College ID: {selectedCollegeId}</span>
+          </div>
+        )}
         {/* Header */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
@@ -668,39 +676,13 @@ export default function MasterList() {
         </div>
       )}
 
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <h3 className="text-lg font-bold text-gray-900">Delete Master Curriculum</h3>
-            <p className="text-sm text-gray-600 mt-2">
-              Are you sure you want to delete{' '}
-              <span className="font-semibold">{deleteTarget.course_name || deleteTarget.course_code || 'this subject'}</span>?
-            </p>
-            <p className="text-xs text-gray-400 mt-1">This action cannot be undone.</p>
-            {deleteError && (
-              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 whitespace-pre-wrap">
-                {deleteError}
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                onClick={() => { if (!deleteLoading) setDeleteTarget(null); }}
-                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                disabled={deleteLoading}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteMaster}
-                disabled={deleteLoading}
-                className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 disabled:opacity-50"
-              >
-                {deleteLoading ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteTarget !== null}
+        itemName={deleteTarget ? (deleteTarget.course_name || deleteTarget.course_code || 'this subject') : ''}
+        itemType="Master Curriculum Subject"
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteMaster}
+      />
 
     </CurriculumLayout>
   );

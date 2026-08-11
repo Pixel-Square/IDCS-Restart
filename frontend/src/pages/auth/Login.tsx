@@ -1,19 +1,104 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Mail, Lock, Eye, EyeOff, AlertCircle } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Building2, Search, ChevronRight } from "lucide-react";
 import { getMe, impersonateLogin, login } from "../../services/auth";
+import { searchColleges, type CollegeOption } from "../../services/institutions";
 import Navbar from "../../components/navigation/Navbar";
+
+const COLLEGE_ID_KEY = "selectedCollegeId";
+const COLLEGE_NAME_KEY = "selectedCollegeName";
+const COLLEGE_CODE_KEY = "selectedCollegeCode";
+
+function loadStoredCollege(): CollegeOption | null {
+  try {
+    const id = localStorage.getItem(COLLEGE_ID_KEY);
+    const name = localStorage.getItem(COLLEGE_NAME_KEY);
+    if (!id || !name) return null;
+    return { id: Number(id), name, code: localStorage.getItem(COLLEGE_CODE_KEY) || "" };
+  } catch {
+    return null;
+  }
+}
 
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [stage, setStage] = useState<"credentials" | "choice" | "impersonate">("credentials");
+  const [selectedCollege, setSelectedCollege] = useState<CollegeOption | null>(() => loadStoredCollege());
+  const [stage, setStage] = useState<"institution" | "credentials" | "choice" | "impersonate">(() =>
+    loadStoredCollege() ? "credentials" : "institution"
+  );
+  const [institutionQuery, setInstitutionQuery] = useState("");
+  const [institutionResults, setInstitutionResults] = useState<CollegeOption[]>([]);
+  const [institutionLoading, setInstitutionLoading] = useState(false);
+  const [institutionError, setInstitutionError] = useState<string | null>(null);
   const [me, setMe] = useState<any | null>(null);
   const [targetIdentifier, setTargetIdentifier] = useState("");
   const [reason, setReason] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Debounced institution lookup. Requires 3+ characters before querying.
+  useEffect(() => {
+    const q = institutionQuery.trim();
+    if (q.length < 3) {
+      setInstitutionResults([]);
+      setInstitutionError(null);
+      setInstitutionLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setInstitutionLoading(true);
+    setInstitutionError(null);
+    const handle = setTimeout(async () => {
+      try {
+        const results = await searchColleges(q);
+        if (cancelled) return;
+        setInstitutionResults(results);
+        setInstitutionError(
+          results.length === 0 ? `We couldn't find "${q}" in our records. Check the spelling and try again.` : null
+        );
+      } catch {
+        if (!cancelled) setInstitutionError("Something went wrong while looking that up. Please try again.");
+      } finally {
+        if (!cancelled) setInstitutionLoading(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [institutionQuery]);
+
+  function handleSelectInstitution(college: CollegeOption) {
+    setSelectedCollege(college);
+    try {
+      localStorage.setItem(COLLEGE_ID_KEY, String(college.id));
+      localStorage.setItem(COLLEGE_NAME_KEY, college.name);
+      localStorage.setItem(COLLEGE_CODE_KEY, college.code || "");
+    } catch {
+      // ignore
+    }
+    setInstitutionQuery("");
+    setInstitutionResults([]);
+    setError(null);
+    setStage("credentials");
+  }
+
+  function handleChangeInstitution() {
+    setSelectedCollege(null);
+    try {
+      localStorage.removeItem(COLLEGE_ID_KEY);
+      localStorage.removeItem(COLLEGE_NAME_KEY);
+      localStorage.removeItem(COLLEGE_CODE_KEY);
+    } catch {
+      // ignore
+    }
+    setIdentifier("");
+    setPassword("");
+    setError(null);
+    setStage("institution");
+  }
 
   function clearStoredSession() {
     try {
@@ -86,7 +171,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login(identifier, password);
+      await login(identifier, password, selectedCollege?.id);
 
       // Fetch profile immediately so we can decide whether to offer impersonation.
       const meRes = await getMe();
@@ -150,12 +235,112 @@ export default function Login() {
           <div className="bg-white rounded-2xl shadow-xl p-8 sm:p-10">
             {/* Header */}
             <div className="mb-8 text-center">
-              <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
-              <p className="text-gray-600">Sign in to access your account</p>
+              <h2 className="text-3xl font-bold text-gray-900 mb-2">
+                {stage === "institution" ? "Find Your Campus" : "Welcome Back"}
+              </h2>
+              <p className="text-gray-600">
+                {stage === "institution"
+                  ? "Look up your college below to get started"
+                  : "Sign in to access your account"}
+              </p>
             </div>
+
+            {stage === "institution" && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2" htmlFor="institution">
+                    College / Institute Name
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <Search className="h-5 w-5 text-gray-400" />
+                    </div>
+                    <input
+                      id="institution"
+                      type="text"
+                      autoFocus
+                      className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-200"
+                      placeholder="Search by college name..."
+                      value={institutionQuery}
+                      onChange={(e) => setInstitutionQuery(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {institutionQuery.trim().length < 3 && (
+                  <p className="text-xs text-gray-500 px-1">
+                    Keep typing — results appear once you've entered at least 3 characters.
+                  </p>
+                )}
+
+                {institutionLoading && (
+                  <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Looking up matching colleges...
+                  </div>
+                )}
+
+                {institutionError && !institutionLoading && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-900">Institution not found</p>
+                      <p className="text-sm text-amber-800 mt-0.5">{institutionError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {!institutionLoading && institutionResults.length > 0 && (
+                  <ul className="divide-y divide-gray-100 border border-gray-200 rounded-lg overflow-hidden">
+                    {institutionResults.map((college) => (
+                      <li key={college.id}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectInstitution(college)}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-indigo-50 transition-colors"
+                        >
+                          <span className="flex items-center gap-3 min-w-0">
+                            <Building2 className="h-5 w-5 text-indigo-500 flex-shrink-0" />
+                            <span className="min-w-0">
+                              <span className="block font-medium text-gray-900 truncate">{college.name}</span>
+                              {college.city && (
+                                <span className="block text-xs text-gray-500 truncate">{college.city}</span>
+                              )}
+                            </span>
+                          </span>
+                          <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
 
             {stage === "credentials" && (
               <form className="space-y-6" onSubmit={handleSubmitCredentials}>
+                {/* Selected institution */}
+                {selectedCollege && (
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+                    <span className="flex items-center gap-2 min-w-0 text-sm font-semibold text-blue-900">
+                      <Building2 className="h-4 w-4 flex-shrink-0" />
+                      <span className="truncate">{selectedCollege.name}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleChangeInstitution}
+                      className="text-xs font-medium text-blue-700 hover:text-blue-900 hover:underline flex-shrink-0"
+                      disabled={loading}
+                    >
+                      Change
+                    </button>
+                  </div>
+                )}
+
                 {/* Email/Register No Field */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2" htmlFor="identifier">
@@ -177,6 +362,7 @@ export default function Login() {
                     />
                   </div>
                 </div>
+
 
                 {/* Password Field */}
                 <div>
@@ -353,7 +539,7 @@ export default function Login() {
 
             {/* Back to Home Link */}
             <div className="text-center pt-4">
-              {stage === "credentials" ? (
+              {stage === "institution" || stage === "credentials" ? (
                 <Link
                   to="/"
                   className="text-sm text-gray-600 hover:text-gray-900 font-medium transition-colors"

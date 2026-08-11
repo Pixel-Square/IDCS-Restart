@@ -5,6 +5,7 @@ from django.db import models
 
 
 class FingerprintEnrollment(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='fingerprintenrollments')
     """Stores fingerprint biometric templates for students and staff."""
 
     class Finger(models.TextChoices):
@@ -71,6 +72,7 @@ class FingerprintEnrollment(models.Model):
 
 
 class GatepassOfflineScan(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='gatepassofflinescans')
     class Direction(models.TextChoices):
         OUT = "OUT", "OUT"
         IN = "IN", "IN"

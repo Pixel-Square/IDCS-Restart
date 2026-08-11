@@ -13,6 +13,34 @@ from .models import College, FeatureCatalog, CollegeFeature
 from .serializers import CollegeSerializer, CollegeUserSerializer, CollegeFeatureSerializer
 from accounts.models import User, Role, UserRole
 from academics.models import StudentProfile, StaffProfile, Department, Course
+
+
+def _resolve_college_id(request):
+    """Return a college_id from the request: X-College-Id header > POST body > query param.
+
+    This ensures college isolation regardless of how the frontend sends the
+    college identifier — explicit header, JSON body field ``college``, or URL
+    query param ``college_id``.
+    """
+    # 1. X-College-Id header (set by middleware from localStorage)
+    cid = getattr(request, 'college_id', None)
+    if cid is not None:
+        return cid
+    # 2. Request body (JSON: {"college": 5})
+    cid = (request.data or {}).get('college')
+    if cid is not None:
+        try:
+            return int(cid)
+        except (TypeError, ValueError):
+            pass
+    # 3. Query param (?college_id=5)
+    raw = request.query_params.get('college_id')
+    if raw:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return None
 from accounts.permissions_super_admin import IsSuperAdminOrSuperuser
 
 
@@ -49,32 +77,112 @@ class CollegeDetailView(generics.RetrieveUpdateDestroyAPIView):
 # ---------------------------------------------------------------------------
 
 class CollegeUsersListView(APIView):
-    """GET /api/college/colleges/<id>/users/  — list all users for a college."""
+    """GET /api/college/colleges/<id>/users/  — list all users for a college.
+
+    Query params:
+      search     — filter by name, email, reg_no, staff_id
+      role       — filter by role name (e.g. STUDENT, FACULTY, SUPER_ADMIN)
+      page       — page number (default 1)
+      page_size  — results per page (default 50, max 200)
+
+    Response shape:
+      {
+        "total": <int>,
+        "total_students": <int>,
+        "total_staff": <int>,
+        "page": <int>,
+        "page_size": <int>,
+        "results": [ ... ]
+      }
+    """
     permission_classes = [IsSuperAdminOrSuperuser]
 
     def get(self, request, pk):
+        from django.db.models import Q
+        from django.core.paginator import Paginator, EmptyPage
+
         college = get_object_or_404(College, pk=pk)
         search = request.query_params.get('search', '').strip()
         role_filter = request.query_params.get('role', '').strip().upper()
 
-        students = StudentProfile.objects.filter(college=college).select_related('user', 'department' if hasattr(StudentProfile, 'department') else 'section')
-        staff = StaffProfile.objects.filter(college=college).select_related('user', 'department')
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(200, max(1, int(request.query_params.get('page_size', 50))))
+        except (TypeError, ValueError):
+            page_size = 50
 
+        # ── Students ────────────────────────────────────────────────────────
+        students_qs = (
+            StudentProfile.objects
+            .filter(college=college)
+            .select_related('user', 'home_department')
+            .order_by('user__first_name', 'user__last_name', 'reg_no')
+        )
+
+        # ── Staff ───────────────────────────────────────────────────────────
+        staff_qs = (
+            StaffProfile.objects
+            .filter(college=college)
+            .select_related('user', 'department')
+            .order_by('user__first_name', 'user__last_name', 'staff_id')
+        )
+
+        # ── Role filter ─────────────────────────────────────────────────────
         if role_filter:
-            students = students.filter(user__user_roles__role__name__iexact=role_filter)
-            staff = staff.filter(user__user_roles__role__name__iexact=role_filter)
+            students_qs = students_qs.filter(
+                user__user_roles__role__name__iexact=role_filter
+            ).distinct()
+            staff_qs = staff_qs.filter(
+                user__user_roles__role__name__iexact=role_filter
+            ).distinct()
 
+        # ── Search filter ───────────────────────────────────────────────────
         if search:
-            from django.db.models import Q
-            q_student = Q(user__username__icontains=search) | Q(user__email__icontains=search) | Q(reg_no__icontains=search) | Q(user__first_name__icontains=search) | Q(user__last_name__icontains=search)
-            q_staff = Q(user__username__icontains=search) | Q(user__email__icontains=search) | Q(staff_id__icontains=search) | Q(user__first_name__icontains=search) | Q(user__last_name__icontains=search)
-            students = students.filter(q_student)
-            staff = staff.filter(q_staff)
+            q_student = (
+                Q(user__username__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(reg_no__icontains=search)
+            )
+            q_staff = (
+                Q(user__username__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(staff_id__icontains=search)
+            )
+            students_qs = students_qs.filter(q_student)
+            staff_qs = staff_qs.filter(q_staff)
 
-        # Serialize both together
-        all_profiles = list(students) + list(staff)
-        serializer = CollegeUserSerializer(all_profiles, many=True)
-        return Response(serializer.data)
+        # ── Counts (before pagination) ───────────────────────────────────────
+        total_students = students_qs.count()
+        total_staff = staff_qs.count()
+        total = total_students + total_staff
+
+        # ── Paginate across combined list ───────────────────────────────────
+        # Students are listed first, then staff.
+        all_profiles = list(students_qs) + list(staff_qs)
+        paginator = Paginator(all_profiles, page_size)
+        try:
+            page_obj = paginator.page(page)
+        except EmptyPage:
+            page_obj = paginator.page(paginator.num_pages)
+
+        serializer = CollegeUserSerializer(page_obj.object_list, many=True)
+        return Response({
+            'total': total,
+            'total_students': total_students,
+            'total_staff': total_staff,
+            'page': page_obj.number,
+            'page_size': page_size,
+            'total_pages': paginator.num_pages,
+            'results': serializer.data,
+        })
+
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +368,12 @@ class CollegeUserImportView(APIView):
         if not email:
             email = f'{reg_no}@imported.local'
 
+        dept = None
+        if dept_code:
+            dept = Department.objects.filter(
+                Q(code__iexact=dept_code) | Q(short_name__iexact=dept_code) | Q(name__iexact=dept_code)
+            ).first()
+
         # Find or create user
         existing = StudentProfile.objects.filter(reg_no=reg_no).select_related('user').first()
         if existing:
@@ -276,9 +390,11 @@ class CollegeUserImportView(APIView):
             existing.college = college
             existing.batch = batch or existing.batch
             existing.status = status_val
+            if dept:
+                existing.home_department = dept
             if phone:
                 existing.mobile_number = phone
-            existing.save(update_fields=['college', 'batch', 'status', 'mobile_number'])
+            existing.save(update_fields=['college', 'batch', 'status', 'home_department', 'mobile_number'])
             return user_obj, existing
         else:
             user_obj = User(
@@ -293,7 +409,6 @@ class CollegeUserImportView(APIView):
             user_obj.set_password(reg_no)
             user_obj.save()
 
-            dept = Department.objects.filter(code__iexact=dept_code).first() if dept_code else None
             profile = StudentProfile(
                 user=user_obj,
                 college=college,
@@ -303,7 +418,6 @@ class CollegeUserImportView(APIView):
             )
             if phone:
                 profile.mobile_number = phone
-            # home_department from dept_code
             if dept:
                 profile.home_department = dept
             profile.save()
@@ -324,7 +438,11 @@ class CollegeUserImportView(APIView):
         if not email:
             email = f'{staff_id}@imported.local'
 
-        dept = Department.objects.filter(code__iexact=dept_code).first() if dept_code else None
+        dept = None
+        if dept_code:
+            dept = Department.objects.filter(
+                Q(code__iexact=dept_code) | Q(short_name__iexact=dept_code) | Q(name__iexact=dept_code)
+            ).first()
 
         existing = StaffProfile.objects.filter(staff_id=staff_id).select_related('user').first()
         if existing:
@@ -546,6 +664,12 @@ class DepartmentListCreateView(APIView):
 
     def get(self, request):
         qs = Department.objects.all().order_by('code')
+        college_id = _resolve_college_id(request)
+        if college_id:
+            try:
+                qs = qs.filter(college_id=int(college_id))
+            except (TypeError, ValueError):
+                pass
         search = request.query_params.get('search', '').strip()
         if search:
             from django.db.models import Q
@@ -563,6 +687,7 @@ class DepartmentListCreateView(APIView):
                 'parent': d.parent_id,
                 'parent_name': str(d.parent) if d.parent else None,
                 'is_sh_main': d.is_sh_main,
+                'college': d.college_id,
             })
         return Response(data)
 
@@ -571,8 +696,9 @@ class DepartmentListCreateView(APIView):
         name = (request.data.get('name') or '').strip()
         if not code or not name:
             return Response({'detail': 'code and name are required.'}, status=400)
-        if Department.objects.filter(code=code).exists():
-            return Response({'detail': f'Department with code "{code}" already exists.'}, status=400)
+        college_id = _resolve_college_id(request)
+        if Department.objects.filter(code=code, college_id=college_id or None).exists():
+            return Response({'detail': f'Department with code "{code}" already exists in this college.'}, status=400)
         d = Department.objects.create(
             code=code,
             name=name,
@@ -580,11 +706,13 @@ class DepartmentListCreateView(APIView):
             is_teaching=request.data.get('is_teaching', True),
             parent_id=request.data.get('parent') or None,
             is_sh_main=request.data.get('is_sh_main', False),
+            college_id=college_id or None,
         )
         return Response({
             'id': d.id, 'code': d.code, 'name': d.name,
             'short_name': d.short_name, 'is_teaching': d.is_teaching,
             'parent': d.parent_id, 'is_sh_main': d.is_sh_main,
+            'college': d.college_id,
         }, status=201)
 
 
@@ -599,14 +727,15 @@ class DepartmentDetailView(APIView):
             'short_name': d.short_name, 'is_teaching': d.is_teaching,
             'parent': d.parent_id, 'parent_name': str(d.parent) if d.parent else None,
             'is_sh_main': d.is_sh_main,
+            'college': d.college_id,
         })
 
     def put(self, request, pk):
         d = get_object_or_404(Department, pk=pk)
         if 'code' in request.data:
             new_code = request.data['code'].strip()
-            if new_code != d.code and Department.objects.filter(code=new_code).exists():
-                return Response({'detail': f'Code "{new_code}" already in use.'}, status=400)
+            if new_code != d.code and Department.objects.filter(code=new_code, college_id=d.college_id).exists():
+                return Response({'detail': f'Code "{new_code}" already in use in this college.'}, status=400)
             d.code = new_code
         if 'name' in request.data:
             d.name = request.data['name'].strip()
@@ -618,11 +747,14 @@ class DepartmentDetailView(APIView):
             d.parent_id = request.data['parent'] or None
         if 'is_sh_main' in request.data:
             d.is_sh_main = bool(request.data['is_sh_main'])
+        if 'college' in request.data:
+            d.college_id = request.data['college'] or None
         d.save()
         return Response({
             'id': d.id, 'code': d.code, 'name': d.name,
             'short_name': d.short_name, 'is_teaching': d.is_teaching,
             'parent': d.parent_id, 'is_sh_main': d.is_sh_main,
+            'college': d.college_id,
         })
 
     def delete(self, request, pk):
@@ -644,6 +776,12 @@ class BatchListCreateView(APIView):
     def get(self, request):
         from academics.models import Batch
         qs = Batch.objects.all().select_related('course', 'course__department', 'department', 'regulation', 'batch_year').order_by('-name')
+        college_id = _resolve_college_id(request)
+        if college_id:
+            try:
+                qs = qs.filter(college_id=int(college_id))
+            except (TypeError, ValueError):
+                pass
         search = request.query_params.get('search', '').strip()
         if search:
             from django.db.models import Q
@@ -667,6 +805,7 @@ class BatchListCreateView(APIView):
                 'regulation_code': str(b.regulation) if b.regulation else None,
                 'is_active': b.is_active,
                 'batch_year': b.batch_year_id,
+                'college': b.college_id,
             })
         return Response(data)
 
@@ -677,12 +816,12 @@ class BatchListCreateView(APIView):
             return Response({'detail': 'name is required.'}, status=400)
         course_id = request.data.get('course') or None
         department_id = request.data.get('department') or None
-        if not course_id and not department_id:
-            return Response({'detail': 'Either course or department is required.'}, status=400)
+        college_id = _resolve_college_id(request)
         b = Batch.objects.create(
             name=name,
             course_id=course_id,
             department_id=department_id,
+            college_id=college_id or None,
             start_year=request.data.get('start_year') or None,
             end_year=request.data.get('end_year') or None,
             regulation_id=request.data.get('regulation') or None,
@@ -693,6 +832,7 @@ class BatchListCreateView(APIView):
             'department': b.department_id, 'start_year': b.start_year,
             'end_year': b.end_year, 'regulation': b.regulation_id,
             'is_active': b.is_active,
+            'college': b.college_id,
         }, status=201)
 
 
@@ -731,12 +871,15 @@ class BatchDetailView(APIView):
             b.regulation_id = request.data['regulation'] or None
         if 'is_active' in request.data:
             b.is_active = bool(request.data['is_active'])
+        if 'college' in request.data:
+            b.college_id = request.data['college'] or None
         b.save()
         return Response({
             'id': b.id, 'name': b.name, 'course': b.course_id,
             'department': b.department_id, 'start_year': b.start_year,
             'end_year': b.end_year, 'regulation': b.regulation_id,
             'is_active': b.is_active,
+            'college': b.college_id,
         })
 
     def delete(self, request, pk):
@@ -759,6 +902,12 @@ class RegulationListCreateView(APIView):
     def get(self, request):
         from curriculum.models import Regulation
         qs = Regulation.objects.all().order_by('-code')
+        college_id = _resolve_college_id(request)
+        if college_id:
+            try:
+                qs = qs.filter(college_id=int(college_id))
+            except (TypeError, ValueError):
+                pass
         search = request.query_params.get('search', '').strip()
         if search:
             from django.db.models import Q
@@ -771,6 +920,7 @@ class RegulationListCreateView(APIView):
                 'name': r.name,
                 'is_active': r.is_active,
                 'created_at': r.created_at.isoformat() if r.created_at else None,
+                'college': r.college_id,
             })
         return Response(data)
 
@@ -779,15 +929,18 @@ class RegulationListCreateView(APIView):
         code = (request.data.get('code') or '').strip()
         if not code:
             return Response({'detail': 'code is required.'}, status=400)
-        if Regulation.objects.filter(code=code).exists():
-            return Response({'detail': f'Regulation "{code}" already exists.'}, status=400)
+        college_id = _resolve_college_id(request)
+        if Regulation.objects.filter(code=code, college_id=college_id or None).exists():
+            return Response({'detail': f'Regulation "{code}" already exists in this college.'}, status=400)
         r = Regulation.objects.create(
             code=code,
             name=(request.data.get('name') or '').strip(),
+            college_id=college_id or None,
             is_active=request.data.get('is_active', True),
         )
         return Response({
             'id': r.id, 'code': r.code, 'name': r.name, 'is_active': r.is_active,
+            'college': r.college_id,
         }, status=201)
 
 
@@ -800,6 +953,7 @@ class RegulationDetailView(APIView):
         r = get_object_or_404(Regulation, pk=pk)
         return Response({
             'id': r.id, 'code': r.code, 'name': r.name, 'is_active': r.is_active,
+            'college': r.college_id,
         })
 
     def put(self, request, pk):
@@ -807,16 +961,19 @@ class RegulationDetailView(APIView):
         r = get_object_or_404(Regulation, pk=pk)
         if 'code' in request.data:
             new_code = request.data['code'].strip()
-            if new_code != r.code and Regulation.objects.filter(code=new_code).exists():
-                return Response({'detail': f'Code "{new_code}" already in use.'}, status=400)
+            if new_code != r.code and Regulation.objects.filter(code=new_code, college_id=r.college_id).exists():
+                return Response({'detail': f'Code "{new_code}" already in use in this college.'}, status=400)
             r.code = new_code
         if 'name' in request.data:
             r.name = (request.data['name'] or '').strip()
         if 'is_active' in request.data:
             r.is_active = bool(request.data['is_active'])
+        if 'college' in request.data:
+            r.college_id = request.data['college'] or None
         r.save()
         return Response({
             'id': r.id, 'code': r.code, 'name': r.name, 'is_active': r.is_active,
+            'college': r.college_id,
         })
 
     def delete(self, request, pk):
@@ -836,6 +993,12 @@ class CourseListView(APIView):
 
     def get(self, request):
         courses = Course.objects.all().select_related('department', 'program').order_by('name')
+        college_id = _resolve_college_id(request)
+        if college_id:
+            try:
+                courses = courses.filter(department__college_id=int(college_id))
+            except (TypeError, ValueError):
+                pass
         data = [
             {'id': c.id, 'name': c.name, 'department': c.department_id,
              'department_name': str(c.department) if c.department else None}

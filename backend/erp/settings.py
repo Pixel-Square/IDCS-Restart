@@ -242,7 +242,8 @@ else:
     )
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', '/home/iqac/idcs_media'))
+
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

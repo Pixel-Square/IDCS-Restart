@@ -15,6 +15,6 @@ class FingerprintEnrollmentAdmin(admin.ModelAdmin):
         "is_active",
         "enrolled_at",
     )
-    list_filter = ("template_format", "device_type", "is_active")
+    list_filter = ('college', "template_format", "device_type", "is_active")
     search_fields = ("user__username", "user__email", "device_type")
     readonly_fields = ("template", "enrolled_at")

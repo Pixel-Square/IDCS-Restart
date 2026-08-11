@@ -17,7 +17,7 @@ class ApplicationAttachmentInline(admin.TabularInline):
 
 class ApplicationAdmin(admin.ModelAdmin):
     list_display = ('id', 'application_type', 'applicant_user', 'status', 'current_step', 'submitted_at', 'created_at')
-    list_filter = ('application_type', 'status')
+    list_filter = ('college', 'application_type', 'status')
     search_fields = ('applicant_user__username', 'applicant_user__email')
     inlines = (ApplicationDataInline, ApplicationAttachmentInline)
     date_hierarchy = 'created_at'
@@ -26,7 +26,7 @@ class ApplicationAdmin(admin.ModelAdmin):
 
 class ApplicationFieldAdmin(admin.ModelAdmin):
     list_display = ('application_type', 'field_key', 'label', 'field_type', 'is_required', 'order')
-    list_filter = ('application_type', 'field_type', 'is_required')
+    list_filter = ('college', 'application_type', 'field_type', 'is_required')
     search_fields = ('field_key', 'label')
 
 
@@ -37,7 +37,7 @@ class ApplicationTypeAdmin(admin.ModelAdmin):
 
 class ApplicationFormVersionAdmin(admin.ModelAdmin):
     list_display = ('application_type', 'version', 'is_active', 'created_at')
-    list_filter = ('application_type', 'is_active')
+    list_filter = ('college', 'application_type', 'is_active')
     readonly_fields = ('created_at',)
 
 
@@ -60,7 +60,7 @@ class ApprovalActionAdmin(admin.ModelAdmin):
 
 class RoleApplicationPermissionAdmin(admin.ModelAdmin):
     list_display = ('role', 'application_type', 'can_edit_all', 'can_override_flow')
-    list_filter = ('can_edit_all', 'can_override_flow')
+    list_filter = ('college', 'can_edit_all', 'can_override_flow')
 
 
 admin.site.register(models.ApplicationType, ApplicationTypeAdmin)

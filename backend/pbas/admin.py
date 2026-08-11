@@ -19,7 +19,7 @@ class PBASNodeAdmin(admin.ModelAdmin):
 @admin.register(PBASSubmission)
 class PBASSubmissionAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'node', 'submission_type', 'college', 'created_at')
-    list_filter = ('submission_type', 'created_at')
+    list_filter = ('college', 'submission_type', 'created_at')
 
 
 @admin.register(PBASVerificationTicket)
@@ -35,6 +35,6 @@ class PBASVerificationTicketAdmin(admin.ModelAdmin):
         'forwarded_to_department_at',
         'created_at',
     )
-    list_filter = ('status', 'created_at')
+    list_filter = ('college', 'status', 'created_at')
     search_fields = ('id', 'submission__id')
 

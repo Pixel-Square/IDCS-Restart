@@ -9,7 +9,7 @@ from .models import (
 class CoeExamDummyAdmin(admin.ModelAdmin):
 	list_display = ('dummy_number', 'student', 'semester', 'qp_type', 'created_at')
 	search_fields = ('dummy_number', 'student__reg_no', 'student__user__first_name', 'student__user__last_name')
-	list_filter = ('semester', 'qp_type')
+	list_filter = ('college', 'semester', 'qp_type')
 
 
 @admin.register(CoeArrearStudent)
@@ -25,7 +25,7 @@ class CoeArrearStudentAdmin(admin.ModelAdmin):
 		'updated_at',
 	)
 	search_fields = ('course_code', 'course_name', 'student_register_number', 'student_name', 'batch')
-	list_filter = ('department', 'semester', 'batch')
+	list_filter = ('college', 'department', 'semester', 'batch')
 
 
 @admin.register(CoeAssignmentStore)
@@ -36,7 +36,7 @@ class CoeAssignmentStoreAdmin(admin.ModelAdmin):
 @admin.register(CoeCourseSelectionStore)
 class CoeCourseSelectionStoreAdmin(admin.ModelAdmin):
 	list_display = ('store_key', 'is_locked', 'updated_at', 'created_at')
-	list_filter = ('is_locked',)
+	list_filter = ('college', 'is_locked',)
 	search_fields = ('store_key',)
 
 
@@ -51,7 +51,7 @@ class CoeKeyValueStoreAdmin(admin.ModelAdmin):
 class CoeStudentMarksAdmin(admin.ModelAdmin):
 	list_display = ('dummy_number', 'qp_type', 'updated_at', 'created_at')
 	search_fields = ('dummy_number',)
-	list_filter = ('qp_type',)
+	list_filter = ('college', 'qp_type',)
 	readonly_fields = ('created_at', 'updated_at')
 
 
@@ -63,6 +63,6 @@ class CoeFinalResultAdmin(admin.ModelAdmin):
 		'qp_type', 'total_marks', 'max_marks', 'updated_at',
 	)
 	search_fields = ('reg_no', 'student_name', 'course_code', 'course_name', 'dummy_number')
-	list_filter = ('department', 'semester', 'qp_type')
+	list_filter = ('college', 'department', 'semester', 'qp_type')
 	readonly_fields = ('created_at', 'updated_at')
 	ordering = ('department', 'semester', 'course_code', 'reg_no')

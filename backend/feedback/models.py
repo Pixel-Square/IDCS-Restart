@@ -5,6 +5,7 @@ import json
 
 
 class FeedbackForm(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='feedbackforms')
     """Feedback form created by HOD for collecting feedback from staff/students."""
     
     TARGET_TYPE_CHOICES = (
@@ -173,6 +174,7 @@ class FeedbackForm(models.Model):
 
 
 class FeedbackQuestion(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='feedbackquestions')
     """Questions within a feedback form."""
 
     QUESTION_TYPE_CHOICES = (
@@ -252,6 +254,7 @@ class FeedbackQuestion(models.Model):
 
 
 class FeedbackQuestionOption(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='feedbackquestionoptions')
     """Radio options for own-type questions."""
 
     question = models.ForeignKey(
@@ -274,6 +277,7 @@ class FeedbackQuestionOption(models.Model):
 
 
 class FeedbackResponse(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='feedbackresponses')
     """Individual responses/answers to feedback questions."""
     
     feedback_form = models.ForeignKey(
@@ -367,6 +371,7 @@ class FeedbackResponse(models.Model):
 
 
 class FeedbackFormSubmission(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='feedbackformsubmissions')
     """Tracks per-user completion status for a feedback form."""
 
     STATUS_CHOICES = (

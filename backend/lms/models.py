@@ -13,6 +13,7 @@ def _material_upload_path(instance, filename: str) -> str:
 
 
 class StaffStorageQuota(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='staffstoragequotas')
     DEFAULT_QUOTA_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB
 
     staff = models.OneToOneField(
@@ -49,6 +50,7 @@ class StaffStorageQuota(models.Model):
 
 
 class StudyMaterial(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studymaterials')
     TYPE_FILE = 'FILE'
     TYPE_LINK = 'LINK'
     TYPE_CHOICES = (
@@ -160,6 +162,7 @@ class StudyMaterial(models.Model):
 
 
 class StudyMaterialDownloadLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='studymaterialdownloadlogs')
     material = models.ForeignKey(
         StudyMaterial,
         on_delete=models.CASCADE,

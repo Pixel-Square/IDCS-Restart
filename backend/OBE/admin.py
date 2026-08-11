@@ -17,7 +17,7 @@ from .services.final_internal_marks import recompute_final_internal_marks
 class Cia1MarkAdmin(admin.ModelAdmin):
     list_display = ('subject', 'student', 'mark', 'updated_at', 'bi')
     search_fields = ('subject__code', 'student__reg_no', 'student__user__username')
-    list_filter = ('subject',)
+    list_filter = ('college', 'subject',)
 
     def bi(self, obj):
         try:
@@ -50,7 +50,7 @@ class ObeMarkTableLockAdmin(admin.ModelAdmin):
         'updated_at',
     )
     search_fields = ('subject_code', 'subject_name', 'section_name', 'staff_user__username')
-    list_filter = ('assessment', 'is_published', 'mark_entry_blocked', 'mark_manager_locked')
+    list_filter = ('college', 'assessment', 'is_published', 'mark_entry_blocked', 'mark_manager_locked')
     raw_id_fields = ('staff_user', 'teaching_assignment', 'academic_year')
     readonly_fields = ('created_at', 'updated_at')
 
@@ -272,7 +272,7 @@ class FinalInternalMarkAdmin(admin.ModelAdmin):
         'computed_by',
         'computed_at',
     )
-    list_filter = ('subject__semester', 'subject', 'teaching_assignment__academic_year')
+    list_filter = ('college', 'subject__semester', 'subject', 'teaching_assignment__academic_year')
     search_fields = (
         'student__reg_no',
         'student__user__username',

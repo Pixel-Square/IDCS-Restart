@@ -14,8 +14,11 @@ class RolesListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        qs = Role.objects.all().order_by('name').values_list('name', flat=True)
-        names = [str(n).upper() for n in qs if n]
+        qs = Role.objects.all().values_list('name', flat=True)
+        # Role names may exist in mixed case (e.g. "HOD" and "hod") as separate
+        # DB rows; dedupe after uppercasing so the frontend doesn't show
+        # duplicate entries.
+        names = sorted({str(n).upper() for n in qs if n})
         return Response({'roles': names})
 
 

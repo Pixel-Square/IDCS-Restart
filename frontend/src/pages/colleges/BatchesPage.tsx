@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Layers, Plus, Pencil, Trash2, Search, X, ArrowLeft, Check } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface BatchItem {
   id: number;
@@ -35,6 +36,16 @@ const emptyForm: FormData = { name: '', course: null, department: null, start_ye
 
 export default function BatchesPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const collegeId = searchParams.get('college_id');
+
+  // Sync college context so X-College-Id header follows this page
+  useEffect(() => {
+    if (collegeId) {
+      window.localStorage.setItem('selectedCollegeId', collegeId);
+    }
+  }, [collegeId]);
+
   const [batches, setBatches] = useState<BatchItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -51,11 +62,14 @@ export default function BatchesPage() {
   const fetchBatches = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetchWithAuth(`/api/college/batches/?search=${encodeURIComponent(search)}`);
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (collegeId) params.append('college_id', collegeId);
+      const res = await fetchWithAuth(`/api/college/batches/?${params.toString()}`);
       if (res.ok) setBatches(await res.json());
     } catch { /* ignore */ }
     setLoading(false);
-  }, [search]);
+  }, [search, collegeId]);
 
   useEffect(() => { fetchBatches(); }, [fetchBatches]);
 
@@ -96,7 +110,8 @@ export default function BatchesPage() {
         ...form,
         start_year: form.start_year ? Number(form.start_year) : null,
         end_year: form.end_year ? Number(form.end_year) : null,
-      };
+      } as any;
+      if (collegeId) payload.college = Number(collegeId);
       const res = await fetchWithAuth(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.detail || 'Save failed'); setSaving(false); return; }
       setShowModal(false);
@@ -119,7 +134,7 @@ export default function BatchesPage() {
     <div className="p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
-        <button onClick={() => navigate(-1)} className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors">
+        <button onClick={() => navigate(collegeId ? `/colleges/${collegeId}` : '/colleges')} className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors">
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div className="p-3 bg-purple-100 rounded-xl">
@@ -128,6 +143,9 @@ export default function BatchesPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Batches</h1>
           <p className="text-sm text-gray-500">Manage student batches across all departments</p>
+          {collegeId && (
+            <p className="text-xs text-gray-500 mt-1">College scope: <strong>{collegeId}</strong></p>
+          )}
         </div>
       </div>
 
@@ -199,14 +217,7 @@ export default function BatchesPage() {
                         <button onClick={() => openEdit(b)} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors" title="Edit">
                           <Pencil className="w-4 h-4" />
                         </button>
-                        {deleteConfirm === b.id ? (
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => handleDelete(b.id)} className="p-1.5 text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors" title="Confirm"><Check className="w-4 h-4" /></button>
-                            <button onClick={() => setDeleteConfirm(null)} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors" title="Cancel"><X className="w-4 h-4" /></button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setDeleteConfirm(b.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                        )}
+                        <button onClick={() => setDeleteConfirm(b.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     </td>
                   </tr>
@@ -233,7 +244,7 @@ export default function BatchesPage() {
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="2023" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Course</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Course (Optional)</label>
                 <select value={form.course ?? ''} onChange={e => setForm(f => ({ ...f, course: e.target.value ? Number(e.target.value) : null }))}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white">
                   <option value="">— None —</option>
@@ -241,7 +252,7 @@ export default function BatchesPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Department (if no Course)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Department (Optional)</label>
                 <select value={form.department ?? ''} onChange={e => setForm(f => ({ ...f, department: e.target.value ? Number(e.target.value) : null }))}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white">
                   <option value="">— None —</option>
@@ -283,6 +294,17 @@ export default function BatchesPage() {
           </div>
         </div>
       )}
+
+      {/* Double Password Confirmation Modal */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={batches.find(b => b.id === deleteConfirm)?.name || ''}
+        itemType="Batch"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleDelete(deleteConfirm);
+        }}
+      />
     </div>
   );
 }

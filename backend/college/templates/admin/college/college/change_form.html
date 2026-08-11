@@ -1,0 +1,15 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block object-tools-items %}
+  {% if original %}
+  <li>
+    <a href="/admin/college/college/{{ original.pk }}/dashboard/"
+       style="background:#417690;color:#fff;padding:6px 14px;border-radius:5px;
+              text-decoration:none;font-weight:600;font-size:13px;">
+      📊 College Dashboard
+    </a>
+  </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

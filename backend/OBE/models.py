@@ -6,6 +6,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 class CdapRevision(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cdaprevisions')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     subject_id = models.CharField(max_length=64, unique=True)
     status = models.TextField(default='draft')
@@ -22,6 +23,7 @@ class CdapRevision(models.Model):
 
 
 class LcaRevision(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='lcarevisions')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     subject_id = models.CharField(max_length=64, unique=True)
     status = models.TextField(default='draft')
@@ -36,6 +38,7 @@ class LcaRevision(models.Model):
 
 
 class CoTargetRevision(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cotargetrevisions')
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     subject_id = models.CharField(max_length=64, unique=True)
     status = models.TextField(default='draft')
@@ -49,6 +52,7 @@ class CoTargetRevision(models.Model):
         db_table = 'co_target_revisions'
 
 class CdapActiveLearningAnalysisMapping(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cdapactivelearninganalysismappings')
     id = models.IntegerField(primary_key=True)
     mapping = models.JSONField(default=dict)
     updated_by = models.IntegerField(null=True, blank=True)
@@ -59,6 +63,7 @@ class CdapActiveLearningAnalysisMapping(models.Model):
 
 
 class ObeAssessmentMasterConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeassessmentmasterconfigs')
     id = models.IntegerField(primary_key=True)
     config = models.JSONField(default=dict)
     updated_by = models.IntegerField(null=True, blank=True)
@@ -69,6 +74,7 @@ class ObeAssessmentMasterConfig(models.Model):
 
 
 class ObeCqiConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obecqiconfigs')
     """Global CQI configuration managed by IQAC.
 
     Stores selected CQI options (list), divider and multiplier used by CQI calculations.
@@ -86,6 +92,7 @@ class ObeCqiConfig(models.Model):
 
 
 class ObeCqiDraft(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obecqidrafts')
     """Per-section CQI draft entries saved by faculty.
 
     Keyed by (subject, teaching_assignment) so multiple sections for the same
@@ -118,6 +125,7 @@ class ObeCqiDraft(models.Model):
 
 
 class ObeCqiPublished(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obecqipublisheds')
     """Per-section CQI published snapshot.
 
     Stored separately from draft so Internal Marks can consume a stable
@@ -152,22 +160,24 @@ class ObeCqiPublished(models.Model):
 
 
 class InternalMarkMapping(models.Model):
-        """IQAC-managed internal mark mapping per Subject.
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='internalmarkmappings')
+    """IQAC-managed internal mark mapping per Subject.
 
-        Stores a JSON object like:
-            { header: string[], cycles: string[], weights: number[] }
-        """
+    Stores a JSON object like:
+        { header: string[], cycles: string[], weights: number[] }
+    """
 
-        subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='internal_mark_mapping')
-        mapping = models.JSONField(default=dict)
-        updated_by = models.IntegerField(null=True, blank=True)
-        updated_at = models.DateTimeField(auto_now=True)
+    subject = models.OneToOneField('academics.Subject', on_delete=models.CASCADE, related_name='internal_mark_mapping')
+    mapping = models.JSONField(default=dict)
+    updated_by = models.IntegerField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-        class Meta:
-                db_table = 'obe_internal_mark_mapping'
+    class Meta:
+        db_table = 'obe_internal_mark_mapping'
 
 
 class FinalInternalMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='finalinternalmarks')
     """Persisted final internal mark per student and assigned subject.
 
     Stored as the final internal total (out of 40) for a specific
@@ -215,6 +225,7 @@ class FinalInternalMark(models.Model):
 
 
 class Cia1Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cia1marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia1_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -244,6 +255,7 @@ class Cia1Mark(models.Model):
 
 
 class AssessmentDraft(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='assessmentdrafts')
     """Draft storage for SSA/CIA/Formative sheets.
 
     Stores the full sheet JSON exactly as the frontend uses it.
@@ -293,6 +305,7 @@ class AssessmentDraft(models.Model):
 
 
 class Ssa1Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='ssa1marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='ssa1_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -322,6 +335,7 @@ class Ssa1Mark(models.Model):
 
 
 class Ssa2Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='ssa2marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='ssa2_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -351,6 +365,7 @@ class Ssa2Mark(models.Model):
 
 
 class Review1Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='review1marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review1_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -380,6 +395,7 @@ class Review1Mark(models.Model):
 
 
 class Review2Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='review2marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='review2_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -409,6 +425,7 @@ class Review2Mark(models.Model):
 
 
 class ProjectMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='projectmarks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='project_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -438,6 +455,7 @@ class ProjectMark(models.Model):
 
 
 class Formative1Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='formative1marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='formative1_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -473,6 +491,7 @@ class Formative1Mark(models.Model):
 
 
 class Formative2Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='formative2marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='formative2_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -508,6 +527,7 @@ class Formative2Mark(models.Model):
 
 
 class Cia2Mark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cia2marks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia2_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -537,6 +557,7 @@ class Cia2Mark(models.Model):
 
 
 class ModelExamMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='modelexammarks')
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='model_exam_marks')
     teaching_assignment = models.ForeignKey(
         'academics.TeachingAssignment',
@@ -566,6 +587,7 @@ class ModelExamMark(models.Model):
 
 
 class ModelExamCOMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='modelexamcomarks')
     model_exam_mark = models.ForeignKey(ModelExamMark, on_delete=models.CASCADE, related_name='co_marks')
     co_num = models.IntegerField()
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -581,6 +603,7 @@ class ModelExamCOMark(models.Model):
 
 
 class LabExamMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='labexammarks')
     ASSESSMENT_CHOICES = (
         ('cia1', 'CIA 1 LAB'),
         ('cia2', 'CIA 2 LAB'),
@@ -621,6 +644,7 @@ class LabExamMark(models.Model):
 
 
 class LabExamCOMark(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='labexamcomarks')
     lab_exam_mark = models.ForeignKey(LabExamMark, on_delete=models.CASCADE, related_name='co_marks')
     co_num = models.IntegerField()
     mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
@@ -636,6 +660,7 @@ class LabExamCOMark(models.Model):
 
 
 class Cia1PublishedSheet(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cia1publishedsheets')
     """Published CIA1 sheet snapshot (question-wise) used for CO attainment calculations."""
 
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia1_published_sheet')
@@ -666,6 +691,7 @@ class Cia1PublishedSheet(models.Model):
 
 
 class Cia2PublishedSheet(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='cia2publishedsheets')
     """Published CIA2 sheet snapshot (question-wise) used for CO attainment calculations."""
 
     subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='cia2_published_sheet')
@@ -696,6 +722,7 @@ class Cia2PublishedSheet(models.Model):
 
 
 class ModelPublishedSheet(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='modelpublishedsheets')
     """Published MODEL sheet snapshot (question-wise / full sheet) used for viewing and CO calculations.
 
     Stored separately from LabPublishedSheet so THEORY MODEL snapshots mirror CIA snapshots.
@@ -729,6 +756,7 @@ class ModelPublishedSheet(models.Model):
 
 
 class LabPublishedSheet(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='labpublishedsheets')
     """Published Lab sheet snapshot (experiment-wise) used for CO attainment calculations."""
 
     ASSESSMENT_CHOICES = (
@@ -770,6 +798,7 @@ class LabPublishedSheet(models.Model):
 
 
 class ObeDueSchedule(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obedueschedules')
     """Assessment due schedule per Semester + Subject + Assessment.
 
     Used to time-gate publishing in faculty mark entry screens.
@@ -812,6 +841,7 @@ class ObeDueSchedule(models.Model):
 
 
 class ObeAssessmentControl(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeassessmentcontrols')
     """Assessment enable + edit control per Semester + Subject + Assessment.
 
     This is used by IQAC to:
@@ -855,6 +885,7 @@ class ObeAssessmentControl(models.Model):
 
 
 class ObePublishRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obepublishrequests')
     """Faculty request to publish after the due time is over."""
 
     STATUS_CHOICES = (
@@ -930,6 +961,7 @@ class ObePublishRequest(models.Model):
 
 
 class ObeEditRequest(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeeditrequests')
     """Faculty request to edit after publishing.
 
     This is distinct from `ObePublishRequest` (which is only for extending the publish window).
@@ -1015,6 +1047,7 @@ class ObeEditRequest(models.Model):
 
 
 class ObeEditNotificationLog(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeeditnotificationlogs')
     CHANNEL_EMAIL = 'EMAIL'
     CHANNEL_WHATSAPP = 'WHATSAPP'
     CHANNEL_CHOICES = (
@@ -1053,6 +1086,7 @@ class ObeEditNotificationLog(models.Model):
 
 
 class ObeGlobalPublishControl(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeglobalpublishcontrols')
     """Optional global override per Semester + Assessment.
 
     When present, this takes precedence over due schedules and publish requests.
@@ -1085,6 +1119,7 @@ class ObeGlobalPublishControl(models.Model):
 
 
 class ObeMarkTableLock(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obemarktablelocks')
     """Authoritative lock state for an OBE mark-entry table.
 
     Why this exists:
@@ -1208,6 +1243,7 @@ class ObeMarkTableLock(models.Model):
 
 
 class ObeQpPatternConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeqppatternconfigs')
     class_type = models.CharField(max_length=50)
     question_paper_type = models.CharField(max_length=50, null=True, blank=True)
     exam = models.CharField(max_length=50)
@@ -1225,6 +1261,7 @@ class ObeQpPatternConfig(models.Model):
 
 
 class SpecialCourseQpPattern(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialcourseqppatterns')
     """Per-teaching-assignment QP pattern for SPECIAL class-type courses.
 
     Faculty defines the number of questions, marks per question, CO mapping,
@@ -1265,6 +1302,7 @@ class SpecialCourseQpPattern(models.Model):
 
 
 class SpecialCourseCoWeights(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='specialcoursecoweights')
     """Per-teaching-assignment CO attainment weights for SPECIAL class-type courses.
 
     IQAC defines how much each CO contributes to the internal mark for a specific
@@ -1295,6 +1333,7 @@ class SpecialCourseCoWeights(models.Model):
 
 
 class ObeBatchQpPatternOverride(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obebatchqppatternoverrides')
     """Batch-scoped override for QP patterns.
 
     This enables IQAC/OBE master to customize question pattern (marks + CO mapping)
@@ -1324,6 +1363,7 @@ class ObeBatchQpPatternOverride(models.Model):
 
 
 class ClassTypeWeights(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='classtypeweights')
     """IQAC-controlled weights per class type.
 
     Used in CO attainment and Internal Mark calculations.
@@ -1345,6 +1385,7 @@ class ClassTypeWeights(models.Model):
 
 
 class IqacResetNotification(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='iqacresetnotifications')
     """Notification created when IQAC resets a course assessment.
     
     Staff sees this notification once when opening the course/exam page.
@@ -1366,6 +1407,7 @@ class IqacResetNotification(models.Model):
 
 
 class ObeTemplatePreset(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obetemplatepresets')
     """IQAC-managed reusable configuration template for batch-applying OBE configs.
 
     payload keys:
@@ -1392,6 +1434,7 @@ class ObeTemplatePreset(models.Model):
 
 
 class ObeAuditChange(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='obeauditchanges')
     """One record per subject successfully modified by an obe_template_apply run."""
 
     subject_code = models.CharField(max_length=64)

@@ -5,20 +5,34 @@ from . import models
 
 
 def _infer_profile_type(user) -> Optional[str]:
-    if hasattr(user, 'student_profile') and getattr(user, 'student_profile') is not None:
-        return 'STUDENT'
-    if hasattr(user, 'staff_profile') and getattr(user, 'staff_profile') is not None:
-        return 'STAFF'
+    try:
+        sp = getattr(user, 'student_profile', None)
+        if sp is not None:
+            return 'STUDENT'
+    except Exception:
+        pass
+    try:
+        st = getattr(user, 'staff_profile', None)
+        if st is not None:
+            return 'STAFF'
+    except Exception:
+        pass
     return None
 
 
 def _get_profile_status(user) -> Optional[str]:
-    sp = getattr(user, 'student_profile', None)
-    if sp is not None:
-        return getattr(sp, 'status', None)
-    st = getattr(user, 'staff_profile', None)
-    if st is not None:
-        return getattr(st, 'status', None)
+    try:
+        sp = getattr(user, 'student_profile', None)
+        if sp is not None:
+            return getattr(sp, 'status', None)
+    except Exception:
+        pass
+    try:
+        st = getattr(user, 'staff_profile', None)
+        if st is not None:
+            return getattr(st, 'status', None)
+    except Exception:
+        pass
     return None
 
 
@@ -71,38 +85,58 @@ def resolve_dashboard_capabilities(user) -> Dict:
     roles_qs = user.roles.all()
     role_names = [r.name for r in roles_qs]
 
-    if getattr(user, 'is_superuser', False) and 'SUPER_ADMIN' not in {str(x).upper() for x in role_names}:
+    # Treat Django superusers as isolated admins: do not derive additional
+    # roles from staff/student profile mappings. Keep only explicit
+    # `accounts.Role` memberships when isolating.
+    is_admin_isolated = bool(getattr(user, 'is_superuser', False))
+    if is_admin_isolated and 'SUPER_ADMIN' not in {str(x).upper() for x in role_names}:
         role_names.append('SUPER_ADMIN')
+
+    # Compute role_features early so page visibility can rely on explicit
+    # role → feature assignments rather than staff/student profile values.
+    try:
+        role_features = list(
+            models.Role.objects.filter(
+                user_roles__user=user
+            ).values_list('features__code', flat=True).distinct()
+        )
+        role_features = {f for f in role_features if f}
+    except Exception:
+        role_features = set()
 
     # Department roles (HOD/AHOD) are modeled in academics.DepartmentRole,
     # not necessarily as accounts.Role. Expose them as effective roles so the
     # frontend can show HOD pages in the sidebar.
     dept_role_names = set()
+    has_active_mentor_mentees = False
+    has_active_advisee_sections = False
+    
     try:
-        staff_profile = getattr(user, 'staff_profile', None)
-        if staff_profile is not None:
-            from academics.models import DepartmentRole
-            from academics.models import StudentMentorMap, SectionAdvisor
+        # Skip deriving department/mentor/advisor roles for isolated admins
+        if not is_admin_isolated:
+            try:
+                staff_profile = getattr(user, 'staff_profile', None)
+            except Exception:
+                staff_profile = None
+            if staff_profile is not None:
+                from academics.models import DepartmentRole
+                from academics.models import StudentMentorMap, SectionAdvisor
 
-            dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
-            for r in dept_roles:
-                if r:
-                    dept_role_names.add(str(r).upper())
+                dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
+                for r in dept_roles:
+                    if r:
+                        dept_role_names.add(str(r).upper())
 
-            has_active_mentor_mentees = StudentMentorMap.objects.filter(mentor=staff_profile, is_active=True).exists()
-            has_active_advisee_sections = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).exists()
+                has_active_mentor_mentees = StudentMentorMap.objects.filter(mentor=staff_profile, is_active=True).exists()
+                has_active_advisee_sections = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).exists()
 
-            if has_active_mentor_mentees:
-                dept_role_names.add('MENTOR')
-            if has_active_advisee_sections:
-                dept_role_names.add('ADVISOR')
-        else:
-            has_active_mentor_mentees = False
-            has_active_advisee_sections = False
+                if has_active_mentor_mentees:
+                    dept_role_names.add('MENTOR')
+                if has_active_advisee_sections:
+                    dept_role_names.add('ADVISOR')
     except Exception:
-        dept_role_names = set()
-        has_active_mentor_mentees = False
-        has_active_advisee_sections = False
+        # Variables already initialized above
+        pass
 
     for r in sorted(dept_role_names):
         if r not in {str(x).upper() for x in role_names}:
@@ -129,6 +163,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         grouped.setdefault(group, []).append(code)
 
     lower_perms = {p.lower() for p in perm_codes}
+    role_names_upper = {str(r).upper() for r in role_names}
 
     def any_contains_all(parts: List[str]) -> bool:
         for p in lower_perms:
@@ -168,35 +203,39 @@ def resolve_dashboard_capabilities(user) -> Dict:
                 return True
         return False
 
+    # Role-based flags: prefer explicit role membership, permissions, or
+    # role_features rather than using `staff_profile`/`student_profile`.
+    STAFF_ROLE_SET = {'STAFF', 'FACULTY', 'ADMIN', 'EXT_STAFF', 'HOD', 'AHOD', 'IQAC', 'HR', 'SECURITY'}
     flags = {
-        'is_student': profile_type == 'STUDENT',
-        'is_staff': profile_type == 'STAFF',
+        'is_student': 'STUDENT' in role_names_upper,
+        'is_staff': bool(role_names_upper & STAFF_ROLE_SET),
         'can_view_curriculum_master': has_master_view(),
         'can_edit_curriculum_master': has_master_edit(),
         'can_approve_department_curriculum': has_department_approve(),
         'can_fill_department_curriculum': has_department_fill(),
-        'can_manage_timetable_templates': 'timetable.manage_templates' in lower_perms,
-        'can_assign_timetable': 'timetable.assign' in lower_perms,
-        'can_view_timetable': 'timetable.view' in lower_perms,
-        'can_assign_advisor': 'academics.assign_advisor' in lower_perms,
-        'can_assign_teaching': 'academics.assign_teaching' in lower_perms,
-        'can_view_feedback_page': 'feedback.feedback_page' in lower_perms,
-        'can_create_feedback': 'feedback.create' in lower_perms,
-        'can_reply_feedback': 'feedback.reply' in lower_perms,
-        'can_access_coe_portal': ('coe.portal.access' in lower_perms) or str(getattr(user, 'email', '') or '').strip().lower() == 'coe@krct.ac.in',
-        'can_manage_academic_calendar': 'academic_calendar.admin' in lower_perms,
-        'can_manage_elective_poll': 'curriculum.manage_elective_poll' in lower_perms,
+        'can_manage_timetable_templates': ('timetable.manage_templates' in lower_perms) or ('timetable_staff' in role_features),
+        'can_assign_timetable': ('timetable.assign' in lower_perms) or ('HOD' in role_names_upper),
+        'can_view_timetable': ('timetable.view' in lower_perms) or ('timetable_student' in role_features) or ('timetable_staff' in role_features),
+        'can_assign_advisor': ('academics.assign_advisor' in lower_perms) or ('ADVISOR' in role_names_upper),
+        'can_assign_teaching': ('academics.assign_teaching' in lower_perms) or ('HOD' in role_names_upper),
+        'can_view_feedback_page': ('feedback.feedback_page' in lower_perms) or ('feedback' in role_features),
+        'can_create_feedback': ('feedback.create' in lower_perms) or ('feedback' in role_features),
+        'can_reply_feedback': ('feedback.reply' in lower_perms) or ('feedback' in role_features),
+        'can_access_coe_portal': ('coe.portal.access' in lower_perms) or str(getattr(user, 'email', '') or '').strip().lower() == 'coe@krct.ac.in' or ('coe' in role_features),
+        'can_manage_academic_calendar': ('academic_calendar.admin' in lower_perms) or ('academic_calendar' in role_features),
+        'can_manage_elective_poll': ('curriculum.manage_elective_poll' in lower_perms) or ('obe' in role_features),
         'can_choose_elective': 'curriculum.choose_elective' in lower_perms,
         'can_hod_elective_manage': 'curriculum.hod_elective_manage' in lower_perms,
-        'can_upload_certificates': profile_type == 'STUDENT',
-        'can_review_certificates': bool(has_active_mentor_mentees or ('MENTOR' in {str(r).upper() for r in role_names}) or ('certificates.review' in lower_perms)),
+        'can_upload_certificates': 'STUDENT' in role_names_upper,
+        'can_review_certificates': (has_active_mentor_mentees or ('MENTOR' in role_names_upper) or ('certificates.review' in lower_perms) or ('certificates' in role_features)),
         'can_view_certificate_achievements': bool(
-            'MENTOR' in {str(r).upper() for r in role_names}
-            or 'ADVISOR' in {str(r).upper() for r in role_names}
-            or 'HOD' in {str(r).upper() for r in role_names}
-            or 'IQAC' in {str(r).upper() for r in role_names}
+            'MENTOR' in role_names_upper
+            or 'ADVISOR' in role_names_upper
+            or 'HOD' in role_names_upper
+            or 'IQAC' in role_names_upper
+            or ('certificates' in role_features)
         ),
-        'can_view_achievement_reports': 'IQAC' in {str(r).upper() for r in role_names},
+        'can_view_achievement_reports': 'IQAC' in role_names_upper or ('certificates' in role_features),
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.
@@ -215,8 +254,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'certificates_review': bool(flags.get('can_review_certificates')),
         'certificates_achievements': bool(flags.get('can_view_certificate_achievements')),
         'certificates_reports': bool(flags.get('can_view_achievement_reports')),
-        'timetable_templates': bool(flags.get('can_manage_timetable_templates') or user.is_staff),
-        'timetable_assignments': bool(flags.get('can_assign_timetable') or any(str(r).upper() == 'HOD' for r in role_names)),
+        'timetable_templates': bool(flags.get('can_manage_timetable_templates')),
+        'timetable_assignments': bool(flags.get('can_assign_timetable') or ('HOD' in role_names_upper)),
         'hod_advisors': bool(flags.get('can_assign_advisor') or hod_role_present),
         'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
         'staff_students': bool('students.view_students' in lower_perms),
@@ -226,6 +265,11 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'coe_portal': bool(flags.get('can_access_coe_portal')),
         'academic_calendar_admin': bool(flags.get('can_manage_academic_calendar')),
         'elective_poll': bool(flags.get('can_manage_elective_poll') or flags.get('can_choose_elective') or flags.get('can_hod_elective_manage')),
+        # Pages like My Calendar, Staff Salary, Event Attending rely on explicit
+        # role features or permissions rather than profile existence.
+        'my_calendar': ('my_calendar' in role_features) or ('calendar.view' in lower_perms),
+        'staff_salary': ('staff_salary' in role_features) or ('staff_salary.view' in lower_perms),
+        'events_attending': ('events' in role_features) or ('events.view' in lower_perms) or ('events.create_proposal' in lower_perms),
     }
 
     # ── College Feature Flags ──────────────────────────────────────────────────
@@ -236,13 +280,19 @@ def resolve_dashboard_capabilities(user) -> Dict:
     college_features: List[str] = []
     try:
         college_id: Optional[int] = None
-        _sp = getattr(user, 'student_profile', None)
-        if _sp is not None:
-            college_id = getattr(_sp, 'college_id', None)
+        try:
+            _sp = getattr(user, 'student_profile', None)
+            if _sp is not None:
+                college_id = getattr(_sp, 'college_id', None)
+        except Exception:
+            pass
         if college_id is None:
-            _st = getattr(user, 'staff_profile', None)
-            if _st is not None:
-                college_id = getattr(_st, 'college_id', None)
+            try:
+                _st = getattr(user, 'staff_profile', None)
+                if _st is not None:
+                    college_id = getattr(_st, 'college_id', None)
+            except Exception:
+                pass
 
         if college_id is not None:
             from college.models import CollegeFeature

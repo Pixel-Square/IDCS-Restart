@@ -12,7 +12,7 @@ class TimetableTemplateAdmin(admin.ModelAdmin):
 @admin.register(TimetableSlot)
 class TimetableSlotAdmin(admin.ModelAdmin):
     list_display = ('template', 'index', 'start_time', 'end_time', 'is_break', 'is_lunch', 'label')
-    list_filter = ('template', 'is_break', 'is_lunch')
+    list_filter = ('college', 'template', 'is_break', 'is_lunch')
     ordering = ('template', 'index')
     # Hide index in the admin form; index is auto-managed
     exclude = ('index',)
@@ -21,26 +21,26 @@ class TimetableSlotAdmin(admin.ModelAdmin):
 @admin.register(TimetableAssignment)
 class TimetableAssignmentAdmin(admin.ModelAdmin):
     list_display = ('period', 'day', 'section', 'staff', 'curriculum_row', 'subject_text')
-    list_filter = ('period__template', 'day')
+    list_filter = ('college', 'period__template', 'day')
     search_fields = ('subject_text',)
 
 
 @admin.register(SpecialTimetable)
 class SpecialTimetableAdmin(admin.ModelAdmin):
     list_display = ('name', 'section', 'created_by', 'is_active', 'created_at')
-    list_filter = ('is_active',)
+    list_filter = ('college', 'is_active',)
 
 
 @admin.register(SpecialTimetableEntry)
 class SpecialTimetableEntryAdmin(admin.ModelAdmin):
     list_display = ('timetable', 'date', 'period', 'staff', 'curriculum_row', 'subject_text', 'is_active')
-    list_filter = ('timetable', 'date', 'period')
+    list_filter = ('college', 'timetable', 'date', 'period')
 
 
 @admin.register(PeriodSwapRequest)
 class PeriodSwapRequestAdmin(admin.ModelAdmin):
     list_display = ('id', 'section', 'requested_by', 'requested_to', 'from_date', 'to_date', 'status', 'created_at')
-    list_filter = ('status', 'from_date', 'to_date', 'created_at')
+    list_filter = ('college', 'status', 'from_date', 'to_date', 'created_at')
     search_fields = ('section__name', 'requested_by__staff_id', 'requested_to__staff_id', 'reason', 'response_message')
     readonly_fields = ('created_at', 'updated_at', 'responded_at')
     fieldsets = (

@@ -43,6 +43,26 @@ class CurriculumMasterViewSet(viewsets.ModelViewSet):
     serializer_class = CurriculumMasterSerializer
     permission_classes = [IsIQACOrReadOnly]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # College scoping: always filter by current college context.
+        # If a college context is set, restrict to that college.
+        # If no context (None), super-admins see global data; non-super-admins
+        # see nothing (college context must be explicit for them).
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+            if cid is not None:
+                qs = qs.filter(college_id=cid)
+            elif not (self.request.user.is_superuser or
+                      getattr(self.request.user, 'roles', None) and
+                      self.request.user.roles.filter(name='SUPER_ADMIN').exists()):
+                # Non-super-admins without a college context see nothing
+                qs = qs.none()
+        except Exception:
+            pass
+        return qs
+
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)
@@ -220,7 +240,21 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
         # Restrict department rows based on user's profile and role.
         user = self.request.user
         qs = CurriculumDepartment.objects.all().select_related('department', 'master', 'semester')
-        
+
+        # College scoping: always filter by current college context.
+        # If no context, non-super-admins see nothing.
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+            if cid is not None:
+                qs = qs.filter(college_id=cid)
+            elif not (user.is_superuser or
+                      getattr(user, 'roles', None) and
+                      user.roles.filter(name='SUPER_ADMIN').exists()):
+                qs = qs.none()
+        except Exception:
+            pass
+
         # Basic filtering
         is_elective = self.request.query_params.get('is_elective')
         if is_elective is not None:
@@ -362,6 +396,16 @@ class ElectiveSubjectViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = ElectiveSubject.objects.all().select_related('department', 'parent', 'semester', 'department_group')
         qs = qs.annotate(student_count=Count('choices', filter=Q(choices__is_active=True)))
+
+        # College scoping: filter by current college context when active
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+            if cid is not None:
+                qs = qs.filter(college_id=cid)
+        except Exception:
+            pass
+
         req = self.request
         dept_id = req.query_params.get('department_id')
         regulation = req.query_params.get('regulation')
@@ -449,23 +493,38 @@ class CurriculumDepartmentsView(APIView):
     def get(self, request):
         user = request.user
         from academics.models import Department
+        from college.tenant import get_current_college_id
         include_non_teaching = str(request.query_params.get('include_non_teaching', 'false')).strip().lower() in {'1', 'true', 'yes'}
-        
-        # Users with global access see all departments
+
+        # ── Resolve current college context ─────────────────────────────────
+        # Priority: X-College-Id header (set by middleware) > ?college_id param
+        cid = get_current_college_id()
+        if cid is None:
+            raw = request.query_params.get('college_id') or ''
+            try:
+                cid = int(raw) if raw else None
+            except (ValueError, TypeError):
+                cid = None
+
+        # Non-super-admins MUST have a college context
+        is_super = user.is_superuser or (
+            getattr(user, 'roles', None) and user.roles.filter(name='SUPER_ADMIN').exists()
+        )
+        if cid is None and not is_super:
+            return Response({'results': []})
+
+        # ── Build base queryset scoped to college ────────────────────────────
         if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
             qs = Department.objects.all()
         else:
             perms = get_user_permissions(user)
-            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish', 
+            wide_perms = {'curriculum_master_edit', 'curriculum_master_publish',
                          'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'}
             if perms & wide_perms:
-                # Users with wide curriculum permissions see all
                 qs = Department.objects.all()
             else:
-                # Regular users see only their effective departments
                 dept_ids = get_user_effective_departments(user)
                 if not dept_ids:
-                    # Try student fallback
                     student = getattr(user, 'student_profile', None)
                     if student:
                         try:
@@ -474,11 +533,13 @@ class CurriculumDepartmentsView(APIView):
                                 dept_ids = [section.batch.course.department_id]
                         except Exception:
                             pass
-                
                 if not dept_ids:
                     return Response({'results': []})
-                
                 qs = Department.objects.filter(id__in=dept_ids)
+
+        # ── Apply mandatory college scope ────────────────────────────────────
+        if cid is not None:
+            qs = qs.filter(college_id=cid)
 
         can_include_non_teaching = bool(
             user.is_superuser
@@ -487,15 +548,12 @@ class CurriculumDepartmentsView(APIView):
         )
         if not (include_non_teaching and can_include_non_teaching):
             qs = qs.filter(is_teaching=True)
-        
-        results = []
-        for d in qs:
-            results.append({
-                'id': d.id, 
-                'code': getattr(d, 'code', None), 
-                'name': getattr(d, 'name', None), 
-                'short_name': getattr(d, 'short_name', None)
-            })
+
+        results = [
+            {'id': d.id, 'code': getattr(d, 'code', None),
+             'name': getattr(d, 'name', None), 'short_name': getattr(d, 'short_name', None)}
+            for d in qs
+        ]
         return Response({'results': results})
 
 

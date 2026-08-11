@@ -24,7 +24,7 @@ class FeedbackFormAdmin(admin.ModelAdmin):
         'status',
         'created_at',
     )
-    list_filter = (
+    list_filter = ('college', 
         'target_type',
         'type',
         'status',
@@ -111,7 +111,7 @@ class FeedbackQuestionAdmin(admin.ModelAdmin):
         'order',
         'created_at',
     )
-    list_filter = (
+    list_filter = ('college', 
         'answer_type',
         'feedback_form__type',
         'feedback_form__target_type',
@@ -170,7 +170,7 @@ class FeedbackResponseAdmin(admin.ModelAdmin):
         'get_answer_text_preview',
         'created_at',
     )
-    list_filter = (
+    list_filter = ('college', 
         'feedback_form__type',
         'feedback_form__target_type',
         'question__answer_type',

@@ -8,6 +8,63 @@ from typing import Optional
 
 User = get_user_model()
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The single global Super Admin account.  No user — including the super admin
+# themselves — may impersonate this account via the impersonation endpoint.
+SUPER_ADMIN_EMAIL = 'admin@example.com'
+
+# Sentinel prefix embedded in ValidationError messages that signal the view
+# to return HTTP 403 (Forbidden) instead of the default HTTP 401.
+# The view strips this prefix before returning the response body.
+_403_PREFIX = '__403__'
+
+
+def _auth_denied(msg: str = 'You are not authorized to impersonate this user.') -> serializers.ValidationError:
+    """Return a ValidationError that the view will translate to HTTP 403."""
+    return serializers.ValidationError(f'{_403_PREFIX}{msg}')
+
+
+def get_user_college_id(user) -> Optional[int]:
+    """
+    Return the college_id for *user* by querying their profile from the database.
+
+    This is the authoritative server-side source of truth — it is NEVER derived
+    from request data or user-supplied values.
+
+    Returns None for the Super Admin or any user without a college assignment.
+    """
+    if user is None:
+        return None
+
+    # Staff profile takes precedence (most higher-role users are staff).
+    try:
+        sp = getattr(user, 'staff_profile', None)
+        if sp is not None and getattr(sp, 'college_id', None):
+            return int(sp.college_id)
+    except Exception:
+        pass
+
+    # Student profile.
+    try:
+        stu = getattr(user, 'student_profile', None)
+        if stu is not None and getattr(stu, 'college_id', None):
+            return int(stu.college_id)
+    except Exception:
+        pass
+
+    # External staff profile.
+    try:
+        ext = getattr(user, 'ext_staff_profile', None)
+        if ext is not None and getattr(ext, 'college_id', None):
+            return int(ext.college_id)
+    except Exception:
+        pass
+
+    return None
+
 
 class SuperuserImpersonationSerializer(serializers.Serializer):
     """
@@ -125,7 +182,80 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         
         if not getattr(target_user, 'is_active', True):
             raise serializers.ValidationError('Target user account is inactive.')
-        
+
+        # ===== STEP 3.5A: Block impersonation of the Super Admin account =====
+        # NO user — regardless of role or is_superuser flag — may impersonate
+        # admin@example.com.  This is the most critical invariant in the system.
+        target_email_lower = str(getattr(target_user, 'email', '') or '').strip().lower()
+        if target_email_lower == SUPER_ADMIN_EMAIL:
+            # Log the denied attempt before raising
+            try:
+                from accounts.models_impersonation import SuperuserImpersonationLog
+                from django.utils import timezone
+                request = self.context.get('request')
+                SuperuserImpersonationLog.log_impersonation(
+                    superuser=superuser,
+                    target_user=target_user,
+                    status='DENIED',
+                    ip_address=self._get_client_ip(request) if request else '',
+                    user_agent=(request.META.get('HTTP_USER_AGENT', '') or '')[:500] if request else '',
+                    reason='[SECURITY] Attempted to impersonate the Super Admin account.',
+                    metadata={'denied_reason': 'target_is_super_admin'},
+                )
+            except Exception:
+                pass
+            raise _auth_denied()
+
+        # ===== STEP 3.5B: College-scope non-superuser impersonators =====
+        # Django superusers (is_superuser=True) retain cross-college impersonation
+        # ability.  All other impersonators (IQAC role / admin.manage permission)
+        # are restricted to users within their own college.
+        # College IDs are always fetched from the DATABASE — not from request data.
+        if not is_django_superuser:
+            impersonator_college_id = get_user_college_id(superuser)
+            target_college_id = get_user_college_id(target_user)
+
+            if impersonator_college_id is None:
+                # Non-superuser impersonator has no college assignment — deny.
+                try:
+                    from accounts.models_impersonation import SuperuserImpersonationLog
+                    request = self.context.get('request')
+                    SuperuserImpersonationLog.log_impersonation(
+                        superuser=superuser,
+                        target_user=target_user,
+                        status='DENIED',
+                        ip_address=self._get_client_ip(request) if request else '',
+                        user_agent=(request.META.get('HTTP_USER_AGENT', '') or '')[:500] if request else '',
+                        reason='[SECURITY] Impersonator has no college assignment.',
+                        metadata={'denied_reason': 'impersonator_no_college'},
+                    )
+                except Exception:
+                    pass
+                raise _auth_denied()
+
+            if impersonator_college_id != target_college_id:
+                # Cross-college impersonation attempt — deny without leaking
+                # any information about which college the target belongs to.
+                try:
+                    from accounts.models_impersonation import SuperuserImpersonationLog
+                    request = self.context.get('request')
+                    SuperuserImpersonationLog.log_impersonation(
+                        superuser=superuser,
+                        target_user=target_user,
+                        status='DENIED',
+                        ip_address=self._get_client_ip(request) if request else '',
+                        user_agent=(request.META.get('HTTP_USER_AGENT', '') or '')[:500] if request else '',
+                        reason='[SECURITY] Cross-college impersonation attempt.',
+                        metadata={
+                            'denied_reason': 'cross_college',
+                            'impersonator_college_id': impersonator_college_id,
+                            'target_college_id': target_college_id,
+                        },
+                    )
+                except Exception:
+                    pass
+                raise _auth_denied()
+
         # ===== STEP 4: Check impersonation permissions =====
         try:
             from accounts.models_impersonation import SuperuserImpersonationPermission

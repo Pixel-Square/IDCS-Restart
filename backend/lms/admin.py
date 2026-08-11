@@ -20,7 +20,7 @@ class StudyMaterialAdmin(admin.ModelAdmin):
         'uploaded_by__user__username',
         'course__name',
     )
-    list_filter = ('material_type', 'course__department', 'created_at')
+    list_filter = ('college', 'material_type', 'course__department', 'created_at')
 
 
 @admin.register(StaffStorageQuota)
@@ -45,4 +45,4 @@ class StudyMaterialDownloadLogAdmin(admin.ModelAdmin):
         'downloaded_by_staff__staff_id',
         'downloaded_by_student__reg_no',
     )
-    list_filter = ('downloaded_at',)
+    list_filter = ('college', 'downloaded_at',)

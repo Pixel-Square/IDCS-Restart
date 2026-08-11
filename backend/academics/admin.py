@@ -118,7 +118,7 @@ class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'get_section_dept')
     search_fields = ('reg_no', 'user__username', 'user__email', 'section__name')
-    list_filter = ('section__batch__course__department', 'batch', 'home_department')
+    list_filter = ('college', 'section__batch__course__department', 'batch', 'home_department')
     list_select_related = ('user', 'section__batch__course__department', 'home_department')
     raw_id_fields = ('user', 'section', 'home_department')
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
@@ -677,7 +677,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
     change_list_template = 'admin/academics/staffprofile_change_list.html'
     list_display = ('staff_id', 'internal_id', 'rfid_uid', 'get_full_name', 'current_department_display', 'designation', 'status')
     search_fields = ('staff_id', 'internal_id', 'rfid_uid', 'user__username', 'user__email', 'user__first_name', 'user__last_name')
-    list_filter = ('department', 'designation')
+    list_filter = ('college', 'department', 'designation')
     list_select_related = ('user', 'department')
     raw_id_fields = ('user', 'department')
     
@@ -987,7 +987,7 @@ class StaffProfileAdmin(admin.ModelAdmin):
 class StudentSectionAssignmentAdmin(admin.ModelAdmin):
     list_display = ('student', 'section', 'section_type', 'start_date', 'end_date', 'created_at')
     search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('section_type', 'section')
+    list_filter = ('college', 'section_type', 'section')
     actions = ('end_assignments',)
 
     def end_assignments(self, request, queryset):
@@ -1004,7 +1004,7 @@ class StudentSectionAssignmentAdmin(admin.ModelAdmin):
 class StaffDepartmentAssignmentAdmin(admin.ModelAdmin):
     list_display = ('staff', 'department', 'start_date', 'end_date', 'created_at')
     search_fields = ('staff__staff_id', 'staff__user__username')
-    list_filter = ('department',)
+    list_filter = ('college', 'department',)
     actions = ('end_assignments',)
 
     def end_assignments(self, request, queryset):
@@ -1021,7 +1021,7 @@ class StaffDepartmentAssignmentAdmin(admin.ModelAdmin):
 class RoleAssignmentAdmin(admin.ModelAdmin):
     list_display = ('staff', 'role_name', 'start_date', 'end_date', 'created_at')
     search_fields = ('staff__staff_id', 'role_name', 'staff__user__username')
-    list_filter = ('role_name',)
+    list_filter = ('college', 'role_name',)
     actions = ('end_assignments',)
 
     def end_assignments(self, request, queryset):
@@ -1039,7 +1039,7 @@ class RoleAssignmentAdmin(admin.ModelAdmin):
 class AcademicYearAdmin(admin.ModelAdmin):
     list_display = ('name', 'parity', 'is_active')
     list_editable = ('is_active',)
-    list_filter = ('parity', 'is_active')
+    list_filter = ('college', 'parity', 'is_active')
     search_fields = ('name',)
     actions = ['shift_semester_action']
 
@@ -1096,7 +1096,7 @@ class AcademicYearAdmin(admin.ModelAdmin):
 class DepartmentAdmin(admin.ModelAdmin):
     list_display = ('code', 'short_name', 'name', 'parent', 'is_sh_main')
     search_fields = ('code', 'short_name', 'name')
-    list_filter = ('is_sh_main', 'parent')
+    list_filter = ('college', 'is_sh_main', 'parent')
     raw_id_fields = ('parent',)
 
 
@@ -1110,7 +1110,7 @@ class ProgramAdmin(admin.ModelAdmin):
 class CourseAdmin(admin.ModelAdmin):
     list_display = ('name', 'department', 'program')
     search_fields = ('name',)
-    list_filter = ('department', 'program')
+    list_filter = ('college', 'department', 'program')
 
 
 @admin.register(Semester)
@@ -1118,14 +1118,14 @@ class SemesterAdmin(admin.ModelAdmin):
     # `course` was removed from Semester; show the semester number only.
     list_display = ('number',)
     search_fields = ()
-    list_filter = ('number',)
+    list_filter = ('college', 'number',)
 
 
 @admin.register(Section)
 class SectionAdmin(admin.ModelAdmin):
     list_display = ('batch', 'name', 'semester', 'managing_department')
     search_fields = ('name',)
-    list_filter = ('batch', 'managing_department')
+    list_filter = ('college', 'batch', 'managing_department')
     raw_id_fields = ('managing_department',)
 
 
@@ -1133,14 +1133,14 @@ class SectionAdmin(admin.ModelAdmin):
 class SubjectAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'course', 'semester')
     search_fields = ('code', 'name')
-    list_filter = ('course', 'semester')
+    list_filter = ('college', 'course', 'semester')
 
 
 @admin.register(Batch)
 class BatchAdmin(admin.ModelAdmin):
     list_display = ('name', 'batch_year', 'department', 'course', 'regulation_display', 'start_year', 'end_year')
     search_fields = ('name', 'course__name', 'department__name', 'regulation__code', 'regulation__name')
-    list_filter = ('batch_year', 'department', 'course', 'regulation')
+    list_filter = ('college', 'batch_year', 'department', 'course', 'regulation')
     raw_id_fields = ('regulation',)
     # `department` is only required when course is blank (S&H-type batches)
     # Leave both fields visible so admin can set either path
@@ -1161,7 +1161,7 @@ class BatchYearAdmin(admin.ModelAdmin):
 @admin.register(TeachingAssignment)
 class TeachingAssignmentAdmin(admin.ModelAdmin):
     list_display = ('staff', 'subject_display', 'elective_subject', 'section', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department', 'staff__department')
+    list_filter = ('college', 'academic_year', 'is_active', 'section__batch__course__department', 'staff__department')
     search_fields = ('staff__user__username', 'staff__staff_id', 'subject__code', 'subject__name', 'elective_subject__course_code', 'elective_subject__course_name', 'section__name')
     list_select_related = ('staff__user', 'subject', 'elective_subject', 'section__batch__course__department', 'academic_year')
     raw_id_fields = ('staff', 'subject', 'elective_subject', 'section', 'curriculum_row', 'academic_year')
@@ -1354,7 +1354,7 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
 @admin.register(StudentMentorMap)
 class StudentMentorMapAdmin(admin.ModelAdmin):
     list_display = ('student', 'mentor', 'is_active')
-    list_filter = ('is_active', 'student__section__batch__course__department')
+    list_filter = ('college', 'is_active', 'student__section__batch__course__department')
     search_fields = ('student__reg_no', 'mentor__staff_id', 'mentor__user__username')
     raw_id_fields = ('student', 'mentor')
 
@@ -1362,7 +1362,7 @@ class StudentMentorMapAdmin(admin.ModelAdmin):
 @admin.register(SectionAdvisor)
 class SectionAdvisorAdmin(admin.ModelAdmin):
     list_display = ('section', 'advisor', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
+    list_filter = ('college', 'academic_year', 'is_active', 'section__batch__course__department')
     search_fields = ('section__name', 'advisor__staff_id', 'advisor__user__username')
     raw_id_fields = ('section', 'advisor', 'academic_year')
 
@@ -1370,7 +1370,7 @@ class SectionAdvisorAdmin(admin.ModelAdmin):
 @admin.register(DepartmentRole)
 class DepartmentRoleAdmin(admin.ModelAdmin):
     list_display = ('department', 'role', 'staff', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'department', 'role')
+    list_filter = ('college', 'academic_year', 'is_active', 'department', 'role')
     search_fields = ('staff__staff_id', 'staff__user__username', 'staff__user__first_name', 'staff__user__last_name')
     raw_id_fields = ('staff', 'academic_year')
 
@@ -1382,7 +1382,7 @@ class DepartmentRoleAdmin(admin.ModelAdmin):
 class StudentSubjectBatchAdmin(admin.ModelAdmin):
     list_display = ('name', 'staff', 'academic_year', 'curriculum_row', 'is_active', 'created_at')
     search_fields = ('name', 'staff__staff_id', 'staff__user__username')
-    list_filter = ('academic_year', 'is_active')
+    list_filter = ('college', 'academic_year', 'is_active')
     raw_id_fields = ('staff', 'curriculum_row')
 
 
@@ -1396,7 +1396,7 @@ class PeriodAttendanceRecordInline(admin.TabularInline):
 @admin.register(PeriodAttendanceSession)
 class PeriodAttendanceSessionAdmin(admin.ModelAdmin):
     list_display = ('section', 'period', 'date', 'teaching_assignment', 'timetable_assignment', 'created_by', 'is_locked', 'created_at')
-    list_filter = ('date', 'is_locked')
+    list_filter = ('college', 'date', 'is_locked')
     raw_id_fields = ('section', 'period', 'teaching_assignment', 'timetable_assignment', 'created_by')
     inlines = (PeriodAttendanceRecordInline,)
 
@@ -1405,7 +1405,7 @@ class PeriodAttendanceSessionAdmin(admin.ModelAdmin):
 class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
     list_display = ('session', 'student', 'status', 'marked_at', 'marked_by')
     search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('status',)
+    list_filter = ('college', 'status',)
     raw_id_fields = ('session', 'student', 'marked_by')
 
 
@@ -1413,7 +1413,7 @@ class PeriodAttendanceRecordAdmin(admin.ModelAdmin):
 @admin.register(AttendanceUnlockRequest)
 class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
     list_display = ('id', 'session', 'requested_by', 'requested_at', 'status', 'reviewed_by', 'reviewed_at')
-    list_filter = ('status', 'requested_at', 'reviewed_at')
+    list_filter = ('college', 'status', 'requested_at', 'reviewed_at')
     search_fields = ('requested_by__user__username', 'requested_by__staff_id', 'reviewed_by__user__username')
     raw_id_fields = ('session', 'requested_by', 'reviewed_by')
     readonly_fields = ('requested_at', 'reviewed_at')
@@ -1424,7 +1424,7 @@ class AttendanceUnlockRequestAdmin(admin.ModelAdmin):
 class PeriodAttendanceSwapRecordAdmin(admin.ModelAdmin):
     list_display = ('session', 'assigned_by', 'assigned_to', 'assigned_at', 'reason')
     search_fields = ('assigned_by__staff_id', 'assigned_by__user__username', 'assigned_to__staff_id', 'assigned_to__user__username')
-    list_filter = ('assigned_at',)
+    list_filter = ('college', 'assigned_at',)
     raw_id_fields = ('session', 'assigned_by', 'assigned_to')
     readonly_fields = ('assigned_at',)
     date_hierarchy = 'assigned_at'
@@ -1436,7 +1436,7 @@ class PeriodAttendanceSwapRecordAdmin(admin.ModelAdmin):
 @admin.register(DailyAttendanceUnlockRequest)
 class DailyAttendanceUnlockRequestAdmin(admin.ModelAdmin):
     list_display = ('id', 'session', 'requested_by', 'requested_at', 'status', 'hod_status', 'hod_reviewed_by', 'hod_reviewed_at', 'reviewed_by', 'reviewed_at')
-    list_filter = ('status', 'hod_status', 'requested_at')
+    list_filter = ('college', 'status', 'hod_status', 'requested_at')
     search_fields = ('requested_by__user__username', 'requested_by__staff_id', 'reviewed_by__user__username', 'session__section__name')
     raw_id_fields = ('session', 'requested_by', 'hod_reviewed_by', 'reviewed_by')
     readonly_fields = ('requested_at', 'hod_reviewed_at', 'reviewed_at')
@@ -1465,7 +1465,7 @@ class DailyAttendanceSwapRecordInline(admin.TabularInline):
 @admin.register(DailyAttendanceSession)
 class DailyAttendanceSessionAdmin(admin.ModelAdmin):
     list_display = ('section', 'date', 'created_by', 'assigned_to', 'is_locked', 'created_at', 'updated_at')
-    list_filter = ('date', 'is_locked')
+    list_filter = ('college', 'date', 'is_locked')
     search_fields = ('section__name',)
     raw_id_fields = ('section', 'created_by', 'assigned_to')
     readonly_fields = ('created_at', 'updated_at')
@@ -1477,7 +1477,7 @@ class DailyAttendanceSessionAdmin(admin.ModelAdmin):
 class DailyAttendanceRecordAdmin(admin.ModelAdmin):
     list_display = ('session', 'student', 'status', 'remarks', 'marked_at', 'marked_by')
     search_fields = ('student__reg_no', 'student__user__username')
-    list_filter = ('status', 'session__date')
+    list_filter = ('college', 'status', 'session__date')
     raw_id_fields = ('session', 'student', 'marked_by')
     readonly_fields = ('marked_at',)
     date_hierarchy = 'session__date'
@@ -1487,7 +1487,7 @@ class DailyAttendanceRecordAdmin(admin.ModelAdmin):
 class DailyAttendanceSwapRecordAdmin(admin.ModelAdmin):
     list_display = ('session', 'assigned_by', 'assigned_to', 'assigned_at', 'reason')
     search_fields = ('assigned_by__staff_id', 'assigned_by__user__username', 'assigned_to__staff_id', 'assigned_to__user__username', 'session__section__name')
-    list_filter = ('assigned_at',)
+    list_filter = ('college', 'assigned_at',)
     raw_id_fields = ('session', 'assigned_by', 'assigned_to')
     readonly_fields = ('assigned_at',)
     date_hierarchy = 'assigned_at'
@@ -1548,7 +1548,7 @@ class SpecialCourseAssessmentSelectionAdmin(admin.ModelAdmin):
         'enabled_assessments_display',
         'updated_at',
     )
-    list_filter = (
+    list_filter = ('college', 
         'academic_year',
         'locked',
         'curriculum_row__department',
@@ -1665,7 +1665,7 @@ class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
         'can_edit_until',
         'used_at',
     )
-    list_filter = ('status', 'selection__academic_year')
+    list_filter = ('college', 'status', 'selection__academic_year')
     search_fields = (
         'requested_by__staff_id',
         'requested_by__user__username',
@@ -1700,7 +1700,7 @@ class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
 class ExtStaffProfileAdmin(admin.ModelAdmin):
     list_display = ('external_id', 'get_username', 'get_full_name', 'designation', 'department', 'mobile', 'is_active')
     search_fields = ('external_id', 'user__username', 'user__email', 'user__first_name', 'user__last_name', 'designation', 'department', 'mobile')
-    list_filter = ('is_active', 'department')
+    list_filter = ('college', 'is_active', 'department')
     readonly_fields = ('external_id', 'created_at', 'updated_at')
 
     def get_username(self, obj):

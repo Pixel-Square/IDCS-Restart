@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from accounts.serializers_impersonation import (
     SuperuserImpersonationSerializer,
     SuperuserImpersonationHistorySerializer,
+    _403_PREFIX,
 )
 from accounts.permissions_api import HasPermissionCode
 
@@ -69,6 +70,37 @@ class SuperuserImpersonateView(APIView):
             log.warning('Impersonation login failed: payload=%s errors=%s', safe_payload, serializer.errors)
         except Exception:
             pass
+
+        # Check if any error message carries the 403-sentinel prefix that the
+        # serializer embeds for *authorization* failures (as opposed to credential
+        # or validation failures which should remain 401).
+        def _strip_sentinel(errors):
+            """Recursively walk serializer errors, strip the sentinel prefix,
+            and return (has_403_error, cleaned_errors)."""
+            found = False
+            if isinstance(errors, list):
+                cleaned = []
+                for item in errors:
+                    if isinstance(item, str) and item.startswith(_403_PREFIX):
+                        found = True
+                        cleaned.append(item[len(_403_PREFIX):])
+                    else:
+                        sub_found, sub_item = _strip_sentinel(item)
+                        found = found or sub_found
+                        cleaned.append(sub_item)
+                return found, cleaned
+            if isinstance(errors, dict):
+                cleaned = {}
+                for key, val in errors.items():
+                    sub_found, sub_val = _strip_sentinel(val)
+                    found = found or sub_found
+                    cleaned[key] = sub_val
+                return found, cleaned
+            return found, errors
+
+        has_403, clean_errors = _strip_sentinel(serializer.errors)
+        if has_403:
+            return Response(clean_errors, status=status.HTTP_403_FORBIDDEN)
 
         return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
 

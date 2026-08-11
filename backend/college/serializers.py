@@ -47,9 +47,21 @@ class CollegeUserSerializer(serializers.Serializer):
         return getattr(obj, 'staff_id', '') if not self._is_student(obj) else ''
 
     def get_department(self, obj):
-        dept = getattr(obj, 'department', None)
+        if self._is_student(obj):
+            dept = getattr(obj, 'home_department', None)
+            if not dept:
+                sec = getattr(obj, 'get_current_section', lambda: None)() or getattr(obj, 'section', None)
+                if sec:
+                    if getattr(sec, 'batch', None) and getattr(sec.batch, 'course', None) and getattr(sec.batch.course, 'department', None):
+                        dept = sec.batch.course.department
+                    elif getattr(sec, 'batch', None) and getattr(sec.batch, 'department', None):
+                        dept = sec.batch.department
+                    elif getattr(sec, 'managing_department', None) and not sec.managing_department.is_sh_main:
+                        dept = sec.managing_department
+        else:
+            dept = getattr(obj, 'department', None)
         if dept:
-            return {'id': dept.id, 'code': dept.code, 'name': str(dept)}
+            return {'id': dept.id, 'code': dept.code, 'name': dept.name}
         return None
 
     def get_designation(self, obj):

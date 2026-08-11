@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Building2, Plus, Search, Edit2, Trash2, X, Check, Globe, Phone, Mail, MapPin, Calendar, Link, ChevronRight } from 'lucide-react';
+import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface College {
   id: number;
@@ -283,21 +284,6 @@ export default function CollegesPage() {
                   </div>
                 )}
               </div>
-
-              {/* Delete confirm inline */}
-              {deleteConfirm === col.id && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center justify-between gap-2">
-                  <span className="text-xs text-red-700 font-medium">Delete this college?</span>
-                  <div className="flex gap-2">
-                    <button onClick={() => handleDelete(col.id)} className="flex items-center gap-1 text-xs bg-red-600 text-white px-2.5 py-1 rounded-lg hover:bg-red-700 transition-colors">
-                      <Check className="w-3.5 h-3.5" /> Yes
-                    </button>
-                    <button onClick={() => setDeleteConfirm(null)} className="flex items-center gap-1 text-xs bg-gray-200 text-gray-700 px-2.5 py-1 rounded-lg hover:bg-gray-300 transition-colors">
-                      <X className="w-3.5 h-3.5" /> No
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -478,6 +464,17 @@ export default function CollegesPage() {
           </div>
         </div>
       )}
+
+      {/* Double Password Confirmation Modal */}
+      <ConfirmPasswordDeleteModal
+        isOpen={deleteConfirm !== null}
+        itemName={colleges.find(c => c.id === deleteConfirm)?.name || ''}
+        itemType="College"
+        onClose={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (deleteConfirm) handleDelete(deleteConfirm);
+        }}
+      />
     </div>
   );
 }
