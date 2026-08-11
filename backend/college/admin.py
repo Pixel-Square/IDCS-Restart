@@ -68,12 +68,68 @@ def _admin_url(app_label: str, model_name: str, college_id: int) -> str:
     return f'/admin/{app_label}/{model_name.lower()}/?college__id__exact={college_id}'
 
 
+from accounts.models import User, Role
+
+class CollegeAdminForm(forms.ModelForm):
+    admin_username = forms.CharField(max_length=150, required=False, help_text="Provide a username to automatically create a College Admin.")
+    admin_email = forms.EmailField(required=False, help_text="Email for the College Admin.")
+    admin_password = forms.CharField(widget=forms.PasswordInput(render_value=True), required=False, help_text="Password for the College Admin.")
+
+    class Meta:
+        model = College
+        fields = '__all__'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        username = cleaned_data.get('admin_username')
+        email = cleaned_data.get('admin_email')
+        password = cleaned_data.get('admin_password')
+
+        if any([username, email, password]) and not all([username, email, password]):
+            raise forms.ValidationError("To create an admin, Username, Email, and Password must all be provided.")
+            
+        if email and User.objects.filter(email=email).exists():
+            raise forms.ValidationError(f"A user with email {email} already exists.")
+            
+        return cleaned_data
+
+
 @admin.register(College)
 class CollegeAdmin(admin.ModelAdmin):
+    form = CollegeAdminForm
     list_display = ('code', 'short_name', 'name', 'city', 'is_active', 'dashboard_link')
     search_fields = ('code', 'short_name', 'name', 'city')
     list_filter = ('is_active', 'city')
     inlines = [CollegeFeatureInline]
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        
+        username = form.cleaned_data.get('admin_username')
+        email = form.cleaned_data.get('admin_email')
+        password = form.cleaned_data.get('admin_password')
+        
+        if username and email and password:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                is_staff=True
+            )
+            from academics.models import StaffProfile
+            StaffProfile.objects.create(
+                user=user,
+                college=obj,
+                staff_id=f"ADMIN-{obj.code or obj.id}-{username}",
+                status='ACTIVE'
+            )
+            admin_role = Role.objects.filter(name__iexact='ADMIN').first()
+            if not admin_role:
+                admin_role = Role.objects.create(name='ADMIN')
+                
+            user.roles.add(admin_role)
+            messages.success(request, f"Successfully automatically provisioned College Admin: {username} ({email})")
+
 
     change_list_template = 'admin/college/college/change_list.html'
     change_form_template = 'admin/college/college/change_form.html'

@@ -22,6 +22,9 @@ interface College {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  admin_username?: string;
+  admin_email?: string;
+  admin_password?: string;
 }
 
 const emptyForm: Omit<College, 'id' | 'created_at' | 'updated_at'> = {
@@ -39,6 +42,9 @@ const emptyForm: Omit<College, 'id' | 'created_at' | 'updated_at'> = {
   established_year: null,
   logo: '',
   is_active: true,
+  admin_username: '',
+  admin_email: '',
+  admin_password: '',
 };
 
 type FormData = typeof emptyForm;
@@ -97,6 +103,9 @@ export default function CollegesPage() {
       established_year: col.established_year,
       logo: col.logo,
       is_active: col.is_active,
+      admin_username: '',
+      admin_email: '',
+      admin_password: '',
     });
     setFormError(null);
     setShowModal(true);
@@ -420,6 +429,29 @@ export default function CollegesPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Logo</label>
                   <input id="college-form-logo" name="logo" value={form.logo} onChange={handleChange} placeholder="Path or URL to logo" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
                   <p className="text-xs text-gray-400 mt-1">Path or URL to logo image</p>
+                </div>
+              </div>
+
+              {/* Admin Provisioning */}
+              <div className="pt-4 border-t border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <span className="p-1 bg-blue-50 text-blue-600 rounded">🔐</span> 
+                  College Admin Provisioning
+                </h3>
+                <p className="text-xs text-gray-500 mb-4">Fill these fields to automatically create a Superadmin for this college.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1.5">Admin Username</label>
+                    <input id="college-form-admin-username" name="admin_username" value={form.admin_username} onChange={handleChange} placeholder="Username" className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1.5">Admin Email</label>
+                    <input id="college-form-admin-email" name="admin_email" type="email" value={form.admin_email} onChange={handleChange} placeholder="admin@college.edu" className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1.5">Admin Password</label>
+                    <input id="college-form-admin-password" name="admin_password" type="password" value={form.admin_password} onChange={handleChange} placeholder="••••••••" className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                  </div>
                 </div>
               </div>
 

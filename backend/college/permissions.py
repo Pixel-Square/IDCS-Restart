@@ -62,11 +62,23 @@ class IsCollegeAdminOrSuperAdmin(BasePermission):
                 return True
         except Exception:
             pass
-        # COLLEGE ADMIN must match the request college
+        # COLLEGE ADMIN or ADMIN must match the request college
         try:
-            if request.user.roles.filter(name__iexact='COLLEGE ADMIN').exists():
+            if request.user.roles.filter(name__iexact='COLLEGE ADMIN').exists() or request.user.roles.filter(name__iexact='ADMIN').exists():
                 uid = _user_college_id(request.user)
-                return uid is not None and uid == request.college_id
+                if uid is None:
+                    return False
+                    
+                req_cid = getattr(request, 'college_id', None)
+                if req_cid is None:
+                    raw = request.META.get('HTTP_X_COLLEGE_ID', '').strip()
+                    if raw:
+                        req_cid = raw
+                        
+                if req_cid is not None:
+                    return str(uid) == str(req_cid)
+                    
+                return True
         except Exception:
             pass
         return False

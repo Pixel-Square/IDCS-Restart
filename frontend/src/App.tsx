@@ -131,6 +131,8 @@ import RolesPage from './pages/roles/RolesPage';
 import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
 import RegulationsPage from './pages/colleges/RegulationsPage';
+import ProgramList from './pages/colleges/ProgramList';
+import CourseListColleges from './pages/colleges/CourseList';
 import ForcePasswordChangeModal from './components/ForcePasswordChangeModal';
 
 type RoleObj = { name: string };
@@ -145,6 +147,7 @@ type Me = {
   profile_type?: string | null;
   profile?: any | null;
   must_change_password?: boolean;
+  college?: { id: number; code: string; name: string; short_name: string; address?: string };
 };
 
 export default function App() {
@@ -265,7 +268,7 @@ export default function App() {
       <Navbar user={user} />
       {user ? (
         <div className="flex">
-          <DashboardSidebar />
+          <DashboardSidebar user={user} />
           <main
             className={`flex-1 min-w-0 transition-all duration-300 pt-20 overflow-x-hidden ${
               // Sidebar is `fixed`, so using `ml-*` here would increase total page width
@@ -293,31 +296,43 @@ export default function App() {
                 />
                 <Route
                   path="/colleges/:id"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeDetailPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeDetailPage user={user} />} />}
                 />
                 <Route
                   path="/colleges/:id/users"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeUsersPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeUsersPage />} />}
                 />
                 <Route
                   path="/colleges/:id/features"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeFeaturesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} requiredPermissions={['college.change_collegefeature']} element={<CollegeFeaturesPage />} />}
                 />
                 <Route
-                  path="/departments"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<DepartmentsPage />} />}
+                  path="/colleges/:id/departments"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<DepartmentsPage />} />}
                 />
                 <Route
-                  path="/batches"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<BatchesPage />} />}
+                  path="/colleges/:id/batches"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<BatchesPage />} />}
                 />
                 <Route
-                  path="/regulations"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RegulationsPage />} />}
+                  path="/colleges/:id/regulations"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RegulationsPage />} />}
+                />
+                
+                {/* Programs CRUD */}
+                <Route
+                  path="/colleges/:id/programs"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN', 'COLLEGE ADMIN']} element={<ProgramList />} />}
+                />
+                
+                {/* Courses CRUD */}
+                <Route
+                  path="/colleges/:id/courses"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN', 'COLLEGE ADMIN']} element={<CourseListColleges />} />}
                 />
                 <Route
                   path="/roles"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RolesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RolesPage />} />}
                 />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
@@ -539,7 +554,7 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/timetable"
-                  element={<ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['ADMIN', 'IQAC']} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
                 />
                 <Route
                   path="/iqac/event-approvals"

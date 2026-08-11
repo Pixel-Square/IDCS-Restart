@@ -141,7 +141,7 @@ export default function TimetableEditor(){
           </svg>
         </span>
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">IQAC — Timetable Templates</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Timetable Templates</h2>
           <p className="text-sm text-gray-600 mt-1">Create and manage timetable templates and periods.</p>
         </div>
       </div>
@@ -230,6 +230,74 @@ export default function TimetableEditor(){
                     </button>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Templates Sidebar */}
+          <div className="bg-white rounded-lg shadow-md p-6 mt-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Clock className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-lg font-semibold text-gray-900">Templates</h3>
+            </div>
+            
+            {/* Create Template Form */}
+            <div className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input 
+                  type="text"
+                  placeholder="e.g. Standard ODD" 
+                  value={newTemplate.name} 
+                  onChange={e=>setNewTemplate({...newTemplate, name: e.target.value})} 
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Parity</label>
+                <select 
+                  value={newTemplate.parity} 
+                  onChange={e=>setNewTemplate({...newTemplate, parity: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="BOTH">Both</option>
+                  <option value="ODD">Odd</option>
+                  <option value="EVEN">Even</option>
+                </select>
+              </div>
+
+              <button 
+                onClick={createTemplate}
+                className="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium mt-2"
+              >
+                Create Template
+              </button>
+            </div>
+
+            {/* Existing Templates */}
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Existing Templates</h4>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {templates.map((t:any)=> (
+                  <button 
+                    key={t.id}
+                    onClick={() => setSelected(t)}
+                    className={`w-full text-left p-3 rounded-lg transition-colors border ${
+                      selected?.id === t.id 
+                        ? 'bg-indigo-50 border-indigo-200' 
+                        : 'bg-white border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium text-gray-900">{t.name}</span>
+                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{t.parity}</span>
+                    </div>
+                  </button>
+                ))}
+                {templates.length === 0 && (
+                  <div className="text-sm text-gray-500 text-center py-2">No templates found.</div>
+                )}
               </div>
             </div>
           </div>

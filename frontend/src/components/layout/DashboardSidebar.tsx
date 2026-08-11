@@ -93,7 +93,7 @@ import { fetchAllQueries } from '../../services/queries';
   roles: Shield,
 };
 
-export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
+export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
 
@@ -484,7 +484,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   if (cf('mentor_assign') && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor'))) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
   if (cf('curriculum_student') && entry.student_curriculum_view) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
-  if (isIqac || (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')))) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
+  if (isIqac || rolesUpper.includes('ADMIN') || (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')))) items.push({ key: 'timetable_templates', label: 'Timetable Templates', to: '/iqac/timetable' });
   const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR');
   if (cf('timetable_staff') && canAssignTimetable && entry.timetable_assignments) items.push({ key: 'timetable_assignments', label: 'Timetable Assignments', to: '/advisor/timetable' });
   if (cf('timetable_student') && flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });
@@ -513,9 +513,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (rolesUpper.includes('IQAC') && (flags.can_view_achievement_reports || permsLower.includes('certificates.export_reports'))) {
     items.push({ key: 'certificates_reports', label: 'Achievement Reports', to: '/iqac/achievement-reports' });
   }
-  if (flags.is_staff) {
-    if (cf('my_calendar')) items.push({ key: 'my_attendance', label: 'My Calendar', to: '/staff/my-attendance' });
-    if (cf('staff_salary')) items.push({ key: 'staff_salary', label: 'Salary', to: '/staff/salary' });
+  if (cf('my_calendar') && rf('my_calendar')) {
+    items.push({ key: 'my_attendance', label: 'My Calendar', to: '/staff/my-attendance' });
+  }
+  if (cf('staff_salary') && flags.is_staff) {
+    items.push({ key: 'staff_salary', label: 'Salary', to: '/staff/salary' });
   }
   if (cf('attendance_marking') && flags.is_staff && (permsLower.includes('academics.mark_attendance') || rolesUpper.includes('HOD') || rolesUpper.includes('ADVISOR'))) {
     items.push({ key: 'period_attendance', label: 'Mark Attendance', to: '/staff/period-attendance' });
@@ -556,22 +558,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (isSuperAdmin && !items.some((item) => item.key === 'colleges')) {
     items.push({ key: 'colleges', label: 'Colleges', to: '/colleges' });
   }
-  // Departments management – Super Admin only
-  if (isSuperAdmin && !items.some((item) => item.key === 'departments')) {
-    items.push({ key: 'departments', label: 'Departments', to: '/departments' });
+
+  // College Setup / Administration for isolated College ADMIN
+  if (rolesUpper.includes('ADMIN') && user?.college?.id && !items.some((item) => item.key === 'college_administration')) {
+    items.push({ key: 'college_administration', label: 'Administration', to: `/colleges/${user.college.id}` });
   }
-  // Batches management – Super Admin only
-  if (isSuperAdmin && !items.some((item) => item.key === 'batches')) {
-    items.push({ key: 'batches', label: 'Batches', to: '/batches' });
-  }
-  // Regulations management – Super Admin only
-  if (isSuperAdmin && !items.some((item) => item.key === 'regulations')) {
-    items.push({ key: 'regulations', label: 'Regulations', to: '/regulations' });
-  }
-  // Roles management – Super Admin only
-  if (isSuperAdmin && !items.some((item) => item.key === 'roles')) {
-    items.push({ key: 'roles', label: 'Roles', to: '/roles' });
-  }
+
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles
   const isSecurity = rolesUpper.includes('SECURITY');
   const isLibrary = rolesUpper.includes('LIBRARY');
@@ -632,20 +624,15 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_staff_validation')) items.push({ key: 'hr_staff_validation', label: 'HR: Staff Validation', to: '/hr/staff-validation' });
     if (rolesUpper.includes('HR') && !items.some(item => item.key === 'hr_staff_salary')) items.push({ key: 'hr_staff_salary', label: 'HR: Staff Salary', to: '/hr/staff-salary' });
   }
-  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN'];
-  const hasApproverRole = rolesUpper.some((r) => approverRoles.includes(r));
-  const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
-  const canAccessPendingApprovals = hasApprovePermission || hasApproverRole;
-  if (cf('staff_requests') && canAccessPendingApprovals && !items.some(item => item.key === 'staff_requests_approvals')) {
+  if (cf('staff_requests') && rf('pending_approvals') && !items.some(item => item.key === 'staff_requests_approvals')) {
     items.push({ key: 'staff_requests_approvals', label: 'Pending Approvals', to: '/staff-requests/pending-approvals' });
   }
 
-  // Event Attending: visible to all staff, HR, and other approvers
-  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PS', 'HOD', 'AHOD'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
+  if (cf('staff_requests') && rf('event_attending') && !items.some(item => item.key === 'event_attending')) {
     items.push({ key: 'event_attending', label: 'Event Attending', to: '/staff-requests/event-attending' });
   }
 
-  if (cf('requests_hub') && (canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
+  if (cf('requests_hub') && rf('requests_hub') && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 

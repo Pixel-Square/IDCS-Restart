@@ -4,6 +4,10 @@ from accounts.models import User, Role
 
 
 class CollegeSerializer(serializers.ModelSerializer):
+    admin_username = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    admin_email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
+    admin_password = serializers.CharField(write_only=True, required=False, allow_blank=True, style={'input_type': 'password'})
+
     class Meta:
         model = College
         fields = [
@@ -12,8 +16,75 @@ class CollegeSerializer(serializers.ModelSerializer):
             'phone', 'email', 'website',
             'established_year', 'logo', 'is_active',
             'created_at', 'updated_at',
+            'admin_username', 'admin_email', 'admin_password',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate(self, data):
+        username = data.get('admin_username')
+        email = data.get('admin_email')
+        password = data.get('admin_password')
+        if any([username, email, password]) and not all([username, email, password]):
+            raise serializers.ValidationError("To create an admin, admin_username, admin_email, and admin_password must all be provided.")
+        if email and User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"admin_email": f"A user with email {email} already exists."})
+        return data
+
+    def create(self, validated_data):
+        username = validated_data.pop('admin_username', None)
+        email = validated_data.pop('admin_email', None)
+        password = validated_data.pop('admin_password', None)
+
+        college = super().create(validated_data)
+
+        if username and email and password:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                is_staff=True
+            )
+            from academics.models import StaffProfile
+            StaffProfile.objects.create(
+                user=user,
+                college=college,
+                staff_id=f"ADMIN-{college.code or college.id}-{username}",
+                status='ACTIVE'
+            )
+            admin_role = Role.objects.filter(name__iexact='ADMIN').first()
+            if not admin_role:
+                admin_role = Role.objects.create(name='ADMIN')
+            user.roles.add(admin_role)
+
+        return college
+
+    def update(self, instance, validated_data):
+        username = validated_data.pop('admin_username', None)
+        email = validated_data.pop('admin_email', None)
+        password = validated_data.pop('admin_password', None)
+
+        college = super().update(instance, validated_data)
+
+        if username and email and password:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                is_staff=True
+            )
+            from academics.models import StaffProfile
+            StaffProfile.objects.create(
+                user=user,
+                college=college,
+                staff_id=f"ADMIN-{college.code or college.id}-{username}",
+                status='ACTIVE'
+            )
+            admin_role = Role.objects.filter(name__iexact='ADMIN').first()
+            if not admin_role:
+                admin_role = Role.objects.create(name='ADMIN')
+            user.roles.add(admin_role)
+
+        return college
 
 
 class CollegeUserSerializer(serializers.Serializer):
@@ -23,6 +94,7 @@ class CollegeUserSerializer(serializers.Serializer):
     email = serializers.CharField(source='user.email')
     first_name = serializers.CharField(source='user.first_name')
     last_name = serializers.CharField(source='user.last_name')
+    profile_id = serializers.IntegerField(source='id')
     profile_type = serializers.SerializerMethodField()
     reg_no = serializers.SerializerMethodField()
     staff_id = serializers.SerializerMethodField()

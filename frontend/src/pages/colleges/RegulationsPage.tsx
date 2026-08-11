@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import { ScrollText, Plus, Pencil, Trash2, Search, X, ArrowLeft, Check } from 'lucide-react';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
@@ -22,8 +22,7 @@ const emptyForm: FormData = { code: '', name: '', is_active: true };
 
 export default function RegulationsPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const collegeId = searchParams.get('college_id');
+  const { id: collegeId } = useParams<{ id: string }>();
 
   // Sync college context so X-College-Id header follows this page
   useEffect(() => {

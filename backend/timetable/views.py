@@ -1365,14 +1365,24 @@ class TimetableTemplateViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
+        from college.views import _resolve_college_id
         user = self.request.user
+        qs = super().get_queryset()
+        college_id = _resolve_college_id(self.request)
+        if college_id:
+            qs = qs.filter(college_id=college_id)
         # IQAC users or admins may see all templates; otherwise show public templates
         perms = get_user_permissions(user)
         role_names = {r.name.upper() for r in user.roles.all()}
-        if 'timetable.manage_templates' in perms or user.is_staff or 'IQAC' in role_names:
-            return super().get_queryset()
+        if 'timetable.manage_templates' in perms or user.is_staff or 'IQAC' in role_names or 'ADMIN' in role_names:
+            return qs
         # For regular users, prefer active templates only
-        return self.queryset.filter(is_active=True)
+        return qs.filter(is_active=True)
+
+    def perform_create(self, serializer):
+        from college.views import _resolve_college_id
+        college_id = _resolve_college_id(self.request)
+        serializer.save(created_by=self.request.user, college_id=college_id)
 
 
 class TimetableSlotViewSet(viewsets.ModelViewSet):

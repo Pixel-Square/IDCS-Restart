@@ -5605,13 +5605,22 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
     queryset = AcademicYear.objects.all().order_by('-id')
     serializer_class = AcademicYearSerializer
     permission_classes = (IsAuthenticated,)
+    def get_queryset(self):
+        from college.views import _resolve_college_id
+        qs = super().get_queryset()
+        college_id = _resolve_college_id(self.request)
+        if college_id:
+            qs = qs.filter(college_id=college_id)
+        return qs
 
     def perform_create(self, serializer):
+        from college.views import _resolve_college_id
         user = self.request.user
         perms = get_user_permissions(user)
         if not (user.is_staff or 'academics.manage_academicyears' in perms or user.has_perm('academics.add_academicyear')):
             raise PermissionDenied('You do not have permission to create academic years.')
-        serializer.save()
+        college_id = _resolve_college_id(self.request)
+        serializer.save(college_id=college_id)
 
     def perform_update(self, serializer):
         user = self.request.user

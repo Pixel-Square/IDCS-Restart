@@ -384,20 +384,30 @@ class MeSerializer(serializers.Serializer):
         return None
 
     def get_college(self, obj):
-        # Return the primary college record if available
         try:
-            from college.models import College
-            c = College.objects.filter(is_active=True).order_by('id').first()
-            if not c:
-                return None
-            return {
-                'code': c.code,
-                'name': c.name,
-                'short_name': c.short_name,
-                'address': c.address,
-            }
+            student_profile = self._safe_related_profile(obj, 'student_profile')
+            if student_profile and getattr(student_profile, 'college', None):
+                c = student_profile.college
+                return {
+                    'id': c.id,
+                    'code': c.code,
+                    'name': c.name,
+                    'short_name': c.short_name,
+                    'address': c.address,
+                }
+            staff_profile = self._safe_related_profile(obj, 'staff_profile')
+            if staff_profile and getattr(staff_profile, 'college', None):
+                c = staff_profile.college
+                return {
+                    'id': c.id,
+                    'code': c.code,
+                    'name': c.name,
+                    'short_name': c.short_name,
+                    'address': c.address,
+                }
         except Exception:
-            return None
+            pass
+        return None
 
 
 class NotificationTemplateSerializer(serializers.ModelSerializer):

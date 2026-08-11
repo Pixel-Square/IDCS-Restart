@@ -29,15 +29,17 @@ interface Counts {
   departments: number;
   batches: number;
   regulations: number;
+  programs: number;
+  courses: number;
 }
 
-export default function CollegeDetailPage() {
+export default function CollegeDetailPage({ user }: { user?: any }) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [college, setCollege] = useState<College | null>(null);
   const [loading, setLoading] = useState(true);
   const [featureSummary, setFeatureSummary] = useState<FeatureSummary | null>(null);
-  const [counts, setCounts] = useState<Counts>({ users: 0, departments: 0, batches: 0, regulations: 0 });
+  const [counts, setCounts] = useState<Counts>({ users: 0, departments: 0, batches: 0, regulations: 0, programs: 0, courses: 0 });
 
   // Persist selected college ID so X-College-Id header follows navigation
   useEffect(() => {
@@ -58,19 +60,23 @@ export default function CollegeDetailPage() {
         setCollege(await res.json());
 
         // Fetch counts in parallel
-        const [usersRes, deptRes, batchRes, regRes, featRes] = await Promise.all([
+        const [usersRes, deptRes, batchRes, regRes, featRes, progRes, crsRes] = await Promise.all([
           fetchWithAuth(`/api/college/colleges/${id}/users/`),
           fetchWithAuth(`/api/college/departments/?college_id=${id}`),
           fetchWithAuth(`/api/college/batches/?college_id=${id}`),
           fetchWithAuth(`/api/college/regulations/?college_id=${id}`),
           fetchWithAuth(`/api/college/colleges/${id}/features/`),
+          fetchWithAuth(`/api/college/programs/?college_id=${id}`),
+          fetchWithAuth(`/api/college/course-records/?college_id=${id}`),
         ]);
 
-        const c: Counts = { users: 0, departments: 0, batches: 0, regulations: 0 };
+        const c: Counts = { users: 0, departments: 0, batches: 0, regulations: 0, programs: 0, courses: 0 };
         if (usersRes.ok) { const d = await usersRes.json(); c.users = d.total || 0; }
         if (deptRes.ok) { const d = await deptRes.json(); c.departments = Array.isArray(d) ? d.length : 0; }
         if (batchRes.ok) { const d = await batchRes.json(); c.batches = Array.isArray(d) ? d.length : 0; }
         if (regRes.ok) { const d = await regRes.json(); c.regulations = Array.isArray(d) ? d.length : 0; }
+        if (progRes.ok) { const d = await progRes.json(); c.programs = Array.isArray(d) ? d.length : 0; }
+        if (crsRes.ok) { const d = await crsRes.json(); c.courses = Array.isArray(d) ? d.length : 0; }
         setCounts(c);
 
         if (featRes.ok) {
@@ -105,6 +111,11 @@ export default function CollegeDetailPage() {
     );
   }
 
+  const canManageFeatures = user && (
+    (user.roles || []).map((r: string) => r.toUpperCase()).includes('SUPER_ADMIN') ||
+    (user.permissions || []).map((p: string) => p.toLowerCase()).includes('college.change_collegefeature')
+  );
+
   const sections = [
     {
       key: 'users',
@@ -115,7 +126,7 @@ export default function CollegeDetailPage() {
       stat: `${counts.users} user${counts.users !== 1 ? 's' : ''}`,
       to: `/colleges/${college.id}/users`,
     },
-    {
+    ...(canManageFeatures ? [{
       key: 'features',
       title: 'Features Management',
       description: 'Enable or disable modules for this college. Each toggle is isolated — changes here don\'t affect other colleges.',
@@ -123,7 +134,7 @@ export default function CollegeDetailPage() {
       color: 'indigo',
       stat: featureSummary ? `${featureSummary.enabled} of ${featureSummary.total} active` : 'Loading...',
       to: `/colleges/${college.id}/features`,
-    },
+    }] : []),
     {
       key: 'departments',
       title: 'Departments',
@@ -131,7 +142,7 @@ export default function CollegeDetailPage() {
       icon: Landmark,
       color: 'teal',
       stat: `${counts.departments} department${counts.departments !== 1 ? 's' : ''}`,
-      to: `/departments?college_id=${college.id}`,
+      to: `/colleges/${college.id}/departments`,
     },
     {
       key: 'batches',
@@ -140,7 +151,7 @@ export default function CollegeDetailPage() {
       icon: Layers,
       color: 'purple',
       stat: `${counts.batches} batch${counts.batches !== 1 ? 'es' : ''}`,
-      to: `/batches?college_id=${college.id}`,
+      to: `/colleges/${college.id}/batches`,
     },
     {
       key: 'regulations',
@@ -149,7 +160,25 @@ export default function CollegeDetailPage() {
       icon: ScrollText,
       color: 'amber',
       stat: `${counts.regulations} regulation${counts.regulations !== 1 ? 's' : ''}`,
-      to: `/regulations?college_id=${college.id}`,
+      to: `/colleges/${college.id}/regulations`,
+    },
+    {
+      key: 'programs',
+      title: 'Programs',
+      description: 'Manage academic programs (e.g., B.Tech, M.Tech, MBA).',
+      icon: BookOpen,
+      color: 'pink',
+      stat: `${counts.programs} program${counts.programs !== 1 ? 's' : ''}`,
+      to: `/colleges/${college.id}/programs`,
+    },
+    {
+      key: 'courses',
+      title: 'Courses',
+      description: 'Manage course configurations mapped to programs and departments.',
+      icon: FileText,
+      color: 'emerald',
+      stat: `${counts.courses} course${counts.courses !== 1 ? 's' : ''}`,
+      to: `/colleges/${college.id}/courses`,
     },
     {
       key: 'master_curriculum',

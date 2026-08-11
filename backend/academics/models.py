@@ -24,7 +24,7 @@ class AcademicYear(models.Model):
     class Meta:
         verbose_name = 'Academic Year'
         verbose_name_plural = 'Academic Years'
-        unique_together = ('name', 'parity')
+        unique_together = ('college', 'name', 'parity')
 
     def __str__(self):
         return f"{self.name}{' (' + self.parity + ')' if self.parity else ''}"
@@ -125,7 +125,10 @@ class Department(models.Model):
 
 class Program(models.Model):
     college = models.ForeignKey('college.College', on_delete=models.CASCADE, null=True, blank=True, related_name='programs')
-    name = models.CharField(max_length=32, unique=True)
+    name = models.CharField(max_length=32)
+
+    class Meta:
+        unique_together = (('college', 'name'),)
 
     def __str__(self):
         return self.name
@@ -197,7 +200,7 @@ class Course(models.Model):
     program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='courses')
 
     class Meta:
-        unique_together = ('name', 'department', 'program')
+        unique_together = ('college', 'name', 'department', 'program')
 
     def __str__(self):
         return self.name
@@ -336,17 +339,17 @@ class Batch(models.Model):
 
     class Meta:
         constraints = [
-            # Normal batches (course-based): unique per course+name
+            # Course-based batches: unique per course+name+college
             models.UniqueConstraint(
-                fields=['name', 'course'],
+                fields=['name', 'course', 'college'],
                 condition=Q(course__isnull=False),
-                name='unique_batch_name_course',
+                name='unique_batch_name_course_college',
             ),
-            # Dept-only batches (S&H etc.): unique per department+name
+            # Dept-only batches (S&H etc.): unique per department+name+college
             models.UniqueConstraint(
-                fields=['name', 'department'],
+                fields=['name', 'department', 'college'],
                 condition=Q(course__isnull=True) & Q(department__isnull=False),
-                name='unique_batch_name_department',
+                name='unique_batch_name_department_college',
             ),
         ]
 
