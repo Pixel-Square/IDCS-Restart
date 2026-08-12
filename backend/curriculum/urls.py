@@ -19,6 +19,7 @@ from .views import (
     SubmitElectiveChoiceView,
     ElectivePollExportView,
     CurriculumColumnConfigViewSet,
+    CurriculumFieldSchemaViewSet,
 )
 from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
@@ -32,6 +33,7 @@ router.register(r'department', CurriculumDepartmentViewSet, basename='curriculum
 router.register(r'elective', ElectiveSubjectViewSet, basename='curriculum-elective')
 router.register(r'department-groups', DepartmentGroupViewSet, basename='curriculum-department-groups')
 router.register(r'column-configs', CurriculumColumnConfigViewSet, basename='curriculum-column-configs')
+router.register(r'field-schemas', CurriculumFieldSchemaViewSet, basename='curriculum-field-schemas')
 
 urlpatterns = [
     # Place the explicit import endpoint before the router so 'import' is not

@@ -4,9 +4,10 @@ import CurriculumLayout from './CurriculumLayout';
 import { updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow, fetchDeptRows } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { useParams, Link } from 'react-router-dom';
-import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2, ArrowLeft } from 'lucide-react';
+import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2 } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
+import FieldSchemaModal from '../../components/curriculum/FieldSchemaModal';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
@@ -50,7 +51,8 @@ export default function DeptList() {
   const [refreshing, setRefreshing] = useState(false);
   const [allDepartments, setAllDepartments] = useState<Department[]>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
-  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
+  const [fieldSchemas, setFieldSchemas] = useState<any[]>([]);
+  const [isFieldModalOpen, setIsFieldModalOpen] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
@@ -81,10 +83,11 @@ export default function DeptList() {
       .catch(console.error)
       .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
-    fetchWithAuth('/api/curriculum/column-configs/')
-      .then(res => res.json())
-      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
-      .catch(() => setColumnConfigs([]));
+    import('../../services/curriculum').then(({ fetchFieldSchemas }) => {
+      fetchFieldSchemas()
+        .then(data => setFieldSchemas(data))
+        .catch(() => setFieldSchemas([]));
+    });
   }, []);
 
   useEffect(() => {
@@ -495,6 +498,13 @@ export default function DeptList() {
     ? (selectedDepartment.short_name || selectedDepartment.code || selectedDepartment.name || `Dept ${selectedDepartment.id}`)
     : null;
 
+  const activeSchemas = fieldSchemas.filter(c => 
+    c.is_active && 
+    (c.scope === 'both' || c.scope === 'department') && 
+    !(c.hidden_for_department_ids || []).includes(currentDept || 0) &&
+    !['course_name', 'category', 'class_type', 'is_elective'].includes(c.key)
+  );
+
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
@@ -619,7 +629,17 @@ export default function DeptList() {
           </div>
         ) : null}
         <div className="flex items-center justify-between mb-4">
-          <div />
+          <div>
+            {currentDept && (
+              <button
+                onClick={() => setIsFieldModalOpen(true)}
+                className="flex items-center gap-2 px-3 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors text-sm font-medium"
+              >
+                <Settings2 className="w-4 h-4" />
+                Manage Dept Fields
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {editAll ? (
               <>
@@ -644,19 +664,9 @@ export default function DeptList() {
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">CAT</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Class</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Elective</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">L</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">T</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">P</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">S</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">C</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">INT</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">EXT</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">TTL</th>
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Hours</th>
-              {columnConfigs.filter(c => c.is_active).map(c => (
+              {activeSchemas.map(c => (
                 <th key={c.key} className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
               ))}
-              <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">QP Type</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Editable</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Actions</th>
             </tr>
@@ -667,7 +677,6 @@ export default function DeptList() {
                 {(editingRow === r.id || (editAll && r.editable)) ? (
                   <>
                     <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => updateRowValue(r.id, { course_code: e.target.value })} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => updateRowValue(r.id, { mnemonic: e.target.value })} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
                         value={r.batch?.id ?? r.batch_id ?? ''}
@@ -680,8 +689,8 @@ export default function DeptList() {
                     </td>
                     <td className="px-3 py-2">
                       <textarea
-                        value={r.course_name || ''}
-                        onChange={e => updateRowValue(r.id, { course_name: e.target.value })}
+                        value={(r.dynamic_data || {}).course_name ?? r.course_name ?? ''}
+                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), course_name: e.target.value } })}
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
                         style={{ minHeight: '32px' }}
                         placeholder="Course Name"
@@ -695,15 +704,15 @@ export default function DeptList() {
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <input
-                        value={r.category || ''}
-                        onChange={e => updateRowValue(r.id, { category: e.target.value })}
+                        value={(r.dynamic_data || {}).category ?? r.category ?? ''}
+                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), category: e.target.value } })}
                         className="w-full min-w-[140px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                       />
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
-                        value={r.class_type || 'THEORY'}
-                        onChange={e => updateRowValue(r.id, { class_type: e.target.value })}
+                        value={(r.dynamic_data || {}).class_type ?? r.class_type ?? 'THEORY'}
+                        onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), class_type: e.target.value } })}
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
@@ -715,38 +724,37 @@ export default function DeptList() {
                     <td className="px-3 py-2 text-center whitespace-nowrap">
                       <input type="checkbox" checked={!!r.is_elective} onChange={e => updateRowValue(r.id, { is_elective: e.target.checked })} className="w-4 h-4" />
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => updateRowValue(r.id, { l: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => updateRowValue(r.id, { t: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => updateRowValue(r.id, { p: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => updateRowValue(r.id, { s: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => updateRowValue(r.id, { c: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => updateRowValue(r.id, { internal_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => updateRowValue(r.id, { external_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => updateRowValue(r.id, { total_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => updateRowValue(r.id, { total_hours: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    {columnConfigs.filter(c => c.is_active).map(c => (
+                    {activeSchemas.map(c => (
                       <td key={c.key} className="px-3 py-2 whitespace-nowrap">
-                        <input
-                          type={c.data_type === 'int' || c.data_type === 'float' ? 'number' : 'text'}
-                          value={(r.dynamic_data || {})[c.key] ?? ''}
-                          onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), [c.key]: c.data_type === 'int' || c.data_type === 'float' ? Number(e.target.value) : e.target.value } })}
-                          className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        />
+                        {c.data_type === 'bool' ? (
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4"
+                            checked={!!(r.dynamic_data || {})[c.key]}
+                            onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), [c.key]: e.target.checked } })}
+                          />
+                        ) : c.data_type === 'select' ? (
+                          <select
+                            value={(r.dynamic_data || {})[c.key] ?? ''}
+                            onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), [c.key]: e.target.value } })}
+                            className="w-full min-w-[88px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            <option value="">—</option>
+                            {(c.options || []).map((opt: string) => (
+                              <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type={c.data_type === 'int' || c.data_type === 'float' ? 'number' : 'text'}
+                            step={c.data_type === 'float' ? 'any' : c.data_type === 'int' ? '1' : undefined}
+                            value={(r.dynamic_data || {})[c.key] ?? ''}
+                            onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), [c.key]: c.data_type === 'int' ? (e.target.value === '' ? null : parseInt(e.target.value, 10)) : c.data_type === 'float' ? (e.target.value === '' ? null : parseFloat(e.target.value)) : e.target.value } })}
+                            className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        )}
                       </td>
                     ))}
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <select
-                        value={r.question_paper_type || ''}
-                        onChange={e => updateRowValue(r.id, { question_paper_type: e.target.value })}
-                        className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
-                        style={{ minWidth: 90 }}
-                      >
-                        <option value="">— Select —</option>
-                        {qpTypes.map(qt => (
-                          <option key={qt.code} value={qt.code}>{qt.label}</option>
-                        ))}
-                      </select>
-                    </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <button
@@ -768,31 +776,33 @@ export default function DeptList() {
                 ) : (
                   <>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.course_code || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.mnemonic || '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">
                       {r.batch ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">{r.batch.name}</span>
                       ) : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{r.course_name || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.category || '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.class_type || '-'}</td>
+                    <td className="px-3 py-2.5 text-sm text-gray-900 font-medium">{(r.dynamic_data || {}).course_name ?? r.course_name ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {}).category ?? r.category ?? '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {}).class_type ?? r.class_type ?? '-'}</td>
                     <td className="px-3 py-2.5 text-center whitespace-nowrap text-sm">{r.is_elective ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.l ?? 0}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.t ?? 0}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.p ?? 0}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.s ?? 0}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.c ?? 0}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.internal_mark ?? '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.external_mark ?? '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
-                    {columnConfigs.filter(c => c.is_active).map(c => (
-                      <td key={c.key} className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {})[c.key] ?? '-'}</td>
-                    ))}
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      <span className="text-sm">{r.question_paper_type || '-'}</span>
-                    </td>
+                    {activeSchemas.map(c => {
+                      const rawVal = (r.dynamic_data || {})[c.key];
+                      let display: React.ReactNode = '-';
+                      if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
+                        if (c.data_type === 'bool') {
+                          display = (rawVal === true || rawVal === 'true' || rawVal === 1)
+                            ? <span className="text-emerald-600 font-semibold">Yes</span>
+                            : <span className="text-gray-400">No</span>;
+                        } else {
+                          display = String(rawVal);
+                        }
+                      } else if (c.data_type === 'bool') {
+                        display = <span className="text-gray-400">No</span>;
+                      }
+                      return (
+                        <td key={c.key} className="px-3 py-2.5 whitespace-nowrap text-sm text-center">{display}</td>
+                      );
+                    })}
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       <div className="flex items-center gap-1">
@@ -851,12 +861,7 @@ export default function DeptList() {
             {filteredRows.length > 0 && (
               <tr className="bg-gray-50 font-semibold">
                 <td colSpan={7} className="px-3 py-3 text-sm text-gray-700">Total</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.l}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.t}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.p}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.s}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.c}</td>
-                <td colSpan={7 + columnConfigs.filter(c => c.is_active).length} className="px-3 py-3"></td>
+                <td colSpan={2 + activeSchemas.length} className="px-3 py-3"></td>
               </tr>
             )}
           </tbody>
@@ -1546,6 +1551,19 @@ export default function DeptList() {
           </div>
         </div>
       )}
+
+      <FieldSchemaModal 
+        isOpen={isFieldModalOpen} 
+        onClose={() => setIsFieldModalOpen(false)}
+        departmentId={currentDept || undefined}
+        onUpdated={() => {
+          import('../../services/curriculum').then(({ fetchFieldSchemas }) => {
+            fetchFieldSchemas()
+              .then(data => setFieldSchemas(data))
+              .catch(() => setFieldSchemas([]));
+          });
+        }}
+      />
 
       {/* Propagate Row Modal */}
       </div>

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, ElectivePoll, ElectivePollSubject, CurriculumColumnConfig
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, ElectivePoll, ElectivePollSubject, CurriculumColumnConfig, CurriculumFieldSchema
 from academics.models import Department, Semester, Batch, BatchYear, AcademicYear, StaffProfile
 
 
@@ -20,6 +20,41 @@ class CurriculumColumnConfigSerializer(serializers.ModelSerializer):
         model = CurriculumColumnConfig
         fields = '__all__'
         read_only_fields = ('college',)
+
+
+class CurriculumFieldSchemaSerializer(serializers.ModelSerializer):
+    """Serializer for CurriculumFieldSchema — the dynamic field definitions per college."""
+    hidden_for_department_ids = serializers.PrimaryKeyRelatedField(
+        source='hidden_for_departments',
+        queryset=Department.objects.all(),
+        many=True,
+        required=False,
+    )
+    can_delete = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CurriculumFieldSchema
+        fields = [
+            'id', 'key', 'label', 'data_type', 'options', 'default_value',
+            'is_core', 'scope', 'is_active', 'sort_order',
+            'hidden_for_department_ids', 'can_delete',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ('is_core', 'created_at', 'updated_at', 'can_delete')
+
+    def validate_key(self, value):
+        import re
+        if not re.match(r'^[a-z][a-z0-9_]*$', value):
+            raise serializers.ValidationError(
+                "Key must be lowercase letters, digits, or underscores, and start with a letter."
+            )
+        return value
+
+    def validate(self, attrs):
+        # Scope-key restrictions
+        if attrs.get('data_type') == 'select' and not attrs.get('options'):
+            raise serializers.ValidationError({'options': 'Options are required for select type.'})
+        return attrs
 
 
 class CurriculumMasterSerializer(serializers.ModelSerializer):
@@ -67,12 +102,38 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
                     except (ValueError, TypeError):
                         pass
             
-            # If still no semester, raise validation error
             if 'semester' not in attrs:
                 raise serializers.ValidationError({
                     'semester': 'Semester is required. Provide either semester_id (Semester PK) or semester (semester number).'
                 })
         return attrs
+
+    def to_internal_value(self, data):
+        # Move legacy top-level fields into dynamic_data
+        legacy_fields = [
+            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'qp_type', 'is_dept_core', 'class_type', 'category'
+        ]
+        
+        dynamic_data = data.get('dynamic_data', {})
+        if isinstance(dynamic_data, str):
+            import json
+            try:
+                dynamic_data = json.loads(dynamic_data)
+            except:
+                dynamic_data = {}
+        else:
+            dynamic_data = dict(dynamic_data)
+
+        # We must create a mutable copy of data
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        
+        for field in legacy_fields:
+            if field in mutable_data:
+                dynamic_data[field] = mutable_data.pop(field)
+                
+        mutable_data['dynamic_data'] = dynamic_data
+        return super().to_internal_value(mutable_data)
 
     def create(self, validated_data):
         deps = validated_data.pop('departments', [])
@@ -118,6 +179,60 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
             'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at')
+
+    def to_internal_value(self, data):
+        legacy_fields = [
+            'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+            'total_hours', 'mnemonic', 'question_paper_type', 'class_type', 'category'
+        ]
+        
+        dynamic_data = data.get('dynamic_data', {})
+        if isinstance(dynamic_data, str):
+            import json
+            try:
+                dynamic_data = json.loads(dynamic_data)
+            except:
+                dynamic_data = {}
+        else:
+            dynamic_data = dict(dynamic_data)
+
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        
+        for field in legacy_fields:
+            if field in mutable_data:
+                dynamic_data[field] = mutable_data.pop(field)
+
+        # Coerce dynamic_data values to their correct types based on field schema
+        try:
+            from college.tenant import get_current_college_id
+            from curriculum.models import CurriculumFieldSchema
+            cid = get_current_college_id()
+            if cid:
+                schemas = {s.key: s.data_type for s in CurriculumFieldSchema.objects.filter(college_id=cid, is_active=True)}
+                for k, v in dynamic_data.items():
+                    dt = schemas.get(k)
+                    if dt and v is not None and v != '':
+                        try:
+                            if dt == 'int':
+                                dynamic_data[k] = int(v)
+                            elif dt == 'float':
+                                dynamic_data[k] = float(v)
+                            elif dt == 'bool':
+                                if isinstance(v, bool):
+                                    dynamic_data[k] = v
+                                else:
+                                    dynamic_data[k] = str(v).lower() in ('true', '1', 'yes')
+                        except (ValueError, TypeError):
+                            pass  # leave value as-is if coercion fails
+                    elif dt == 'int' and v == '':
+                        dynamic_data[k] = None
+                    elif dt == 'float' and v == '':
+                        dynamic_data[k] = None
+        except Exception:
+            pass
+
+        mutable_data['dynamic_data'] = dynamic_data
+        return super().to_internal_value(mutable_data)
 
     def update(self, instance, validated_data):
         # Respect model-level protection; model.save will raise ValidationError if not allowed

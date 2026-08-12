@@ -199,6 +199,143 @@ class CurriculumColumnConfig(models.Model):
         return f"{self.college} - {self.label} ({self.key})"
 
 
+FIELD_DATA_TYPE_CHOICES = [
+    ('int', 'Integer'),
+    ('float', 'Float'),
+    ('text', 'Text'),
+    ('bool', 'Boolean'),
+    ('select', 'Select'),
+]
+
+FIELD_SCOPE_CHOICES = [
+    ('master', 'Master Only'),
+    ('department', 'Department Only'),
+    ('both', 'Both'),
+]
+
+# Core field keys that are always kept (migrated from explicit DB columns)
+CORE_FIELD_KEYS = {
+    'course_name', 'class_type', 'category', 'is_elective', 'is_dept_core',
+    'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
+    'qp_type', 'mnemonic', 'question_paper_type', 'total_hours',
+}
+
+
+class CurriculumFieldSchema(models.Model):
+    """Defines which fields exist in curriculum data JSON per college.
+
+    Core fields (is_core=True) are seeded from existing DB columns and cannot
+    be permanently deleted — only hidden. Custom fields (is_core=False) can be
+    added by college admins and removed with double-password confirmation.
+
+    Fields created at Master scope replicate automatically to all Department
+    curriculum rows for that college when the field is added.
+    """
+    college = models.ForeignKey(
+        'college.College',
+        on_delete=models.CASCADE,
+        related_name='curriculum_field_schemas',
+    )
+    key = models.CharField(
+        max_length=64,
+        help_text="Unique field key used as JSON key, e.g. 'co_attainment'",
+    )
+    label = models.CharField(max_length=128, help_text="Display label shown in column header")
+    data_type = models.CharField(
+        max_length=16,
+        choices=FIELD_DATA_TYPE_CHOICES,
+        default='text',
+    )
+    options = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='For select type: list of option values, e.g. ["A","B","C"]',
+    )
+    default_value = models.CharField(max_length=255, blank=True, default='')
+    is_core = models.BooleanField(
+        default=False,
+        help_text='Core fields are seeded from original DB columns. They can be hidden but not deleted.',
+    )
+    scope = models.CharField(
+        max_length=16,
+        choices=FIELD_SCOPE_CHOICES,
+        default='both',
+        help_text='Which curriculum type this field applies to.',
+    )
+    is_active = models.BooleanField(default=True)
+    # For department-level overrides: departments may hide master-inherited fields
+    hidden_for_departments = models.ManyToManyField(
+        'academics.Department',
+        blank=True,
+        related_name='hidden_curriculum_fields',
+        help_text='Departments that have removed this master field from their view.',
+    )
+    sort_order = models.PositiveSmallIntegerField(default=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Curriculum Field Schema'
+        verbose_name_plural = 'Curriculum Field Schemas'
+        unique_together = (('college', 'key'),)
+        ordering = ('sort_order', 'key')
+
+    def __str__(self):
+        return f"{self.college_id} - {self.label} ({self.key})"
+
+    def can_delete(self):
+        """Core fields cannot be deleted, only hidden."""
+        return not self.is_core
+
+    def replicate_to_department_rows(self):
+        """Add this field (with default value) to all existing department rows for this college."""
+        from django.db import transaction
+        key = self.key
+        default = self._typed_default()
+        with transaction.atomic():
+            rows = CurriculumDepartment.objects.filter(college=self.college)
+            update_list = []
+            for row in rows.iterator():
+                data = row.dynamic_data or {}
+                if key not in data:
+                    data[key] = default
+                    row.dynamic_data = data
+                    update_list.append(row)
+            if update_list:
+                CurriculumDepartment.objects.bulk_update(update_list, ['dynamic_data'], batch_size=500)
+
+    def replicate_to_master_rows(self):
+        """Add this field (with default value) to all existing master rows for this college."""
+        from django.db import transaction
+        key = self.key
+        default = self._typed_default()
+        with transaction.atomic():
+            rows = CurriculumMaster.objects.filter(college=self.college)
+            update_list = []
+            for row in rows.iterator():
+                data = row.dynamic_data or {}
+                if key not in data:
+                    data[key] = default
+                    row.dynamic_data = data
+                    update_list.append(row)
+            if update_list:
+                CurriculumMaster.objects.bulk_update(update_list, ['dynamic_data'], batch_size=500)
+
+    def _typed_default(self):
+        """Return the default value coerced to the correct Python type based on data_type."""
+        raw = self.default_value or ''
+        try:
+            if self.data_type == 'int':
+                return int(raw) if raw.strip() else None
+            elif self.data_type == 'float':
+                return float(raw) if raw.strip() else None
+            elif self.data_type == 'bool':
+                return raw.lower() in ('true', '1', 'yes') if raw.strip() else False
+        except (ValueError, TypeError):
+            pass
+        return raw  # 'text', 'select', or fallback
+
+
 
 class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)

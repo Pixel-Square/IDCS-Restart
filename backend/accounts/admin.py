@@ -94,6 +94,25 @@ class UserRoleInline(admin.TabularInline):
     verbose_name_plural = 'Roles'
 
 
+class CollegeListFilter(admin.SimpleListFilter):
+    title = 'college'
+    parameter_name = 'college'
+
+    def lookups(self, request, model_admin):
+        from college.models import College
+        colleges = College.objects.all().order_by('name')
+        return [(str(c.id), c.name) for c in colleges]
+
+    def queryset(self, request, queryset):
+        val = self.value()
+        if val:
+            from django.db.models import Q
+            return queryset.filter(
+                Q(student_profile__college_id=val) | Q(staff_profile__college_id=val)
+            ).distinct()
+        return queryset
+
+
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
     # Use custom forms so that:
@@ -103,6 +122,7 @@ class UserAdmin(DjangoUserAdmin):
     add_form = CustomUserCreationForm
 
     list_display = ('username', 'email', 'mobile_no', 'is_staff', 'get_roles', 'get_profile_status')
+    list_filter = ('is_staff', 'is_superuser', 'is_active', CollegeListFilter, 'groups')
     inlines = (StudentProfileInline, StaffProfileInline, UserRoleInline)
     actions = ('deactivate_users', 'delete_and_purge_users')
     change_list_template = 'admin/accounts/user/change_list.html'

@@ -57,9 +57,9 @@ from .permissions import IsCollegeAdminOrSuperAdmin
 # ---------------------------------------------------------------------------
 
 class CollegeListCreateView(generics.ListCreateAPIView):
-    """List all colleges or create a new one. Accessible to SUPER_ADMIN."""
+    """List all colleges or create a new one. Accessible to super admins, and college admins see only theirs."""
     serializer_class = CollegeSerializer
-    permission_classes = [IsSuperAdminOrSuperuser]
+    permission_classes = [IsCollegeAdminOrSuperAdmin]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['code', 'name', 'short_name', 'city']
     ordering_fields = ['code', 'name', 'city', 'created_at']
@@ -70,6 +70,17 @@ class CollegeListCreateView(generics.ListCreateAPIView):
         is_active = self.request.query_params.get('is_active')
         if is_active is not None:
             qs = qs.filter(is_active=is_active.lower() == 'true')
+        
+        user = self.request.user
+        is_super = user.is_superuser or user.roles.filter(name='SUPER_ADMIN').exists()
+        if not is_super:
+            from .permissions import _user_college_id
+            uid = _user_college_id(user)
+            if uid is not None:
+                qs = qs.filter(pk=uid)
+            else:
+                qs = qs.none()
+                
         return qs
 
 

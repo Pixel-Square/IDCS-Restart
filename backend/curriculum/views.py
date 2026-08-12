@@ -5,8 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.core.paginator import Paginator, EmptyPage
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType, CurriculumColumnConfig
-from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer, CurriculumColumnConfigSerializer
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType, CurriculumColumnConfig, CurriculumFieldSchema
+from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer, CurriculumColumnConfigSerializer, CurriculumFieldSchemaSerializer
 from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
@@ -40,7 +40,7 @@ def custom_exception_handler(exc, context):
 class CurriculumColumnConfigViewSet(viewsets.ModelViewSet):
     queryset = CurriculumColumnConfig.objects.all().order_by('sort_order', 'key')
     serializer_class = CurriculumColumnConfigSerializer
-    permission_classes = [IsAuthenticated] # Or restrict to college admin/IQAC
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -52,6 +52,177 @@ class CurriculumColumnConfigViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         college_id = self.request.query_params.get('college_id') or getattr(self.request, 'college_id', None)
         serializer.save(college_id=college_id)
+
+
+class CurriculumFieldSchemaViewSet(viewsets.ModelViewSet):
+    """ViewSet for dynamic curriculum field schemas.
+
+    Supports:
+    - GET  /api/curriculum/field-schemas/          → list schemas for current college
+    - POST /api/curriculum/field-schemas/          → create new field (IQAC/Admin only)
+    - PATCH/PUT /api/curriculum/field-schemas/{id}/ → update label/options/sort_order
+    - DELETE /api/curriculum/field-schemas/{id}/   → soft-delete (custom fields only)
+    - POST /api/curriculum/field-schemas/{id}/confirm-remove/ → dept removes master-inherited field
+    - POST /api/curriculum/field-schemas/{id}/dept-hide/  → hide field for a specific dept
+    - POST /api/curriculum/field-schemas/{id}/dept-show/  → un-hide field for a specific dept
+    - POST /api/curriculum/field-schemas/{id}/replicate/  → push field to all existing rows
+    """
+    queryset = CurriculumFieldSchema.objects.all()
+    serializer_class = CurriculumFieldSchemaSerializer
+    permission_classes = [IsAuthenticated]
+
+    def _get_college_id(self):
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+        except Exception:
+            cid = None
+        if not cid:
+            cid = self.request.query_params.get('college_id')
+            try:
+                cid = int(cid) if cid else None
+            except (ValueError, TypeError):
+                cid = None
+        return cid
+
+    def _is_privileged(self):
+        user = self.request.user
+        if user.is_superuser:
+            return True
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+        if user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+            return True
+        if role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'SUPER_ADMIN', 'ADMIN'}:
+            return True
+        return False
+
+    def get_queryset(self):
+        cid = self._get_college_id()
+        qs = CurriculumFieldSchema.objects.all()
+        if cid:
+            qs = qs.filter(college_id=cid)
+        # Filter by scope
+        scope = self.request.query_params.get('scope')
+        if scope:
+            qs = qs.filter(scope__in=[scope, 'both'])
+        # Active only by default unless ?include_inactive=1
+        include_inactive = str(self.request.query_params.get('include_inactive', '')).lower() in {'1', 'true'}
+        if not include_inactive:
+            qs = qs.filter(is_active=True)
+        return qs.order_by('sort_order', 'key')
+
+    def perform_create(self, serializer):
+        if not self._is_privileged():
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only IQAC or Admin can create curriculum fields.')
+        cid = self._get_college_id()
+        instance = serializer.save(college_id=cid, is_core=False)
+        # Replicate to existing rows based on scope
+        try:
+            if instance.scope in ('both', 'department'):
+                instance.replicate_to_department_rows()
+            if instance.scope in ('both', 'master'):
+                instance.replicate_to_master_rows()
+        except Exception as exc:
+            logger.warning('Field replication failed for %s: %s', instance.key, exc)
+
+    def perform_update(self, serializer):
+        if not self._is_privileged():
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only IQAC or Admin can update curriculum fields.')
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if not self._is_privileged():
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+        instance = self.get_object()
+        if not instance.can_delete():
+            return Response(
+                {'detail': 'Core fields cannot be deleted. You can hide them by setting is_active=false.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Soft-delete: mark inactive instead of hard delete
+        instance.is_active = False
+        instance.save(update_fields=['is_active', 'updated_at'])
+        return Response({'status': 'Field hidden (soft-deleted).'}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='confirm-remove')
+    def confirm_remove(self, request, pk=None):
+        """Department-level: remove a master-inherited field from dept view.
+
+        Body: { "password": "...", "department_id": 123 }
+        Requires the requesting user's password for verification.
+        On success, adds the department to hidden_for_departments.
+        """
+        schema = self.get_object()
+        password = request.data.get('password', '')
+        dept_id = request.data.get('department_id')
+        if not password:
+            return Response({'detail': 'Password is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not dept_id:
+            return Response({'detail': 'department_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify password
+        user = request.user
+        if not user.check_password(password):
+            return Response({'detail': 'Incorrect password.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from academics.models import Department
+            dept = Department.objects.get(pk=dept_id)
+        except Exception:
+            return Response({'detail': 'Department not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        schema.hidden_for_departments.add(dept)
+        return Response({'status': f'Field "{schema.key}" hidden for department {dept.code}.'})
+
+    @action(detail=True, methods=['post'], url_path='dept-show')
+    def dept_show(self, request, pk=None):
+        """Restore a previously hidden master field for a department.
+
+        Body: { "department_id": 123 }
+        """
+        schema = self.get_object()
+        dept_id = request.data.get('department_id')
+        if not dept_id:
+            return Response({'detail': 'department_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            from academics.models import Department
+            dept = Department.objects.get(pk=dept_id)
+        except Exception:
+            return Response({'detail': 'Department not found.'}, status=status.HTTP_404_NOT_FOUND)
+        schema.hidden_for_departments.remove(dept)
+        return Response({'status': f'Field "{schema.key}" restored for department {dept.code}.'})
+
+    @action(detail=True, methods=['post'], url_path='replicate')
+    def replicate(self, request, pk=None):
+        """Manually trigger replication of this field to all existing rows."""
+        if not self._is_privileged():
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+        schema = self.get_object()
+        try:
+            dept_count = master_count = 0
+            if schema.scope in ('both', 'department'):
+                before = CurriculumDepartment.objects.filter(college=schema.college).count()
+                schema.replicate_to_department_rows()
+                dept_count = before
+            if schema.scope in ('both', 'master'):
+                before = CurriculumMaster.objects.filter(college=schema.college).count()
+                schema.replicate_to_master_rows()
+                master_count = before
+            return Response({
+                'status': 'Replication complete.',
+                'dept_rows_processed': dept_count,
+                'master_rows_processed': master_count,
+            })
+        except Exception as exc:
+            logger.exception('Replication error: %s', exc)
+            return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 
 class CurriculumMasterViewSet(viewsets.ModelViewSet):
@@ -309,7 +480,7 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             role_names = {r.name.upper() for r in user.roles.all()}
         except Exception:
             role_names = set()
-        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER'}):
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'OBE_MASTER', 'SUPER_ADMIN', 'ADMIN'}):
             logger.debug('get_queryset: user is superuser or IQAC/HAA; user=%s groups=%s roles=%s', user.username, [g.name for g in user.groups.all()], role_names)
             return qs
 
@@ -532,7 +703,13 @@ class CurriculumDepartmentsView(APIView):
             return Response({'results': []})
 
         # ── Build base queryset scoped to college ────────────────────────────
-        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists():
+        try:
+            role_names = {r.name.upper() for r in user.roles.all()}
+        except Exception:
+            role_names = set()
+        has_admin_role = bool(role_names & {'IQAC', 'HAA', 'IQAC_HEAD', 'SUPER_ADMIN', 'ADMIN'})
+        
+        if user.is_superuser or user.groups.filter(name__in=['IQAC', 'HAA']).exists() or has_admin_role:
             qs = Department.objects.all()
         else:
             perms = get_user_permissions(user)
@@ -562,6 +739,7 @@ class CurriculumDepartmentsView(APIView):
         can_include_non_teaching = bool(
             user.is_superuser
             or user.groups.filter(name__in=['IQAC', 'HAA']).exists()
+            or has_admin_role
             or (get_user_permissions(user) & {'curriculum_master_edit', 'curriculum_master_publish', 'CURRICULUM_MASTER_EDIT', 'CURRICULUM_MASTER_PUBLISH'})
         )
         if not (include_non_teaching and can_include_non_teaching):

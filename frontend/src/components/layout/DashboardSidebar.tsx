@@ -91,6 +91,7 @@ import { fetchAllQueries } from '../../services/queries';
   batches: Layers,
   regulations: ScrollText,
   roles: Shield,
+  my_college: Building2,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -378,6 +379,8 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // If empty (no college assigned, e.g. SUPER_ADMIN), ALL features pass through.
   const collegeFeatureCodes: string[] = (data as any).college_features || [];
   const hasCollegeFeatures = collegeFeatureCodes.length > 0;
+  // College ID — available for ADMIN role users so they can navigate to their own college
+  const myCollegeId: number | null = (data as any).college_id ?? null;
   /**
    * cf(code) returns true if the feature is enabled for this college,
    * OR if the user has no college assignment (admin accounts).
@@ -557,6 +560,12 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Colleges management – Super Admin only
   if (isSuperAdmin && !items.some((item) => item.key === 'colleges')) {
     items.push({ key: 'colleges', label: 'Colleges', to: '/colleges' });
+  }
+
+  // Administration – College ADMIN role sees their own college management page
+  const isCollegeAdmin = rolesUpper.includes('ADMIN') && !isSuperAdmin;
+  if (isCollegeAdmin && myCollegeId && !items.some((item) => item.key === 'my_college')) {
+    items.push({ key: 'my_college', label: 'Administration', to: `/colleges/${myCollegeId}` });
   }
 
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles

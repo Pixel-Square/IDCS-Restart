@@ -5,7 +5,7 @@ import { useLocation, useNavigate, useParams, Link } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 
 import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2 } from 'lucide-react';
-import ColumnConfigModal from '../../components/curriculum/ColumnConfigModal';
+import FieldSchemaModal from '../../components/curriculum/FieldSchemaModal';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
@@ -36,7 +36,7 @@ export default function MasterList() {
   const propagateMessageTimer = useRef<number | null>(null);
   const [deptList, setDeptList] = useState<Array<{ id: number; label: string }>>([]);
   const [batchDeptExisting, setBatchDeptExisting] = useState<Record<number, number[]>>({});
-  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
+  const [fieldSchemas, setFieldSchemas] = useState<any[]>([]);
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[]; } catch { return []; }
   })();
@@ -84,10 +84,11 @@ export default function MasterList() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
-    fetchWithAuth('/api/curriculum/column-configs/')
-      .then(res => res.json())
-      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
-      .catch(() => setColumnConfigs([]));
+    import('../../services/curriculum').then(({ fetchFieldSchemas }) => {
+      fetchFieldSchemas('master')
+        .then(data => setFieldSchemas(data.filter(s => s.is_active)))
+        .catch(() => setFieldSchemas([]));
+    });
   }, []);
 
   useEffect(() => {
@@ -288,13 +289,8 @@ export default function MasterList() {
             semester: m.semester,
             batch_id: batchId,
             course_code: m.course_code,
-            course_name: m.course_name,
-            category: m.category,
-            class_type: m.class_type,
+            dynamic_data: m.dynamic_data || {},
             is_elective: m.is_elective,
-            l: m.l, t: m.t, p: m.p, s: m.s, c: m.c,
-            internal_mark: m.internal_mark,
-            external_mark: m.external_mark,
             for_all_departments: false,
             departments: allowedDepts,
             editable: m.editable,
@@ -434,14 +430,15 @@ export default function MasterList() {
             {(() => {
               try {
                 const roles = JSON.parse(localStorage.getItem('roles') || '[]');
-                const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
-                if (isIQAC) return (
+                const hasAdminRole = Array.isArray(roles) && roles.some((r: string) => ['iqac', 'admin', 'super_admin', 'super admin', 'superadmin'].includes(String(r).toLowerCase()));
+                const canManageFields = canDeleteMaster || hasAdminRole;
+                if (canManageFields) return (
                   <button
                     onClick={() => setIsColumnConfigOpen(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all duration-200 shadow-sm hover:shadow-md"
                   >
                     <Settings2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">Configure Columns</span>
+                    <span className="hidden sm:inline">Manage Fields</span>
                   </button>
                 );
               } catch (e) {}
@@ -541,18 +538,8 @@ export default function MasterList() {
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Code</th>
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Batch</th>
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Course</th>
-                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">CAT</th>
-                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Class</th>
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Elective</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">L</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">T</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">P</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">S</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">C</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">INT</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">EXT</th>
-                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">TTL</th>
-                  {columnConfigs.filter(c => c.is_active).map(c => (
+                  {fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').map(c => (
                     <th key={c.key} className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
                   ))}
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Depts</th>
@@ -576,23 +563,28 @@ export default function MasterList() {
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-100 text-indigo-800">{m.batch.name}</span>
                         ) : <span className="text-gray-300">—</span>}
                       </td>
-                      <td className="px-3 py-3 text-sm text-gray-900 font-medium min-w-[200px]">{m.course_name || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">{m.category || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">{m.class_type || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-900 font-medium min-w-[200px]">{(m.dynamic_data || {}).course_name ?? m.course_name ?? '-'}</td>
                       <td className="px-3 py-3 text-sm text-center whitespace-nowrap">
                         {m.is_elective ? <span className="text-green-700 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}
                       </td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.l ?? 0}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.t ?? 0}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.p ?? 0}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.s ?? 0}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.c ?? 0}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.internal_mark ?? '-'}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.external_mark ?? '-'}</td>
-                      <td className="px-3 py-3 text-sm text-center text-gray-900 font-semibold whitespace-nowrap">{m.total_mark ?? '-'}</td>
-                      {columnConfigs.filter(c => c.is_active).map(c => (
-                        <td key={c.key} className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{(m.dynamic_data || {})[c.key] ?? '-'}</td>
-                      ))}
+                      {fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').map(c => {
+                        const rawVal = (m.dynamic_data || {})[c.key];
+                        let display: React.ReactNode = '-';
+                        if (rawVal !== null && rawVal !== undefined && rawVal !== '') {
+                          if (c.data_type === 'bool') {
+                            display = (rawVal === true || rawVal === 'true' || rawVal === 1)
+                              ? <span className="text-green-700 font-semibold">Yes</span>
+                              : <span className="text-gray-400">No</span>;
+                          } else {
+                            display = String(rawVal);
+                          }
+                        } else if (c.data_type === 'bool') {
+                          display = <span className="text-gray-400">No</span>;
+                        }
+                        return (
+                          <td key={c.key} className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{display}</td>
+                        );
+                      })}
                       <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">
                         {m.for_all_departments ? 'ALL' : 
                           (m.departments_display && m.departments_display.length > 0) ?
@@ -646,13 +638,8 @@ export default function MasterList() {
                 )}
                 {filteredData.length > 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-3 text-right font-bold text-gray-900">Total</td>
-                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.l}</td>
-                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.t}</td>
-                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.p}</td>
-                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.s}</td>
-                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.c}</td>
-                    <td colSpan={3 + columnConfigs.filter(c => c.is_active).length} className="bg-gray-50"></td>
+                    <td colSpan={4} className="px-3 py-3 text-right font-bold text-gray-900">Total</td>
+                    <td colSpan={fieldSchemas.filter(c => c.key !== 'course_name' && c.key !== 'is_elective').length} className="bg-gray-50"></td>
                     <td colSpan={3} className="bg-gray-50"></td>
                   </tr>
                 )}
@@ -732,15 +719,15 @@ export default function MasterList() {
         onConfirm={handleDeleteMaster}
       />
 
-      <ColumnConfigModal 
+      <FieldSchemaModal 
         isOpen={isColumnConfigOpen} 
         onClose={() => setIsColumnConfigOpen(false)} 
         onUpdated={() => {
-          // Re-fetch column configs to reflect changes
-          fetchWithAuth('/api/curriculum/column-configs/')
-            .then(res => res.json())
-            .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
-            .catch(() => setColumnConfigs([]));
+          import('../../services/curriculum').then(({ fetchFieldSchemas }) => {
+            fetchFieldSchemas('master')
+              .then(data => setFieldSchemas(data.filter(s => s.is_active)))
+              .catch(() => setFieldSchemas([]));
+          });
         }} 
       />
 

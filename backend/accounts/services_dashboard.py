@@ -262,8 +262,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
     # If the user has no college (e.g. SUPER_ADMIN), return empty list so the
     # sidebar shows all items it would normally show via role/perm checks.
     college_features: List[str] = []
+    college_id: Optional[int] = None
     try:
-        college_id: Optional[int] = None
         _sp = getattr(user, 'student_profile', None)
         if _sp is not None:
             college_id = getattr(_sp, 'college_id', None)
@@ -312,6 +312,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'entry_points': entry_points,
         'college_features': college_features,
         'role_features': role_features,
+        # Expose the user's college ID so the frontend can build
+        # college-admin links (e.g. /colleges/:id) for ADMIN role users.
+        'college_id': college_id,
     }
 
 

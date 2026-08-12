@@ -132,6 +132,8 @@ import RolesPage from './pages/roles/RolesPage';
 import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
 import RegulationsPage from './pages/colleges/RegulationsPage';
+import ProgramList from './pages/colleges/ProgramList';
+import CollegeCourseList from './pages/colleges/CourseList';
 import ForcePasswordChangeModal from './components/ForcePasswordChangeModal';
 
 type RoleObj = { name: string };
@@ -290,35 +292,64 @@ export default function App() {
                 <Route path="/credits" element={<CreditsPage />} />
                 <Route
                   path="/colleges"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegesPage />} />}
                 />
+                {/* College ADMIN can access their own college detail and sub-pages */}
                 <Route
                   path="/colleges/:id"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeDetailPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeDetailPage user={user} />} />}
                 />
                 <Route
                   path="/colleges/:id/users"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeUsersPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeUsersPage />} />}
                 />
                 <Route
                   path="/colleges/:id/features"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeFeaturesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeFeaturesPage />} />}
                 />
                 <Route
                   path="/departments"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<DepartmentsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<DepartmentsPage />} />}
+                />
+                <Route
+                  path="/colleges/:id/departments"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<DepartmentsPage />} />}
                 />
                 <Route
                   path="/batches"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<BatchesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<BatchesPage />} />}
+                />
+                <Route
+                  path="/colleges/:id/batches"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<BatchesPage />} />}
                 />
                 <Route
                   path="/regulations"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RegulationsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RegulationsPage />} />}
+                />
+                <Route
+                  path="/colleges/:id/regulations"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RegulationsPage />} />}
+                />
+                <Route
+                  path="/programs"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<ProgramList />} />}
+                />
+                <Route
+                  path="/colleges/:id/programs"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<ProgramList />} />}
+                />
+                <Route
+                  path="/courses"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeCourseList />} />}
+                />
+                <Route
+                  path="/colleges/:id/courses"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeCourseList />} />}
                 />
                 <Route
                   path="/roles"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RolesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RolesPage />} />}
                 />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
@@ -461,6 +492,10 @@ export default function App() {
                 <Route path="/curriculum/master/:id" element={<MasterEditor />} />
                 <Route path="/curriculum/master/new" element={<MasterEditor />} />
                 <Route path="/curriculum/department" element={<DeptList />} />
+                <Route path="/colleges/:id/curriculum/master" element={<MasterList />} />
+                <Route path="/colleges/:id/curriculum/master/new" element={<MasterEditor />} />
+                <Route path="/colleges/:id/curriculum/master/:id" element={<MasterEditor />} />
+                <Route path="/colleges/:id/curriculum/department" element={<DeptList />} />
 
                 <Route
                   path="/curriculum/elective-import"

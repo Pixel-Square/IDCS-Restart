@@ -25,7 +25,9 @@ export type Master = {
   total_mark?: number | null;
   for_all_departments?: boolean;
   departments?: number[];
+  departments_display?: any[];
   editable?: boolean;
+  dynamic_data?: Record<string, any>;
 };
 
 export type DeptRow = {
@@ -55,6 +57,11 @@ export type DeptRow = {
   editable?: boolean;
   overridden?: boolean;
   is_elective?: boolean;
+  mnemonic?: string | null;
+  approval_status?: string;
+  approved_by?: number | null;
+  approved_at?: string | null;
+  dynamic_data?: Record<string, any>;
 };
 
 export type CurriculumPendingDepartmentCount = {
@@ -621,16 +628,8 @@ export async function propagateDeptRow(
       semester_id: semesterId,
       batch_id: batchId,
       course_code: row.course_code,
-      course_name: row.course_name,
-      category: row.category,
-      class_type: row.class_type,
+      dynamic_data: row.dynamic_data || {},
       is_elective: row.is_elective,
-      l: row.l, t: row.t, p: row.p, s: row.s, c: row.c,
-      internal_mark: row.internal_mark,
-      external_mark: row.external_mark,
-      total_mark: row.total_mark,
-      total_hours: row.total_hours,
-      question_paper_type: row.question_paper_type,
       editable: row.editable,
     };
     try {
@@ -647,3 +646,114 @@ export async function propagateDeptRow(
   }
   return results;
 }
+
+// ─── Field Schema types and API ───────────────────────────────────────────────
+
+export type FieldDataType = 'int' | 'float' | 'text' | 'bool' | 'select';
+export type FieldScope = 'master' | 'department' | 'both';
+
+export interface CurriculumFieldSchema {
+  id: number;
+  key: string;
+  label: string;
+  data_type: FieldDataType;
+  options: string[];
+  default_value: string;
+  is_core: boolean;
+  scope: FieldScope;
+  is_active: boolean;
+  sort_order: number;
+  hidden_for_department_ids: number[];
+  can_delete: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFieldSchemaPayload {
+  key: string;
+  label: string;
+  data_type: FieldDataType;
+  options?: string[];
+  default_value?: string;
+  scope: FieldScope;
+  sort_order?: number;
+}
+
+/** Fetch all active field schemas for the current college. */
+export async function fetchFieldSchemas(scope?: FieldScope): Promise<CurriculumFieldSchema[]> {
+  const qs = new URLSearchParams();
+  if (scope) qs.set('scope', scope);
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/?${qs.toString()}`);
+  if (!res.ok) throw new Error('Failed to fetch field schemas');
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.results || []);
+}
+
+/** Create a new custom field schema (IQAC/Admin only). */
+export async function createFieldSchema(payload: CreateFieldSchemaPayload): Promise<CurriculumFieldSchema> {
+  const res = await fetchWithAuth('/api/curriculum/field-schemas/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || data.key?.[0] || JSON.stringify(data) || 'Failed to create field');
+  }
+  return res.json();
+}
+
+/** Update label/sort_order/options of an existing schema. */
+export async function updateFieldSchema(id: number, payload: Partial<CreateFieldSchemaPayload>): Promise<CurriculumFieldSchema> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${id}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Soft-delete a custom (non-core) field schema. */
+export async function deleteFieldSchema(id: number): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${id}/`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Failed to remove field');
+  }
+}
+
+/** Department hides a master-inherited field (requires password). */
+export async function confirmRemoveFieldForDept(
+  schemaId: number,
+  departmentId: number,
+  password: string,
+): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/confirm-remove/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password, department_id: departmentId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Removal failed');
+  }
+}
+
+/** Department restores a previously hidden master field. */
+export async function restoreFieldForDept(schemaId: number, departmentId: number): Promise<void> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/dept-show/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ department_id: departmentId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+/** Trigger replication of a field to all existing rows. */
+export async function replicateField(schemaId: number): Promise<{ status: string; dept_rows_processed: number; master_rows_processed: number }> {
+  const res = await fetchWithAuth(`/api/curriculum/field-schemas/${schemaId}/replicate/`, { method: 'POST' });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
