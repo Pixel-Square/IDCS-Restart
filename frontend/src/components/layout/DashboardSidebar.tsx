@@ -93,7 +93,7 @@ import { fetchAllQueries } from '../../services/queries';
   roles: Shield,
 };
 
-export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
+export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
 
@@ -396,6 +396,9 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
    */
   const rf = (code: string): boolean => roleFeatureCodes.includes(code);
 
+  // Curriculum master/department: require explicit curriculum permissions, role feature, OR entry point
+  if (cf('curriculum_master') && (rf('curriculum_master') || (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)))) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
+  if (cf('curriculum_dept') && (rf('curriculum_dept') || (entry.department_curriculum && (permsLower.some(p => p.includes('curriculum')) || entry.department_curriculum)))) items.push({ key: 'department_curriculum', label: 'Department Curriculum', to: '/curriculum/department' });
   if (cf('curriculum_master') && (rf('curriculum_master') || permsLower.includes('curriculum.import_elective_choices'))) items.push({ key: 'elective_import', label: 'Elective Import', to: '/curriculum/elective-import' });
 
   if (permsLower.includes('curriculum.manage_elective_poll') || permsLower.includes('curriculum.choose_elective') || permsLower.includes('curriculum.hod_elective_manage') || rolesUpper.includes('IQAC') || entry.elective_poll) items.push({ key: 'elective_poll', label: 'Elective Poll', to: '/curriculum/elective-poll' });
@@ -481,7 +484,7 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
 
   if (cf('mentor_assign') && (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor'))) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
   if (cf('curriculum_student') && entry.student_curriculum_view) items.push({ key: 'student_curriculum_view', label: 'My Curriculum', to: '/curriculum/student' });
-  if (isIqac || rolesUpper.includes('ADMIN') || (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')))) items.push({ key: 'timetable_templates', label: 'Timetable Templates', to: '/iqac/timetable' });
+  if (isIqac || (cf('timetable_admin') && (flags.can_manage_timetable_templates || permsLower.includes('timetable.manage_templates')))) items.push({ key: 'timetable_templates', label: 'IQAC: Timetable Templates', to: '/iqac/timetable' });
   const canAssignTimetable = Boolean(flags.can_assign_timetable) || permsLower.includes('timetable.assign') || rolesUpper.includes('ADVISOR');
   if (cf('timetable_staff') && canAssignTimetable && entry.timetable_assignments) items.push({ key: 'timetable_assignments', label: 'Timetable Assignments', to: '/advisor/timetable' });
   if (cf('timetable_student') && flags.can_view_timetable && flags.is_student && permsLower.includes('timetable.view')) items.push({ key: 'student_timetable', label: 'My Timetable', to: '/student/timetable' });
@@ -554,11 +557,6 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   // Colleges management – Super Admin only
   if (isSuperAdmin && !items.some((item) => item.key === 'colleges')) {
     items.push({ key: 'colleges', label: 'Colleges', to: '/colleges' });
-  }
-
-  // College Setup / Administration for isolated College ADMIN
-  if (rolesUpper.includes('ADMIN') && user?.college?.id && !items.some((item) => item.key === 'college_administration')) {
-    items.push({ key: 'college_administration', label: 'Administration', to: `/colleges/${user.college.id}` });
   }
 
   // IDCSScan — available to SECURITY, IQAC, and ADMIN roles

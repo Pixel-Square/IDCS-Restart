@@ -1,4 +1,3 @@
-import SuperAdminLogin from "./pages/auth/SuperAdminLogin";
 import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
@@ -132,9 +131,6 @@ import RolesPage from './pages/roles/RolesPage';
 import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
 import RegulationsPage from './pages/colleges/RegulationsPage';
-import ProgramList from './pages/colleges/ProgramList';
-import CurriculumColumnsConfigPage from './pages/colleges/CurriculumColumnsConfigPage';
-import CourseListColleges from './pages/colleges/CourseList';
 import ForcePasswordChangeModal from './components/ForcePasswordChangeModal';
 
 type RoleObj = { name: string };
@@ -149,7 +145,6 @@ type Me = {
   profile_type?: string | null;
   profile?: any | null;
   must_change_password?: boolean;
-  college?: { id: number; code: string; name: string; short_name: string; address?: string };
 };
 
 export default function App() {
@@ -270,7 +265,7 @@ export default function App() {
       <Navbar user={user} />
       {user ? (
         <div className="flex">
-          <DashboardSidebar user={user} />
+          <DashboardSidebar />
           <main
             className={`flex-1 min-w-0 transition-all duration-300 pt-20 overflow-x-hidden ${
               // Sidebar is `fixed`, so using `ml-*` here would increase total page width
@@ -298,43 +293,31 @@ export default function App() {
                 />
                 <Route
                   path="/colleges/:id"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeDetailPage user={user} />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeDetailPage />} />}
                 />
                 <Route
                   path="/colleges/:id/users"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<CollegeUsersPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeUsersPage />} />}
                 />
                 <Route
                   path="/colleges/:id/features"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} requiredPermissions={['college.change_collegefeature']} element={<CollegeFeaturesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<CollegeFeaturesPage />} />}
                 />
                 <Route
-                  path="/colleges/:id/departments"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<DepartmentsPage />} />}
+                  path="/departments"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<DepartmentsPage />} />}
                 />
                 <Route
-                  path="/colleges/:id/batches"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<BatchesPage />} />}
+                  path="/batches"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<BatchesPage />} />}
                 />
                 <Route
-                  path="/colleges/:id/regulations"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RegulationsPage />} />}
-                />
-                
-                {/* Programs CRUD */}
-                <Route
-                  path="/colleges/:id/programs"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN', 'COLLEGE ADMIN']} element={<ProgramList />} />}
-                />
-                
-                {/* Courses CRUD */}
-                <Route
-                  path="/colleges/:id/courses"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN', 'COLLEGE ADMIN']} element={<CourseListColleges />} />}
+                  path="/regulations"
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RegulationsPage />} />}
                 />
                 <Route
                   path="/roles"
-                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN', 'ADMIN']} element={<RolesPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['SUPER_ADMIN']} element={<RolesPage />} />}
                 />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
@@ -473,10 +456,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<AcademicCalendarPage mode="student" />} />}
                 />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
-                <Route path="/colleges/:id/curriculum/master" element={<MasterList />} />
-                <Route path="/colleges/:id/curriculum/master/:masterId" element={<MasterEditor />} />
-                <Route path="/colleges/:id/curriculum/master/new" element={<MasterEditor />} />
-                <Route path="/colleges/:id/curriculum/department" element={<DeptList />} />
+                <Route path="/curriculum/master" element={<MasterList />} />
+                <Route path="/curriculum/master/:id" element={<MasterEditor />} />
+                <Route path="/curriculum/master/new" element={<MasterEditor />} />
+                <Route path="/curriculum/department" element={<DeptList />} />
 
                 <Route
                   path="/curriculum/elective-import"
@@ -556,7 +539,7 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/timetable"
-                  element={<ProtectedRoute user={user} requiredRoles={['ADMIN', 'IQAC']} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
                 />
                 <Route
                   path="/iqac/event-approvals"
@@ -822,7 +805,6 @@ export default function App() {
         <div className="pt-16">
           <Routes>
             <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-            <Route path="/login/super-admin" element={<React.Suspense fallback={<div>Loading...</div>}><SuperAdminLogin /></React.Suspense>} />
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>
