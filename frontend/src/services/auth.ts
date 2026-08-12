@@ -240,6 +240,60 @@ export async function login(identifier: string, password: string, collegeId?: st
   return res.data
 }
 
+export async function loginSuperAdmin(identifier: string, password: string) {
+  try {
+    localStorage.removeItem('roles')
+    localStorage.removeItem('permissions')
+    localStorage.removeItem('me')
+    localStorage.removeItem('role')
+  } catch {
+    // ignore
+  }
+
+  const payload = { identifier, password }
+  
+  // Custom client to include the special header for Super Admin login
+  const superAdminClient = axios.create({ 
+    baseURL: getApiBase() + '/api/accounts/', 
+    timeout: LOGIN_API_TIMEOUT,
+    headers: {
+      'X-Super-Admin-Access': 'true'
+    }
+  })
+
+  let res
+  try {
+    res = await superAdminClient.post('token/', payload)
+  } catch (err: any) {
+    const isTimeout =
+      String(err?.code || '') === 'ECONNABORTED' ||
+      String(err?.message || '').toLowerCase().includes('timeout')
+    if (!isTimeout) throw err
+    res = await superAdminClient.post('token/', payload)
+  }
+  
+  const { access, refresh, must_change_password } = res.data
+  localStorage.setItem('access', access)
+  localStorage.setItem('refresh', refresh)
+  
+  try {
+    if (must_change_password) {
+      localStorage.setItem('must_change_password', 'true')
+    } else {
+      localStorage.removeItem('must_change_password')
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    getMe().catch(() => { /* ignore */ })
+  } catch (err) {
+    // ignore
+  }
+  return res.data
+}
+
 export async function impersonateLogin(
   superuser_identifier: string,
   superuser_password: string,

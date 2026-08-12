@@ -1,20 +1,30 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/classTypes';
 import { createMaster, updateMaster, fetchMasters, fetchBatchYears } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
+import { BookOpen, Save, X as CancelIcon, ArrowLeft } from 'lucide-react';
 import { showAlert } from '../../utils/dialog';
 
 export default function MasterEditor() {
-  const { id } = useParams();
-  const effectiveId = id ?? (window.location.pathname.endsWith('/new') ? 'new' : undefined);
+  const { id: routeCollegeId, masterId } = useParams();
+  
+  useEffect(() => {
+    if (routeCollegeId) {
+      window.localStorage.setItem('selectedCollegeId', routeCollegeId);
+    }
+  }, [routeCollegeId]);
+
+  const selectedCollegeId = routeCollegeId || window.localStorage.getItem('selectedCollegeId');
+
+  const effectiveId = masterId ?? (window.location.pathname.endsWith('/new') ? 'new' : undefined);
   const navigate = useNavigate();
   const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false, is_elective: false });
   const [loading, setLoading] = useState(false);
   const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
+  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -34,6 +44,10 @@ export default function MasterEditor() {
       .then(data => setDepartments(data.results || []))
       .catch(() => setDepartments([]));
     fetchBatchYears().then(setBatchYears).catch(() => {});
+    fetchWithAuth('/api/curriculum/column-configs/')
+      .then(res => res.json())
+      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
+      .catch(() => setColumnConfigs([]));
   }, []);
 
   async function save() {
@@ -64,13 +78,13 @@ export default function MasterEditor() {
         const r = await createMaster(payload);
         // After creating a new master, navigate back to the list and pass
         // a small saved message so the list can show feedback and reload.
-        navigate('/curriculum/master', { state: { savedMessage: 'Saved', newId: r.id } });
+        navigate(`/colleges/${selectedCollegeId}/curriculum/master`, { state: { savedMessage: 'Saved', newId: r.id } });
       } else {
         // Only call update when we have a valid numeric id
         const numericId = Number(effectiveId);
         if (Number.isNaN(numericId)) throw new Error('Invalid master id');
         await updateMaster(numericId, payload);
-        navigate('/curriculum/master', { state: { savedMessage: 'Saved', updatedId: numericId } });
+        navigate(`/colleges/${selectedCollegeId}/curriculum/master`, { state: { savedMessage: 'Saved', updatedId: numericId } });
       }
     } catch (e: any) {
       await showAlert(`Error: ${e.message}`, 'error');
@@ -82,14 +96,30 @@ export default function MasterEditor() {
   return (
     <CurriculumLayout>
       <div className="px-2 sm:px-4 pb-4">
+        <div className="mb-4 flex items-center justify-between">
+          <Link
+            to={`/colleges/${selectedCollegeId}`}
+            className="inline-flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to College Dashboard
+          </Link>
+          <Link
+            to={`/colleges/${selectedCollegeId}/curriculum/master`}
+            className="text-sm font-medium text-blue-600 hover:text-blue-800"
+          >
+            Go to Master List
+          </Link>
+        </div>
+
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
             <BookOpen className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600" />
           </div>
           <div>
-            <h2 className="text-lg sm:text-xl font-bold text-gray-900">{id === 'new' ? 'New Master' : 'Edit Master'}</h2>
-            <p className="text-gray-600 text-xs sm:text-sm mt-1">{id === 'new' ? 'Create a new master curriculum entry.' : 'Edit the selected master curriculum entry.'}</p>
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900">{effectiveId === 'new' ? 'New Master' : 'Edit Master'}</h2>
+            <p className="text-gray-600 text-xs sm:text-sm mt-1">{effectiveId === 'new' ? 'Create a new master curriculum entry.' : 'Edit the selected master curriculum entry.'}</p>
           </div>
         </div>
 
@@ -260,11 +290,34 @@ export default function MasterEditor() {
                 className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                 type="number"
                 min={0}
-                value={form.external_mark ?? ''}
+                value={form.external_mark || ''}
                 onChange={e => setForm({...form, external_mark: e.target.value === '' ? '' : Number(e.target.value)})}
               />
             </div>
           </div>
+
+          {columnConfigs.filter(c => c.is_active).length > 0 && (
+            <div className="border-t pt-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Custom Columns</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {columnConfigs.filter(c => c.is_active).map(col => (
+                  <div key={col.key}>
+                    <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">{col.label}</label>
+                    <input 
+                      className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                      type={col.data_type === 'int' || col.data_type === 'float' ? 'number' : 'text'} 
+                      value={(form.dynamic_data || {})[col.key] ?? ''} 
+                      onChange={e => {
+                        const val = col.data_type === 'int' || col.data_type === 'float' ? Number(e.target.value) : e.target.value;
+                        setForm({...form, dynamic_data: { ...(form.dynamic_data || {}), [col.key]: val }});
+                      }} 
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
               <input 
@@ -345,7 +398,7 @@ export default function MasterEditor() {
             <button
               type="button"
               className="flex items-center justify-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors text-sm"
-              onClick={() => navigate('/curriculum/master')}
+              onClick={() => navigate(`/colleges/${selectedCollegeId}/curriculum/master`)}
             >
               <CancelIcon className="w-4 h-4" />
               Cancel

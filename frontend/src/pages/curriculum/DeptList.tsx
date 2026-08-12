@@ -3,7 +3,8 @@ import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow, fetchDeptRows } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2 } from 'lucide-react';
+import { useParams, Link } from 'react-router-dom';
+import { Edit, Check, X, Save, RefreshCw, Copy, Trash2, Building2, ArrowLeft } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
@@ -11,7 +12,15 @@ type Department = { id: number; code: string; name: string; short_name?: string 
 type QPType = { id: number; code: string; label: string };
 
 export default function DeptList() {
-  const selectedCollegeId = window.localStorage.getItem('selectedCollegeId');
+  const { id: routeCollegeId } = useParams<{ id: string }>();
+  
+  useEffect(() => {
+    if (routeCollegeId) {
+      window.localStorage.setItem('selectedCollegeId', routeCollegeId);
+    }
+  }, [routeCollegeId]);
+
+  const selectedCollegeId = routeCollegeId || window.localStorage.getItem('selectedCollegeId');
   const draftStorageKey = 'curriculum.dept.drafts.v1';
   const readDrafts = (): Record<number, any> => {
     try {
@@ -41,6 +50,7 @@ export default function DeptList() {
   const [refreshing, setRefreshing] = useState(false);
   const [allDepartments, setAllDepartments] = useState<Department[]>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
+  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
@@ -71,6 +81,10 @@ export default function DeptList() {
       .catch(console.error)
       .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
+    fetchWithAuth('/api/curriculum/column-configs/')
+      .then(res => res.json())
+      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
+      .catch(() => setColumnConfigs([]));
   }, []);
 
   useEffect(() => {
@@ -484,12 +498,15 @@ export default function DeptList() {
   return (
     <CurriculumLayout>
       <div className="px-4 pb-6">
-        {selectedCollegeId && (
-          <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 mb-6 flex items-center gap-2 text-indigo-800">
-            <Building2 className="w-5 h-5 text-indigo-600" />
-            <span className="text-sm font-medium">Viewing curriculum scoped to College ID: {selectedCollegeId}</span>
-          </div>
-        )}
+        <div className="mb-4">
+          <Link
+            to={`/colleges/${selectedCollegeId}`}
+            className="inline-flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to College Dashboard
+          </Link>
+        </div>
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -636,6 +653,9 @@ export default function DeptList() {
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">EXT</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">TTL</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Hours</th>
+              {columnConfigs.filter(c => c.is_active).map(c => (
+                <th key={c.key} className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
+              ))}
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">QP Type</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Editable</th>
               <th className="px-3 py-3 text-left text-xs font-bold text-indigo-900 uppercase tracking-wider whitespace-nowrap">Actions</th>
@@ -704,6 +724,16 @@ export default function DeptList() {
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => updateRowValue(r.id, { external_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => updateRowValue(r.id, { total_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => updateRowValue(r.id, { total_hours: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    {columnConfigs.filter(c => c.is_active).map(c => (
+                      <td key={c.key} className="px-3 py-2 whitespace-nowrap">
+                        <input
+                          type={c.data_type === 'int' || c.data_type === 'float' ? 'number' : 'text'}
+                          value={(r.dynamic_data || {})[c.key] ?? ''}
+                          onChange={e => updateRowValue(r.id, { dynamic_data: { ...(r.dynamic_data || {}), [c.key]: c.data_type === 'int' || c.data_type === 'float' ? Number(e.target.value) : e.target.value } })}
+                          className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        />
+                      </td>
+                    ))}
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
                         value={r.question_paper_type || ''}
@@ -757,6 +787,9 @@ export default function DeptList() {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.external_mark ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
+                    {columnConfigs.filter(c => c.is_active).map(c => (
+                      <td key={c.key} className="px-3 py-2.5 whitespace-nowrap text-sm">{(r.dynamic_data || {})[c.key] ?? '-'}</td>
+                    ))}
                     <td className="px-3 py-2.5 whitespace-nowrap">
                       <span className="text-sm">{r.question_paper_type || '-'}</span>
                     </td>
@@ -823,7 +856,7 @@ export default function DeptList() {
                 <td className="px-3 py-3 text-sm text-gray-900">{totals.p}</td>
                 <td className="px-3 py-3 text-sm text-gray-900">{totals.s}</td>
                 <td className="px-3 py-3 text-sm text-gray-900">{totals.c}</td>
-                <td colSpan={7} className="px-3 py-3"></td>
+                <td colSpan={7 + columnConfigs.filter(c => c.is_active).length} className="px-3 py-3"></td>
               </tr>
             )}
           </tbody>

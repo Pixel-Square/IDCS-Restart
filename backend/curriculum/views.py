@@ -5,8 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.core.paginator import Paginator, EmptyPage
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType
-from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType, CurriculumColumnConfig
+from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer, CurriculumColumnConfigSerializer
 from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
 from academics.utils import get_user_effective_departments
@@ -35,6 +35,24 @@ def custom_exception_handler(exc, context):
         response.data['detail'] = str(exc)
 
     return response
+
+
+class CurriculumColumnConfigViewSet(viewsets.ModelViewSet):
+    queryset = CurriculumColumnConfig.objects.all().order_by('sort_order', 'key')
+    serializer_class = CurriculumColumnConfigSerializer
+    permission_classes = [IsAuthenticated] # Or restrict to college admin/IQAC
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        college_id = self.request.query_params.get('college_id') or getattr(self.request, 'college_id', None)
+        if college_id:
+            qs = qs.filter(college_id=college_id)
+        return qs
+
+    def perform_create(self, serializer):
+        college_id = self.request.query_params.get('college_id') or getattr(self.request, 'college_id', None)
+        serializer.save(college_id=college_id)
+
 
 class CurriculumMasterViewSet(viewsets.ModelViewSet):
     # Order master curriculum entries by semester (ascending) so subjects

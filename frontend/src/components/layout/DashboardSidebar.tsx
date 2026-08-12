@@ -396,9 +396,6 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
    */
   const rf = (code: string): boolean => roleFeatureCodes.includes(code);
 
-  // Curriculum master/department: require explicit curriculum permissions, role feature, OR entry point
-  if (cf('curriculum_master') && (rf('curriculum_master') || (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)))) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
-  if (cf('curriculum_dept') && (rf('curriculum_dept') || (entry.department_curriculum && (permsLower.some(p => p.includes('curriculum')) || entry.department_curriculum)))) items.push({ key: 'department_curriculum', label: 'Department Curriculum', to: '/curriculum/department' });
   if (cf('curriculum_master') && (rf('curriculum_master') || permsLower.includes('curriculum.import_elective_choices'))) items.push({ key: 'elective_import', label: 'Elective Import', to: '/curriculum/elective-import' });
 
   if (permsLower.includes('curriculum.manage_elective_poll') || permsLower.includes('curriculum.choose_elective') || permsLower.includes('curriculum.hod_elective_manage') || rolesUpper.includes('IQAC') || entry.elective_poll) items.push({ key: 'elective_poll', label: 'Elective Poll', to: '/curriculum/elective-poll' });

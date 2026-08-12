@@ -1,18 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { fetchMasters, fetchBatchYears, createMaster, fetchDeptRows, Master, deleteMaster } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams, Link } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
-import { Link } from 'react-router-dom';
-import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2, Building2 } from 'lucide-react';
+
+import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2, Building2, ArrowLeft, Settings2 } from 'lucide-react';
+import ColumnConfigModal from '../../components/curriculum/ColumnConfigModal';
 import { showAlert, showConfirm } from '../../utils/dialog';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 export default function MasterList() {
-  const selectedCollegeId = window.localStorage.getItem('selectedCollegeId');
+  const { id: routeCollegeId } = useParams<{ id: string }>();
+  
+  useEffect(() => {
+    if (routeCollegeId) {
+      window.localStorage.setItem('selectedCollegeId', routeCollegeId);
+    }
+  }, [routeCollegeId]);
+
+  const selectedCollegeId = routeCollegeId || window.localStorage.getItem('selectedCollegeId');
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isColumnConfigOpen, setIsColumnConfigOpen] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
@@ -26,6 +36,7 @@ export default function MasterList() {
   const propagateMessageTimer = useRef<number | null>(null);
   const [deptList, setDeptList] = useState<Array<{ id: number; label: string }>>([]);
   const [batchDeptExisting, setBatchDeptExisting] = useState<Record<number, number[]>>({});
+  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
   const userPerms = (() => {
     try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[]; } catch { return []; }
   })();
@@ -73,6 +84,10 @@ export default function MasterList() {
       .catch(err => console.error(err))
       .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
+    fetchWithAuth('/api/curriculum/column-configs/')
+      .then(res => res.json())
+      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
+      .catch(() => setColumnConfigs([]));
   }, []);
 
   useEffect(() => {
@@ -372,6 +387,16 @@ export default function MasterList() {
           </div>
         )}
         {/* Header */}
+        <div className="mb-4">
+          <Link
+            to={`/colleges/${selectedCollegeId}`}
+            className="inline-flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to College Dashboard
+          </Link>
+        </div>
+
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
@@ -397,11 +422,27 @@ export default function MasterList() {
                 const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
                 if (isIQAC) return (
                   <Link
-                    to="/curriculum/master/new"
+                    to={`/colleges/${selectedCollegeId}/curriculum/master/new`}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-all duration-200 shadow-sm hover:shadow-md"
                   >
                     New Master
                   </Link>
+                );
+              } catch (e) {}
+              return null;
+            })()}
+            {(() => {
+              try {
+                const roles = JSON.parse(localStorage.getItem('roles') || '[]');
+                const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
+                if (isIQAC) return (
+                  <button
+                    onClick={() => setIsColumnConfigOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all duration-200 shadow-sm hover:shadow-md"
+                  >
+                    <Settings2 className="w-4 h-4" />
+                    <span className="hidden sm:inline">Configure Columns</span>
+                  </button>
                 );
               } catch (e) {}
               return null;
@@ -511,6 +552,9 @@ export default function MasterList() {
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">INT</th>
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">EXT</th>
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">TTL</th>
+                  {columnConfigs.filter(c => c.is_active).map(c => (
+                    <th key={c.key} className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">{c.label}</th>
+                  ))}
                   <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Depts</th>
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Editable</th>
                   <th className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider whitespace-nowrap">Actions</th>
@@ -546,6 +590,9 @@ export default function MasterList() {
                       <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.internal_mark ?? '-'}</td>
                       <td className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{m.external_mark ?? '-'}</td>
                       <td className="px-3 py-3 text-sm text-center text-gray-900 font-semibold whitespace-nowrap">{m.total_mark ?? '-'}</td>
+                      {columnConfigs.filter(c => c.is_active).map(c => (
+                        <td key={c.key} className="px-3 py-3 text-sm text-center text-gray-900 whitespace-nowrap">{(m.dynamic_data || {})[c.key] ?? '-'}</td>
+                      ))}
                       <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">
                         {m.for_all_departments ? 'ALL' : 
                           (m.departments_display && m.departments_display.length > 0) ?
@@ -561,7 +608,7 @@ export default function MasterList() {
                       <td className="px-3 py-3 whitespace-nowrap">
                         <div className="flex items-center justify-center gap-2">
                           <Link
-                            to={`/curriculum/master/${m.id}`}
+                            to={`/colleges/${selectedCollegeId}/curriculum/master/${m.id}`}
                             className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                             title="Edit"
                           >
@@ -598,14 +645,15 @@ export default function MasterList() {
                   ))
                 )}
                 {filteredData.length > 0 && (
-                  <tr className="bg-gray-50 font-semibold">
-                    <td colSpan={6} className="px-3 py-3 text-sm text-gray-700">Total</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.l}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.t}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.p}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.s}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.c}</td>
-                    <td colSpan={6} className="px-3 py-3"></td>
+                  <tr>
+                    <td colSpan={6} className="px-3 py-3 text-right font-bold text-gray-900">Total</td>
+                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.l}</td>
+                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.t}</td>
+                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.p}</td>
+                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.s}</td>
+                    <td className="px-3 py-3 text-center font-bold text-gray-900">{totals.c}</td>
+                    <td colSpan={3 + columnConfigs.filter(c => c.is_active).length} className="bg-gray-50"></td>
+                    <td colSpan={3} className="bg-gray-50"></td>
                   </tr>
                 )}
               </tbody>
@@ -682,6 +730,18 @@ export default function MasterList() {
         itemType="Master Curriculum Subject"
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteMaster}
+      />
+
+      <ColumnConfigModal 
+        isOpen={isColumnConfigOpen} 
+        onClose={() => setIsColumnConfigOpen(false)} 
+        onUpdated={() => {
+          // Re-fetch column configs to reflect changes
+          fetchWithAuth('/api/curriculum/column-configs/')
+            .then(res => res.json())
+            .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
+            .catch(() => setColumnConfigs([]));
+        }} 
       />
 
     </CurriculumLayout>

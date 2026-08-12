@@ -605,6 +605,12 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         if not getattr(user, 'is_active', True):
             raise serializers.ValidationError('User account is disabled.')
 
+        # Ensure superuser can only login if the custom header is present
+        if getattr(user, 'is_superuser', False):
+            request = self.context.get('request')
+            if not request or request.META.get('HTTP_X_SUPER_ADMIN_ACCESS') != 'true':
+                raise serializers.ValidationError(invalid_msg)
+
         # Check for inactive or debarred students
         # NOTE: `hasattr(user, 'student_profile')` is unsafe for OneToOne reverse
         # relations because it can raise RelatedObjectDoesNotExist (500). Use

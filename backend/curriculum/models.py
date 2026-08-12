@@ -180,6 +180,25 @@ def _normalize_assessment_keys(value) -> list[str]:
     return deduped
 
 
+class CurriculumColumnConfig(models.Model):
+    college = models.ForeignKey('college.College', on_delete=models.CASCADE, related_name='curriculum_columns')
+    key = models.CharField(max_length=64, help_text="JSON key, e.g. 'credits'")
+    label = models.CharField(max_length=64, help_text="Display label, e.g. 'Credits (C)'")
+    data_type = models.CharField(max_length=16, choices=[('int', 'Integer'), ('str', 'Text'), ('float', 'Float')], default='str')
+    is_active = models.BooleanField(default=True)
+    is_core = models.BooleanField(default=False, help_text="Core columns cannot be deleted, only hidden")
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        verbose_name = 'Curriculum Column Config'
+        verbose_name_plural = 'Curriculum Column Configs'
+        unique_together = ('college', 'key')
+        ordering = ('sort_order', 'key')
+
+    def __str__(self):
+        return f"{self.college} - {self.label} ({self.key})"
+
+
 
 class CurriculumMaster(models.Model):
     regulation = models.CharField(max_length=32)
@@ -230,6 +249,7 @@ class CurriculumMaster(models.Model):
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    dynamic_data = models.JSONField(default=dict, blank=True, help_text="Dynamic schema per-college configuration")
 
     class Meta:
         verbose_name = 'Curriculum Master'
@@ -348,6 +368,7 @@ class CurriculumDepartment(models.Model):
     overridden = models.BooleanField(default=False)
     approval_status = models.CharField(max_length=16, choices=APPROVAL_STATUS_CHOICES, default=APPROVAL_APPROVED)
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='approved_curriculum_rows')
+    dynamic_data = models.JSONField(default=dict, blank=True, help_text="Dynamic schema per-college configuration")
     approved_at = models.DateTimeField(null=True, blank=True)
 
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)

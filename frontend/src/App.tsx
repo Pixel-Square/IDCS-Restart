@@ -1,3 +1,4 @@
+import SuperAdminLogin from "./pages/auth/SuperAdminLogin";
 import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
@@ -132,6 +133,7 @@ import DepartmentsPage from './pages/colleges/DepartmentsPage';
 import BatchesPage from './pages/colleges/BatchesPage';
 import RegulationsPage from './pages/colleges/RegulationsPage';
 import ProgramList from './pages/colleges/ProgramList';
+import CurriculumColumnsConfigPage from './pages/colleges/CurriculumColumnsConfigPage';
 import CourseListColleges from './pages/colleges/CourseList';
 import ForcePasswordChangeModal from './components/ForcePasswordChangeModal';
 
@@ -471,10 +473,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<AcademicCalendarPage mode="student" />} />}
                 />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
-                <Route path="/curriculum/master" element={<MasterList />} />
-                <Route path="/curriculum/master/:id" element={<MasterEditor />} />
-                <Route path="/curriculum/master/new" element={<MasterEditor />} />
-                <Route path="/curriculum/department" element={<DeptList />} />
+                <Route path="/colleges/:id/curriculum/master" element={<MasterList />} />
+                <Route path="/colleges/:id/curriculum/master/:masterId" element={<MasterEditor />} />
+                <Route path="/colleges/:id/curriculum/master/new" element={<MasterEditor />} />
+                <Route path="/colleges/:id/curriculum/department" element={<DeptList />} />
 
                 <Route
                   path="/curriculum/elective-import"
@@ -820,6 +822,7 @@ export default function App() {
         <div className="pt-16">
           <Routes>
             <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+            <Route path="/login/super-admin" element={<React.Suspense fallback={<div>Loading...</div>}><SuperAdminLogin /></React.Suspense>} />
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>
