@@ -750,6 +750,42 @@ class CollegeUserDeleteView(APIView):
 
         return Response(status=204)
 
+class CollegeUserRolesView(APIView):
+    """PUT /api/college/colleges/<college_id>/users/<user_id>/roles/"""
+    permission_classes = [IsCollegeAdminOrSuperAdmin]
+
+    def put(self, request, pk, user_id):
+        college = get_object_or_404(College, pk=pk)
+        self.check_object_permissions(request, college)
+        user = get_object_or_404(User, pk=user_id)
+        
+        # Verify user belongs to college
+        sp = getattr(user, 'student_profile', None)
+        st = getattr(user, 'staff_profile', None)
+        
+        if not (sp and sp.college_id == college.id) and not (st and st.college_id == college.id):
+            return Response({"detail": "User does not belong to this college."}, status=status.HTTP_400_BAD_REQUEST)
+
+        role_names = request.data.get('roles', [])
+        if not isinstance(role_names, list):
+            return Response({"detail": "Roles must be a list of strings."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        from accounts.models import Role
+        roles = []
+        for name in role_names:
+            clean_name = str(name).strip()
+            if not clean_name:
+                continue
+            role_objs = list(Role.objects.filter(name__iexact=clean_name))
+            if role_objs:
+                primary_role = next((r for r in role_objs if r.name == clean_name.upper()), role_objs[0])
+                roles.append(primary_role)
+        
+        user.roles.set(roles)
+        
+        return Response({"detail": "Roles updated successfully.", "roles": [r.name for r in roles]})
+
+
 
 # ---------------------------------------------------------------------------
 # College Features — List & Bulk Update

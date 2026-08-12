@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Search, Trash2, X, Check, Users, GraduationCap, UserCheck, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Trash2, X, Check, Users, GraduationCap, UserCheck, ChevronLeft, ChevronRight, Shield } from 'lucide-react';
 import ConfirmPasswordDeleteModal from '../../components/ConfirmPasswordDeleteModal';
 
 interface CollegeUser {
@@ -44,6 +44,10 @@ export default function CollegeUsersList({ collegeId }: Props) {
   const [page, setPage] = useState(1);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [roles, setRoles] = useState<string[]>([]);
+  
+  const [rolesModalUser, setRolesModalUser] = useState<CollegeUser | null>(null);
+  const [editingRoles, setEditingRoles] = useState<string[]>([]);
+  const [rolesSaving, setRolesSaving] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -87,6 +91,28 @@ export default function CollegeUsersList({ collegeId }: Props) {
       fetchUsers();
     } catch (e: any) {
       alert(e.message);
+    }
+  };
+
+  const handleSaveRoles = async () => {
+    if (!rolesModalUser) return;
+    setRolesSaving(true);
+    try {
+      const res = await fetchWithAuth(`/api/college/colleges/${collegeId}/users/${rolesModalUser.id}/roles/`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: editingRoles }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to update roles');
+      }
+      setRolesModalUser(null);
+      fetchUsers();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setRolesSaving(false);
     }
   };
 
@@ -216,13 +242,25 @@ export default function CollegeUsersList({ collegeId }: Props) {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => setDeleteConfirm(u.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remove from college"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => {
+                            setRolesModalUser(u);
+                            setEditingRoles(u.roles.map(r => r.toUpperCase()));
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Edit Roles"
+                        >
+                          <Shield className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirm(u.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Remove from college"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -279,6 +317,77 @@ export default function CollegeUsersList({ collegeId }: Props) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Roles Modal */}
+      {rolesModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => !rolesSaving && setRolesModalUser(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Manage Roles</h2>
+                <p className="text-sm text-gray-500">{[rolesModalUser.first_name, rolesModalUser.last_name].filter(Boolean).join(' ') || rolesModalUser.username}</p>
+              </div>
+              <button 
+                onClick={() => setRolesModalUser(null)} 
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                disabled={rolesSaving}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="max-h-64 overflow-y-auto pr-2 mb-6 space-y-2">
+              {roles.length === 0 ? (
+                <p className="text-sm text-gray-500">No roles available.</p>
+              ) : (
+                roles.map(r => {
+                  const isChecked = editingRoles.some(er => er.toUpperCase() === r.toUpperCase());
+                  return (
+                    <label key={r} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const upperR = r.toUpperCase();
+                          if (e.target.checked) {
+                            setEditingRoles(prev => Array.from(new Set([...prev.map(p => p.toUpperCase()), upperR])));
+                          } else {
+                            setEditingRoles(prev => prev.filter(role => role.toUpperCase() !== upperR));
+                          }
+                        }}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">{r}</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRolesModalUser(null)}
+                disabled={rolesSaving}
+                className="px-4 py-2.5 text-sm font-medium text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveRoles}
+                disabled={rolesSaving}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {rolesSaving ? (
+                  <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Save Roles
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

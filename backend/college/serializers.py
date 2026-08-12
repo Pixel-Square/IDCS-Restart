@@ -150,7 +150,8 @@ class CollegeUserSerializer(serializers.Serializer):
 
     def get_roles(self, obj):
         try:
-            return list(obj.user.roles.values_list('name', flat=True))
+            raw_roles = obj.user.roles.values_list('name', flat=True)
+            return sorted(list(set(str(r).strip().upper() for r in raw_roles if r)))
         except Exception:
             return []
 

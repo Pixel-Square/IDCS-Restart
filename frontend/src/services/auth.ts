@@ -250,26 +250,19 @@ export async function loginSuperAdmin(identifier: string, password: string) {
     // ignore
   }
 
-  const payload = { identifier, password }
-  
-  // Custom client to include the special header for Super Admin login
-  const superAdminClient = axios.create({ 
-    baseURL: getApiBase() + '/api/accounts/', 
-    timeout: LOGIN_API_TIMEOUT,
-    headers: {
-      'X-Super-Admin-Access': 'true'
-    }
-  })
+  // The sa_key is validated server-side to ensure only the dedicated
+  // super admin login page can authenticate the admin@example.com account.
+  const payload = { identifier, password, sa_key: 'IDCS3_SA_2026_SECURE' }
 
   let res
   try {
-    res = await superAdminClient.post('token/', payload)
+    res = await publicClient.post('token/', payload, { timeout: LOGIN_API_TIMEOUT })
   } catch (err: any) {
     const isTimeout =
       String(err?.code || '') === 'ECONNABORTED' ||
       String(err?.message || '').toLowerCase().includes('timeout')
     if (!isTimeout) throw err
-    res = await superAdminClient.post('token/', payload)
+    res = await publicClient.post('token/', payload, { timeout: LOGIN_API_TIMEOUT })
   }
   
   const { access, refresh, must_change_password } = res.data

@@ -6,6 +6,7 @@ from .views import (
     CollegeUserImportTemplateView,
     CollegeUserImportView,
     CollegeUserDeleteView,
+    CollegeUserRolesView,
     CollegeFeaturesListView,
     CollegeFeatureToggleView,
     DepartmentListCreateView,
@@ -33,6 +34,7 @@ urlpatterns = [
     path('colleges/<int:pk>/users/import-template/', CollegeUserImportTemplateView.as_view(), name='college-users-import-template'),
     path('colleges/<int:pk>/users/import/', CollegeUserImportView.as_view(), name='college-users-import'),
     path('colleges/<int:pk>/users/<int:user_id>/', CollegeUserDeleteView.as_view(), name='college-user-delete'),
+    path('colleges/<int:pk>/users/<int:user_id>/roles/', CollegeUserRolesView.as_view(), name='college-user-roles'),
     path('colleges/<int:pk>/features/', CollegeFeaturesListView.as_view(), name='college-features-list'),
     path('colleges/<int:pk>/features/<str:code>/', CollegeFeatureToggleView.as_view(), name='college-feature-toggle'),
     # Departments CRUD

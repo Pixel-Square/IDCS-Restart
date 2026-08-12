@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
 import Navbar from "./components/navigation/Navbar";
+import SuperAdminLogin from "./pages/auth/SuperAdminLogin";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
@@ -805,6 +806,7 @@ export default function App() {
         <div className="pt-16">
           <Routes>
             <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
+            <Route path="/login/super-admin" element={<SuperAdminLogin />} />
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>

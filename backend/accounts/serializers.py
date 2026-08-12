@@ -595,6 +595,19 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         if not getattr(user, 'is_active', True):
             raise serializers.ValidationError('User account is disabled.')
 
+        # ── Super Admin isolation ──────────────────────────────────────────
+        # The designated super admin account (admin@example.com) can ONLY
+        # authenticate through the dedicated /login/super-admin page which
+        # sends a secret access key in the request body.  This does NOT
+        # affect Django admin login at db3.krgi.co.in (separate auth flow).
+        _SUPER_ADMIN_EMAIL = 'admin@example.com'
+        _SUPER_ADMIN_ACCESS_KEY = 'IDCS3_SA_2026_SECURE'
+
+        if str(getattr(user, 'email', '') or '').strip().lower() == _SUPER_ADMIN_EMAIL:
+            sa_key = str(self.initial_data.get('sa_key', '') or '').strip()
+            if sa_key != _SUPER_ADMIN_ACCESS_KEY:
+                raise serializers.ValidationError(invalid_msg)
+
         # Check for inactive or debarred students
         # NOTE: `hasattr(user, 'student_profile')` is unsafe for OneToOne reverse
         # relations because it can raise RelatedObjectDoesNotExist (500). Use
