@@ -188,3 +188,21 @@ urlpatterns += [
     path('visual-admin/export/', visual_admin_export, name='visual-admin-export'),
     path('visual-admin/import/', visual_admin_import, name='visual-admin-import'),
 ]
+
+
+# Academic Visuals Engine Endpoints
+from .academic_visuals_views import (
+    AcademicDashboardListView,
+    AcademicDashboardDetailView,
+    AcademicVisualDynamicOptionsView,
+    AcademicDashboardQueryView,
+)
+
+urlpatterns += [
+    path('visuals/dashboards/', AcademicDashboardListView.as_view(), name='academic-visuals-dashboards-list'),
+    path('visuals/dashboards/<str:dash_id>/', AcademicDashboardDetailView.as_view(), name='academic-visuals-dashboard-detail'),
+    path('visuals/dynamic-options/', AcademicVisualDynamicOptionsView.as_view(), name='academic-visuals-dynamic-options'),
+    path('visuals/dashboard-query/', AcademicDashboardQueryView.as_view(), name='academic-visuals-dashboard-query'),
+]
+
+

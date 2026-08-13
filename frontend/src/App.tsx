@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
@@ -125,6 +125,8 @@ const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/Aca
 // Visual Admin
 const VisualAdminDashboard = safeLazy(() => import('./pages/visual_admin/VisualAdminDashboard'), 'VisualAdminDashboard');
 const VisualAdminURLsPage = safeLazy(() => import('./pages/visual_admin/VisualAdminURLsPage'), 'VisualAdminURLsPage');
+const AcademicVisualsPage = safeLazy(() => import('./pages/visual_admin/AcademicVisualsPage'), 'AcademicVisualsPage');
+
 const AcV2PublishControlPage = safeLazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'), 'PublishControlPage');
 const AcV2ExamManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/ExamManagementPage'), 'ExamManagementPage');
 const AcV2QpPatternEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'), 'QpPatternEditorPage');
@@ -1232,6 +1234,20 @@ export default function App() {
                 />
                 {/* ── Visual Admin Routes ─────────────────────────────── */}
                 <Route
+                  path="/academic-visuals"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['VISUAL_ADMIN']}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcademicVisualsPage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
                   path="/visual-admin"
                   element={
                     <ProtectedRoute
@@ -1259,6 +1275,7 @@ export default function App() {
                     />
                   }
                 />
+
                 {/* ────────────────────────────────────────────────────────────── */}
 
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />

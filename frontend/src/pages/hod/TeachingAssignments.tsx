@@ -579,17 +579,7 @@ export default function TeachingAssignmentsPage(){
                   .catch(() => [])
               )
             );
-            // Merge, deduplicating by ID (keep cross-dept version when both exist)
-            const mergedMap = new Map<number, any>();
-            allElectiveFetches.forEach(arr => {
-              arr.forEach((elective: any) => {
-                const existing = mergedMap.get(elective.id);
-                if (!existing || (!existing.is_cross_department && elective.is_cross_department)) {
-                  mergedMap.set(elective.id, elective);
-                }
-              });
-            });
-            electiveOptionsData = Array.from(mergedMap.values());
+            electiveOptionsData = allElectiveFetches.flat();
           } else {
             const electRes = await fetchWithAuth('/api/curriculum/elective/?page_size=0');
             if (electRes.ok) {
@@ -627,10 +617,8 @@ export default function TeachingAssignmentsPage(){
         // appear in the Elective Subject Assignments section.
         const allSharedRows = Object.values(sharedCurriculumMap).flat()
         const sharedElectiveRows = allSharedRows.filter((c: any) => c.is_elective)
-        const existElectiveIds = new Set(electiveParentsData.map((p: any) => p.id))
-        const newSharedElectiveParents = sharedElectiveRows.filter((c: any) => !existElectiveIds.has(c.id))
-        if (newSharedElectiveParents.length > 0) {
-          electiveParentsData = [...electiveParentsData, ...newSharedElectiveParents]
+        if (sharedElectiveRows.length > 0) {
+          electiveParentsData = [...electiveParentsData, ...sharedElectiveRows]
           setElectiveParents(electiveParentsData)
         }
       }
@@ -1960,10 +1948,9 @@ export default function TeachingAssignmentsPage(){
                         e.regulation === parent.regulation &&
                         e.semester === parent.semester
                       );
-                      // Deduplicate: cross-dept electives shouldn't appear in own list
                       const allElectives = [
                         ...ownElectives,
-                        ...crossDeptElectives.filter(ce => !ownElectives.some(oe => oe.id === ce.id))
+                        ...crossDeptElectives
                       ];
                       if (allElectives.length === 0) {
                         return <div className="text-gray-400 text-sm py-2">No elective subjects added yet.</div>;

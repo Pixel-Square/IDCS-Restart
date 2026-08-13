@@ -6985,8 +6985,6 @@ def list_uploads(request):
     return Response({'files': files_list})
 
 
-<<<<<<< HEAD
-=======
 def _normalize_cdap_template_key(raw_key: str, name: str) -> str:
     candidate = str(raw_key or '').strip()
     if candidate:
@@ -7072,7 +7070,6 @@ def cdap_template_detail(request, template_id):
     return Response(serializer.data)
 
 
->>>>>>> d12832d (n5)
 @api_view(['GET', 'PUT'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
