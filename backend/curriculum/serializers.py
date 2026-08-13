@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, ElectivePoll, ElectivePollSubject, CurriculumColumnConfig, CurriculumFieldSchema
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, ElectivePoll, ElectivePollSubject, CurriculumColumnConfig, CurriculumFieldSchema, Regulation
 from academics.models import Department, Semester, Batch, BatchYear, AcademicYear, StaffProfile
 
 
@@ -88,16 +88,43 @@ class CurriculumMasterSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_by', 'created_at', 'updated_at')
     
     def validate(self, attrs):
+        request = self.context.get('request')
+        college_id = None
+        try:
+            from college.tenant import get_current_college_id
+            college_id = get_current_college_id()
+        except Exception:
+            college_id = None
+
+        if college_id is None and request is not None:
+            raw_cid = getattr(request, 'college_id', None) or request.query_params.get('college_id')
+            try:
+                college_id = int(raw_cid) if raw_cid not in (None, '') else None
+            except (TypeError, ValueError):
+                college_id = None
+
+        regulation_code = (attrs.get('regulation') or getattr(self.instance, 'regulation', '') or '').strip()
+        if regulation_code:
+            reg_qs = Regulation.objects.filter(code=regulation_code)
+            if college_id is not None:
+                reg_qs = reg_qs.filter(college_id=college_id)
+            elif self.instance and getattr(self.instance, 'college_id', None) is not None:
+                reg_qs = reg_qs.filter(college_id=self.instance.college_id)
+
+            if not reg_qs.exists():
+                raise serializers.ValidationError({
+                    'regulation': f'Regulation "{regulation_code}" is not configured for this college. Please create it in Regulations first.'
+                })
+
         # For create operations, semester is required - try to get it from semester_id or infer from semester number
         if not self.instance and 'semester' not in attrs:
             # Check if there's a semester number we can use
-            request = self.context.get('request')
             if request and request.data:
                 sem_num = request.data.get('semester')
                 if sem_num:
                     try:
                         # Get or create the Semester object
-                        sem_obj, _ = Semester.objects.get_or_create(number=int(sem_num))
+                        sem_obj, _ = Semester.objects.get_or_create(number=int(sem_num), college_id=college_id)
                         attrs['semester'] = sem_obj
                     except (ValueError, TypeError):
                         pass

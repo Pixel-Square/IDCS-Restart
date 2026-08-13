@@ -212,10 +212,18 @@ class Semester(models.Model):
     number = models.PositiveSmallIntegerField()
 
     class Meta:
-        unique_together = (('number',),)
+        unique_together = (('college', 'number'),)
 
     def __str__(self):
         return f"Sem {self.number}"
+
+    def save(self, *args, **kwargs):
+        try:
+            from college.tenant import auto_assign_college
+            auto_assign_college(self)
+        except Exception:
+            pass
+        super().save(*args, **kwargs)
 
 
 class Section(models.Model):
@@ -287,7 +295,8 @@ class Section(models.Model):
                 offset = 1 if (ay.parity or '').upper() == 'ODD' else 2
                 sem_number = delta * 2 + offset
                 if sem_number and sem_number > 0:
-                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                    sem_college_id = self.college_id or getattr(batch, 'college_id', None)
+                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number, college_id=sem_college_id)
                     self.semester = sem_obj
             except Exception:
                 # fail silently and continue saving without semester

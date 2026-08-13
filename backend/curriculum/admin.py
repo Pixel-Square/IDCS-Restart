@@ -185,6 +185,11 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
             created = 0
             updated = 0
             errors = []
+            try:
+                from college.tenant import get_current_college_id
+                current_college_id = get_current_college_id()
+            except Exception:
+                current_college_id = None
             with transaction.atomic():
                 for idx, row in enumerate(reader, start=1):
                     try:
@@ -199,7 +204,7 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
                             raise ValueError('regulation and semester required')
                         # resolve Semester instance
                         from academics.models import Semester
-                        semester_obj, _ = Semester.objects.get_or_create(number=sem_num)
+                        semester_obj, _ = Semester.objects.get_or_create(number=sem_num, college_id=current_college_id)
 
                         # find existing by regulation+semester + either course_code (preferred)
                         # or, when course_code is missing, match by course_name (case-insensitive)
@@ -207,14 +212,14 @@ class CurriculumMasterAdmin(admin.ModelAdmin):
                         cname = (row.get('course_name') or '').strip() or None
                         instance = None
                         if cc:
-                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code=cc).first()
+                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code=cc, college_id=current_college_id).first()
                         else:
                             # If course_code is not provided, try to match a master with NULL course_code
                             # and the same course_name. If course_name is also missing, don't match to avoid
                             # repeatedly updating the first row for a regulation+semester.
                             if cname:
                                 instance = CurriculumMaster.objects.filter(
-                                    regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname
+                                    regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname, college_id=current_college_id
                                 ).first()
                             else:
                                 instance = None

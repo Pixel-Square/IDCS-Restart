@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.core.paginator import Paginator, EmptyPage
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType, CurriculumColumnConfig, CurriculumFieldSchema
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, QuestionPaperType, CurriculumColumnConfig, CurriculumFieldSchema, Regulation
 from .serializers import CurriculumMasterSerializer, CurriculumDepartmentSerializer, ElectiveSubjectSerializer, ElectiveChoiceSerializer, DepartmentGroupSerializer, CurriculumColumnConfigSerializer, CurriculumFieldSchemaSerializer
 from .permissions import IsIQACOrReadOnly, IsIQACOnly
 from accounts.utils import get_user_permissions
@@ -347,6 +347,12 @@ class MasterImportView(APIView):
         from academics.models import Department
 
         with transaction.atomic():
+            try:
+                from college.tenant import get_current_college_id
+                current_college_id = get_current_college_id()
+            except Exception:
+                current_college_id = getattr(request, 'college_id', None)
+
             for idx, row in enumerate(reader, start=1):
                 try:
                     reg = row.get('regulation') or ''
@@ -356,16 +362,16 @@ class MasterImportView(APIView):
                     if not reg or sem_num <= 0:
                         raise ValueError('regulation and semester required')
 
-                    semester_obj, _ = Semester.objects.get_or_create(number=sem_num)
+                    semester_obj, _ = Semester.objects.get_or_create(number=sem_num, college_id=current_college_id)
 
                     cc = row.get('course_code') or None
                     cname = (row.get('course_name') or '').strip() or None
                     instance = None
                     if cc:
-                        instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code=cc).first()
+                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code=cc, college_id=current_college_id).first()
                     else:
                         if cname:
-                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname).first()
+                            instance = CurriculumMaster.objects.filter(regulation=reg, semester__number=sem_num, course_code__isnull=True, course_name__iexact=cname, college_id=current_college_id).first()
 
                     vals = {
                         'regulation': reg,
@@ -749,6 +755,50 @@ class CurriculumDepartmentsView(APIView):
             {'id': d.id, 'code': getattr(d, 'code', None),
              'name': getattr(d, 'name', None), 'short_name': getattr(d, 'short_name', None)}
             for d in qs
+        ]
+        return Response({'results': results})
+
+
+class CurriculumRegulationsView(APIView):
+    """Return active regulations for the current college context.
+
+    This endpoint is intentionally curriculum-scoped so all roles that can access
+    Master Curriculum can use the same regulation list source.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+        except Exception:
+            cid = None
+
+        if cid is None:
+            cid = getattr(request, 'college_id', None)
+
+        if cid is None:
+            raw = request.query_params.get('college_id')
+            try:
+                cid = int(raw) if raw else None
+            except (TypeError, ValueError):
+                cid = None
+
+        qs = Regulation.objects.filter(is_active=True)
+        if cid is not None:
+            qs = qs.filter(college_id=cid)
+
+        qs = qs.order_by('code')
+        results = [
+            {
+                'id': r.id,
+                'code': r.code,
+                'name': r.name,
+                'college': r.college_id,
+                'is_active': r.is_active,
+            }
+            for r in qs
         ]
         return Response({'results': results})
 

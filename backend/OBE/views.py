@@ -1577,7 +1577,12 @@ def _resolve_semester_from_ta(ta):
                 sem_number = int(delta) * 2 + int(offset)
                 if sem_number >= 1 and sem_number <= 20:
                     from academics.models import Semester
-                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                    sem_college_id = None
+                    try:
+                        sem_college_id = getattr(sec, 'college_id', None) or getattr(batch, 'college_id', None)
+                    except Exception:
+                        sem_college_id = None
+                    sem_obj, _ = Semester.objects.get_or_create(number=sem_number, college_id=sem_college_id)
                     return sem_obj
     except Exception:
         pass

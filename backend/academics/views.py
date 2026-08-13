@@ -5690,7 +5690,8 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
                     sem_number = delta * 2 + offset
 
                     if sem_number and sem_number > 0:
-                        sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
+                        sem_college_id = getattr(sec, 'college_id', None) or getattr(getattr(sec, 'batch', None), 'college_id', None)
+                        sem_obj, _ = Semester.objects.get_or_create(number=sem_number, college_id=sem_college_id)
                         if sec.semester_id != sem_obj.id:
                             sec.semester = sem_obj
                             # We use save() instead of update() to trigger any signals if needed,
@@ -5973,6 +5974,17 @@ class SemesterViewSet(viewsets.ReadOnlyModelViewSet):
     """Read-only ViewSet for Semester objects."""
     queryset = Semester.objects.all().order_by('number')
     permission_classes = (IsAuthenticated,)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        try:
+            from college.tenant import get_current_college_id
+            cid = get_current_college_id()
+            if cid is not None:
+                return qs.filter(college_id=cid)
+        except Exception:
+            pass
+        return qs
 
     def get_serializer_class(self):
         from .serializers import SemesterSerializer

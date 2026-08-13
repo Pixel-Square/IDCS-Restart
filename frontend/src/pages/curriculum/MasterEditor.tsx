@@ -64,6 +64,8 @@ export default function MasterEditor() {
   const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [fieldSchemas, setFieldSchemas] = useState<CurriculumFieldSchema[]>([]);
+  const [regulations, setRegulations] = useState<Array<{ id: number; code: string; name?: string; is_active?: boolean }>>([]);
+  const [semesters, setSemesters] = useState<Array<{ id: number; number: number; name?: string }>>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
 
   const activeFieldSchemas = useMemo(
@@ -91,7 +93,33 @@ export default function MasterEditor() {
     fetchFieldSchemas('master')
       .then(data => setFieldSchemas(data.filter(schema => schema.is_active)))
       .catch(() => setFieldSchemas([]));
-  }, []);
+
+    const collegeParam = selectedCollegeId ? `?college_id=${encodeURIComponent(String(selectedCollegeId))}` : '';
+    fetchWithAuth(`/api/curriculum/regulations/${collegeParam}`)
+      .then(res => res.ok ? res.json() : { results: [] })
+      .then(data => {
+        const list = Array.isArray(data) ? data : (data.results || []);
+        setRegulations(list.filter((r: any) => r && r.code && (r.is_active !== false)));
+      })
+      .catch(() => setRegulations([]));
+
+    fetchWithAuth('/api/academics/semesters/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const list = Array.isArray(data) ? data : (data.results || []);
+        setSemesters(list.filter((s: any) => s && typeof s.id === 'number' && typeof s.number === 'number'));
+      })
+      .catch(() => setSemesters([]));
+  }, [selectedCollegeId]);
+
+  useEffect(() => {
+    if (!form.semester_id && form.semester && semesters.length) {
+      const matched = semesters.find((s) => Number(s.number) === Number(form.semester));
+      if (matched) {
+        setForm((prev: any) => ({ ...prev, semester_id: matched.id }));
+      }
+    }
+  }, [form.semester, form.semester_id, semesters]);
 
   useEffect(() => {
     if (effectiveId !== 'new' || activeFieldSchemas.length === 0) return;
@@ -113,7 +141,7 @@ export default function MasterEditor() {
     try {
       // Validate form data
       if (!form.regulation) throw new Error('Regulation is required');
-      if (!form.semester || form.semester <= 0) throw new Error('Semester must be a positive number');
+      if (!form.semester_id && (!form.semester || form.semester <= 0)) throw new Error('Semester is required');
       // course_code is optional now
       if (!form.course_name) throw new Error('Course Name is required');
       if ((form.internal_mark !== '' && form.internal_mark != null && form.internal_mark < 0) || (form.external_mark !== '' && form.external_mark != null && form.external_mark < 0)) throw new Error('Marks cannot be negative');
@@ -132,6 +160,9 @@ export default function MasterEditor() {
       payload.external_mark = (form.external_mark === '' || form.external_mark == null) ? 0 : Number(form.external_mark);
       // ensure course_code is null when left empty
       payload.course_code = (form.course_code === '' || form.course_code == null) ? null : form.course_code;
+      if (form.semester_id) {
+        payload.semester_id = Number(form.semester_id);
+      }
 
       if (effectiveId === 'new') {
         const r = await createMaster(payload);
@@ -191,23 +222,39 @@ export default function MasterEditor() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Regulation</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                value={form.regulation || ''} 
-                onChange={e => setForm({...form, regulation: e.target.value})} 
-                required 
-              />
+              <select
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm bg-white"
+                value={form.regulation || ''}
+                onChange={e => setForm({ ...form, regulation: e.target.value })}
+                required
+              >
+                <option value="">Select Regulation</option>
+                {regulations.map((r) => (
+                  <option key={r.id} value={r.code}>
+                    {r.code}{r.name ? ` - ${r.name}` : ''}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">Semester</label>
-              <input 
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                type="number" 
-                min={1} 
-                value={form.semester || 1} 
-                onChange={e => setForm({...form, semester: Number(e.target.value)})} 
-                required 
-              />
+              <select
+                className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm bg-white"
+                value={form.semester_id ?? ''}
+                onChange={e => {
+                  const selectedId = e.target.value ? Number(e.target.value) : null;
+                  const selectedSemester = semesters.find((s) => s.id === selectedId);
+                  setForm({ ...form, semester_id: selectedId, semester: selectedSemester?.number ?? form.semester });
+                }}
+                required
+              >
+                <option value="">Select Semester</option>
+                {semesters.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || `SEM${s.number}`}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
