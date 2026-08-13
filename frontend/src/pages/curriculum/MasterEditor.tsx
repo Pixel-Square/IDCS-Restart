@@ -1,14 +1,53 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/classTypes';
-import { createMaster, updateMaster, fetchMasters, fetchBatchYears } from '../../services/curriculum';
+import { createMaster, updateMaster, fetchMasters, fetchBatchYears, fetchFieldSchemas, CurriculumFieldSchema } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Save, X as CancelIcon, ArrowLeft } from 'lucide-react';
 import { showAlert } from '../../utils/dialog';
 
+const MASTER_FORM_FIELD_KEYS = new Set([
+  'course_name',
+  'class_type',
+  'category',
+  'is_elective',
+  'is_dept_core',
+  'l',
+  't',
+  'p',
+  's',
+  'c',
+  'internal_mark',
+  'external_mark',
+  'total_mark',
+  'qp_type',
+  'mnemonic',
+  'question_paper_type',
+  'total_hours',
+]);
+
+function coerceSchemaDefault(schema: CurriculumFieldSchema) {
+  const raw = schema.default_value;
+  if (raw === '' || raw === null || raw === undefined) {
+    return schema.data_type === 'bool' ? false : '';
+  }
+  if (schema.data_type === 'int') {
+    const parsed = Number.parseInt(String(raw), 10);
+    return Number.isNaN(parsed) ? '' : parsed;
+  }
+  if (schema.data_type === 'float') {
+    const parsed = Number.parseFloat(String(raw));
+    return Number.isNaN(parsed) ? '' : parsed;
+  }
+  if (schema.data_type === 'bool') {
+    return ['true', '1', 'yes', 'y', 'on'].includes(String(raw).trim().toLowerCase());
+  }
+  return String(raw);
+}
+
 export default function MasterEditor() {
-  const { id: routeCollegeId, masterId } = useParams();
+  const { id: routeCollegeId, masterId: routeMasterId } = useParams();
   
   useEffect(() => {
     if (routeCollegeId) {
@@ -18,21 +57,26 @@ export default function MasterEditor() {
 
   const selectedCollegeId = routeCollegeId || window.localStorage.getItem('selectedCollegeId');
 
-  const effectiveId = masterId ?? (window.location.pathname.endsWith('/new') ? 'new' : undefined);
+  const effectiveId = routeMasterId ?? (window.location.pathname.endsWith('/new') ? 'new' : undefined);
   const navigate = useNavigate();
-  const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false, is_elective: false });
+  const [form, setForm] = useState<any>({ regulation: '', semester: 1, for_all_departments: true, editable: false, is_elective: false, dynamic_data: {} });
   const [loading, setLoading] = useState(false);
   const [departments, setDepartments] = useState<Array<{id:number; code:string; name:string}>>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
-  const [columnConfigs, setColumnConfigs] = useState<any[]>([]);
+  const [fieldSchemas, setFieldSchemas] = useState<CurriculumFieldSchema[]>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+
+  const activeFieldSchemas = useMemo(
+    () => fieldSchemas.filter((schema) => schema.is_active && (schema.scope === 'both' || schema.scope === 'master') && !MASTER_FORM_FIELD_KEYS.has(schema.key)),
+    [fieldSchemas],
+  );
 
   useEffect(() => {
     if (effectiveId && effectiveId !== 'new') {
       setLoading(true);
       fetchMasters().then(list => {
         const found = list.find(m => String(m.id) === String(effectiveId));
-        if (found) setForm(found);
+        if (found) setForm({ ...found, dynamic_data: found.dynamic_data || {} });
       }).finally(() => setLoading(false));
     }
   }, [effectiveId]);
@@ -44,11 +88,25 @@ export default function MasterEditor() {
       .then(data => setDepartments(data.results || []))
       .catch(() => setDepartments([]));
     fetchBatchYears().then(setBatchYears).catch(() => {});
-    fetchWithAuth('/api/curriculum/column-configs/')
-      .then(res => res.json())
-      .then(data => setColumnConfigs(Array.isArray(data) ? data : data.results || []))
-      .catch(() => setColumnConfigs([]));
+    fetchFieldSchemas('master')
+      .then(data => setFieldSchemas(data.filter(schema => schema.is_active)))
+      .catch(() => setFieldSchemas([]));
   }, []);
+
+  useEffect(() => {
+    if (effectiveId !== 'new' || activeFieldSchemas.length === 0) return;
+    setForm((prev: any) => {
+      const currentDynamic = { ...(prev.dynamic_data || {}) };
+      let changed = false;
+      for (const schema of activeFieldSchemas) {
+        if (currentDynamic[schema.key] === undefined || currentDynamic[schema.key] === null || currentDynamic[schema.key] === '') {
+          currentDynamic[schema.key] = coerceSchemaDefault(schema);
+          changed = true;
+        }
+      }
+      return changed ? { ...prev, dynamic_data: currentDynamic } : prev;
+    });
+  }, [effectiveId, activeFieldSchemas]);
 
   async function save() {
     setLoading(true);
@@ -62,6 +120,7 @@ export default function MasterEditor() {
 
       // Prepare payload; use selected department ids array
       const payload: any = { ...form };
+      payload.dynamic_data = { ...(form.dynamic_data || {}) };
       if (!form.for_all_departments) {
         payload.departments = Array.isArray(form.departments) ? form.departments : [];
       } else {
@@ -296,24 +355,65 @@ export default function MasterEditor() {
             </div>
           </div>
 
-          {columnConfigs.filter(c => c.is_active).length > 0 && (
+          {activeFieldSchemas.length > 0 && (
             <div className="border-t pt-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">Custom Columns</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {columnConfigs.filter(c => c.is_active).map(col => (
-                  <div key={col.key}>
-                    <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">{col.label}</label>
-                    <input 
-                      className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" 
-                      type={col.data_type === 'int' || col.data_type === 'float' ? 'number' : 'text'} 
-                      value={(form.dynamic_data || {})[col.key] ?? ''} 
-                      onChange={e => {
-                        const val = col.data_type === 'int' || col.data_type === 'float' ? Number(e.target.value) : e.target.value;
-                        setForm({...form, dynamic_data: { ...(form.dynamic_data || {}), [col.key]: val }});
-                      }} 
-                    />
-                  </div>
-                ))}
+              <h3 className="text-sm font-semibold text-gray-700 mb-3">Additional Master Fields</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {activeFieldSchemas.map(schema => {
+                  const currentValue = (form.dynamic_data || {})[schema.key];
+                  return (
+                    <div key={schema.key}>
+                      <label className="block text-xs sm:text-sm font-semibold text-indigo-900 mb-1">{schema.label}</label>
+                      {schema.data_type === 'bool' ? (
+                        <label className="inline-flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-300 w-full">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(currentValue)}
+                            onChange={e => setForm({
+                              ...form,
+                              dynamic_data: { ...(form.dynamic_data || {}), [schema.key]: e.target.checked },
+                            })}
+                            className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{schema.default_value ? 'Enabled' : 'Disabled'}</span>
+                        </label>
+                      ) : schema.data_type === 'select' ? (
+                        <select
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm bg-white"
+                          value={currentValue ?? ''}
+                          onChange={e => setForm({
+                            ...form,
+                            dynamic_data: { ...(form.dynamic_data || {}), [schema.key]: e.target.value },
+                          })}
+                        >
+                          <option value="">Select {schema.label}</option>
+                          {(schema.options || []).map(opt => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          className="w-full px-2 py-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                          type={schema.data_type === 'int' || schema.data_type === 'float' ? 'number' : 'text'}
+                          step={schema.data_type === 'float' ? 'any' : schema.data_type === 'int' ? '1' : undefined}
+                          value={currentValue ?? ''}
+                          onChange={e => setForm({
+                            ...form,
+                            dynamic_data: {
+                              ...(form.dynamic_data || {}),
+                              [schema.key]: schema.data_type === 'int'
+                                ? (e.target.value === '' ? null : Number.parseInt(e.target.value, 10))
+                                : schema.data_type === 'float'
+                                ? (e.target.value === '' ? null : Number.parseFloat(e.target.value))
+                                : e.target.value,
+                            },
+                          })}
+                          placeholder={schema.label}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

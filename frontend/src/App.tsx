@@ -489,12 +489,12 @@ export default function App() {
                 />
                 <Route path="/import/questions" element={<QuestionImportPage />} />
                 <Route path="/curriculum/master" element={<MasterList />} />
-                <Route path="/curriculum/master/:id" element={<MasterEditor />} />
+                <Route path="/curriculum/master/:masterId" element={<MasterEditor />} />
                 <Route path="/curriculum/master/new" element={<MasterEditor />} />
                 <Route path="/curriculum/department" element={<DeptList />} />
                 <Route path="/colleges/:id/curriculum/master" element={<MasterList />} />
                 <Route path="/colleges/:id/curriculum/master/new" element={<MasterEditor />} />
-                <Route path="/colleges/:id/curriculum/master/:id" element={<MasterEditor />} />
+                <Route path="/colleges/:id/curriculum/master/:masterId" element={<MasterEditor />} />
                 <Route path="/colleges/:id/curriculum/department" element={<DeptList />} />
 
                 <Route

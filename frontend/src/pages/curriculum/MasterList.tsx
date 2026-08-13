@@ -50,6 +50,15 @@ export default function MasterList() {
     'obe.master.manage',
   ];
   const canDeleteMaster = Array.isArray(userPerms) && userPerms.some(p => masterWritePerms.includes(p));
+  const hasAdminRole = (() => {
+    try {
+      const roles = JSON.parse(localStorage.getItem('roles') || '[]');
+      return Array.isArray(roles) && roles.some((r: string) => ['iqac', 'admin', 'super_admin', 'super admin', 'superadmin'].includes(String(r).toLowerCase()));
+    } catch {
+      return false;
+    }
+  })();
+  const canManageFields = canDeleteMaster || hasAdminRole;
   const loc = useLocation();
   const navigate = useNavigate();
   const uniqueRegs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
@@ -412,27 +421,16 @@ export default function MasterList() {
             >
               <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
+            {canManageFields && (
+              <Link
+                to={`/colleges/${selectedCollegeId}/curriculum/master/new`}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-all duration-200 shadow-sm hover:shadow-md"
+              >
+                New Master
+              </Link>
+            )}
             {(() => {
-              try {
-                const roles = JSON.parse(localStorage.getItem('roles') || '[]');
-                const isIQAC = Array.isArray(roles) && roles.some((r: string) => String(r).toLowerCase() === 'iqac');
-                if (isIQAC) return (
-                  <Link
-                    to={`/colleges/${selectedCollegeId}/curriculum/master/new`}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-all duration-200 shadow-sm hover:shadow-md"
-                  >
-                    New Master
-                  </Link>
-                );
-              } catch (e) {}
-              return null;
-            })()}
-            {(() => {
-              try {
-                const roles = JSON.parse(localStorage.getItem('roles') || '[]');
-                const hasAdminRole = Array.isArray(roles) && roles.some((r: string) => ['iqac', 'admin', 'super_admin', 'super admin', 'superadmin'].includes(String(r).toLowerCase()));
-                const canManageFields = canDeleteMaster || hasAdminRole;
-                if (canManageFields) return (
+              if (canManageFields) return (
                   <button
                     onClick={() => setIsColumnConfigOpen(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition-all duration-200 shadow-sm hover:shadow-md"
@@ -441,7 +439,6 @@ export default function MasterList() {
                     <span className="hidden sm:inline">Manage Fields</span>
                   </button>
                 );
-              } catch (e) {}
               return null;
             })()}
             <button
