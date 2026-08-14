@@ -152,6 +152,9 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
             effective_roles = []
 
         has_iqac_role = any(str(r or '').strip().upper() == 'IQAC' for r in effective_roles)
+        has_admin_role = any(str(r or '').strip().upper() == 'ADMIN' for r in effective_roles)
+        has_super_admin_role = any(str(r or '').strip().upper() == 'SUPER_ADMIN' for r in effective_roles)
+
         has_admin_manage = False
         try:
             from accounts.utils import get_user_permissions
@@ -161,7 +164,7 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
         except Exception:
             has_admin_manage = False
 
-        if not (is_django_superuser or has_iqac_role or has_admin_manage):
+        if not (is_django_superuser or has_iqac_role or has_admin_role or has_super_admin_role or has_admin_manage):
             raise serializers.ValidationError('Account is not authorized to impersonate users.')
         
         if not getattr(superuser, 'is_active', True):
@@ -207,11 +210,12 @@ class SuperuserImpersonationSerializer(serializers.Serializer):
             raise _auth_denied()
 
         # ===== STEP 3.5B: College-scope non-superuser impersonators =====
-        # Django superusers (is_superuser=True) retain cross-college impersonation
-        # ability.  All other impersonators (IQAC role / admin.manage permission)
+        # Django superusers (is_superuser=True) and SUPER_ADMIN retain cross-college impersonation
+        # ability.  All other impersonators (IQAC role / admin.manage permission / ADMIN)
         # are restricted to users within their own college.
         # College IDs are always fetched from the DATABASE — not from request data.
-        if not is_django_superuser:
+        is_global_admin = is_django_superuser or has_super_admin_role
+        if not is_global_admin:
             impersonator_college_id = get_user_college_id(superuser)
             target_college_id = get_user_college_id(target_user)
 

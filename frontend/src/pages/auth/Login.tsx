@@ -134,8 +134,8 @@ export default function Login() {
     const normRoles = roles.map((r: any) => String(r || "").trim().toUpperCase());
     const normPerms = perms.map((p: any) => String(p || "").trim().toLowerCase());
 
-    // IQAC main account, IQAC role, explicit permission, SUPER_ADMIN role, or is_superuser.
-    return Boolean(meObj?.is_iqac_main) || Boolean(meObj?.is_superuser) || normRoles.includes("IQAC") || normRoles.includes("SUPER_ADMIN") || normPerms.includes("admin.manage");
+    // IQAC main account, IQAC role, ADMIN role, explicit permission, SUPER_ADMIN role, or is_superuser.
+    return Boolean(meObj?.is_iqac_main) || Boolean(meObj?.is_superuser) || normRoles.includes("IQAC") || normRoles.includes("SUPER_ADMIN") || normRoles.includes("ADMIN") || normPerms.includes("admin.manage");
   }
 
   function extractServerMessage(err: unknown): string | null {

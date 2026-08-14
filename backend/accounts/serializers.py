@@ -624,6 +624,29 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
             if student_status == 'DEBAR':
                 raise serializers.ValidationError('Your student account has been debarred. Please contact administration.')
 
+        # --- College Isolation check ---
+        college_id = self.initial_data.get('college')
+        if college_id:
+            is_global_admin = getattr(user, 'is_superuser', False)
+            if not is_global_admin:
+                try:
+                    effective_roles = _compute_effective_role_names(user)
+                    if 'SUPER_ADMIN' in effective_roles:
+                        is_global_admin = True
+                except Exception:
+                    pass
+            
+            if not is_global_admin:
+                try:
+                    from accounts.serializers_impersonation import get_user_college_id
+                    user_cid = get_user_college_id(user)
+                    if user_cid is None or str(user_cid) != str(college_id):
+                        raise serializers.ValidationError('You are not authorized to login to this college.')
+                except serializers.ValidationError:
+                    raise
+                except Exception:
+                    pass
+
         # --- Login Lockdown check ---
         # If login_lockdown is enabled, only superusers may authenticate directly.
         # The superuser impersonation endpoint uses a separate serializer and is unaffected.
