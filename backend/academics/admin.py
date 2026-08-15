@@ -13,6 +13,7 @@ from .models import (
     Course,
     Semester,
     Section,
+    MixedSection,
     Batch,
     BatchYear,
     Subject,
@@ -1078,6 +1079,31 @@ class SectionAdmin(admin.ModelAdmin):
     raw_id_fields = ('managing_department',)
 
 
+@admin.register(MixedSection)
+class MixedSectionAdmin(admin.ModelAdmin):
+    list_display = ('name', 'batch', 'semester', 'academic_year', 'is_active', 'get_section_count')
+    search_fields = ('name', 'batch__name')
+    list_filter = ('batch', 'semester', 'academic_year', 'is_active')
+    filter_horizontal = ('sections',)
+    raw_id_fields = ('batch', 'semester', 'academic_year')
+
+    fieldsets = (
+        ('Basic Info', {
+            'fields': ('name', 'description'),
+        }),
+        ('Association', {
+            'fields': ('batch', 'semester', 'academic_year', 'sections'),
+        }),
+        ('Status', {
+            'fields': ('is_active',),
+        }),
+    )
+
+    def get_section_count(self, obj):
+        return obj.sections.count()
+    get_section_count.short_description = 'Sections Count'
+
+
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'course', 'semester')
@@ -1340,10 +1366,16 @@ class StudentMentorMapAdmin(admin.ModelAdmin):
 
 @admin.register(SectionAdvisor)
 class SectionAdvisorAdmin(admin.ModelAdmin):
-    list_display = ('section', 'advisor', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
-    search_fields = ('section__name', 'advisor__staff_id', 'advisor__user__username')
-    raw_id_fields = ('section', 'advisor', 'academic_year')
+    list_display = ('section', 'mixed_section', 'advisor', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department', 'mixed_section__batch__department')
+    search_fields = ('section__name', 'mixed_section__name', 'advisor__staff_id', 'advisor__user__username')
+    raw_id_fields = ('section', 'mixed_section', 'advisor', 'academic_year')
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name in {'section', 'mixed_section'}:
+            formfield.help_text = 'Choose either a regular section or a mixed section, not both.'
+        return formfield
 
 
 @admin.register(DepartmentRole)

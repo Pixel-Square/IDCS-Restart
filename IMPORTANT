@@ -4,4 +4,4 @@ python manage.py runserver
 
  source /home/iqac2/IDCS-Restart/backend/.venv/bin/activate
 
-
+sudo systemctl restart gunicorn

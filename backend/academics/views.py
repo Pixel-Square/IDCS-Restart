@@ -40,6 +40,7 @@ from .models import (
     SpecialCourseAssessmentSelection,
     SpecialCourseAssessmentEditRequest,
     Semester,
+    MixedSection,
 )
 from OBE.models import (
     Cia1Mark,
@@ -57,6 +58,7 @@ from .models import AttendanceUnlockRequest
 
 from .serializers import (
     SectionAdvisorSerializer,
+    MixedSectionSerializer,
     TeachingAssignmentSerializer,
     StudentSimpleSerializer,
 )
@@ -2194,11 +2196,15 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         # Handle duplicate active section+academic_year by updating existing mapping.
         data = request.data or {}
         section_id = data.get('section_id') or data.get('section')
+        mixed_section_id = data.get('mixed_section_id') or data.get('mixed_section')
         academic_year = data.get('academic_year')
         advisor_id = data.get('advisor_id') or data.get('advisor')
 
-        # If academic_year missing but section and advisor present, default to active AcademicYear
-        if section_id and advisor_id and not academic_year:
+        if (section_id and mixed_section_id) or (not section_id and not mixed_section_id):
+            return Response({'detail': 'Choose either a Section or a Mixed Section, not both.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # If academic_year missing but target and advisor present, default to active AcademicYear
+        if (section_id or mixed_section_id) and advisor_id and not academic_year:
             try:
                 active_ay = AcademicYear.objects.filter(is_active=True).first() or AcademicYear.objects.order_by('-id').first()
                 if active_ay is not None:
@@ -2206,77 +2212,67 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
             except Exception:
                 academic_year = None
 
-        if section_id and academic_year and advisor_id:
+        target_id = mixed_section_id if mixed_section_id else section_id
+        target_field = 'mixed_section_id' if mixed_section_id else 'section_id'
+
+        if target_id and academic_year and advisor_id:
             try:
-                # Accept numeric IDs or object payloads
-                sec_id = int(section_id)
+                target_pk = int(target_id)
                 ay_id = int(academic_year)
             except Exception:
-                sec_id = None
+                target_pk = None
                 ay_id = None
 
-            if sec_id and ay_id:
+            if target_pk and ay_id:
                 # If provided academic year isn't active, prefer the current active academic year
                 try:
                     provided_ay = AcademicYear.objects.filter(pk=ay_id).first()
                     if provided_ay is not None and not provided_ay.is_active:
-                        # Prefer an active academic year with the same name (pair like Odd/Even)
                         active_same = AcademicYear.objects.filter(name=provided_ay.name, is_active=True).first()
                         if active_same is not None:
                             ay_id = active_same.pk
                         else:
-                            # Fallback to any active academic year
                             active_ay = AcademicYear.objects.filter(is_active=True).first()
                             if active_ay is not None:
                                 ay_id = active_ay.pk
                 except Exception:
                     pass
-                existing = SectionAdvisor.objects.filter(section_id=sec_id, academic_year_id=ay_id, is_active=True).first()
+
+                existing_qs = SectionAdvisor.objects.filter(is_active=True, academic_year_id=ay_id)
+                existing = existing_qs.filter(**{target_field: target_pk}).first()
                 if existing:
-                    # update advisor and return existing
-                    try:
-                        old_advisor = getattr(existing, 'advisor', None)
-                        old_advisor_id = getattr(old_advisor, 'id', None)
-                    except Exception:
-                        old_advisor = None
-                        old_advisor_id = None
+                    old_advisor = getattr(existing, 'advisor', None)
+                    old_advisor_id = getattr(old_advisor, 'id', None)
 
                     existing.advisor_id = int(advisor_id)
                     if 'is_active' in data:
                         existing.is_active = bool(data.get('is_active'))
                     existing.save()
 
-                    # If the advisor changed, attempt to remove ADVISOR role from the previous advisor
                     try:
                         if old_advisor_id and int(advisor_id) != int(old_advisor_id):
                             from accounts.models import Role
-                            # reload the old advisor instance to be safe
                             old_sp = StaffProfile.objects.filter(pk=old_advisor_id).select_related('user').first()
                             if old_sp:
                                 old_user = getattr(old_sp, 'user', None)
                                 if old_user:
                                     role_obj = Role.objects.filter(name='ADVISOR').first()
                                     if role_obj and role_obj in old_user.roles.all():
-                                        # Check if old advisor has any other active SectionAdvisor mappings
                                         other_active = SectionAdvisor.objects.filter(advisor=old_sp, is_active=True).exclude(pk=existing.pk).exists()
                                         if not other_active:
                                             try:
                                                 old_user.roles.remove(role_obj)
                                             except Exception:
-                                                # Don't raise from role removal; signal handlers or validations may prevent removal
                                                 pass
                     except Exception:
-                        # best-effort only; never fail the API because role-sync failed
                         pass
 
                     serializer = self.get_serializer(existing)
                     return Response(serializer.data, status=status.HTTP_200_OK)
 
-                # No existing mapping -> create using the resolved ay_id
                 data_copy = dict(data)
                 data_copy['academic_year'] = ay_id
-                # ensure section/advisor are integers
-                data_copy['section_id'] = sec_id
+                data_copy[target_field] = target_pk
                 data_copy['advisor_id'] = int(advisor_id)
                 try:
                     serializer = self.get_serializer(data=data_copy)
@@ -2299,6 +2295,82 @@ class SectionAdvisorViewSet(viewsets.ModelViewSet):
         if not (user.is_superuser or ('academics.assign_advisor' in perms) or user.has_perm('academics.delete_sectionadvisor')):
             raise PermissionDenied('You do not have permission to delete advisor assignments.')
         # Deleting the instance will trigger post_delete signal to remove ADVISOR role if no other active mapping exists
+        instance.delete()
+
+
+class MixedSectionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Mixed Sections (groups of regular sections).
+    
+    Mixed sections are used to group multiple regular sections for cross-section activities
+    (e.g., common lab, common project work). This ViewSet provides CRUD operations for
+    mixed sections and retrieves the curriculum available for them based on their
+    constituent sections' departments and semester.
+    """
+    queryset = MixedSection.objects.select_related(
+        'batch__course__department', 
+        'batch__department', 
+        'semester'
+    ).prefetch_related('sections__batch__course__department', 'sections__batch__department')
+    serializer_class = MixedSectionSerializer
+    permission_classes = (IsAuthenticated, IsHODOfDepartment)
+
+    def get_queryset(self):
+        """Filter mixed sections by department and academic year if provided."""
+        user = self.request.user
+        queryset = self.queryset
+        
+        # Filter by batch department if user is HOD
+        if not user.is_superuser:
+            staff_profile = getattr(user, 'staff_profile', None)
+            if staff_profile:
+                allowed_depts = get_user_effective_departments(user)
+                if allowed_depts:
+                    queryset = queryset.filter(
+                        Q(batch__department_id__in=allowed_depts) |
+                        Q(batch__course__department_id__in=allowed_depts)
+                    ).distinct()
+        
+        # Filter by academic year if provided
+        academic_year = self.request.query_params.get('academic_year')
+        if academic_year:
+            try:
+                queryset = queryset.filter(academic_year_id=int(academic_year))
+            except (ValueError, TypeError):
+                pass
+        
+        # Filter by batch if provided
+        batch = self.request.query_params.get('batch')
+        if batch:
+            try:
+                queryset = queryset.filter(batch_id=int(batch))
+            except (ValueError, TypeError):
+                pass
+        
+        return queryset
+
+    def perform_create(self, serializer):
+        """Ensure user has permission to create mixed section."""
+        user = self.request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or ('academics.assign_advisor' in perms) or user.has_perm('academics.add_mixedsection')):
+            raise PermissionDenied('You do not have permission to create mixed sections.')
+        serializer.save()
+
+    def perform_update(self, serializer):
+        """Ensure user has permission to update mixed section."""
+        user = self.request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or ('academics.assign_advisor' in perms) or user.has_perm('academics.change_mixedsection')):
+            raise PermissionDenied('You do not have permission to update mixed sections.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        """Ensure user has permission to delete mixed section."""
+        user = self.request.user
+        perms = get_user_permissions(user)
+        if not (user.is_superuser or ('academics.assign_advisor' in perms) or user.has_perm('academics.delete_mixedsection')):
+            raise PermissionDenied('You do not have permission to delete mixed sections.')
         instance.delete()
 
 
@@ -3890,6 +3962,63 @@ class HODSectionsView(APIView):
                 'semester': sem_val,
                 'year': student_year,
             })
+        
+        # Also include Mixed Sections that the HOD can access
+        from .models import MixedSection
+        
+        # Determine which mixed sections to include
+        if global_access:
+            mixed_sections = MixedSection.objects.filter(is_active=True).select_related(
+                'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
+            ).order_by('batch__name', 'name')
+        else:
+            # Mixed sections where the batch belongs to HOD's departments
+            mixed_sections = MixedSection.objects.filter(
+                is_active=True,
+                batch__isnull=False
+            ).filter(
+                Q(batch__course__department_id__in=dept_ids) |
+                Q(batch__department_id__in=dept_ids)
+            ).select_related(
+                'batch__course__department', 'batch__department', 'batch__regulation', 'semester'
+            ).order_by('batch__name', 'name')
+        
+        for ms in mixed_sections:
+            batch = getattr(ms, 'batch', None)
+            course = getattr(batch, 'course', None) if batch else None
+            dept = (
+                getattr(course, 'department', None)
+                if course is not None
+                else (getattr(batch, 'department', None) if batch else None)
+            )
+            reg = getattr(batch, 'regulation', None) if batch else None
+            sem_obj = getattr(ms, 'semester', None)
+            sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
+            
+            student_year = None
+            if batch and getattr(batch, 'start_year', None) and current_acad_year:
+                try:
+                    delta = current_acad_year - int(batch.start_year)
+                    student_year = delta + 1
+                except Exception:
+                    student_year = None
+            
+            results.append({
+                'id': ms.id,
+                'name': ms.name,
+                'batch_id': getattr(batch, 'id', None),
+                'batch_name': getattr(batch, 'name', None),
+                'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None), 'name': getattr(reg, 'name', None)} if reg else None,
+                'course_id': getattr(course, 'id', None),
+                'department_id': getattr(dept, 'id', None),
+                'department_code': getattr(dept, 'code', None),
+                'department_short_name': getattr(dept, 'short_name', None) or getattr(dept, 'code', None) or getattr(dept, 'name', None),
+                'semester': sem_val,
+                'year': student_year,
+                'mixed_section_id': ms.id,
+                'is_mixed_section': True,
+            })
+        
         return Response({'results': results})
 
 
@@ -7769,22 +7898,40 @@ class AdvisorMyStudentsView(APIView):
 
             advisor_qs = SectionAdvisor.objects.filter(
                 advisor=staff_profile, is_active=True, academic_year__is_active=True
-            ).select_related('section', 'section__batch', 'section__batch__course', 'section__batch__regulation')
-            sections = [a.section for a in advisor_qs]
-            if not sections:
+            ).select_related(
+                'section', 'section__batch', 'section__batch__course', 'section__batch__regulation',
+                'mixed_section', 'mixed_section__batch', 'mixed_section__batch__course',
+                'mixed_section__batch__department', 'mixed_section__batch__regulation',
+                'mixed_section__semester'
+            )
+            related_targets = []
+            for a in advisor_qs:
+                if a.section_id and a.section is not None:
+                    related_targets.append({'kind': 'section', 'object': a.section})
+                if a.mixed_section_id and a.mixed_section is not None:
+                    related_targets.append({'kind': 'mixed', 'object': a.mixed_section})
+            if not related_targets:
                 return Response({'results': []})
 
             from .models import StudentSectionAssignment, StudentProfile
 
-            section_ids = [s.id for s in sections]
+            section_ids = [entry['object'].id for entry in related_targets if entry['kind'] == 'section']
+            mixed_ids = [entry['object'].id for entry in related_targets if entry['kind'] == 'mixed']
+            mixed_member_ids = list(
+                StudentSectionAssignment.objects.filter(
+                    section__mixed_sections__id__in=mixed_ids,
+                    end_date__isnull=True,
+                ).values_list('section_id', flat=True).distinct()
+            ) if mixed_ids else []
+            all_section_ids = list(set(section_ids + mixed_member_ids))
             assign_qs = StudentSectionAssignment.objects.filter(
-                section_id__in=section_ids, end_date__isnull=True
+                section_id__in=all_section_ids, end_date__isnull=True
             ).exclude(student__status__in=['INACTIVE', 'DEBAR']).select_related('student__user', 'section')
             students_by_section: dict = {}
             for a in assign_qs:
                 students_by_section.setdefault(a.section_id, []).append(a.student)
 
-            legacy_qs = StudentProfile.objects.filter(section_id__in=section_ids).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user', 'section')
+            legacy_qs = StudentProfile.objects.filter(section_id__in=all_section_ids).exclude(status__in=['INACTIVE', 'DEBAR']).select_related('user', 'section')
             for s in legacy_qs:
                 present = students_by_section.setdefault(s.section_id, [])
                 if not any(x.pk == s.pk for x in present):
@@ -7806,43 +7953,81 @@ class AdvisorMyStudentsView(APIView):
                 mentor_map = {}
 
             results = []
-            for sec in sections:
-                studs = students_by_section.get(sec.id, [])
-                ser = StudentSimpleSerializer([
-                    {
-                        'id': st.pk,
-                        'reg_no': st.reg_no,
-                        'user': getattr(st, 'user', None),
-                        'section_id': getattr(st, 'section_id', None),
-                        'section_name': str(getattr(st, 'section', '')),
-                        'has_mentor': (st.pk in mentor_map),
-                        'mentor_id': mentor_map.get(st.pk, {}).get('mentor_id'),
-                        'mentor_name': mentor_map.get(st.pk, {}).get('mentor_name'),
-                    }
-                    for st in studs
-                ], many=True)
-                batch = getattr(sec, 'batch', None)
-                course = getattr(batch, 'course', None) if batch is not None else None
-                dept = (
-                    getattr(course, 'department', None)
-                    if course is not None
-                    else (getattr(batch, 'department', None) if batch else None)
-                        or getattr(sec, 'managing_department', None)
-                )
-                reg = getattr(batch, 'regulation', None) if batch else None
-                sem_obj = getattr(sec, 'semester', None)
-                sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
-                results.append({
-                    'section_id': sec.id,
-                    'section_name': sec.name,
-                    'batch': getattr(batch, 'name', None),
-                    'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None)} if reg else None,
-                    'department_id': getattr(dept, 'id', None),
-                    'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
-                    'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
-                    'semester': sem_val,
-                    'students': ser.data,
-                })
+            for entry in related_targets:
+                kind = entry['kind']
+                obj = entry['object']
+                if kind == 'section':
+                    sec = obj
+                    studs = students_by_section.get(sec.id, [])
+                    ser = StudentSimpleSerializer([
+                        {
+                            'id': st.pk,
+                            'reg_no': st.reg_no,
+                            'user': getattr(st, 'user', None),
+                            'section_id': getattr(st, 'section_id', None),
+                            'section_name': str(getattr(st, 'section', '')),
+                            'has_mentor': (st.pk in mentor_map),
+                            'mentor_id': mentor_map.get(st.pk, {}).get('mentor_id'),
+                            'mentor_name': mentor_map.get(st.pk, {}).get('mentor_name'),
+                        }
+                        for st in studs
+                    ], many=True)
+                    batch = getattr(sec, 'batch', None)
+                    course = getattr(batch, 'course', None) if batch is not None else None
+                    dept = (
+                        getattr(course, 'department', None)
+                        if course is not None
+                        else (getattr(batch, 'department', None) if batch else None)
+                            or getattr(sec, 'managing_department', None)
+                    )
+                    reg = getattr(batch, 'regulation', None) if batch else None
+                    sem_obj = getattr(sec, 'semester', None)
+                    sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
+                    results.append({
+                        'section_id': sec.id,
+                        'section_name': sec.name,
+                        'batch': getattr(batch, 'name', None),
+                        'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None)} if reg else None,
+                        'department_id': getattr(dept, 'id', None),
+                        'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
+                        'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                        'semester': sem_val,
+                        'students': ser.data,
+                    })
+                else:
+                    mixed = obj
+                    batch = getattr(mixed, 'batch', None)
+                    course = getattr(batch, 'course', None) if batch is not None else None
+                    dept = (
+                        getattr(batch, 'department', None)
+                        if batch is not None and getattr(batch, 'course_id', None) is None
+                        else (getattr(course, 'department', None) if course is not None else None)
+                    )
+                    if dept is None and mixed.sections.exists():
+                        first_section = mixed.sections.first()
+                        first_batch = getattr(first_section, 'batch', None)
+                        first_course = getattr(first_batch, 'course', None) if first_batch is not None else None
+                        dept = getattr(first_course, 'department', None) if first_course is not None else (getattr(first_batch, 'department', None) if first_batch else None)
+                    reg = getattr(batch, 'regulation', None) if batch else None
+                    sem_obj = getattr(mixed, 'semester', None)
+                    sem_val = getattr(sem_obj, 'number', None) if sem_obj else None
+                    if sem_val is None and mixed.sections.exists():
+                        first_section = mixed.sections.first()
+                        first_sem = getattr(first_section, 'semester', None)
+                        sem_val = getattr(first_sem, 'number', None) if first_sem else None
+                    results.append({
+                        'section_id': mixed.id,
+                        'mixed_section_id': mixed.id,
+                        'is_mixed_section': True,
+                        'section_name': mixed.name,
+                        'batch': getattr(batch, 'name', None),
+                        'batch_regulation': {'id': getattr(reg, 'id', None), 'code': getattr(reg, 'code', None)} if reg else None,
+                        'department_id': getattr(dept, 'id', None),
+                        'department': {'id': getattr(dept, 'id', None), 'code': getattr(dept, 'code', None)} if dept else None,
+                        'department_short_name': (getattr(dept, 'short_name', None) or getattr(dept, 'code', None)) if dept else None,
+                        'semester': sem_val,
+                        'students': [],
+                    })
 
             return Response({'results': results})
         except Exception as e:

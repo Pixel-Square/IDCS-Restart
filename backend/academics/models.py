@@ -270,6 +270,50 @@ class Section(models.Model):
         return super().save(*args, **kwargs)
 
 
+class MixedSection(models.Model):
+    """A Mixed Section groups multiple regular sections together for
+    cross-section activities (e.g., common lab, common project work).
+
+    Students from different regular sections can be part of the same mixed section.
+    """
+    name = models.CharField(max_length=128, help_text='Name of the mixed section (e.g., Lab Group A, Project Batch 1)')
+    batch = models.ForeignKey('Batch', on_delete=models.CASCADE, related_name='mixed_sections', help_text='The batch this mixed section belongs to')
+    sections = models.ManyToManyField(
+        'Section',
+        related_name='mixed_sections',
+        help_text='Regular sections that are part of this mixed section'
+    )
+    semester = models.ForeignKey(
+        'Semester',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mixed_sections',
+        help_text='Semester this mixed section belongs to'
+    )
+    academic_year = models.ForeignKey(
+        'AcademicYear',
+        on_delete=models.CASCADE,
+        related_name='mixed_sections',
+        null=True,
+        blank=True,
+        help_text='Academic year this mixed section is active in'
+    )
+    description = models.TextField(blank=True, help_text='Additional details about this mixed section')
+    is_active = models.BooleanField(default=True, help_text='Whether this mixed section is currently active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Mixed Section'
+        verbose_name_plural = 'Mixed Sections'
+        unique_together = ('name', 'batch')
+        ordering = ('batch', 'name')
+
+    def __str__(self):
+        return f"{self.name} ({self.batch})"
+
+
 class Batch(models.Model):
     """A student cohort/batch for a given course or department.
 
@@ -448,6 +492,14 @@ class StudentProfile(models.Model):
     )
     reg_no = models.CharField(max_length=64, unique=True, db_index=True)
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
+    mixed_section = models.ForeignKey(
+        'MixedSection',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='students',
+        help_text='Optional mixed section assignment for cross-section activities'
+    )
     batch = models.CharField(max_length=32, blank=True)
     status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
 
@@ -916,7 +968,22 @@ class StudentMentorMap(models.Model):
 
 
 class SectionAdvisor(models.Model):
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='advisor_mappings')
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='advisor_mappings',
+        null=True,
+        blank=True,
+        help_text='Regular section assigned to this advisor. Either section or mixed_section must be selected, not both.'
+    )
+    mixed_section = models.ForeignKey(
+        'MixedSection',
+        on_delete=models.CASCADE,
+        related_name='advisor_mappings',
+        null=True,
+        blank=True,
+        help_text='Mixed section assigned to this advisor. Either section or mixed_section must be selected, not both.'
+    )
     advisor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='section_advisories')
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='section_advisors')
     is_active = models.BooleanField(default=True)
@@ -925,17 +992,40 @@ class SectionAdvisor(models.Model):
         verbose_name = 'Section Advisor'
         verbose_name_plural = 'Section Advisors'
         constraints = [
-            models.UniqueConstraint(fields=['section', 'academic_year'], condition=Q(is_active=True), name='unique_active_advisor_per_section_year')
+            models.UniqueConstraint(fields=['section', 'academic_year'], condition=Q(is_active=True) & Q(section__isnull=False), name='unique_active_advisor_per_section_year'),
+            models.UniqueConstraint(fields=['mixed_section', 'academic_year'], condition=Q(is_active=True) & Q(mixed_section__isnull=False), name='unique_active_advisor_per_mixed_section_year')
         ]
 
     def __str__(self):
-        return f"{self.section} -> {self.advisor.staff_id} ({self.academic_year.name})"
+        target = self.mixed_section or self.section
+        return f"{target} -> {self.advisor.staff_id} ({self.academic_year.name})"
 
     def clean(self):
         # Department membership is not enforced at the model level; allow
         # advisors to be assigned across departments. Permission checks
         # remain the responsibility of higher-level logic (views/permissions).
-        pass
+        has_section = self.section_id is not None
+        has_mixed = self.mixed_section_id is not None
+
+        if has_section and has_mixed:
+            raise ValidationError({'section': 'Choose either a Section or a Mixed Section, not both.'})
+        if not has_section and not has_mixed:
+            raise ValidationError({'section': 'Select either a Section or a Mixed Section.'})
+
+        if self.advisor_id and self.academic_year_id:
+            qs = SectionAdvisor.objects.filter(
+                advisor_id=self.advisor_id,
+                academic_year_id=self.academic_year_id,
+                is_active=True,
+            ).exclude(pk=self.pk)
+            if self.section_id is not None:
+                if qs.filter(section_id=self.section_id).exists():
+                    raise ValidationError({'section': 'This advisor is already assigned to this section in the active academic year.'})
+            if self.mixed_section_id is not None:
+                if qs.filter(mixed_section_id=self.mixed_section_id).exists():
+                    raise ValidationError({'mixed_section': 'This advisor is already assigned to this mixed section in the active academic year.'})
+
+        super().clean()
 
 
 # Ensure logical `ADVISOR` role is synchronized with SectionAdvisor records.

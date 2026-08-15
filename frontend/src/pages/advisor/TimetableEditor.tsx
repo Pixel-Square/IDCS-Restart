@@ -1329,7 +1329,10 @@ export default function TimetableEditor(){
           department_short_name: entry.department_short_name,
           department: entry.department,
           // include semester if present on the API response under common keys
-          semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null
+          semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null,
+          // include mixed section info for curriculum endpoint selection
+          mixed_section_id: entry.mixed_section_id ?? null,
+          is_mixed_section: entry.is_mixed_section ?? entry.mixed_section ?? false
         }))
         setSections(secs)
         // auto-select first section so advisor doesn't need manual selection
@@ -1369,14 +1372,67 @@ export default function TimetableEditor(){
         setCurrentSectionRegulation(selectedSection.batch_regulation)
       }
       
-      fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sectionId}`)
+      // Check if this is a mixed section and use the appropriate endpoint
+      const isMixed = Boolean(selectedSection?.is_mixed_section || selectedSection?.mixed_section_id)
+      let curriculumUrl = `/api/timetable/curriculum-for-section/?section_id=${sectionId}`
+      if (isMixed && selectedSection?.mixed_section_id) {
+        curriculumUrl = `/api/timetable/curriculum-for-mixed-section/?mixed_section_id=${selectedSection.mixed_section_id}`
+      }
+      
+      fetchWithAuth(curriculumUrl)
         .then(r=>r.json()).then(d=>setCurriculum(d.results || []))
       loadTimetable()
       // fetch aggregated subjects + staff for this section
       fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`).then(r=>{
-        if(!r.ok) return []
+        if(!r.ok) return null
         return r.json()
-      }).then(d=> setSubjectStaffList(d.results || []))
+      }).then(d=> {
+        const data = d?.results || d || []
+        if(Array.isArray(data) && data.length > 0) {
+          setSubjectStaffList(data)
+        } else {
+          // Fallback: fetch teaching assignments directly for this section as source of truth
+          fetchWithAuth(`/api/academics/teaching-assignments/?section_id=${sectionId}&page_size=0`)
+            .then(r => {
+              if(!r.ok) return null
+              return r.json()
+            })
+            .then(taData => {
+              if(!taData) return
+              const taResults = taData.results || taData || []
+              // Transform teaching assignments into subject+staff format
+              // Deduplicate by curriculum row ID to show each subject only once
+              const seen = new Set<number>()
+              const staffList = taResults
+                .filter((ta: any) => {
+                  const crId = ta.curriculum_row_details?.id || ta.curriculum_row || null
+                  if (!crId) return false // Skip if no curriculum row id
+                  const id = Number(crId)
+                  if (seen.has(id)) return false
+                  seen.add(id)
+                  return true
+                })
+                .map((ta: any) => {
+                  // Extract staff name from staff_details.user
+                  let staffName = '—'
+                  if (ta.staff_details?.user?.first_name || ta.staff_details?.user?.last_name) {
+                    const firstName = ta.staff_details.user.first_name || ''
+                    const lastName = ta.staff_details.user.last_name || ''
+                    staffName = `${firstName} ${lastName}`.trim()
+                  }
+                  return {
+                    id: ta.curriculum_row_details?.id || ta.curriculum_row || null,
+                    course_code: ta.curriculum_row_details?.course_code || ta.curriculum_row?.course_code || '',
+                    course_name: ta.curriculum_row_details?.course_name || ta.curriculum_row?.course_name || '',
+                    department_id: ta.curriculum_row_details?.department_id || ta.curriculum_row?.department_id || null,
+                    staff: staffName
+                  }
+                })
+              setSubjectStaffList(staffList)
+            })
+            .catch(e => console.error('Failed to fetch fallback teaching assignments', e))
+        }
+      })
       // fetch existing special timetables for this section
       fetchWithAuth(`/api/timetable/special-timetables/?section_id=${sectionId}`).then(r=>{
         if(!r.ok) return []
@@ -1616,39 +1672,44 @@ export default function TimetableEditor(){
 
   // Create a comprehensive subjects list combining curriculum and staff assignments
   const getCombinedSubjectsList = () => {
-    const currentSection = sections.find(s => s.id === sectionId)
-    const isShared = isSharedSection(currentSection)
-
-    let filteredCurriculum = curriculum;
-    if (!isShared) {
-      if (!currentSectionRegulation?.code) return []
-      filteredCurriculum = curriculum.filter((subject: any) => 
-        subject.regulation === currentSectionRegulation.code
-      )
-    }
-    
     const normalizeCode = (value: any) => String(value || '').trim().toUpperCase()
     const normalizeName = (value: any) => String(value || '').trim().toLowerCase()
 
-    // Create a multi-key map so shared S&H rows still resolve when ids differ.
+    // Create a multi-key map for staff lookups from curriculum data
     const staffMap = new Map()
-    subjectStaffList.forEach((staffSubject: any) => {
-      if (!staffSubject?.staff) return
-      if (staffSubject.id) {
-        staffMap.set(`id:${Number(staffSubject.id)}`, staffSubject.staff)
+    curriculum.forEach((subject: any) => {
+      if (!subject?.staff) return
+      if (subject.id) {
+        staffMap.set(`id:${Number(subject.id)}`, subject.staff)
       }
-      const code = normalizeCode(staffSubject.course_code)
-      const name = normalizeName(staffSubject.course_name)
-      if (code) staffMap.set(`code:${code}`, staffSubject.staff)
-      if (name) staffMap.set(`name:${name}`, staffSubject.staff)
+      const code = normalizeCode(subject.course_code)
+      const name = normalizeName(subject.course_name)
+      if (code) staffMap.set(`code:${code}`, subject.staff)
+      if (name) staffMap.set(`name:${name}`, subject.staff)
     })
     
-    // Combine curriculum with staff data
-    const combined = filteredCurriculum.map((subject: any) => {
+    // Use subjectStaffList as the source of truth (already section-specific and has staff names)
+    // Filter by section's department to ensure we only show subjects from that department
+    if (!subjectStaffList || subjectStaffList.length === 0) {
+      return []
+    }
+    
+    const filtered = subjectStaffList.filter((subject: any) => {
+      // If section has a department, only include subjects from that department
+      if (sectionDepartmentId && subject.department_id) {
+        return Number(subject.department_id) === Number(sectionDepartmentId)
+      }
+      // If no department filter, include all
+      return true
+    })
+    
+    // Combine with curriculum staff data if available
+    const combined = filtered.map((subject: any) => {
       const idKey = `id:${Number(subject.id || 0)}`
       const codeKey = `code:${normalizeCode(subject.course_code || subject.code)}`
       const nameKey = `name:${normalizeName(subject.course_name || subject.name)}`
-      const staff = staffMap.get(idKey) || staffMap.get(codeKey) || staffMap.get(nameKey) || '—'
+      const currStaff = staffMap.get(idKey) || staffMap.get(codeKey) || staffMap.get(nameKey)
+      const staff = subject.staff || currStaff || '—'
       return {
         ...subject,
         staff,

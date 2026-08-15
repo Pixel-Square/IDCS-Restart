@@ -4,7 +4,7 @@ from django.utils import timezone
 
 from .models import TeachingAssignment
 from .models import SpecialCourseAssessmentEditRequest
-from academics.models import Subject, Section, Semester
+from academics.models import Subject, Section, Semester, MixedSection
 from accounts.utils import get_user_permissions
 from academics.models import SectionAdvisor, StaffProfile
 from academics.models import AcademicYear
@@ -772,22 +772,72 @@ def _user_can_manage_assignment(user, teaching_assignment: TeachingAssignment) -
 
 
 class SectionAdvisorSerializer(serializers.ModelSerializer):
-    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section')
+    section_id = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), source='section', allow_null=True, required=False)
+    mixed_section_id = serializers.PrimaryKeyRelatedField(queryset=MixedSection.objects.all(), source='mixed_section', allow_null=True, required=False)
     advisor_id = serializers.PrimaryKeyRelatedField(queryset=StaffProfile.objects.all(), source='advisor')
     section = serializers.StringRelatedField(read_only=True)
+    mixed_section = serializers.StringRelatedField(read_only=True)
     advisor = serializers.StringRelatedField(read_only=True)
     academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False, allow_null=True)
     department_id = serializers.SerializerMethodField(read_only=True)
 
     def get_department_id(self, obj):
         try:
-            return obj.section.batch.course.department_id
+            if obj.mixed_section_id:
+                if getattr(obj.mixed_section, 'batch', None) and getattr(obj.mixed_section.batch, 'department', None):
+                    return obj.mixed_section.batch.department_id
+                if obj.mixed_section.sections.exists():
+                    first_section = obj.mixed_section.sections.first()
+                    if first_section and first_section.batch and first_section.batch.course:
+                        return first_section.batch.course.department_id
+                return None
+            if obj.section_id:
+                return obj.section.batch.course.department_id
         except Exception:
             return None
 
+    def validate(self, attrs):
+        section = attrs.get('section')
+        mixed_section = attrs.get('mixed_section')
+        if section and mixed_section:
+            raise serializers.ValidationError('Choose either a Section or a Mixed Section, not both.')
+        if not section and not mixed_section:
+            raise serializers.ValidationError('Select either a Section or a Mixed Section.')
+        return attrs
+
     class Meta:
         model = SectionAdvisor
-        fields = ('id', 'section', 'section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active', 'department_id')
+        fields = ('id', 'section', 'section_id', 'mixed_section', 'mixed_section_id', 'advisor', 'advisor_id', 'academic_year', 'is_active', 'department_id')
+
+
+class MixedSectionSerializer(serializers.ModelSerializer):
+    batch_id = serializers.PrimaryKeyRelatedField(queryset=__import__('academics.models', fromlist=['Batch']).Batch.objects.all(), source='batch', required=False, allow_null=True)
+    section_ids = serializers.PrimaryKeyRelatedField(many=True, queryset=Section.objects.all(), source='sections', required=False)
+    semester_id = serializers.PrimaryKeyRelatedField(queryset=Semester.objects.all(), source='semester', allow_null=True, required=False)
+    batch_name = serializers.CharField(source='batch.name', read_only=True, allow_null=True)
+    batch_department_id = serializers.CharField(source='batch.department_id', read_only=True, allow_null=True)
+    batch_department_name = serializers.CharField(source='batch.department.name', read_only=True, allow_null=True)
+    semester_number = serializers.IntegerField(source='semester.number', read_only=True, allow_null=True)
+    sections_detail = serializers.SerializerMethodField(read_only=True)
+
+    def get_sections_detail(self, obj):
+        """Return details of all sections in this mixed section."""
+        return [{
+            'id': s.id,
+            'name': s.name,
+            'batch': s.batch_id,
+            'batch_name': str(s.batch) if s.batch else None,
+            'semester': s.semester_id,
+            'department_id': s.batch.course.department_id if s.batch and s.batch.course else (s.batch.department_id if s.batch else None),
+        } for s in obj.sections.all()]
+
+    class Meta:
+        model = MixedSection
+        fields = ('id', 'name', 'batch', 'batch_id', 'batch_name', 'batch_department_id', 'batch_department_name', 
+                  'sections', 'section_ids', 'sections_detail', 'semester', 'semester_id', 'semester_number', 
+                  'academic_year', 'description', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
 
 
 class AttendanceUnlockRequestSerializer(serializers.ModelSerializer):

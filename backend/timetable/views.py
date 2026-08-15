@@ -18,6 +18,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _coerce_int(val):
+    try:
+        return int(val) if val is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _normalize_class_type(raw_class_type, curriculum_row=None):
     raw = str(raw_class_type or '').strip()
     if not raw:
@@ -463,6 +470,283 @@ class CurriculumBySectionView(APIView):
             return Response({'results': self._finalize_results(rows, sem_num)})
         except Exception:
             return Response({'results': []})
+
+
+class MixedSectionCurriculumView(APIView):
+    """
+    API endpoint to retrieve curriculum for a Mixed Section.
+    
+    A mixed section groups multiple regular sections. This endpoint resolves
+    curriculum by:
+    1. Getting department + semester from the mixed section's batch
+    2. For each chosen section, extracting its department + semester
+    3. Querying CurriculumDepartment for all (dept_id, semester) pairs
+    4. Deduplicating by course_code and returning with department info
+    
+    Query params:
+    - mixed_section_id (required): ID of the MixedSection
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        mixed_section_id = request.query_params.get('mixed_section_id') or request.query_params.get('mixed_section')
+        debug = request.query_params.get('debug') == '1'
+        if not mixed_section_id:
+            return Response({'results': []})
+
+        try:
+            from academics.models import MixedSection
+            mixed_sec = MixedSection.objects.select_related(
+                'batch__course__department',
+                'batch__department',
+                'semester'
+            ).prefetch_related(
+                'sections__batch__course__department',
+                'sections__batch__department',
+                'sections__managing_department'
+            ).get(pk=int(mixed_section_id))
+        except Exception as e:
+            if debug:
+                return Response({'error': str(e), 'results': []})
+            return Response({'results': []})
+
+        sem_num = getattr(mixed_sec.semester, 'number', None)
+        if sem_num is None:
+            return Response({'results': [], 'debug': {'error': 'No semester found for mixed section'}})
+
+        # Collect all (department_id, semester) pairs to query
+        dept_sem_pairs = set()
+        dept_section_map = {}  # Track which sections contribute which departments
+        section_details = {}  # Track section details for debugging
+        
+        # 1. From mixed section's batch
+        batch_dept_id = None
+        logger.info(f'[MixedSection {mixed_section_id}] Processing batch...')
+        if mixed_sec.batch:
+            logger.info(f'  - Batch ID: {mixed_sec.batch.id}, Name: {mixed_sec.batch.name}')
+            if mixed_sec.batch.course and getattr(mixed_sec.batch.course, 'department_id', None):
+                batch_dept_id = mixed_sec.batch.course.department_id
+                logger.info(f'  - Found dept from batch.course: {batch_dept_id}')
+            elif getattr(mixed_sec.batch, 'department_id', None):
+                batch_dept_id = mixed_sec.batch.department_id
+                logger.info(f'  - Found dept from batch.department: {batch_dept_id}')
+        
+        if batch_dept_id:
+            dept_sem_pairs.add((batch_dept_id, sem_num))
+            if batch_dept_id not in dept_section_map:
+                dept_section_map[batch_dept_id] = []
+            dept_section_map[batch_dept_id].append(('batch', None))
+        else:
+            logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve batch department')
+        
+        # 2. From each chosen section - MUST resolve department from each chosen section
+        chosen_sections = list(mixed_sec.sections.all())
+        logger.info(f'[MixedSection {mixed_section_id}] Found {len(chosen_sections)} chosen sections')
+        
+        for i, section in enumerate(chosen_sections):
+            dept_id = None
+            section_sem = getattr(section.semester, 'number', None) or sem_num
+            logger.info(f'  Section {i+1}/{len(chosen_sections)}: ID={section.id}, Name={section.name}, Batch={section.batch_id}, Sem={section_sem}')
+            
+            # Priority: section.batch.course.department > section.batch.department > section.managing_department
+            if section.batch:
+                batch = section.batch
+                logger.info(f'    - Section batch found: ID={batch.id}, name={batch.name}')
+                if getattr(batch, 'course', None):
+                    course = batch.course
+                    logger.info(f'      - Section batch has course: ID={course.id}')
+                    if getattr(course, 'department_id', None):
+                        dept_id = course.department_id
+                        logger.info(f'      - Using course.department_id: {dept_id}')
+                
+                if not dept_id and getattr(batch, 'department_id', None):
+                    dept_id = batch.department_id
+                    logger.info(f'      - Using batch.department_id: {dept_id}')
+            
+            if not dept_id and getattr(section, 'managing_department_id', None):
+                dept_id = section.managing_department_id
+                logger.info(f'    - Using section.managing_department_id: {dept_id}')
+            
+            if dept_id:
+                dept_sem_pairs.add((dept_id, section_sem))
+                if dept_id not in dept_section_map:
+                    dept_section_map[dept_id] = []
+                dept_section_map[dept_id].append(('section', section.id, section.name))
+                section_details[section.id] = {'name': section.name, 'dept_id': dept_id, 'sem': section_sem}
+                logger.info(f'    ✓ Resolved dept {dept_id} for section {section.id}')
+            else:
+                # Log if we couldn't resolve department for a chosen section
+                logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve department for chosen section {section.id} ({section.name})')
+                section_details[section.id] = {'name': section.name, 'dept_id': None, 'sem': section_sem, 'error': 'No department found'}
+        
+        if not dept_sem_pairs:
+            return Response({'results': []})
+
+        logger.info(f'[MixedSection {mixed_section_id}] Querying curriculum for dept-sem pairs: {dept_sem_pairs}')
+
+        try:
+            from curriculum.models import CurriculumDepartment
+            
+            # Query curriculum for all department-semester pairs
+            all_rows = []
+            courses_per_dept = {}  # Track courses found per department
+            for dept_id, sem_num_val in dept_sem_pairs:
+                try:
+                    rows = CurriculumDepartment.objects.filter(
+                        department_id=dept_id,
+                        semester__number=sem_num_val
+                    ).select_related('department')
+                    row_count = len(rows) if hasattr(rows, '__len__') else rows.count()
+                    courses_per_dept[f'dept_{dept_id}_sem_{sem_num_val}'] = row_count
+                    logger.info(f'  - Dept {dept_id}, Sem {sem_num_val}: Found {row_count} courses')
+                    all_rows.extend(rows)
+                except Exception as e:
+                    logger.warning(f'Failed to fetch curriculum for dept {dept_id}, sem {sem_num_val}: {e}')
+                    courses_per_dept[f'dept_{dept_id}_sem_{sem_num_val}'] = f'ERROR: {str(e)}'
+                    continue
+            
+            logger.info(f'[MixedSection {mixed_section_id}] Total curriculum records fetched: {len(all_rows)}')
+            
+            if not all_rows:
+                # No curriculum found - return empty with debug info if requested
+                msg = f'No curriculum found for mixed section {mixed_section_id} with dept-sem pairs: {dept_sem_pairs}'
+                logger.warning(msg)
+                if debug:
+                    return Response({
+                        'results': [], 
+                        'debug': {
+                            'message': msg, 
+                            'dept_sem_pairs': list(dept_sem_pairs), 
+                            'dept_section_map': dept_section_map,
+                            'section_details': section_details,
+                            'courses_per_dept': courses_per_dept
+                        }
+                    })
+                return Response({'results': []})
+            
+            # Deduplicate by course_code, preserving department info
+            # Each course maps to all departments that have it
+            seen = {}
+            for c in all_rows:
+                code = (c.course_code or '').strip()
+                if not code:
+                    code = None
+                
+                # Use course code as key if available, otherwise use pk
+                key = code if code else f'pk:{c.pk}'
+                
+                if key not in seen:
+                    seen[key] = {
+                        'id': c.pk,
+                        'course_code': code,
+                        'mnemonic': getattr(c, 'mnemonic', None),
+                        'course_name': c.course_name,
+                        'regulation': c.regulation,
+                        'semester': sem_num,
+                        'class_type': _normalize_class_type(c.class_type, c),
+                        'is_elective': c.is_elective,
+                        'is_dept_core': getattr(c, 'is_dept_core', False),
+                        'departments': []
+                    }
+                
+                # Add department info if not already present
+                existing_depts = [d['id'] for d in seen[key].get('departments', [])]
+                if c.department_id not in existing_depts:
+                    seen[key]['departments'].append({
+                        'id': c.department_id,
+                        'code': getattr(c.department, 'code', None),
+                        'name': getattr(c.department, 'name', None),
+                        'short_name': getattr(c.department, 'short_name', None),
+                    })
+            
+            results = list(seen.values())
+            msg = f'Mixed section {mixed_section_id}: Deduplicated to {len(results)} courses from {len(dept_sem_pairs)} dept-sem pairs'
+            logger.info(msg)
+            # Finalize results to fill in missing course codes if needed
+            final_results = self._finalize_results(results, sem_num)
+            resp = {'results': final_results}
+            if debug:
+                resp['debug'] = {
+                    'message': msg,
+                    'dept_sem_pairs': sorted(list(dept_sem_pairs)),
+                    'dept_section_map': {k: v for k, v in dept_section_map.items()},
+                    'section_details': section_details,
+                    'courses_per_dept': courses_per_dept,
+                    'chosen_sections': [{'id': s.id, 'name': s.name} for s in chosen_sections],
+                    'courses_count': len(final_results)
+                }
+            return Response(resp)
+        except Exception as e:
+            error_msg = f'Error in MixedSectionCurriculumView: {str(e)}'
+            logger.exception(error_msg)
+            if debug:
+                return Response({
+                    'results': [], 
+                    'debug': {
+                        'error': error_msg, 
+                        'exception': str(e),
+                        'dept_sem_pairs': sorted(list(dept_sem_pairs)) if dept_sem_pairs else [],
+                        'section_details': section_details
+                    }
+                })
+            return Response({'results': []})
+
+    def _finalize_results(self, rows, sem_num):
+        """Fill in missing course codes from Subject table as fallback."""
+        code_by_name = {}
+        for row in rows:
+            name_key = (row.get('course_name') or '').strip().lower()
+            code_val = (row.get('course_code') or '').strip()
+            if name_key and code_val and name_key not in code_by_name:
+                code_by_name[name_key] = code_val
+
+        for row in rows:
+            if (row.get('course_code') or '').strip():
+                continue
+            name_key = (row.get('course_name') or '').strip().lower()
+            if name_key and name_key in code_by_name:
+                row['course_code'] = code_by_name[name_key]
+
+        try:
+            from academics.models import Subject, TeachingAssignment
+            
+            for row in rows:
+                if (row.get('course_code') or '').strip():
+                    continue
+                row_name = (row.get('course_name') or '').strip()
+                if not row_name:
+                    continue
+
+                # Try to find code from TeachingAssignment.subject
+                code_from_ta_subject = (
+                    TeachingAssignment.objects.filter(
+                        subject__isnull=False,
+                        subject__name__iexact=row_name,
+                        is_active=True,
+                    )
+                    .exclude(subject__code__isnull=True)
+                    .exclude(subject__code='')
+                    .values_list('subject__code', flat=True)
+                    .first()
+                )
+                if code_from_ta_subject:
+                    row['course_code'] = code_from_ta_subject
+                    continue
+
+                # Try to find code from Subject table
+                code_from_subject = (
+                    Subject.objects.filter(name__iexact=row_name, semester__number=sem_num)
+                    .exclude(code__isnull=True)
+                    .exclude(code='')
+                    .values_list('code', flat=True)
+                    .first()
+                )
+                if code_from_subject:
+                    row['course_code'] = code_from_subject
+        except Exception:
+            pass
+
+        return rows
 
 
 class SectionTimetableView(APIView):

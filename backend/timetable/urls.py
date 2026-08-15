@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import TimetableTemplateViewSet, TimetableSlotViewSet, TimetableAssignmentViewSet, CurriculumBySectionView, SectionTimetableView, StaffTimetableView, SectionSubjectsStaffView
+from .views import TimetableTemplateViewSet, TimetableSlotViewSet, TimetableAssignmentViewSet, CurriculumBySectionView, MixedSectionCurriculumView, SectionTimetableView, StaffTimetableView, SectionSubjectsStaffView
 from .views import SpecialTimetableViewSet, SpecialTimetableEntryViewSet, PeriodSwapView
 from .views import PeriodSwapRequestView, PeriodSwapRequestActionView, BulkSpecialTimetableEntryCreateView
 
@@ -14,6 +14,7 @@ router.register('special-entries', SpecialTimetableEntryViewSet, basename='speci
 urlpatterns = [
     path('', include(router.urls)),
     path('curriculum-for-section/', CurriculumBySectionView.as_view(), name='timetable-curriculum-for-section'),
+    path('curriculum-for-mixed-section/', MixedSectionCurriculumView.as_view(), name='timetable-curriculum-for-mixed-section'),
     path('section/<int:section_id>/timetable/', SectionTimetableView.as_view(), name='timetable-section-timetable'),
     path('section/<int:section_id>/subjects-staff/', SectionSubjectsStaffView.as_view(), name='timetable-section-subjects-staff'),
     path('section/<int:section_id>/swap-periods/', PeriodSwapView.as_view(), name='timetable-section-swap-periods'),

@@ -179,13 +179,10 @@ def validate_roles_for_user(user, roles):
         'PRINCIPAL',
         'PS',
         'VISUAL_ADMIN',
-<<<<<<< HEAD
-=======
         'DB_READER',
         'CODE_ADMIN',
         'CODE_COURSE_INCHARGE',
         'CODE_SECTION_INCHARGE',
->>>>>>> 4c2ca77 (naveen6)
     }
     
     # External staff can only have EXT_STAFF role

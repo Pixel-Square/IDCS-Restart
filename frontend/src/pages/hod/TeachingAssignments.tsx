@@ -3,9 +3,9 @@ import { User, BookOpen, Save, Edit, X, Trash2, RefreshCw } from 'lucide-react'
 import fetchWithAuth from '../../services/fetchAuth'
 import { getCachedMe } from '../../services/auth'
 
-type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string } }
+type Section = { id: number; name: string; batch: string; batch_regulation?: { id: number; code: string; name?: string } | null; department_id?: number; department_short_name?: string; semester?: number; department?: { id: number; code?: string }; mixed_section?: boolean; mixed_section_id?: number | null; is_mixed_section?: boolean }
 type Staff = { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string; department?: number | { id?: number; code?: string; name?: string } }
-type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; department_id?: number; department_code?: string; semester?: number; regulation?: string; home_dept_codes?: string[] }
+type CurriculumRow = { id: number; course_code?: string; course_name?: string; department?: { id: number; code?: string }; department_id?: number; department_code?: string; semester?: number; regulation?: string; home_dept_codes?: string[]; departments?: { id: number; code?: string; name?: string; short_name?: string }[] }
 type TeachingAssignment = { 
   id: number
   staff: string | number
@@ -412,6 +412,17 @@ export default function TeachingAssignmentsPage(){
     }
   }, [departments, selectedDept])
 
+  const resolveMixedSectionCurriculum = (section: Section): CurriculumRow[] => {
+    const deptId = section.department_id ?? section.department?.id
+    const sem = section.semester
+    if (!deptId || sem == null) return []
+    return (curriculum || []).filter((c: CurriculumRow) => {
+      const rowDeptId = c.department_id ?? c.department?.id
+      const rowSemester = c.semester
+      return Number(rowDeptId) === Number(deptId) && Number(rowSemester) === Number(sem) && !(c as any).is_elective
+    })
+  }
+
   async function fetchData(forceRefresh = false){
     try{
       setLoading(true)
@@ -505,11 +516,34 @@ export default function TeachingAssignmentsPage(){
         const d = await safeJson(sres)
         const raw = d.results || d
         sectionsData = raw.map((r: any) => {
-          // HODSectionsView format has `id`, advisor my-students format has `section_id`
+          const isMixed = Boolean(r.is_mixed_section || r.mixed_section_id !== undefined || r.mixed_section)
           if (r.section_id !== undefined) {
-            return { id: r.section_id, name: r.section_name, batch: r.batch, batch_regulation: r.batch_regulation, department_id: r.department_id, department_short_name: r.department_short_name, semester: r.semester, department: r.department }
+            return {
+              id: r.section_id,
+              name: r.section_name,
+              batch: r.batch,
+              batch_regulation: r.batch_regulation,
+              department_id: r.department_id,
+              department_short_name: r.department_short_name,
+              semester: r.semester,
+              department: r.department,
+              mixed_section: isMixed,
+              mixed_section_id: r.mixed_section_id ?? (r.mixed_section && r.mixed_section.id) ?? null,
+              is_mixed_section: isMixed,
+            }
           } else {
-            return { id: r.id, name: r.name, batch: r.batch_name, batch_regulation: r.batch_regulation, department_id: r.department_id, semester: r.semester, department: { id: r.department_id, code: r.department_code } }
+            return {
+              id: r.id,
+              name: r.name,
+              batch: r.batch_name,
+              batch_regulation: r.batch_regulation,
+              department_id: r.department_id,
+              semester: r.semester,
+              department: { id: r.department_id, code: r.department_code },
+              mixed_section: isMixed,
+              mixed_section_id: r.mixed_section_id ?? null,
+              is_mixed_section: isMixed,
+            }
           }
         })
         setSections(sectionsData)
@@ -605,6 +639,21 @@ export default function TeachingAssignmentsPage(){
         const sharedCurriculumMap: Record<number, CurriculumRow[]> = {}
         await Promise.all(allSectionsForCurriculum.map(async sec => {
           try {
+            if (sec.mixed_section || sec.is_mixed_section || sec.mixed_section_id) {
+              // Use new mixed-section curriculum endpoint
+              const mixedSectionId = sec.mixed_section_id
+              if (mixedSectionId) {
+                const r = await fetchWithAuth(`/api/timetable/curriculum-for-mixed-section/?mixed_section_id=${mixedSectionId}`)
+                if (r.ok) {
+                  const d = await r.json()
+                  sharedCurriculumMap[sec.id] = (d.results || []) as CurriculumRow[]
+                }
+              } else {
+                // Fallback to manual resolution if mixed_section_id not available
+                sharedCurriculumMap[sec.id] = resolveMixedSectionCurriculum(sec)
+              }
+              return
+            }
             const r = await fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sec.id}`)
             if (r.ok) {
               const d = await r.json()
@@ -740,6 +789,52 @@ export default function TeachingAssignmentsPage(){
   // Prefer per-section curriculum (backend section-level resolver) for all sections.
   // Fallback to global curriculum only if section map is unavailable.
   const getSectionSubjects = (section: Section): CurriculumRow[] => {
+    const isMixed = Boolean(section.mixed_section || section.mixed_section_id || section.is_mixed_section)
+    if (isMixed) {
+      if (sharedSectionCurriculum[section.id] && sharedSectionCurriculum[section.id].length > 0) {
+        return sharedSectionCurriculum[section.id].filter((c: any) => !c.is_elective)
+      }
+      const deptId = section.department_id ?? section.department?.id
+      const sem = section.semester
+      if (deptId && sem != null) {
+        return (curriculum || []).filter((c: CurriculumRow) => {
+          const rowDeptId = c.department_id ?? c.department?.id
+          const rowSemester = c.semester
+          return Number(rowDeptId) === Number(deptId) && Number(rowSemester) === Number(sem) && !(c as any).is_elective
+        })
+      }
+      return []
+    }
+
+    // If in advisor/course assignment mode, only show subjects with actual teaching assignments for this section
+    if (showCourseAssignments) {
+      const sectionAssignments = assignments.filter(a => {
+        const aSectionId = Number(
+          a.section_details?.id || 
+          (a as any).section_details?.id || 
+          a.section || 
+          (a as any).section_id || 
+          0
+        );
+        return aSectionId === Number(section.id);
+      });
+      
+      // Get unique curriculum rows from assignments for this section
+      const curriculumRowIds = new Set<number>();
+      sectionAssignments.forEach(a => {
+        const id = Number(
+          a.curriculum_row_details?.id ||
+          (a.curriculum_row && typeof a.curriculum_row === 'object' ? a.curriculum_row.id : a.curriculum_row) ||
+          (a as any).curriculum_row_id ||
+          0
+        );
+        if (id > 0) curriculumRowIds.add(id);
+      });
+      
+      // Return only curriculum rows that have assignments
+      return curriculum.filter(c => curriculumRowIds.has(c.id));
+    }
+    
     const sectionRows = sharedSectionCurriculum[section.id]
     if (sectionRows && sectionRows.length > 0) {
       // Exclude is_elective rows.
@@ -1296,6 +1391,11 @@ export default function TeachingAssignmentsPage(){
                                 Regulation: {section.batch_regulation.code}
                               </span>
                             )}
+                            {(section.mixed_section || section.is_mixed_section || section.mixed_section_id) && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
+                                Mixed Section
+                              </span>
+                            )}
                           </div>
                         </div>
                         <div className="text-blue-600 text-sm font-medium">
@@ -1333,7 +1433,14 @@ export default function TeachingAssignmentsPage(){
                                   </td>
                                   <td className="px-4 py-3 text-gray-700">
                                     <div>{subject.course_name || 'Unnamed'}</div>
-                                    {subject.home_dept_codes && subject.home_dept_codes.length > 0 && (
+                                    {/* Show departments from mixed section curriculum endpoint */}
+                                    {subject.departments && subject.departments.length > 0 && (
+                                      <div className="text-xs text-indigo-600 font-medium mt-0.5">
+                                        {subject.departments.map((d: any) => d.code || d.short_name || d.name || '').filter(Boolean).join(', ')}
+                                      </div>
+                                    )}
+                                    {/* Fallback to home_dept_codes for shared sections */}
+                                    {(!subject.departments || subject.departments.length === 0) && subject.home_dept_codes && subject.home_dept_codes.length > 0 && (
                                       <div className="text-xs text-amber-600 font-medium mt-0.5">
                                         {subject.home_dept_codes.join(', ')}
                                       </div>

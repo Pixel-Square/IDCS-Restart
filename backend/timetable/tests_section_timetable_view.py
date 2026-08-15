@@ -145,8 +145,6 @@ class SectionTimetableViewIntegrationTests(SimpleTestCase):
         self.assertEqual(staff_data.get("name"), "Praveenkumar T, Swethabharathi R")
 
 
-<<<<<<< HEAD
-=======
 class CurriculumBySectionViewIntegrationTests(SimpleTestCase):
     def test_returns_credits_for_section_curriculum_rows(self):
         section = SimpleNamespace(

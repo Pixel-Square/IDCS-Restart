@@ -58,8 +58,6 @@ class CdapActiveLearningAnalysisMapping(models.Model):
         db_table = 'cdap_active_learning_analysis_mapping'
 
 
-<<<<<<< HEAD
-=======
 class CdapTemplate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     key = models.CharField(max_length=64, unique=True)
@@ -77,7 +75,6 @@ class CdapTemplate(models.Model):
         db_table = 'cdap_templates'
 
 
->>>>>>> d12832d (n5)
 class ObeAssessmentMasterConfig(models.Model):
     id = models.IntegerField(primary_key=True)
     config = models.JSONField(default=dict)
