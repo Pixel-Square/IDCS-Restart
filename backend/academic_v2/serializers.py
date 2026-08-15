@@ -258,6 +258,7 @@ class AcV2SemesterGroupSerializer(serializers.ModelSerializer):
 class AcV2ClassTypeSerializer(serializers.ModelSerializer):
     enabled_exams = serializers.SerializerMethodField()
     total_weight = serializers.SerializerMethodField()
+    coattainment_layout = serializers.SerializerMethodField()
     
     class Meta:
         model = AcV2ClassType
@@ -265,13 +266,23 @@ class AcV2ClassTypeSerializer(serializers.ModelSerializer):
             'id', 'name', 'short_code', 'display_name',
             'total_internal_marks', 'allow_customize_questions',
             'exam_assignments', 'cqi_global_custom_vars', 'default_co_count',
-            'enabled_exams', 'total_weight',
+            'enabled_exams', 'total_weight', 'coattainment_layout',
             'is_active', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']
         # Suppress auto-generated unique validators so updates don't
         # falsely reject an unchanged name on the same instance.
         validators = []
+
+    def get_coattainment_layout(self, obj):
+        vars_data = getattr(obj, 'cqi_global_custom_vars', None)
+        if isinstance(vars_data, dict):
+            return vars_data.get('_coattainment_layout', {})
+        elif isinstance(vars_data, list):
+            for item in vars_data:
+                if isinstance(item, dict) and '_coattainment_layout' in item:
+                    return item.get('_coattainment_layout', {})
+        return {}
     
     def validate_name(self, value):
         """Check uniqueness manually, excluding the current instance on updates."""

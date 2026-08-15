@@ -464,11 +464,12 @@ function PublishSuccessPanel({ onClose, studentCount, marksCount }: {
 // ---------------------------------------------------------------------------
 // Post-publish warning panel — shown after animation if empty cells exist
 // ---------------------------------------------------------------------------
-function PublishWarningPanel({ emptyCellCount, mustFillAllCells, onClose, onContinue }: {
+function PublishWarningPanel({ emptyCellCount, mustFillAllCells, onClose, onContinue, isPublishing }: {
   emptyCellCount: number;
   mustFillAllCells: boolean;
   onClose: () => void;
   onContinue: () => void;
+  isPublishing?: boolean;
 }) {
   const [reveal, setReveal] = React.useState(false);
   React.useEffect(() => { const t = setTimeout(() => setReveal(true), 80); return () => clearTimeout(t); }, []);
@@ -521,16 +522,28 @@ function PublishWarningPanel({ emptyCellCount, mustFillAllCells, onClose, onCont
       >
         <button
           onClick={onClose}
-          className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors"
+          disabled={isPublishing}
+          className="px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-100 transition-colors disabled:opacity-50"
         >
           ← Close &amp; Fix
         </button>
         {!mustFillAllCells && (
           <button
             onClick={onContinue}
-            className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-amber-600 to-orange-600 rounded-xl hover:from-amber-700 hover:to-orange-700 transition-colors shadow-[0_8px_20px_-8px_rgba(217,119,6,0.6)]"
+            disabled={isPublishing}
+            className="px-5 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-amber-600 to-orange-600 rounded-xl hover:from-amber-700 hover:to-orange-700 transition-colors shadow-[0_8px_20px_-8px_rgba(217,119,6,0.6)] disabled:opacity-75 flex items-center gap-2"
           >
-            Continue with {emptyCellCount} empty {emptyCellCount === 1 ? 'cell' : 'cells'}
+            {isPublishing ? (
+              <>
+                <svg className="w-4 h-4 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>Publishing&hellip;</span>
+              </>
+            ) : (
+              <span>Continue with {emptyCellCount} empty {emptyCellCount === 1 ? 'cell' : 'cells'}</span>
+            )}
           </button>
         )}
       </div>
@@ -781,6 +794,29 @@ export default function MarkEntryPage() {
     cia_max_marks: number;
     cia_weight: number;
   } | null>(null);
+  const [showMarkManagerToggle, setShowMarkManagerToggle] = useState(false);
+  const availableCos = useMemo(() => {
+    try {
+      // Prefer COs from mark_manager config
+      if (examInfo?.mark_manager && typeof examInfo.mark_manager.cos === 'object') {
+        const keys = Object.keys(examInfo.mark_manager.cos).map(k => Number(k)).filter(n => Number.isFinite(n) && n > 0);
+        if (keys.length) return keys.sort((a, b) => a - b);
+      }
+      // Then covered_cos from examInfo
+      const covered = (examInfo as any)?.covered_cos;
+      if (Array.isArray(covered) && covered.length) return covered.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0).sort((a: number, b: number) => a - b);
+      // Then derive from question COs (use examInfo qp_pattern to avoid referencing local questions state)
+      const qpQuestions = Array.isArray((examInfo as any)?.qp_pattern?.questions) ? (examInfo as any).qp_pattern.questions : [];
+      const qcos = qpQuestions.flatMap((q: any) => Array.isArray(q.co_number) ? q.co_number : (q.co_number ? [q.co_number] : []));
+      const uniq = Array.from(new Set(qcos.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0)));
+      if (uniq.length) return uniq.sort((a, b) => a - b);
+      // Fallback to co_count or 5
+      const cnt = Number((examInfo as any)?.co_count) || 5;
+      return Array.from({ length: cnt }, (_, i) => i + 1);
+    } catch (e) {
+      return [1, 2, 3, 4, 5];
+    }
+  }, [examInfo]);
   const [mmConfirming, setMmConfirming] = useState(false);
 
   // Import flow states
@@ -1044,6 +1080,7 @@ export default function MarkEntryPage() {
       if (hasChanges) return;
       if (showPublishConfirm) return; // don't refresh while publish modal is open
       if (suppressAutoRefreshAfterWarningRef.current) return; // don't refresh after "Close & Fix"
+      if (mmSetup && examInfo?.mark_manager?.enabled && examInfo.mark_manager.mode === 'user_define' && !examInfo.mark_manager.confirmed) return;
       if (!examId) return;
       loadDataRef.current?.().catch(() => undefined);
     };
@@ -1064,6 +1101,7 @@ export default function MarkEntryPage() {
       if (showPublishConfirm) return;
       if (suppressAutoRefreshAfterWarningRef.current) return;
       if (autoSaveStatus === 'saving') return;
+      if (mmSetup && examInfo?.mark_manager?.enabled && examInfo.mark_manager.mode === 'user_define' && !examInfo.mark_manager.confirmed) return;
       loadDataRef.current?.().catch(() => undefined);
     }, 2000);
 
@@ -1127,13 +1165,37 @@ export default function MarkEntryPage() {
       setSealAnimationEnabled(Boolean(pc?.seal_animation_enabled));
       setSealWatermarkEnabled(Boolean(pc?.seal_watermark_enabled));
 
-      // Init Mark Manager setup if needed
+      // Init Mark Manager setup if needed, but do NOT overwrite local edits while the user is actively configuring it.
       if (examData.mark_manager?.enabled && examData.mark_manager?.mode === 'user_define' && !examData.mark_manager?.confirmed) {
-        const cos: Record<number, MarkManagerCOConfig> = {};
-        for (let i = 1; i <= 5; i++) {
-          cos[i] = { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
+        if (!mmSetup) {
+          // Derive CO numbers from exam data (mark_manager config, covered_cos, qp_pattern questions), fallback to co_count or 5
+          let coNumbers: number[] = [];
+          try {
+            if (examData.mark_manager && typeof examData.mark_manager.cos === 'object') {
+              coNumbers = Object.keys(examData.mark_manager.cos).map(k => Number(k)).filter(n => Number.isFinite(n) && n > 0);
+            }
+            if (!coNumbers.length && Array.isArray((examData as any).covered_cos) && (examData as any).covered_cos.length) {
+              coNumbers = (examData as any).covered_cos.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0);
+            }
+            if (!coNumbers.length && Array.isArray(examData.qp_pattern?.questions)) {
+              const qcos = (examData.qp_pattern.questions || []).flatMap((q: any) => Array.isArray(q.co_number) ? q.co_number : (q.co_number ? [q.co_number] : []));
+              coNumbers = Array.from(new Set(qcos.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0)));
+            }
+          } catch (e) {
+            coNumbers = [];
+          }
+          if (!coNumbers.length) {
+            const fallbackCount = Number((examData as any).co_count) || 5;
+            coNumbers = Array.from({ length: fallbackCount }, (_, i) => i + 1);
+          }
+
+          const cos: Record<number, MarkManagerCOConfig> = {};
+          coNumbers.sort((a, b) => a - b).forEach((c) => {
+            cos[c] = { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
+          });
+          setMmSetup({ cos, cia_enabled: false, cia_max_marks: 30, cia_weight: 0 });
+          setShowMarkManagerToggle(true);
         }
-        setMmSetup({ cos, cia_enabled: false, cia_max_marks: 30, cia_weight: 0 });
       }
 
       // Unblock after exam details (students can load just after)
@@ -1176,6 +1238,12 @@ export default function MarkEntryPage() {
     if (!mmSetup || !examId) return;
     try {
       setMmConfirming(true);
+      const cosPayload: Record<string, MarkManagerCOConfig> = {};
+      Object.keys(mmSetup.cos || {}).forEach(k => {
+        const numKey = Number(k);
+        const val = mmSetup.cos[numKey];
+        if (val) cosPayload[String(k)] = val;
+      });
       const payload = {
         mark_manager: {
           enabled: true,
@@ -1183,7 +1251,7 @@ export default function MarkEntryPage() {
           cia_enabled: mmSetup.cia_enabled,
           cia_max_marks: mmSetup.cia_max_marks,
           cia_weight: mmSetup.cia_weight,
-          cos: mmSetup.cos,
+          cos: cosPayload,
         },
       };
       const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/confirm-mark-manager/`, {
@@ -1197,6 +1265,7 @@ export default function MarkEntryPage() {
       }
       setMessage({ type: 'success', text: 'Mark Manager configured. Loading questions...' });
       setMmSetup(null);
+      setShowMarkManagerToggle(false);
       await loadData();
     } catch (error) {
       setMessage({ type: 'error', text: error instanceof Error ? error.message : 'Failed to confirm Mark Manager' });
@@ -1551,31 +1620,57 @@ export default function MarkEntryPage() {
 
   // Calls the publish API and transitions to success.
   const callPublishAPI = async () => {
-    const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || err.error || 'Publish failed');
-    }
-    await loadData();
     setPublishCountdown(null);
-    if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+    if (countdownIntervalRef.current) {
+      window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
     setShowSealStamp(Boolean(sealAnimationEnabled));
     setPublishStatus('success');
+
+    try {
+      setPublishing(true);
+      const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Publish API error:', err);
+      }
+      loadData().catch((e) => console.error('Error refreshing after publish:', e));
+    } catch (e) {
+      console.error('Failed to publish in background:', e);
+    } finally {
+      setPublishing(false);
+    }
   };
 
   // Called from the "Continue with empty cells" button in the warning panel.
   const continuePublish = async () => {
-    setPublishing(true);
+    setPublishCountdown(null);
+    if (countdownIntervalRef.current) {
+      window.clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setShowSealStamp(Boolean(sealAnimationEnabled));
+    setPublishStatus('success');
+
     try {
-      await callPublishAPI();
+      setPublishing(true);
+      const res = await fetchWithAuth(`/api/academic-v2/exams/${examId}/publish/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Publish API error:', err);
+      }
+      loadData().catch((e) => console.error('Error refreshing after publish:', e));
     } catch (e) {
-      setPublishStatus('idle');
-      setShowPublishConfirm(false);
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to publish' });
+      console.error('Failed to publish in background:', e);
     } finally {
       setPublishing(false);
     }
@@ -1941,10 +2036,12 @@ export default function MarkEntryPage() {
     if (!examInfo?.mark_manager) return;
     const mm = examInfo.mark_manager;
     const cos: Record<number, MarkManagerCOConfig> = {};
-    for (let i = 1; i <= 5; i++) {
-      const c = mm.cos[String(i)];
-      cos[i] = c ? { enabled: c.enabled, num_items: c.num_items, max_marks: c.max_marks, weight: (c as any).weight || 0 } : { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
-    }
+    const mmCos = mm.cos || {};
+    // Use availableCos to maintain consistent CO numbering
+    availableCos.forEach((co) => {
+      const c = mmCos[String(co)];
+      cos[co] = c ? { enabled: c.enabled, num_items: c.num_items, max_marks: c.max_marks, weight: (c as any).weight || 0 } : { enabled: false, num_items: 5, max_marks: 25, weight: 0 };
+    });
     setMmSetup({ cos, cia_enabled: mm.cia_enabled, cia_max_marks: mm.cia_max_marks, cia_weight: (mm as any).cia_weight || 0 });
   };
 
@@ -2188,8 +2285,8 @@ export default function MarkEntryPage() {
         </div>
       )}
 
-      {/* ───── Toolbar + Table (hidden during Mark Manager setup) ───── */}
-      {!(needsMarkManagerSetup && mmSetup) && (<>
+      {/* ───── Toolbar + Table ───── */}
+      <>
       <div className="bg-white rounded-xl shadow-sm border shrink-0">
 
         {/* Publish control timers moved to toolbar */}
@@ -2240,10 +2337,24 @@ export default function MarkEntryPage() {
           )}
 
           {/* Mark Manager edit (user_define mode, already confirmed) */}
-          {canImport && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && examInfo.mark_manager?.confirmed && (
-            <button onClick={editMarkManager} className="px-3 py-1.5 text-sm border border-teal-300 text-teal-700 rounded-lg hover:bg-teal-50 flex items-center gap-1.5">
-              <Edit3 className="w-3.5 h-3.5" /> Mark Manager
-            </button>
+          {canImport && examInfo.mark_manager?.enabled && examInfo.mark_manager?.mode === 'user_define' && (
+            <>
+              <button
+                onClick={() => {
+                  if (!mmSetup) editMarkManager();
+                  // only toggle visibility; keep mmSetup so configuration isn't lost
+                  setShowMarkManagerToggle(s => !s);
+                }}
+                className="px-3 py-1.5 text-sm rounded-lg bg-green-600 text-white hover:bg-green-700 flex items-center gap-1.5"
+              >
+                <Edit3 className="w-3.5 h-3.5" /> Mark Manager
+              </button>
+              {examInfo.mark_manager?.confirmed && (
+                <button onClick={editMarkManager} className="px-3 py-1.5 text-sm border border-teal-300 text-teal-700 rounded-lg hover:bg-teal-50 flex items-center gap-1.5 ml-2">
+                  <Edit3 className="w-3.5 h-3.5" /> Edit MM
+                </button>
+              )}
+            </>
           )}
 
           {/* Publish / save buttons */}
@@ -2450,6 +2561,7 @@ export default function MarkEntryPage() {
                 mustFillAllCells={mustFillAllCells}
                 onClose={() => closePublishModal(false, true)}
                 onContinue={continuePublish}
+                isPublishing={publishing}
               />
             )}
             
@@ -2824,8 +2936,6 @@ export default function MarkEntryPage() {
 
 
 
-      </>)}
-
       {/* ───── Mark Manager Setup (user_define mode — first time or edit) ───── */}
       {mmSetup && (
         <div className="bg-white rounded-xl shadow-sm border p-6 space-y-5">
@@ -2836,7 +2946,7 @@ export default function MarkEntryPage() {
               {needsMarkManagerSetup ? 'Setup Required' : 'Editing'}
             </span>
             {!needsMarkManagerSetup && (
-              <button onClick={() => setMmSetup(null)} className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+              <button onClick={() => { setMmSetup(null); setShowMarkManagerToggle(false); }} className="ml-auto text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
                 <X className="w-3.5 h-3.5" /> Cancel
               </button>
             )}
@@ -2847,7 +2957,7 @@ export default function MarkEntryPage() {
 
           {/* CO checkboxes */}
           <div className="flex flex-wrap items-center gap-3">
-            {[1, 2, 3, 4, 5].map(co => (
+            {availableCos.map(co => (
               <label key={co} className={`flex items-center gap-1.5 px-3 py-2 border rounded-lg cursor-pointer select-none transition-colors ${mmSetup.cos[co]?.enabled ? 'bg-teal-50 border-teal-400 ring-1 ring-teal-400' : 'hover:bg-gray-50'}`}>
                 <input
                   type="checkbox"
@@ -2899,7 +3009,7 @@ export default function MarkEntryPage() {
                 </div>
               </div>
             )}
-            {[1, 2, 3, 4, 5].filter(co => mmSetup.cos[co]?.enabled).map(co => (
+            {availableCos.filter(co => mmSetup.cos[co]?.enabled).map(co => (
               <div key={co} className="border rounded-lg p-4 bg-gray-50">
                 <h4 className="text-sm font-bold text-gray-800 mb-2">CO-{co}</h4>
                 <div className="space-y-2">
@@ -2973,7 +3083,6 @@ export default function MarkEntryPage() {
       )}
 
       {/* ───── Marks Table ───── */}
-      {!(needsMarkManagerSetup && mmSetup) && (
       <div className="bg-white rounded-xl shadow-sm border flex-1 min-h-0 overflow-hidden flex flex-col relative">
         <style>{`
           .marks-table-scroll::-webkit-scrollbar {
@@ -3194,7 +3303,7 @@ export default function MarkEntryPage() {
           </div>
         )}
       </div>
-      )}
+      </>
 
       {/* ───── Sort/Filter Modal ───── */}
       {sortFilterOpen && (

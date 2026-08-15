@@ -16,6 +16,7 @@ const ApprovalInboxPage = React.lazy(() => import('./admin/ApprovalInboxPage'));
 const InternalMarkAdminPage = React.lazy(() => import('./admin/InternalMarkAdminPage'));
 const PassMarkSettingsPage = React.lazy(() => import('./admin/SettingsPage'));
 const GoogleSheetsPage = React.lazy(() => import('./admin/GoogleSheetsPage'));
+const CoAttainmentConfigPage = React.lazy(() => import('./admin/coattainment/CoAttainmentConfig'));
 const CourseListPage = React.lazy(() => import('./faculty/CourseListPage'));
 const MarkEntryPage = React.lazy(() => import('./faculty/MarkEntryPage'));
 const InternalMarkPage = React.lazy(() => import('./faculty/InternalMarkPage'));
@@ -62,6 +63,10 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/admin/google-sheets',
     element: <GoogleSheetsPage />,
+  },
+  {
+    path: 'academic-v2/admin/co-attainment-config',
+    element: <CoAttainmentConfigPage />,
   },
   // Course Manager + Bypass
   {

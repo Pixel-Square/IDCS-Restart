@@ -15,6 +15,11 @@ import { exportCOSummaryToExcel, exportCOSummaryToPDF, exportInternalMarksExcel 
 import FacultyCourseDashboard from './FacultyCourseDashboard';
 import ResultAnalysisPage from './result_analysis/ResultAnalysisPage';
 import ResetNoticePopup, { type ResetNotice } from './ResetNoticePopup';
+const COattainmentTable = React.lazy(() => import('./coattainment/COattainmentTable'));
+
+function COattainmentTableWrapper({ courseId }: { courseId?: string | undefined }) {
+  return <COattainmentTable courseId={courseId} />;
+}
 
 /* ─── types ─── */
 
@@ -107,6 +112,8 @@ export default function InternalMarkPage() {
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [tab, setTab] = useState<'dashboard' | 'exams' | 'co' | 'result'>('dashboard');
+  // add coattainment tab
+  const [showCoAttainment, setShowCoAttainment] = useState(false);
 
   // CO summary
   const [coLoading, setCoLoading] = useState(false);
@@ -495,6 +502,14 @@ export default function InternalMarkPage() {
         >
           <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />Result Analysis
         </button>
+        <button
+          onClick={() => { setTab('coattainment'); }}
+          className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            tab === 'coattainment' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4 inline mr-1.5 -mt-0.5" />CO Attainment
+        </button>
       </div>
 
       {/* ─── Tab: Dashboard ─── */}
@@ -642,6 +657,14 @@ export default function InternalMarkPage() {
           onChangeView={setCoView}
           onRefresh={loadCOSummary}
         />
+      )}
+      {tab === 'coattainment' && (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          {/* lazy import faculty COattainment table */}
+          <React.Suspense fallback={<div className="p-6">Loading…</div>}>
+            <COattainmentTableWrapper courseId={courseId} />
+          </React.Suspense>
+        </div>
       )}
     </div>
   );

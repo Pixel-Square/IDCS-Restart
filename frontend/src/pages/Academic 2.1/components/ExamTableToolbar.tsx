@@ -11,6 +11,7 @@ interface ExamTableToolbarProps {
   onSearchChange: (query: string) => void;
   searchPlaceholder?: string;
   filters?: {
+    q
     label: string;
     value: string;
     options: { value: string; label: string }[];
@@ -128,11 +129,10 @@ export function QuickFilter({ options, selected, onChange }: QuickFilterProps) {
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
-          className={`px-3 py-1 rounded-lg text-sm transition-colors ${
-            selected === opt.value
+          className={`px-3 py-1 rounded-lg text-sm transition-colors ${selected === opt.value
               ? 'bg-blue-600 text-white'
               : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-          }`}
+            }`}
         >
           {opt.label}
         </button>

@@ -2301,7 +2301,16 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
     
     def perform_update(self, serializer):
+        layout = self.request.data.get('coattainment_layout')
         instance = serializer.save(updated_by=self.request.user)
+
+        if layout is not None and isinstance(layout, dict):
+            vars_data = instance.cqi_global_custom_vars
+            if not isinstance(vars_data, dict):
+                vars_data = {'_items': vars_data} if isinstance(vars_data, list) else {}
+            vars_data['_coattainment_layout'] = layout
+            instance.cqi_global_custom_vars = vars_data
+            instance.save(update_fields=['cqi_global_custom_vars'])
 
         # Keep CQI DB config in sync with the JSON-based admin editor.
         # Faculty views prefer AcV2CqiExam (DB) for stable CQI CO/condition symbols.
@@ -7295,6 +7304,17 @@ def faculty_course_co_summary(request, ta_id):
         'course_name': course_name,
         'co_count': co_count,
         'total_internal_marks': total_internal,
+        'class_type': {
+            'id': class_type.id if class_type else None,
+            'name': class_type.name if class_type else None,
+            'code': getattr(class_type, 'code', None) or (class_type.name if class_type else None),
+            'coattainment_layout': (
+                class_type.cqi_global_custom_vars.get('_coattainment_layout', {})
+                if class_type and isinstance(class_type.cqi_global_custom_vars, dict)
+                else {}
+            ),
+        } if class_type else None,
+        'qp_type': qp_type_code,
         'exams': exams_data,
         'students': students_data,
         'cqi_config': cqi_config,

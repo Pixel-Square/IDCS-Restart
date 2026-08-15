@@ -133,6 +133,7 @@ const AcV2QpPatternEditorPage = safeLazy(() => import('./pages/Academic 2.1/admi
 const AcV2ApprovalInboxPage = safeLazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'), 'ApprovalInboxPage');
 const AcV2InternalMarkAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'), 'InternalMarkAdminPage');
 const AcV2WeightagePage = safeLazy(() => import('./pages/Academic 2.1/admin/WeightagePage'), 'WeightagePage');
+const AcV2CoAttainmentConfigPage = safeLazy(() => import('./pages/Academic 2.1/admin/coattainment/CoAttainmentConfig'), 'CoAttainmentConfig');
 const AcV2CourseListPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'), 'CourseListPage');
 const AcV2MarkEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'), 'MarkEntryPage');
 const AcV2InternalMarkPage = safeLazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'), 'InternalMarkPage');
@@ -892,6 +893,23 @@ export default function App() {
                         <LazyErrorBoundary>
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcV2WeightagePage />
+                        </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
+                <Route
+                  path="/academic-v2/admin/co-attainment-config"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcV2CoAttainmentConfigPage />
                         </React.Suspense>
                         </LazyErrorBoundary>
                       }

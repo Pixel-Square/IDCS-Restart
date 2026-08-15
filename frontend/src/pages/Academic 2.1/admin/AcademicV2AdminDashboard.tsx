@@ -47,11 +47,18 @@ const adminPages: AdminPage[] = [
     order: 5,
   },
   {
+    title: 'CO Attainment',
+    path: '/academic-v2/admin/co-attainment-config',
+    description: 'Configure CO attainment columns and related settings for courses',
+    icon: <BarChart2 size={32} />,
+    order: 6,
+  },
+  {
     title: 'Approval Inbox',
     path: '/academic-v2/admin/approvals',
     description: 'Review edit requests from faculty',
     icon: <CheckCircle size={32} />,
-    order: 6,
+    order: 7,
   },
   {
     title: 'Publish Control',
