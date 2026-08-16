@@ -4,7 +4,7 @@ import fetchWithAuth from '../../../../services/fetchAuth';
 export type ColumnDef = {
   id: string;
   label: string;
-  kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula';
+  kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula' | 'total';
   formula?: string;
   meta?: any;
 };
@@ -54,27 +54,15 @@ export function evaluateFormulaExpr(expr: string, context: Record<string, number
   }
 
   function parseFactor(): number {
-    if (pos < tokens!.length && tokens![pos] === '-') {
-      pos++;
-      return -parsePrimary();
-    }
-    if (pos < tokens!.length && tokens![pos] === '+') {
-      pos++;
-      return parsePrimary();
-    }
-    return parsePrimary();
-  }
-
-  function parsePrimary(): number {
     if (pos >= tokens!.length) return 0;
     const token = tokens![pos++];
     if (token === '(') {
       const val = parseExpression();
-      if (pos < tokens!.length && tokens![pos] === ')') {
-        pos++;
-      }
+      if (pos < tokens!.length && tokens![pos] === ')') pos++;
       return val;
     }
+    if (token === '-') return -parseFactor();
+    if (token === '+') return parseFactor();
     const num = parseFloat(token);
     return isNaN(num) ? 0 : num;
   }
@@ -87,29 +75,64 @@ export function evaluateFormulaExpr(expr: string, context: Record<string, number
   }
 }
 
-export default function COattainmentTable({ courseId }: { courseId?: string }) {
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<any | null>(null);
+export default function COattainmentTable({
+  courseId,
+  data: propData,
+}: {
+  courseId?: string;
+  data?: {
+    course_code: string;
+    course_name: string;
+    co_count: number;
+    total_internal_marks: number;
+    class_type?: { id?: string; name?: string; code?: string; short_code?: string; coattainment_layout?: Record<string, ColumnDef[]> };
+    qp_type?: any;
+    exams: Array<{ id: string; name?: string; exam_display_name?: string; short_name?: string }>;
+    students: Array<{
+      student_id: string;
+      reg_no: string;
+      name: string;
+      co_totals?: number[];
+      exam_marks?: Record<string, Record<string, number>>;
+    }>;
+    course?: { class_type?: { id?: string; name?: string; code?: string; short_code?: string }; class_type_id?: string; question_paper_type?: string; qp_type?: string };
+    class_type_id?: string;
+    question_paper_type?: string;
+  };
+}) {
+  const [fetchedData, setFetchedData] = useState<any | null>(null);
+  const [fetching, setFetching] = useState(!propData && !!courseId);
 
   useEffect(() => {
-    if (!courseId) return;
-    setLoading(true);
+    if (propData || !courseId) return;
+    let cancelled = false;
+    setFetching(true);
     (async () => {
       try {
         const res = await fetchWithAuth(`/api/academic-v2/faculty/courses/${courseId}/co-summary/`);
-        if (!res.ok) throw new Error('Failed');
-        setData(await res.json());
+        if (!res.ok) throw new Error('Failed to fetch CO attainment');
+        const resData = await res.json();
+        if (!cancelled) setFetchedData(resData);
       } catch (e) {
-        setData(null);
+        if (!cancelled) setFetchedData(null);
       } finally {
-        setLoading(false);
+        if (!cancelled) setFetching(false);
       }
     })();
-  }, [courseId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId, propData]);
 
-  if (!courseId) return <div className="p-6 text-sm text-gray-500">No course selected</div>;
-  if (loading) return <div className="p-6 text-sm text-gray-500">Loading CO attainment…</div>;
-  if (!data) return <div className="p-6 text-sm text-red-500">Failed to load CO data</div>;
+  const data = propData || fetchedData;
+
+  if (fetching && !data) {
+    return <div className="p-6 text-sm text-gray-500">Loading CO attainment table…</div>;
+  }
+
+  if (!data) {
+    return <div className="p-6 text-sm text-gray-400">No CO attainment data available.</div>;
+  }
 
   const coCount = data.co_count || 5;
 
@@ -132,13 +155,11 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
       if (Object.keys(map).length === 0) return [];
 
       const classTypeId = data.class_type?.id ?? data.course?.class_type?.id ?? data.course?.class_type_id ?? data.class_type_id ?? '';
-      const qpType = data.qp_type ?? data.course?.question_paper_type ?? data.course?.qp_type ?? data.question_paper_type ?? '';
+      const qpType = (typeof data.qp_type === 'object' ? data.qp_type?.code || data.qp_type?.name : data.qp_type) ?? data.course?.question_paper_type ?? data.course?.qp_type ?? data.question_paper_type ?? '';
       const comboKey = classTypeId && qpType ? `${classTypeId}::${qpType}` : `course:${courseId}`;
 
-      // 1. Direct match with comboKey
       if (Array.isArray(map[comboKey]) && map[comboKey].length > 0) return map[comboKey];
 
-      // Collect all possible ClassType identifiers
       const ctIds = [
         data.class_type?.id,
         data.class_type?.code,
@@ -146,19 +167,18 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
         data.class_type?.name,
         data.course?.class_type?.id,
         data.course?.class_type?.code,
+        data.course?.class_type?.short_code,
         data.course?.class_type_id,
         data.class_type_id,
       ].filter((x) => x !== undefined && x !== null && String(x).trim() !== '').map((x) => String(x).trim());
 
-      // Collect all possible QpType identifiers
       const qpTypes = [
-        data.qp_type?.code || data.qp_type,
+        typeof data.qp_type === 'object' ? data.qp_type?.code || data.qp_type?.name : data.qp_type,
         data.course?.question_paper_type,
         data.course?.qp_type,
         data.question_paper_type,
       ].filter((x) => x !== undefined && x !== null && String(x).trim() !== '').map((x) => String(x).trim());
 
-      // 2. Try any combination of ctId :: qpType (case-insensitive)
       for (const ct of ctIds) {
         for (const qp of qpTypes) {
           const targetKey = `${ct}::${qp}`.toLowerCase();
@@ -170,7 +190,6 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
         }
       }
 
-      // 3. Try matching by qpType or classType if key has '::' (case-insensitive)
       const ctIdsLower = ctIds.map((x) => x.toLowerCase());
       const qpTypesLower = qpTypes.map((x) => x.toLowerCase());
       for (const k of Object.keys(map)) {
@@ -184,7 +203,6 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
         }
       }
 
-      // 4. Fallback: if there is any stored column configuration in localStorage, use it!
       const keysWithColumns = Object.keys(map).filter((k) => Array.isArray(map[k]) && map[k].length > 0);
       if (keysWithColumns.length > 0) {
         return map[keysWithColumns[0]];
@@ -196,7 +214,14 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
     }
   })();
 
-  const subColumns: ColumnDef[] = storedColumns;
+  const subColumns: ColumnDef[] = (() => {
+    if (storedColumns.length === 0) return [];
+    const hasTotal = storedColumns.some((c) => c.kind === 'total' || c.id === 'co_total');
+    if (!hasTotal) {
+      return [...storedColumns, { id: 'co_total', label: 'COx Total', kind: 'total' }];
+    }
+    return storedColumns;
+  })();
 
   const formatSubColumnTitle = (label: string, coNum: number) => {
     const str = label || `CO${coNum}`;
@@ -258,11 +283,81 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
     return '-';
   };
 
-  const evaluateFormulaForStudent = (student: any, formula: string, coNum: number) => {
+  const getCoTotalValue = (student: any, coNum: number, visitedColIds = new Set<string>()) => {
+    let sum = 0;
+    let hasAnyNumeric = false;
+
+    const evalColValue = (col: ColumnDef): number | null => {
+      if (!col || visitedColIds.has(col.id)) return null;
+
+      if (col.kind === 'raw') {
+        const raw = getRawTotal(student, coNum);
+        return typeof raw === 'number' && !isNaN(raw) ? raw : null;
+      }
+      if (col.kind === 'weighted') {
+        const w = getWeightedTotal(student, coNum);
+        return typeof w === 'number' && !isNaN(w) ? w : null;
+      }
+      if (col.kind === 'exam') {
+        const sc = getExamScore(student, col.meta?.exam, coNum);
+        return typeof sc === 'number' && !isNaN(sc) ? sc : null;
+      }
+      if (col.kind === 'formula' && col.formula) {
+        // Skip formula columns that depend on CO Sub-Column Total to prevent self-reference
+        if (/\[CO[x0-9]*-?(CO-)?(SUBCOL(UMNS)?-)?TOTAL\]/i.test(col.formula)) return null;
+
+        const nextVisited = new Set(visitedColIds);
+        nextVisited.add(col.id);
+        const fVal = evaluateFormulaForStudent(student, col.formula, coNum, nextVisited);
+        return typeof fVal === 'number' && !isNaN(fVal) ? fVal : null;
+      }
+      return null;
+    };
+
+    for (const col of subColumns) {
+      if (col.kind === 'total' || col.id === 'co_total') continue;
+      const val = evalColValue(col);
+      if (typeof val === 'number') {
+        sum += val;
+        hasAnyNumeric = true;
+      }
+    }
+
+    if (!hasAnyNumeric) {
+      const raw = getRawTotal(student, coNum);
+      if (typeof raw === 'number' && raw > 0) return Number.isInteger(raw) ? raw : Number(raw.toFixed(2));
+      const weighted = getWeightedTotal(student, coNum);
+      if (typeof weighted === 'number' && weighted > 0) return Number.isInteger(weighted) ? weighted : Number(weighted.toFixed(2));
+      return '-';
+    }
+    return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
+  };
+
+  const evaluateFormulaForStudent = (student: any, formula: string, coNum: number, visitedColIds = new Set<string>()) => {
     const rawTotal = getRawTotal(student, coNum);
     const weightedTotal = getWeightedTotal(student, coNum);
+    const coTotalVal = getCoTotalValue(student, coNum, visitedColIds);
+    const numericCoTotal = typeof coTotalVal === 'number' ? coTotalVal : 0;
 
     const context: Record<string, number> = {
+      'COX-SUBCOL-TOTAL': numericCoTotal,
+      'COX_SUBCOL_TOTAL': numericCoTotal,
+      'COX-SUBCOLUMNS-TOTAL': numericCoTotal,
+      'COX_SUBCOLUMNS_TOTAL': numericCoTotal,
+      'COX-TOTAL': numericCoTotal,
+      'COX_TOTAL': numericCoTotal,
+      'COX-CO-TOTAL': numericCoTotal,
+      'COX_CO_TOTAL': numericCoTotal,
+
+      [`CO${coNum}-SUBCOL-TOTAL`]: numericCoTotal,
+      [`CO${coNum}_SUBCOL_TOTAL`]: numericCoTotal,
+      [`CO${coNum}-SUBCOLUMNS-TOTAL`]: numericCoTotal,
+      [`CO${coNum}_SUBCOLUMNS_TOTAL`]: numericCoTotal,
+      [`CO${coNum}-TOTAL`]: numericCoTotal,
+      [`CO${coNum}_TOTAL`]: numericCoTotal,
+      [`CO${coNum}-CO-TOTAL`]: numericCoTotal,
+      [`CO${coNum}_CO_TOTAL`]: numericCoTotal,
+
       'COX-TOTAL-RAW': rawTotal,
       'COX_TOTAL_RAW': rawTotal,
       [`CO${coNum}-TOTAL-RAW`]: rawTotal,
@@ -278,7 +373,6 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
       [`CO${coNum}_WEIGHTED`]: weightedTotal,
     };
 
-    // Add exam-specific tokens
     if (Array.isArray(data.exams)) {
       data.exams.forEach((ex: any) => {
         const code = getExamCode(ex);
@@ -307,6 +401,9 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
   };
 
   const getCellValue = (student: any, col: ColumnDef, coNum: number) => {
+    if (col.kind === 'total' || col.id === 'co_total') {
+      return getCoTotalValue(student, coNum);
+    }
     if (col.kind === 'raw') {
       const val = getRawTotal(student, coNum);
       return Number.isInteger(val) ? val : Number(val.toFixed(2));
@@ -319,7 +416,7 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
       return getExamScore(student, col.meta?.exam, coNum);
     }
     if (col.kind === 'formula' && col.formula) {
-      return evaluateFormulaForStudent(student, col.formula, coNum);
+      return evaluateFormulaForStudent(student, col.formula, coNum, new Set([col.id]));
     }
     return '-';
   };
@@ -342,7 +439,6 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
       <div className="overflow-x-auto border rounded-lg">
         <table className="min-w-full text-xs border-collapse">
           <thead>
-            {/* CO Header Row */}
             <tr className="bg-gray-100 text-gray-800">
               <th rowSpan={2} className="border px-3 py-2 text-left font-semibold w-28 sticky left-0 bg-gray-100 z-10">
                 Reg No
@@ -361,20 +457,27 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
               ))}
             </tr>
 
-            {/* Sub-Columns Header Row */}
             <tr className="bg-gray-50 text-gray-700">
               {coNumbers.flatMap((co) =>
                 subColumns.length > 0 ? (
                   subColumns.map((col) => (
                     <th
                       key={`co-${co}-col-${col.id}`}
-                      className="border px-2 py-1.5 text-center font-medium min-w-[110px] max-w-[160px] truncate"
+                      className={`border px-2 py-1.5 text-center truncate ${
+                        col.kind === 'total' || col.id === 'co_total'
+                          ? 'font-bold min-w-[100px] max-w-[140px] bg-amber-100/90 text-amber-950 border-amber-300'
+                          : 'font-medium min-w-[110px] max-w-[160px]'
+                      }`}
                       title={formatSubColumnTitle(col.label, co)}
                     >
-                      <div className="truncate">{formatSubColumnTitle(col.label, co)}</div>
-                      {col.kind === 'formula' && (
-                        <div className="text-[10px] text-purple-600 font-mono font-normal truncate">formula</div>
-                      )}
+                      <div className="truncate font-bold">{formatSubColumnTitle(col.label, co)}</div>
+                      <div className="text-[10px] font-mono truncate">
+                        {col.kind === 'formula' ? (
+                          <span className="text-purple-600 font-normal">formula</span>
+                        ) : col.kind === 'total' || col.id === 'co_total' ? (
+                          <span className="text-amber-700 font-semibold">total</span>
+                        ) : null}
+                      </div>
                     </th>
                   ))
                 ) : (
@@ -397,20 +500,32 @@ export default function COattainmentTable({ courseId }: { courseId?: string }) {
                   </td>
                   {coNumbers.flatMap((co) =>
                     subColumns.length > 0 ? (
-                      subColumns.map((col) => (
-                        <td
-                          key={`cell-${s.student_id || s.reg_no}-${co}-${col.id}`}
-                          className={`border px-2 py-1.5 text-center font-mono ${
-                            col.kind === 'formula'
-                              ? 'bg-purple-50/30 font-semibold text-purple-900'
-                              : col.kind === 'weighted'
-                              ? 'bg-blue-50/20 text-blue-950 font-medium'
-                              : 'text-gray-800'
-                          }`}
-                        >
-                          {getCellValue(s, col, co)}
-                        </td>
-                      ))
+                      subColumns.map((col) => {
+                        if (col.kind === 'total' || col.id === 'co_total') {
+                          return (
+                            <td
+                              key={`cell-${s.student_id || s.reg_no}-${co}-${col.id}`}
+                              className="border px-2 py-1.5 text-center font-mono font-bold bg-amber-50/90 text-amber-950 border-amber-200"
+                            >
+                              {getCoTotalValue(s, co)}
+                            </td>
+                          );
+                        }
+                        return (
+                          <td
+                            key={`cell-${s.student_id || s.reg_no}-${co}-${col.id}`}
+                            className={`border px-2 py-1.5 text-center font-mono ${
+                              col.kind === 'formula'
+                                ? 'bg-purple-50/30 font-semibold text-purple-900'
+                                : col.kind === 'weighted'
+                                ? 'bg-blue-50/20 text-blue-950 font-medium'
+                                : 'text-gray-800'
+                            }`}
+                          >
+                            {getCellValue(s, col, co)}
+                          </td>
+                        );
+                      })
                     ) : (
                       <td key={`cell-${s.student_id || s.reg_no}-${co}-empty`} className="border px-2 py-1.5 text-center text-gray-400">
                         -

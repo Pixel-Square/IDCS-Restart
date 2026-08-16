@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import fetchWithAuth from '../../../../services/fetchAuth';
-import { Plus, X, Search, Calculator, ArrowLeft, ArrowRight, Trash2 } from 'lucide-react';
+import { Plus, X, Search, Calculator, ArrowLeft, ArrowRight, Trash2, Edit2 } from 'lucide-react';
 
 export type ColumnDef = {
   id: string;
   label: string;
-  kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula';
+  kind: 'raw' | 'weighted' | 'exam' | 'custom' | 'formula' | 'total';
   formula?: string;
   meta?: any;
 };
@@ -44,8 +44,9 @@ function TokenPickerModal({
 
   const categories = [
     {
-      title: 'CO Aggregates Tokens',
+      title: 'CO Aggregates & Sub-Column Totals',
       tokens: [
+        { token: '[COx-SUBCOL-TOTAL]', label: 'Sum / Total of sub-columns inside COx (Amber column value)', isHighlighted: true },
         { token: '[COx-TOTAL-RAW]', label: 'Total Raw Marks for COx across all exams' },
         { token: '[COx-TOTAL-WEIGHT]', label: 'Total Weighted Attainment for COx' },
         { token: '[COx-WEIGHTED]', label: 'Weighted Attainment for COx' },
@@ -122,22 +123,43 @@ function TokenPickerModal({
             <div key={idx} className="border rounded-lg p-3 bg-gray-50/50">
               <div className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-2">{cat.title}</div>
               <div className="space-y-1.5">
-                {cat.tokens.map((t, tIdx) => (
-                  <button
-                    key={tIdx}
-                    type="button"
-                    onClick={() => {
-                      onSelectToken(t.token);
-                      onClose();
-                    }}
-                    className="w-full text-left px-3 py-1.5 bg-white border border-gray-200 rounded-md hover:bg-blue-50 hover:border-blue-300 transition flex items-center justify-between group"
-                  >
-                    <code className="text-xs font-mono font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 group-hover:bg-blue-100">
-                      {t.token}
-                    </code>
-                    <span className="text-xs text-gray-500 truncate ml-2">{t.label}</span>
-                  </button>
-                ))}
+                {cat.tokens.map((t, tIdx) => {
+                  const isHighlight = Boolean(
+                    (t as any).isHighlighted ||
+                    t.token.includes('SUBCOL') ||
+                    t.token === '[COx-TOTAL]' ||
+                    t.token === '[COx-CO-TOTAL]'
+                  );
+
+                  return (
+                    <button
+                      key={tIdx}
+                      type="button"
+                      onClick={() => {
+                        onSelectToken(t.token);
+                        onClose();
+                      }}
+                      className={`w-full text-left px-3 py-1.5 rounded-md border transition flex items-center justify-between group ${
+                        isHighlight
+                          ? 'bg-amber-50/80 border-amber-300 hover:bg-amber-100/90'
+                          : 'bg-white border-gray-200 hover:bg-blue-50 hover:border-blue-300'
+                      }`}
+                    >
+                      <code
+                        className={`text-xs font-mono font-bold px-1.5 py-0.5 rounded border ${
+                          isHighlight
+                            ? 'text-amber-950 bg-amber-200 border-amber-350 group-hover:bg-amber-300'
+                            : 'text-blue-700 bg-blue-50 border-blue-100 group-hover:bg-blue-100'
+                        }`}
+                      >
+                        {t.token}
+                      </code>
+                      <span className={`text-xs truncate ml-2 ${isHighlight ? 'text-amber-900 font-medium' : 'text-gray-500'}`}>
+                        {t.label}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -162,16 +184,20 @@ function CoFieldPickerPopup({
   selectedClassType,
   selectedQpType,
   classTypes,
+  initialColumn,
   onClose,
   onAdd,
+  onUpdate,
 }: {
   open: boolean;
   courseId?: string;
   selectedClassType?: string;
   selectedQpType?: string;
   classTypes?: any[];
+  initialColumn?: ColumnDef | null;
   onClose: () => void;
   onAdd: (items: ColumnDef[]) => void;
+  onUpdate: (updatedCol: ColumnDef) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [exams, setExams] = useState<any[]>([]);
@@ -185,6 +211,14 @@ function CoFieldPickerPopup({
 
   useEffect(() => {
     if (!open) return;
+
+    if (initialColumn) {
+      setFormulaTitle(initialColumn.label || '');
+      setFormulaExpr(initialColumn.formula || '');
+    } else {
+      setFormulaTitle('COx Custom Formula');
+      setFormulaExpr('');
+    }
 
     const classTypeMeta = classTypes?.find((ct: any) => String(ct.id) === String(selectedClassType));
     const filteredByCombination = (classTypeMeta?.exam_assignments || []).filter((ex: any) => {
@@ -225,7 +259,7 @@ function CoFieldPickerPopup({
         setLoading(false);
       }
     })();
-  }, [open, courseId, selectedClassType, selectedQpType, classTypes]);
+  }, [open, courseId, selectedClassType, selectedQpType, classTypes, initialColumn]);
 
   if (!open) return null;
 
@@ -248,23 +282,31 @@ function CoFieldPickerPopup({
     }, 50);
   };
 
-  const handleAdd = () => {
-    const newCols: ColumnDef[] = [];
-
+  const handleSave = () => {
     const title = formulaTitle.trim();
     const expr = formulaExpr.trim();
 
-    if (title || expr) {
-      newCols.push({
-        id: `col_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        label: title || 'COx Custom Field',
-        kind: expr ? 'formula' : 'custom',
+    if (initialColumn) {
+      const updated: ColumnDef = {
+        ...initialColumn,
+        label: title || initialColumn.label,
+        kind: initialColumn.kind === 'total' ? 'total' : expr ? 'formula' : 'custom',
         formula: expr,
-      });
-    }
-
-    if (newCols.length > 0) {
-      onAdd(newCols);
+      };
+      onUpdate(updated);
+    } else {
+      const newCols: ColumnDef[] = [];
+      if (title || expr) {
+        newCols.push({
+          id: `col_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          label: title || 'COx Custom Field',
+          kind: expr ? 'formula' : 'custom',
+          formula: expr,
+        });
+      }
+      if (newCols.length > 0) {
+        onAdd(newCols);
+      }
     }
     onClose();
   };
@@ -274,13 +316,15 @@ function CoFieldPickerPopup({
       <div className="w-full max-w-2xl bg-white rounded-lg shadow-xl overflow-hidden my-8 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="px-5 py-3.5 border-b flex items-center justify-between bg-gray-50">
-          <div className="font-semibold text-gray-900">Add CO Attainment Fields</div>
+          <div className="font-semibold text-gray-900">
+            {initialColumn ? `Edit Column: ${initialColumn.label}` : 'Add CO Attainment Fields'}
+          </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleAdd}
+              onClick={handleSave}
               className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded text-sm transition"
             >
-              Add Selected
+              {initialColumn ? 'Save Changes' : 'Add Selected'}
             </button>
             <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded">
               Close
@@ -320,11 +364,11 @@ function CoFieldPickerPopup({
                 type="text"
                 value={formulaExpr}
                 onChange={(e) => setFormulaExpr(e.target.value)}
-                placeholder="e.g. [COx-TOTAL-RAW] * 0.4 + [COx-TOTAL-WEIGHT] * 0.6"
+                placeholder="e.g. [COx-SUBCOL-TOTAL] * 0.5"
                 className="w-full px-3 py-2.5 border rounded-md text-sm font-mono bg-gray-50 focus:bg-white focus:ring-2 focus:ring-purple-400 focus:outline-none transition"
               />
               <div className="text-xs text-gray-500 mt-2">
-                Use token variables like <code className="text-purple-700 font-semibold bg-purple-50 px-1 py-0.5 rounded">[COx-TOTAL-RAW]</code> or click <span className="font-medium">+ Token Variables</span> to select.
+                Use variable tokens like <code className="text-amber-900 font-bold bg-amber-100 px-1 py-0.5 rounded border border-amber-300">[COx-SUBCOL-TOTAL]</code> or click <span className="font-medium">+ Token Variables</span> to select.
               </div>
             </div>
           </div>
@@ -351,6 +395,7 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   const [selectedQpType, setSelectedQpType] = useState<string>('');
   const [columnMap, setColumnMap] = useState<Record<string, ColumnDef[]>>(() => loadStoredMap());
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [editingColumn, setEditingColumn] = useState<ColumnDef | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(columnMap));
@@ -437,7 +482,18 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   }, [selectedClassType, selectedQpType, qpTypeOptions]);
 
   const activeKey = selectedClassType && selectedQpType ? `${selectedClassType}::${selectedQpType}` : null;
-  const currentColumns = activeKey ? columnMap[activeKey] || [] : [];
+  const rawCurrentColumns = activeKey ? columnMap[activeKey] || [] : [];
+
+  const currentColumns = useMemo(() => {
+    if (!rawCurrentColumns || rawCurrentColumns.length === 0) return [];
+    const hasTotal = rawCurrentColumns.some((c) => c.kind === 'total' || c.id === 'co_total');
+    if (!hasTotal) {
+      const defaultTotal: ColumnDef = { id: 'co_total', label: 'COx Total', kind: 'total' };
+      return [...rawCurrentColumns, defaultTotal];
+    }
+    return rawCurrentColumns;
+  }, [rawCurrentColumns]);
+
   const selectedClassTypeMeta = classTypes.find((ct: any) => String(ct.id) === String(selectedClassType));
   const ctCode = selectedClassTypeMeta?.code || selectedClassTypeMeta?.short_code || selectedClassTypeMeta?.name || '';
   const altKey = ctCode && selectedQpType ? `${ctCode}::${selectedQpType}` : null;
@@ -454,10 +510,25 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
     });
   };
 
+  const updateColumn = (updatedCol: ColumnDef) => {
+    if (!activeKey || !updatedCol) return;
+
+    setColumnMap((prev) => {
+      const existing = [...currentColumns];
+      const idx = existing.findIndex((c) => c.id === updatedCol.id);
+      if (idx !== -1) {
+        existing[idx] = updatedCol;
+      }
+      const newMap = { ...prev, [activeKey]: existing };
+      if (altKey) newMap[altKey] = existing;
+      return newMap;
+    });
+  };
+
   const move = (idx: number, dir: -1 | 1) => {
     if (!activeKey) return;
     setColumnMap((prev) => {
-      const existing = [...(prev[activeKey] || (altKey ? prev[altKey] : []) || [])];
+      const existing = [...currentColumns];
       const target = idx + dir;
       if (target < 0 || target >= existing.length) return prev;
       const temp = existing[target];
@@ -472,12 +543,21 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
   const removeColumn = (columnId: string) => {
     if (!activeKey) return;
     setColumnMap((prev) => {
-      const existing = prev[activeKey] || (altKey ? prev[altKey] : []) || [];
-      const updated = existing.filter((column) => column.id !== columnId);
+      const updated = currentColumns.filter((column) => column.id !== columnId);
       const newMap = { ...prev, [activeKey]: updated };
       if (altKey) newMap[altKey] = updated;
       return newMap;
     });
+  };
+
+  const handleEditClick = (col: ColumnDef) => {
+    setEditingColumn(col);
+    setPickerOpen(true);
+  };
+
+  const handleClosePicker = () => {
+    setPickerOpen(false);
+    setEditingColumn(null);
   };
 
   return (
@@ -533,7 +613,10 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
 
             <div className="pt-2">
               <button
-                onClick={() => setPickerOpen(true)}
+                onClick={() => {
+                  setEditingColumn(null);
+                  setPickerOpen(true);
+                }}
                 disabled={!selectedClassType || !selectedQpType}
                 className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-sm transition disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
@@ -578,6 +661,8 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
                           <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${
                             c.kind === 'formula'
                               ? 'bg-purple-100 text-purple-700'
+                              : c.kind === 'total'
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
                               : c.kind === 'exam'
                               ? 'bg-blue-100 text-blue-700'
                               : 'bg-gray-100 text-gray-700'
@@ -592,6 +677,13 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
                         )}
                       </div>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleEditClick(c)}
+                          className="p-1.5 border rounded text-blue-600 hover:bg-blue-50 hover:border-blue-200"
+                          title="Edit Column Title / Formula"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => move(idx, -1)}
                           disabled={idx === 0}
@@ -636,8 +728,10 @@ export default function CoAttainmentConfig({ courseId }: { courseId?: string }) 
           selectedClassType={selectedClassType}
           selectedQpType={selectedQpType}
           classTypes={classTypes}
-          onClose={() => setPickerOpen(false)}
+          initialColumn={editingColumn}
+          onClose={handleClosePicker}
           onAdd={onAddColumns}
+          onUpdate={updateColumn}
         />
       )}
     </div>
