@@ -160,7 +160,7 @@ def validate_roles_for_user(user, roles):
     # normalize role names
     role_names = {getattr(r, 'name', str(r)).upper() for r in roles}
 
-    STUDENT_ALLOWED = {'STUDENT'}
+    STUDENT_ALLOWED = {'STUDENT', 'VISUAL_ADMIN'}
     # NOTE: Many deployments use additional staff-only roles (SECURITY, HR, IQAC, etc.).
     # Keep this list permissive for staff profiles while still preventing STUDENT on staff.
     STAFF_ALLOWED = {
@@ -178,6 +178,11 @@ def validate_roles_for_user(user, roles):
         'HAA',
         'PRINCIPAL',
         'PS',
+        'VISUAL_ADMIN',
+        'DB_READER',
+        'CODE_ADMIN',
+        'CODE_COURSE_INCHARGE',
+        'CODE_SECTION_INCHARGE',
     }
     
     # External staff can only have EXT_STAFF role

@@ -1,0 +1,11 @@
+# TODO
+- [x] Refactor `OddEvenSemTimetable.tsx` to remove hardcoded odd/even period arrays (ODD_SEM_TEMPLATE / EVEN_SEM_TEMPLATE).
+- [x] Add user-driven column builder:
+  - [x] Allow adding up to 10 columns.
+  - [x] Each column can be chosen as `Period 1..15`, `Break`, or `Lunch`.
+  - [x] Break/Lunch can be placed at any position by adding them in the desired order.
+- [x] Update timing UI to work with manually added columns.
+- [x] Enforce duplicates policy for `Period N` (block duplicates within a template).
+- [x] Update UI labels/notes to remove “automatically configured”.
+- [x] Save/edit/load must preserve selected columns.
+- [x] Run frontend build/typecheck and do quick manual verification.

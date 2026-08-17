@@ -37,17 +37,20 @@ class IsHODOfDepartment(permissions.BasePermission):
             return False
         # Allow list/retrieve for HODs (queryset is filtered in the viewset)
         if request.method in permissions.SAFE_METHODS:
-            staff_profile = getattr(user, 'staff_profile', None)
-            if not staff_profile:
-                return False
             # allow list/retrieve for users who are HODs or who have explicit assign permission
             try:
                 from accounts.utils import get_user_permissions
+                from academics.views import _user_is_iqac_admin
                 perms = get_user_permissions(user)
-                if 'academics.assign_advisor' in perms:
+                if user.is_superuser or _user_is_iqac_admin(user) or 'academics.assign_advisor' in perms or 'academics.assign_teaching' in perms or 'academics.view_all_sections' in perms or 'academics.view_all_departments' in perms:
                     return True
             except Exception:
                 pass
+
+            staff_profile = getattr(user, 'staff_profile', None)
+            if not staff_profile:
+                return False
+
             hod_depts = DepartmentRole.objects.filter(staff=staff_profile, role='HOD', is_active=True)
             return hod_depts.exists()
         # For unsafe methods, require authentication here; detailed checks in has_object_permission

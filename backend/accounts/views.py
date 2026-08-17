@@ -1350,6 +1350,39 @@ def _friendly_gateway_error_message(exc: Exception) -> str:
     return 'Gateway request failed.'
 
 
+def _try_systemd_restart_whatsapp_gateway() -> tuple[bool, str]:
+    """Best-effort local restart for the WhatsApp gateway service.
+
+    This is intentionally opt-in via settings so production deployments can
+    decide whether the Django process is allowed to restart system services.
+    """
+
+    allow = bool(getattr(settings, 'OBE_WHATSAPP_GATEWAY_ALLOW_SYSTEMD_RESTART', False))
+    if not allow:
+        return False, ''
+
+    service = str(getattr(settings, 'OBE_WHATSAPP_GATEWAY_SYSTEMD_SERVICE', 'whatsapp') or 'whatsapp').strip()
+    if not service:
+        service = 'whatsapp'
+
+    try:
+        import subprocess
+
+        r = subprocess.run(
+            ['systemctl', 'restart', service],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=12,
+        )
+        if int(r.returncode or 0) == 0:
+            return True, f'Restarted system service: {service}'
+        msg = (r.stderr or r.stdout or '').strip()
+        return False, (msg or f'Failed to restart system service: {service}')
+    except Exception as e:
+        return False, str(e)
+
+
 def _normalize_gateway_path(value: str, default: str) -> str:
     s = str(value or '').strip()
     if not s:
@@ -1585,10 +1618,13 @@ class WhatsAppGatewayRestartView(APIView):
             return Response({'ok': False, 'detail': 'WhatsApp gateway is not configured.'})
 
         api_key = str(getattr(settings, 'OBE_WHATSAPP_API_KEY', '') or '').strip()
-        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 8.0) or 8.0)
+        timeout = float(getattr(settings, 'OBE_WHATSAPP_TIMEOUT_SECONDS', 5.0) or 5.0)
 
         try:
             import requests as _requests
+
+            last_error: Exception | None = None
+            last_detail: str = ''
 
             for base in bases:
                 try:
@@ -1598,16 +1634,40 @@ class WhatsAppGatewayRestartView(APIView):
                         headers={'X-Api-Key': api_key} if api_key else {},
                         timeout=timeout,
                     )
-                    if 200 <= int(r.status_code or 0) < 300:
+                    code = int(r.status_code or 0)
+                    if 200 <= code < 300:
                         try:
                             payload = r.json()
                         except Exception:
                             payload = {'ok': True}
                         return Response(payload)
-                except Exception:
+
+                    # Capture gateway error details (often includes API key mismatch).
+                    try:
+                        payload = r.json() if 'application/json' in (r.headers.get('content-type') or '') else None
+                    except Exception:
+                        payload = None
+                    if isinstance(payload, dict):
+                        last_detail = str(payload.get('detail') or payload.get('message') or payload.get('error') or '').strip()
+                    if not last_detail:
+                        last_detail = str((r.text or '').strip())
+
+                    if code in (401, 403) and not last_detail:
+                        last_detail = 'Gateway authentication failed (API key mismatch).'
+                    last_error = Exception(f'Gateway HTTP {code}')
+                except Exception as e:
+                    last_error = e
                     continue
 
-            return Response({'ok': False, 'detail': 'Gateway restart request failed.'})
+            # If the gateway is local and unreachable, optionally try a systemd restart.
+            restarted, restart_msg = _try_systemd_restart_whatsapp_gateway()
+            if restarted:
+                return Response({'ok': True, 'detail': restart_msg})
+
+            detail = last_detail or (_friendly_gateway_error_message(last_error) if last_error else 'Gateway restart request failed.')
+            if restarted is False and restart_msg:
+                detail = f'{detail} {restart_msg}'.strip()
+            return Response({'ok': False, 'detail': detail})
         except Exception as e:
             log.exception('WhatsApp gateway restart failed')
             return Response({'ok': False, 'detail': str(e)})

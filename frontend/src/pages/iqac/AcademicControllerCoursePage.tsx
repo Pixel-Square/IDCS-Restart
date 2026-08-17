@@ -186,6 +186,12 @@ export default function AcademicControllerCoursePage(): JSX.Element {
           <button className="obe-btn" onClick={() => navigate(`/obe/course/${encodeURIComponent(code)}`)}>
             Open OBE (faculty view)
           </button>
+          <button className="obe-btn" onClick={() => navigate(`/iqac/academic-controller/course/${encodeURIComponent(code)}/question-bank`)}>
+            Question Bank
+          </button>
+          <button className="obe-btn" onClick={() => navigate(`/iqac/academic-controller/course/${encodeURIComponent(code)}/question-bank-logs`)}>
+            Question Bank Logs
+          </button>
         </div>
       </div>
 

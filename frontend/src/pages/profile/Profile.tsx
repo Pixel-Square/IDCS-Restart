@@ -393,10 +393,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
   const initials = (user.username || 'U').slice(0, 2).toUpperCase();
 
+  const rootAvatarValue = String((user as any)?.profile_image || '').trim();
+  const nestedAvatarValue = String((user as any)?.profile?.profile_image || '').trim();
+  const avatarSourceValue = rootAvatarValue || nestedAvatarValue;
+
   const avatarUrlCandidates = useMemo(() => {
-    const rootValue = String((user as any)?.profile_image || '').trim();
-    const nestedValue = String((user as any)?.profile?.profile_image || '').trim();
-    const raw = rootValue || nestedValue;
+    const raw = avatarSourceValue;
     if (!raw) return [] as string[];
 
     const normalized = raw.replace(/\\+/g, '/');
@@ -406,19 +408,25 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
 
     if (normalized.startsWith('/')) {
-      const direct = normalized;
-      const apiBaseUrl = `${getApiBase()}${normalized}`;
-      return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+      // Use relative path first; avoid duplicate absolute+relative retries for the same resource.
+      return [normalized];
     }
 
     const direct = `/media/${normalized}`;
     const apiBaseUrl = `${getApiBase()}/media/${normalized}`;
-    return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
-  }, [user]);
+
+    // Deduplicate while preserving order.
+    const unique = new Set<string>();
+    for (const candidate of [direct, apiBaseUrl]) {
+      const value = String(candidate || '').trim();
+      if (value) unique.add(value);
+    }
+    return Array.from(unique);
+  }, [avatarSourceValue]);
 
   useEffect(() => {
     setAvatarCandidateIndex(0);
-  }, [avatarUrlCandidates]);
+  }, [avatarSourceValue]);
 
   const resolvedCandidate = avatarUrlCandidates[avatarCandidateIndex] || '';
   const hasLoadableCandidate = Boolean(avatarPreviewUrl) || avatarCandidateIndex < avatarUrlCandidates.length;
@@ -1076,10 +1084,18 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                       src={activeAvatarUrl}
                       alt="Profile"
                       className="w-full h-full object-cover"
-                      onError={() => {
+                      onError={(e) => {
+                        // Prevent recursive onError loops on broken/missing URLs.
+                        e.currentTarget.onerror = null;
+
+                        if (avatarPreviewUrl) {
+                          setAvatarPreviewUrl(null);
+                          return;
+                        }
+
                         setAvatarCandidateIndex((prev) => {
                           const next = prev + 1;
-                          return next;
+                          return next < avatarUrlCandidates.length ? next : avatarUrlCandidates.length;
                         });
                       }}
                     />

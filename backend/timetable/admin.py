@@ -1,6 +1,7 @@
 from django.contrib import admin
 from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
 from .models import SpecialTimetable, SpecialTimetableEntry, PeriodSwapRequest
+# from .models import TeacherConstraints, SubjectRequirements, TeacherSubjectMapping, GeneratedTimetable, GenerationLog
 
 
 @admin.register(TimetableTemplate)
@@ -60,3 +61,129 @@ class PeriodSwapRequestAdmin(admin.ModelAdmin):
             'fields': ('created_at', 'updated_at', 'responded_at')
         }),
     )
+
+
+"""
+# ─────────────────────────────────────────────────────────────
+# Automatic Timetable Generator Admin
+# ─────────────────────────────────────────────────────────────
+
+
+@admin.register(TeacherConstraints)
+class TeacherConstraintsAdmin(admin.ModelAdmin):
+    list_display = ('staff', 'max_weekly_hours', 'max_consecutive_periods', 'created_at')
+    list_filter = ('prefers_morning', 'prefers_afternoon', 'created_at')
+    search_fields = ('staff__user__first_name', 'staff__user__last_name', 'staff__staff_id')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    fieldsets = (
+        ('Teacher', {
+            'fields': ('staff',)
+        }),
+        ('Workload Constraints', {
+            'fields': ('max_weekly_hours', 'max_consecutive_periods')
+        }),
+        ('Availability', {
+            'fields': ('available_days', 'unavailable_periods')
+        }),
+        ('Preferences', {
+            'fields': ('prefers_morning', 'prefers_afternoon', 'prefers_no_first_hour', 'prefers_no_last_hour')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+
+@admin.register(SubjectRequirements)
+class SubjectRequirementsAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'theory_hours', 'lab_hours', 'tutorial_hours', 'created_at')
+    list_filter = ('requires_consecutive_slots', 'cannot_be_first_period', 'cannot_be_last_period', 'created_at')
+    search_fields = ('curriculum_row__course_code', 'subject__code')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    fieldsets = (
+        ('Subject', {
+            'fields': ('curriculum_row', 'subject')
+        }),
+        ('Hours Breakdown', {
+            'fields': ('theory_hours', 'lab_hours', 'tutorial_hours', 'practical_hours')
+        }),
+        ('Lab Requirements', {
+            'fields': ('requires_consecutive_slots', 'consecutive_slot_count', 'lab_slot_duration_minutes')
+        }),
+        ('Period Constraints', {
+            'fields': ('cannot_be_first_period', 'cannot_be_last_period', 'preferred_days')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+
+@admin.register(TeacherSubjectMapping)
+class TeacherSubjectMappingAdmin(admin.ModelAdmin):
+    list_display = ('staff', 'curriculum_row', 'effectiveness_score', 'ranking', 'is_primary', 'created_at')
+    list_filter = ('is_primary', 'ranking', 'academic_year', 'can_teach_theory', 'can_teach_lab', 'can_teach_tutorial')
+    search_fields = ('staff__user__first_name', 'staff__user__last_name', 'staff__staff_id', 
+                     'curriculum_row__course_code', 'subject__code')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    fieldsets = (
+        ('Teacher & Subject', {
+            'fields': ('staff', 'curriculum_row', 'subject', 'section', 'academic_year')
+        }),
+        ('Effectiveness', {
+            'fields': ('effectiveness_score', 'ranking', 'years_of_experience', 'is_primary')
+        }),
+        ('Teaching Capabilities', {
+            'fields': ('can_teach_theory', 'can_teach_lab', 'can_teach_tutorial')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at')
+        }),
+    )
+
+
+@admin.register(GeneratedTimetable)
+class GeneratedTimetableAdmin(admin.ModelAdmin):
+    list_display = ('name', 'template', 'academic_year', 'status', 'total_assignments', 'generated_at')
+    list_filter = ('status', 'generation_algorithm', 'created_at', 'generated_at', 'published_at')
+    search_fields = ('name', 'description')
+    readonly_fields = ('created_at', 'generated_at', 'published_at', 'total_assignments', 'constraint_violations', 'error_message')
+    filter_horizontal = ('departments', 'sections')
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'description', 'template', 'academic_year')
+        }),
+        ('Scope', {
+            'fields': ('departments', 'sections')
+        }),
+        ('Generation', {
+            'fields': ('status', 'generation_algorithm', 'error_message')
+        }),
+        ('Results', {
+            'fields': ('total_assignments', 'constraint_violations')
+        }),
+        ('Metadata', {
+            'fields': ('created_by', 'created_at', 'generated_at', 'published_at')
+        }),
+    )
+
+
+@admin.register(GenerationLog)
+class GenerationLogAdmin(admin.ModelAdmin):
+    list_display = ('generated_timetable', 'level', 'message', 'created_at')
+    list_filter = ('level', 'created_at', 'generated_timetable')
+    search_fields = ('message', 'generated_timetable__name')
+    readonly_fields = ('created_at',)
+    
+    def has_add_permission(self, request):
+        # Logs are created automatically, not manually
+        return False
+    
+    def has_delete_permission(self, request, obj=None):
+        # Allow deletion of logs for cleanup
+        return True
+"""

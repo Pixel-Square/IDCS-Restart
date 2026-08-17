@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
+import { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
 import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
@@ -8,6 +8,7 @@ import { showAlert, showConfirm } from '../../utils/dialog';
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
+type ClassTypeItem = { id: number; code: string; label: string };
 
 export default function DeptList() {
   const draftStorageKey = 'curriculum.dept.drafts.v1';
@@ -50,18 +51,19 @@ export default function DeptList() {
   const [deleteLinkedCount, setDeleteLinkedCount] = useState<number | null>(null);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
-  const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
-  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
+  const [selectedReg, setSelectedReg] = useState<string | null>(null);
+  const [selectedSem, setSelectedSem] = useState<number | null>(null);
+  const [currentDept, setCurrentDept] = useState<number | null>(null);
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
 
   useEffect(() => {
-    // update selectedReg when rows change
+    // Keep filters permissive by default so the page shows all available rows.
     const regs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
-    if (regs.length === 1) setSelectedReg(regs[0]);
-    else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
+    if (selectedReg && !regs.includes(selectedReg)) setSelectedReg(null);
+    if (!selectedReg && regs.length === 1) setSelectedReg(regs[0]);
     const sems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a:any,b:any)=>a-b) : [];
-    if (sems.length === 1) setSelectedSem(sems[0]);
-    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
+    if (selectedSem != null && !sems.includes(selectedSem)) setSelectedSem(null);
+    if (selectedSem == null && sems.length === 1) setSelectedSem(sems[0]);
   }, [rows]);
   useEffect(() => {
     fetchDeptRows()
@@ -71,11 +73,55 @@ export default function DeptList() {
     fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
 
+  // Fetch rows whenever filters (department / regulation / semester / batch) change
+  useEffect(() => {
+    setLoading(true);
+    fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined })
+      .then(r => setRows(r))
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [currentDept, selectedReg, selectedSem, selectedBatch]);
+
   useEffect(() => {
     fetchWithAuth('/api/curriculum/qp-types/')
       .then(res => res.ok ? res.json() : [])
       .then(data => setQpTypes(Array.isArray(data) ? data : []))
       .catch(() => setQpTypes([]));
+  }, []);
+
+  // Fetch class types from API
+  useEffect(() => {
+    fetchWithAuth('/api/curriculum/class-types/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => setClassTypes(Array.isArray(data) ? data : []))
+      .catch(() => setClassTypes([]));
+  }, []);
+
+  // Fetch admin-created class types from Academic v2
+  useEffect(() => {
+    fetchWithAuth('/api/academic-v2/class-types/')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const items = (Array.isArray(data) ? data : data?.results || []);
+        setAdminClassTypes(items.map((ct: any) => ({ id: ct.id, code: ct.short_code || ct.name, label: ct.display_name || ct.name })));
+      })
+      .catch(() => setAdminClassTypes([]));
+  }, []);
+
+  // Fetch admin-created QP types (master data only) from Academic v2
+  useEffect(() => {
+    fetchWithAuth('/api/academic-v2/qp-types/')
+      .then(res => res.ok ? res.json() : { results: [] })
+      .then(data => {
+        const qpTypesList = Array.isArray(data) ? data : (data.results || []);
+        setAdminQpTypes(qpTypesList.map((qt: any) => ({
+          id: qt.id,
+          code: qt.code,
+          label: qt.name || qt.code,
+          class_type_id: qt.class_type,
+        })));
+      })
+      .catch(() => setAdminQpTypes([]));
   }, []);
 
   // Fetch departments based on curriculum permissions
@@ -115,6 +161,53 @@ export default function DeptList() {
       setRefreshing(false);
     }
   }
+
+  // Helper: render class type <option> elements - prioritize admin (Academic v2) class types
+  const renderClassTypeOptions = () => (
+    <>
+      {adminClassTypes.map(ct => (
+        <option key={`adm-${ct.code}`} value={ct.code}>{ct.label} ({ct.code})</option>
+      ))}
+      {adminClassTypes.length === 0 && classTypes.map(ct => (
+        <option key={ct.code} value={ct.code}>{ct.label}</option>
+      ))}
+    </>
+  );
+
+  // Helper: filter QP types by class type (null = global, applied to all)
+  const getQpTypesForClassType = (classTypeCode: string | null) => {
+    if (!classTypeCode) return [];
+    
+    // Find the class type ID from the selected code
+    const selectedClassType = adminClassTypes.find(ct => ct.code === classTypeCode);
+    const classTypeId = selectedClassType?.id;
+    
+    if (!classTypeId) return [];
+    
+    // Show QP types that are:
+    // 1. Global (class_type_id is null)
+    // 2. OR specifically mapped to this class type
+    return adminQpTypes.filter(qt => !(qt as any).class_type_id || (qt as any).class_type_id === classTypeId);
+  };
+
+  // Helper: render QP type <option> elements filtered by class type
+  const renderQpTypeOptions = (classTypeCode?: string) => {
+    const filtered = classTypeCode ? getQpTypesForClassType(classTypeCode) : adminQpTypes;
+    return (
+      <>
+        {filtered.length > 0 && (
+          <optgroup label="Admin (Academic v2)" style={{ backgroundColor: '#FFF7ED' }}>
+            {filtered.map(qt => (
+              <option key={`adm-${qt.code}`} value={qt.code} style={{ backgroundColor: '#FFF7ED', color: '#9A3412' }}>{qt.label}</option>
+            ))}
+          </optgroup>
+        )}
+        {qpTypes.map(qt => (
+          <option key={qt.code} value={qt.code}>{qt.label}</option>
+        ))}
+      </>
+    );
+  };
 
   async function onSave(row: any) {
     try {
@@ -203,7 +296,7 @@ export default function DeptList() {
     try{
       await approveDeptRow(rowId, action);
       // refresh all rows
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       await showAlert('OK');
     }catch(e:any){ await showAlert(String(e), 'error'); }
@@ -248,8 +341,11 @@ export default function DeptList() {
   const [currentDept, setCurrentDept] = useState<number | null>(null);
 
   useEffect(() => {
-    if (uniqueDepts.length === 1) setCurrentDept(uniqueDepts[0]);
-    else if (!uniqueDepts.includes(currentDept || -1)) setCurrentDept(uniqueDepts[0] ?? null);
+    if (uniqueDepts.length === 1) {
+      setCurrentDept(uniqueDepts[0]);
+    } else if (currentDept != null && !uniqueDepts.includes(currentDept)) {
+      setCurrentDept(uniqueDepts[0] ?? null);
+    }
   }, [rows]);
 
   // derive elective options from department rows
@@ -317,7 +413,7 @@ export default function DeptList() {
       if (!payload.course_code) delete payload.course_code;
       if (!payload.course_name) delete payload.course_name;
       await createElective(payload);
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       // refresh elective subjects for UI
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
@@ -347,7 +443,7 @@ export default function DeptList() {
       });
       if (!res.ok) throw new Error(await res.text());
       // refresh data
-      const fresh = await fetchDeptRows();
+      const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
@@ -510,6 +606,7 @@ export default function DeptList() {
                 onChange={e => setSelectedReg(e.target.value || null)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value="">All Regulations</option>
                 {uniqueRegs.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             </div>
@@ -520,6 +617,7 @@ export default function DeptList() {
                 onChange={e => setSelectedSem(e.target.value ? Number(e.target.value) : null)}
                 className="px-4 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value="">All Semesters</option>
                 {uniqueSems.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
@@ -553,6 +651,16 @@ export default function DeptList() {
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Filter by Department</h3>
           <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setCurrentDept(null)}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                currentDept === null
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              All Departments
+            </button>
             {allDepartments.map(dept => {
               const isActive = currentDept === dept.id;
               const hasRows = uniqueDepts.includes(dept.id);
@@ -679,9 +787,7 @@ export default function DeptList() {
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
-                        {CLASS_TYPES.map((ct) => (
-                          <option key={ct.value} value={ct.value}>{ct.label}</option>
-                        ))}
+                        {renderClassTypeOptions()}
                       </select>
                     </td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
@@ -697,6 +803,9 @@ export default function DeptList() {
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => updateRowValue(r.id, { total_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => updateRowValue(r.id, { total_hours: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
+                      {!r.class_type ? (
+                        <span className="text-xs text-gray-500">Select class type first</span>
+                      ) : (
                       <select
                         value={r.question_paper_type || ''}
                         onChange={e => updateRowValue(r.id, { question_paper_type: e.target.value })}
@@ -704,10 +813,9 @@ export default function DeptList() {
                         style={{ minWidth: 90 }}
                       >
                         <option value="">— Select —</option>
-                        {qpTypes.map(qt => (
-                          <option key={qt.code} value={qt.code}>{qt.label}</option>
-                        ))}
+                        {renderQpTypeOptions(r.class_type)}
                       </select>
+                      )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -1152,9 +1260,7 @@ export default function DeptList() {
                   onChange={e => setAddForm(f => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {CLASS_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.label}</option>
-                  ))}
+                  {renderClassTypeOptions()}
                 </select>
               </div>
               <div>
@@ -1248,16 +1354,18 @@ export default function DeptList() {
               </div>
               <div className="col-span-2">
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Question Paper Type</label>
+                {!addForm.class_type ? (
+                  <div className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm">Please select a class type first</div>
+                ) : (
                 <select
                   value={addForm.question_paper_type || ''}
                   onChange={e => setAddForm(f => ({ ...f, question_paper_type: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {qpTypes.map(qt => (
-                    <option key={qt.code} value={qt.code}>{qt.label}</option>
-                  ))}
+                  {renderQpTypeOptions(addForm.class_type)}
                 </select>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <input 
@@ -1342,9 +1450,7 @@ export default function DeptList() {
                   onChange={e => setEditElectiveForm((f:any) => ({ ...f, class_type: e.target.value }))} 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
-                  {CLASS_TYPES.map((ct) => (
-                    <option key={ct.value} value={ct.value}>{ct.label}</option>
-                  ))}
+                  {renderClassTypeOptions()}
                 </select>
               </div>
               <div>
@@ -1444,9 +1550,7 @@ export default function DeptList() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 >
                   <option value="">— Select —</option>
-                  {qpTypes.map(qt => (
-                    <option key={qt.code} value={qt.code}>{qt.label}</option>
-                  ))}
+                  {renderQpTypeOptions()}
                 </select>
               </div>
               <div className="flex items-center gap-2">

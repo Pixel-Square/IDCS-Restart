@@ -98,6 +98,7 @@ export interface User {
   first_name?: string;
   last_name?: string;
   staff_id?: string;
+  profile_image?: string;
 }
 
 export interface ApprovalLog {

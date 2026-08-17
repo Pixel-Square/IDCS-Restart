@@ -22,8 +22,11 @@
     "jsbarcode": "^3.12.3",
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
-    "jszip": "^3.10.1",
+    "katex": "^0.16.45",
     "lucide-react": "^0.563.0",
+    "mathlive": "^0.109.2",
+    "mermaid": "^11.15.0",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
     "react": "^18.2.0",
     "react-barcode": "^1.6.1",
@@ -33,7 +36,8 @@
     "react-router-dom": "^6.14.0",
     "recharts": "^3.7.0",
     "tesseract.js": "^7.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
@@ -49,7 +53,10 @@
     "eslint-plugin-react-hooks": "^4.6.2",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
-    "typescript": "5.2.2",
+    "typescript": "^5.2.2",
     "vite": "^5.4.21"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.59.0"
   }
 }

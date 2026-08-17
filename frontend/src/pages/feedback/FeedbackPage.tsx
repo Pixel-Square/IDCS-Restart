@@ -2551,7 +2551,9 @@ export default function FeedbackPage() {
       regulation: null,
       years: form.years || (form.year ? [form.year] : []),
       semesters: [],
-      sections: form.sections || []
+      sections: form.sections || [],
+      anonymous: false,
+      form_name: form.form_name || '',
     });
 
     setShowCreateForm(true);
@@ -5920,16 +5922,16 @@ export default function FeedbackPage() {
                               <div className="flex items-center justify-between mb-1.5">
                                 <div className="flex items-center gap-2">
                                   <div className="w-7 h-7 bg-green-600 rounded-full flex items-center justify-center text-white font-semibold text-xs flex-shrink-0">
-                                    {isAnonymous ? '●' : resp.user_name.charAt(0).toUpperCase()}
+                                    {(resp as any).is_anonymous ? '●' : resp.user_name.charAt(0).toUpperCase()}
                                   </div>
                                   <div className="leading-tight">
                                     <p className="font-semibold text-slate-800 text-xs">
-                                      {isAnonymous ? 'Anonymous Responder' : resp.user_name}
-                                      {!isAnonymous && resp.register_number && (
+                                      {(resp as any).is_anonymous ? 'Anonymous Responder' : resp.user_name}
+                                      {!(resp as any).is_anonymous && resp.register_number && (
                                         <span className="text-slate-600 font-normal ml-1 text-xs">({resp.register_number})</span>
                                       )}
                                     </p>
-                                    {isAnonymous && (
+                                    {(resp as any).is_anonymous && (
                                       <span className="text-xs px-1 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium inline-block mt-0.5">
                                         Anonymous
                                       </span>

@@ -1,0 +1,251 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --idcs-blue: #0090FF;
+  --idcs-orange: #FF6600;
+  --idcs-cyan: #00FFDD;
+  --idcs-dark: #050508;
+  --idcs-glass: rgba(255, 255, 255, 0.04);
+  --idcs-border: rgba(0, 144, 255, 0.15);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: auto; /* Lenis handles this */
+}
+
+body {
+  background-color: var(--idcs-dark);
+  color: #ffffff;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+  cursor: none;
+}
+
+/* Custom cursor */
+.cursor-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--idcs-cyan);
+  border-radius: 50%;
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  transform: translate(-50%, -50%);
+  mix-blend-mode: difference;
+  transition: width 0.2s, height 0.2s;
+}
+
+.cursor-ring {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(0, 144, 255, 0.5);
+  border-radius: 50%;
+  position: fixed;
+  pointer-events: none;
+  z-index: 9998;
+  transform: translate(-50%, -50%);
+  transition: all 0.1s ease-out;
+}
+
+.cursor-ring.hover {
+  width: 56px;
+  height: 56px;
+  border-color: var(--idcs-cyan);
+  background: rgba(0, 255, 221, 0.04);
+}
+
+/* Lenis smooth scroll */
+html.lenis {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-scrolling iframe {
+  pointer-events: none;
+}
+
+/* Glass morphism utility */
+.glass {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 144, 255, 0.12);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 144, 255, 0.2);
+}
+
+/* Neon glow text */
+.text-glow-blue {
+  text-shadow: 0 0 20px rgba(0, 144, 255, 0.8), 0 0 40px rgba(0, 144, 255, 0.4);
+}
+
+.text-glow-cyan {
+  text-shadow: 0 0 20px rgba(0, 255, 221, 0.8), 0 0 40px rgba(0, 255, 221, 0.4);
+}
+
+.text-glow-orange {
+  text-shadow: 0 0 20px rgba(255, 102, 0, 0.8), 0 0 40px rgba(255, 102, 0, 0.4);
+}
+
+/* Border glow */
+.border-glow-blue {
+  box-shadow: 0 0 20px rgba(0, 144, 255, 0.3), inset 0 0 20px rgba(0, 144, 255, 0.05);
+}
+
+.border-glow-cyan {
+  box-shadow: 0 0 20px rgba(0, 255, 221, 0.3), inset 0 0 20px rgba(0, 255, 221, 0.05);
+}
+
+/* Canvas container — fixed, full screen */
+.canvas-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.canvas-container.interactive {
+  pointer-events: auto;
+}
+
+/* Scroll container */
+.scroll-container {
+  position: relative;
+  z-index: 1;
+}
+
+/* Section overlays */
+.scene-overlay {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.scene-overlay.interactive {
+  pointer-events: auto;
+}
+
+/* Data counter */
+.data-counter {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: rgba(0, 255, 221, 0.7);
+  letter-spacing: 0.1em;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 144, 255, 0.4);
+  border-radius: 2px;
+}
+
+/* Selection */
+::selection {
+  background: rgba(0, 144, 255, 0.3);
+  color: white;
+}
+
+/* Portal cards hover */
+.portal-card {
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.portal-card:hover {
+  transform: translateY(-8px) scale(1.02);
+}
+
+/* Scan line animation */
+@keyframes scanLine {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.scan-line {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0, 144, 255, 0.4), transparent);
+  animation: scanLine 8s linear infinite;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0.3;
+}
+
+/* Noise texture overlay */
+.noise-overlay {
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 998;
+  opacity: 0.4;
+}
+
+/* Gradient overlays for scene transitions */
+.scene-fade-top {
+  background: linear-gradient(to bottom, var(--idcs-dark) 0%, transparent 100%);
+}
+
+.scene-fade-bottom {
+  background: linear-gradient(to top, var(--idcs-dark) 0%, transparent 100%);
+}
+
+/* Loading screen */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--idcs-dark);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Responsive canvas */
+@media (max-width: 768px) {
+  .canvas-container {
+    touch-action: none;
+  }
+}

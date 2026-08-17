@@ -28,16 +28,32 @@ export interface UserQueryListItem {
   updated_at: string;
 }
 
+async function fetchQueriesWithFallback(primaryPath: string, fallbackPath: string, init?: RequestInit): Promise<Response> {
+  try {
+    const primary = await fetchWithAuth(primaryPath, init);
+    if (primary.ok) return primary;
+
+    // Retry on route-level/backend availability issues.
+    if ([404, 405, 502, 503, 504].includes(primary.status)) {
+      return await fetchWithAuth(fallbackPath, init);
+    }
+
+    return primary;
+  } catch {
+    return await fetchWithAuth(fallbackPath, init);
+  }
+}
+
 export async function fetchMyQueries(): Promise<UserQueryListItem[]> {
-  const res = await fetchWithAuth('/api/accounts/queries/');
+  const res = await fetchQueriesWithFallback('/api/accounts/queries/', '/api/auth/queries/');
   if (!res.ok) {
-    throw new Error('Failed to fetch queries');
+    throw new Error('Unable to fetch queries');
   }
   return await res.json();
 }
 
 export async function createQuery(query_text: string): Promise<UserQuery> {
-  const res = await fetchWithAuth('/api/accounts/queries/', {
+  const res = await fetchQueriesWithFallback('/api/accounts/queries/', '/api/auth/queries/', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -45,21 +61,21 @@ export async function createQuery(query_text: string): Promise<UserQuery> {
     body: JSON.stringify({ query_text }),
   });
   if (!res.ok) {
-    throw new Error('Failed to create query');
+    throw new Error('Unable to create query');
   }
   return await res.json();
 }
 
 export async function fetchAllQueries(): Promise<{ queries: UserQuery[] }> {
-  const res = await fetchWithAuth('/api/accounts/queries/all/');
+  const res = await fetchQueriesWithFallback('/api/accounts/queries/all/', '/api/auth/queries/all/');
   if (!res.ok) {
-    throw new Error('Failed to fetch all queries');
+    throw new Error('Unable to fetch all queries');
   }
   return await res.json();
 }
 
 export async function updateQuery(id: number, data: { status: string; admin_notes?: string }): Promise<UserQuery> {
-  const res = await fetchWithAuth(`/api/accounts/queries/${id}/update/`, {
+  const res = await fetchQueriesWithFallback(`/api/accounts/queries/${id}/update/`, `/api/auth/queries/${id}/update/`, {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -67,7 +83,7 @@ export async function updateQuery(id: number, data: { status: string; admin_note
     body: JSON.stringify(data),
   });
   if (!res.ok) {
-    throw new Error('Failed to update query');
+    throw new Error('Unable to update query');
   }
   return await res.json();
 }

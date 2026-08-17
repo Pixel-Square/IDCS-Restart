@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { CoeStudentsMapResponse, fetchCoeStudentsMap, fetchCoeCourseSel, saveCoeCourseSel } from '../../services/coe';
+import { CoeStudentsMapResponse, fetchCoeStudentsMap, fetchCoeCourseSel, saveCoeCourseSel, fetchCoeFilterOptions } from '../../services/coe';
 import fetchWithAuth from '../../services/fetchAuth';
 import { getCachedMe } from '../../services/auth';
 import {
@@ -25,7 +25,7 @@ async function imageUrlToDataUrl(url: string): Promise<string> {
       if (typeof reader.result === 'string') resolve(reader.result);
       else reject(new Error('Failed to read image as data URL.'));
     };
-    reader.onerror = () => reject(new Error('Failed to load image.'));
+    reader.onerror = () => reject(new Error('Unable to load image.'));
     reader.readAsDataURL(blob);
   });
 }
@@ -36,6 +36,7 @@ type CourseRow = {
   courseCode: string;
   courseName: string;
   key: string;
+  courseType?: string;
 };
 
 function sanitizeFileName(name: string) {
@@ -77,6 +78,7 @@ export default function CourseList() {
   const [cdapPdfUrl, setCdapPdfUrl] = useState<string | null>(null);
   const [cdapCurrentRow, setCdapCurrentRow] = useState<CourseRow | null>(null);
   const [cdapBulkLoading, setCdapBulkLoading] = useState(false);
+  const [courseTypeMap, setCourseTypeMap] = useState<Record<string, string>>({});
 
   // Fetch departments on mount
   useEffect(() => {
@@ -88,23 +90,12 @@ export default function CourseList() {
 
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-          setDepartment('ALL');
-        } else {
-          console.warn('Failed to fetch departments, using defaults');
-          setDepartments(['ALL']);
-        }
+        setDepartments(options.departments);
+        setSemesters(options.semesters);
+        setDepartment(options.departments[0] || 'ALL');
+        setSemester(options.semesters[0] || 'SEM1');
       } catch (err) {
         if (active) console.warn('Error fetching departments:', err);
       } finally {
@@ -117,35 +108,63 @@ export default function CourseList() {
     };
   }, []);
 
-  // Fetch semesters on mount
-  useEffect(() => {
-    let active = true;
-
-    (async () => {
-      try {
-        const res = await fetchWithAuth('/api/academics/semesters/');
-        if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const sems = data.results || data || [];
-          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
-          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
-          setSemester(semNames[0] || 'SEM1');
-        } else {
-          console.warn('Failed to fetch semesters, using defaults');
-          setSemesters(['SEM1']);
-        }
-      } catch (err) {
-        if (active) console.warn('Error fetching semesters:', err);
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const getCurrentFilterKey = () => `${department}::${semester}`;
+
+  const normalizeCourseCode = (value: unknown): string =>
+    String(value || '').trim().toUpperCase();
+
+  const readListPayload = (payload: any): any[] => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.results)) return payload.results;
+    if (Array.isArray(payload?.teaching_assignments)) return payload.teaching_assignments;
+    return [];
+  };
+
+  const buildCourseTypeMap = async (courseCodes: string[]): Promise<Record<string, string>> => {
+    const courseSet = new Set(courseCodes.map(normalizeCourseCode).filter(Boolean));
+    if (courseSet.size === 0) return {};
+
+    const [taRes, deptRes, electiveRes] = await Promise.all([
+      fetchWithAuth('/api/academics/my-teaching-assignments/'),
+      fetchWithAuth('/api/curriculum/department/'),
+      fetchWithAuth('/api/curriculum/elective/?page_size=0'),
+    ]);
+
+    const [taData, deptData, electiveData] = await Promise.all([
+      taRes.ok ? taRes.json() : Promise.resolve([]),
+      deptRes.ok ? deptRes.json() : Promise.resolve([]),
+      electiveRes.ok ? electiveRes.json() : Promise.resolve([]),
+    ]);
+
+    const taList = readListPayload(taData);
+    const deptRows = readListPayload(deptData);
+    const electiveRows = readListPayload(electiveData);
+
+    const map: Record<string, string> = {};
+
+    taList.forEach((row) => {
+      const code = normalizeCourseCode(row?.subject_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      if (classType && !map[code]) map[code] = classType;
+    });
+
+    deptRows.forEach((row) => {
+      const code = normalizeCourseCode(row?.course_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      if (classType && !map[code]) map[code] = classType;
+    });
+
+    electiveRows.forEach((row) => {
+      const code = normalizeCourseCode(row?.course_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      if (classType && !map[code]) map[code] = classType;
+    });
+
+    return map;
+  };
 
   // ── Fetch persisted selections from DB on filter change ──
   useEffect(() => {
@@ -178,6 +197,34 @@ export default function CourseList() {
   }, [department, semester]);
 
   useEffect(() => {
+    if (!data) {
+      setCourseTypeMap({});
+      return;
+    }
+
+    const courseCodes = new Set<string>();
+    data.departments.forEach((dept) => {
+      (dept.courses || []).forEach((course) => {
+        const code = normalizeCourseCode(course.course_code);
+        if (code) courseCodes.add(code);
+      });
+    });
+
+    let active = true;
+    buildCourseTypeMap(Array.from(courseCodes))
+      .then((map) => {
+        if (active) setCourseTypeMap(map);
+      })
+      .catch(() => {
+        if (active) setCourseTypeMap({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [data]);
+
+  useEffect(() => {
     let active = true;
 
     (async () => {
@@ -189,8 +236,7 @@ export default function CourseList() {
         setData(res);
       } catch (err) {
         if (!active) return;
-        const message = err instanceof Error ? err.message : 'Failed to load courses.';
-        setError(message);
+        setError('Unable to load courses right now. Please try again.');
       } finally {
         // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
@@ -209,11 +255,13 @@ export default function CourseList() {
     const list: CourseRow[] = [];
     for (const deptBlock of data.departments) {
       for (const course of deptBlock.courses) {
+        const codeKey = normalizeCourseCode(course.course_code || '');
         list.push({
           department: deptBlock.department,
           semester,
           courseCode: course.course_code || '',
           courseName: course.course_name || 'Unnamed Course',
+          courseType: courseTypeMap[codeKey] || '',
           key: getCourseKey({
             department: deptBlock.department,
             semester,
@@ -225,7 +273,7 @@ export default function CourseList() {
     }
 
     return list;
-  }, [data, semester]);
+  }, [data, semester, courseTypeMap]);
 
   useEffect(() => {
     if (rows.length === 0) return;
@@ -355,7 +403,7 @@ export default function CourseList() {
       const cdap = await res.json();
 
       if (!res.ok) {
-        throw new Error(cdap.detail || 'Failed to fetch CDAP data');
+        throw new Error(cdap.detail || 'Unable to load CDAP data');
       }
 
       if (!cdap.rows || cdap.rows.length === 0) {
@@ -380,7 +428,7 @@ export default function CourseList() {
           doc.addImage(krLogoDataUrl, 'PNG', logoX, logoY, pdfWidth, logoHeight);
         }
       } catch (err) {
-        console.error('Failed to load logo', err);
+        console.error('Unable to load logo', err);
       }
 
       doc.setFontSize(14);
@@ -509,7 +557,7 @@ export default function CourseList() {
       setCdapCurrentRow(row);
       setShowCdapModal(true);
     } catch (err: any) {
-      alert(err?.message || 'Failed to fetch CDAP data');
+      alert('Unable to load CDAP data right now. Please try again.');
     } finally {
       setCdapLoadingRow(null);
     }
@@ -538,7 +586,7 @@ export default function CourseList() {
           doc.addImage(krLogoDataUrl, 'PNG', logoX, logoY, pdfWidth, logoHeight);
         }
       } catch (err) {
-        console.error('Failed to load logo', err);
+        console.error('Unable to load logo', err);
       }
 
       doc.setFontSize(14);
@@ -671,7 +719,7 @@ export default function CourseList() {
       try {
         krLogoDataUrl = await imageUrlToDataUrl(krLogoSrc);
       } catch (err) {
-        console.warn('Failed to load logo for bulk download', err);
+        console.warn('Unable to load logo for bulk download', err);
       }
 
       // Create a folder for department and semester
@@ -688,7 +736,7 @@ export default function CourseList() {
           const cdap = await res.json();
 
           if (!res.ok) {
-            console.warn(`Failed to fetch CDAP for ${row.courseCode}: ${cdap.detail || 'Unknown error'}`);
+            console.warn(`Unable to load CDAP for ${row.courseCode}: ${cdap.detail || 'Unknown error'}`);
             failureCount++;
             continue;
           }
@@ -846,7 +894,7 @@ export default function CourseList() {
       }
     } catch (err: any) {
       console.error('Bulk download failed', err);
-      alert(`Bulk download failed: ${err?.message || 'Unknown error'}`);
+      alert('Bulk download could not be completed right now. Please try again.');
     } finally {
       setCdapBulkLoading(false);
     }
@@ -995,7 +1043,7 @@ export default function CourseList() {
       <div className="rounded-xl border border-blue-100 bg-white p-6 shadow-sm flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">COE Course List</h1>
-          <p className="mt-2 text-sm text-gray-600">Choose QP type and ESE mode. Students List will use this selection.</p>
+          <p className="mt-2 text-sm text-gray-600">Choose ESE mode. Students List will use this selection.</p>
         </div>
         <div className="flex gap-3">
           <button
@@ -1083,64 +1131,12 @@ export default function CourseList() {
                   <div className="flex flex-col gap-3">
                     <div className="min-w-0">
                       <p className="text-lg font-bold text-gray-900 truncate">{row.courseName}</p>
-                      <p className="text-xs font-medium text-gray-500 truncate">{row.courseCode || 'NO_CODE'} | {row.department} | {row.semester}</p>
+                      <p className="text-xs font-medium text-gray-500 truncate">
+                        {row.courseCode || 'NO_CODE'} | {row.department} | {row.semester} | {row.courseType || '-'}
+                      </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <div className="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-white px-2 py-1">
-                        <span className="text-xs font-semibold uppercase text-gray-500">QP</span>
-                        <label className="inline-flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`qp-${row.key}`}
-                            checked={conf.qpType === 'QP1'}
-                            disabled={isLocked || conf.eseType === 'NON_ESE'}
-                            onChange={() => updateSelection(row.key, { qpType: 'QP1' })}
-                          />
-                          QP1
-                        </label>
-                        <label className="inline-flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`qp-${row.key}`}
-                            checked={conf.qpType === 'QP2'}
-                            disabled={isLocked || conf.eseType === 'NON_ESE'}
-                            onChange={() => updateSelection(row.key, { qpType: 'QP2' })}
-                          />
-                          QP2
-                        </label>
-                        <label className="inline-flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`qp-${row.key}`}
-                            checked={conf.qpType === 'TCPR'}
-                            disabled={isLocked || conf.eseType === 'NON_ESE'}
-                            onChange={() => updateSelection(row.key, { qpType: 'TCPR' })}
-                          />
-                          TCPR
-                        </label>
-                        <label className="inline-flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`qp-${row.key}`}
-                            checked={conf.qpType === 'TCPL'}
-                            disabled={isLocked || conf.eseType === 'NON_ESE'}
-                            onChange={() => updateSelection(row.key, { qpType: 'TCPL' })}
-                          />
-                          TCPL
-                        </label>
-                        <label className="inline-flex items-center gap-1">
-                          <input
-                            type="radio"
-                            name={`qp-${row.key}`}
-                            checked={conf.qpType === 'OE'}
-                            disabled={isLocked || conf.eseType === 'NON_ESE'}
-                            onChange={() => updateSelection(row.key, { qpType: 'OE' })}
-                          />
-                          OE
-                        </label>
-                      </div>
-
                       <div className="inline-flex items-center gap-3 rounded-md border border-gray-200 bg-white px-2 py-1">
                         <span className="text-xs font-semibold uppercase text-gray-500">Type</span>
                         <label className="inline-flex items-center gap-1">

@@ -1,0 +1,24 @@
+[Unit]
+Description=Cloudflare Tunnel - IDCS Production
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iqac2
+WorkingDirectory=/home/iqac2/.cloudflared
+ExecStart=/usr/bin/cloudflared tunnel --config /home/iqac2/.cloudflared/config.yml run
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/home/iqac2/.cloudflared
+
+[Install]
+WantedBy=multi-user.target

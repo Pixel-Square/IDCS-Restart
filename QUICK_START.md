@@ -1,7 +1,8 @@
-# 🚀 IDCS Backend + ESSL - Quick Start Commands
+# 🚀 IDCS Quick Start - Backend, ESSL & Automatic Timetable Generator
 
-## ✅ ESSL Device Status - ALL DEVICES ONLINE
+## ✅ System Status
 
+### ESSL Device Status - ALL DEVICES ONLINE
 ```
 ✓ 192.168.81.80:4370  - REACHABLE
 ✓ 192.168.81.87:4370  - REACHABLE
@@ -10,21 +11,60 @@
 ✓ 192.168.81.96:4370  - REACHABLE
 ```
 
+### Automatic Timetable Generator - READY
+```
+✓ Backend models (5 new models)
+✓ Constraint satisfaction algorithm
+✓ REST API (4 viewsets)
+✓ React frontend components (3 components)
+✓ Admin interface
+✓ Database migrations applied
+```
+
 ---
 
-## 🎯 THE SINGLE COMMAND YOU NEED
+## 🎯 START SERVICES
 
-### Best Option: Run the all-in-one script
+### All-in-One Command (Recommended)
 ```bash
 /home/iqac/IDCS-Restart/run-all.sh
 ```
 
-This single command:
-- ✅ Activates Python environment
-- ✅ Starts Django backend on port 8000 (Gunicorn)
-- ✅ Starts all 5 ESSL device listeners
-- ✅ Displays real-time logs
-- ✅ Handles graceful shutdown with Ctrl+C
+This runs:
+- ✅ Django backend on port 8000
+- ✅ All 5 ESSL device listeners
+- ✅ Real-time log display
+- ✅ Graceful shutdown (Ctrl+C)
+
+---
+
+## ⚡ AUTOMATIC TIMETABLE GENERATOR - Quick Start
+
+### Frontend Setup (New Terminal)
+```bash
+cd /home/iqac2/IDCS-Restart
+source .venv/bin/activate
+cd frontend
+npm run dev
+```
+**Frontend**: http://localhost:5173
+
+### Access the System
+```
+📱 Backend Admin:    http://localhost:8000/admin
+🔌 API Root:        http://localhost:8000/api/timetable/
+⚡ Generator UI:    http://localhost:5173 → "⚡ Automatic Generator"
+```
+
+### What You Can Do
+1. **Teacher Constraints** - Set workload limits and availability
+2. **Teacher-Subject Assignment** - Map teachers to subjects
+3. **Automatic Generator** - Generate conflict-free timetables
+
+### Learn More
+- 📖 [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - Complete overview
+- 📘 [AUTOMATIC_TIMETABLE_GENERATOR_GUIDE.md](AUTOMATIC_TIMETABLE_GENERATOR_GUIDE.md) - Full API docs
+- 📙 [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) - Deploy guide
 
 ---
 

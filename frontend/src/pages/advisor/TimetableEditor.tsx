@@ -4,6 +4,12 @@ import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCir
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
+const isSharedSection = (sec: any) => {
+  if (!sec) return false;
+  const code = sec.department_short_name || sec.department_code || sec.department?.code;
+  return sec.department_id === null || code === 'S&H';
+};
+
 // Stable CellPopup component outside main component to prevent recreation on every render
 function CellPopup(props: any) {
   const {
@@ -57,10 +63,13 @@ function CellPopup(props: any) {
     selectedOtherDept,
     setSelectedOtherDept,
     setLastSelectedCurriculumRaw,
+    lastSelectedCurriculumRaw,
+    sectionDepartmentId,
     selectedElectiveSubjectId,
     setSelectedElectiveSubjectId,
     otherDeptStaffList,
     setOtherDeptStaffList,
+    subjectStaffList,
   } = props
   const [deptCurriculumError, setDeptCurriculumError] = useState<string | null>(null)
   const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
@@ -95,6 +104,75 @@ function CellPopup(props: any) {
     if(item.parent_id) return item.parent_id
     return item.id
   }
+
+  const normalizeCode = (value: any) => String(value || '').trim().toUpperCase()
+  const normalizeName = (value: any) => String(value || '').trim().toLowerCase()
+
+  const findSelectedSubjectStaff = () => {
+    if (!editingCurriculumId) return null
+
+    const selectedSubject = subjectSource.find((item: any) => {
+      if (selectedElectiveSubjectId && item?.is_elective_child) {
+        return Number(item.id) === Number(selectedElectiveSubjectId)
+      }
+      return Number(resolveCurriculumId(item)) === Number(editingCurriculumId)
+    })
+
+    const selectedId = Number(selectedElectiveSubjectId || editingCurriculumId)
+    const selectedCode = normalizeCode(selectedSubject?.course_code)
+    const selectedName = normalizeName(selectedSubject?.course_name)
+
+    return (subjectStaffList || []).find((item: any) => {
+      const itemId = Number(item?.id || 0)
+      const byId = itemId > 0 && selectedId > 0 && itemId === selectedId
+      if (byId) return true
+
+      const itemCode = normalizeCode(item?.course_code)
+      const itemName = normalizeName(item?.course_name)
+      const byCode = Boolean(selectedCode && itemCode && selectedCode === itemCode)
+      const byName = Boolean(selectedName && itemName && selectedName === itemName)
+      return byCode || byName
+    }) || null
+  }
+
+  // Helper to determine staff list to show and check if they are explicitly assigned
+  const getStaffOptions = () => {
+    if (!editingCurriculumId) {
+      return { list: [], isAssigned: false };
+    }
+    // Match by id first, then by stable code/name for shared S&H curriculum rows.
+    const selectedSubjectObj = findSelectedSubjectStaff();
+
+    const assignedStaff = selectedSubjectObj?.assigned_staff || [];
+    if (assignedStaff.length > 0) {
+      return { list: assignedStaff, isAssigned: true };
+    }
+    // Fallback to department's staff list
+    return { list: isOtherDept ? (otherDeptStaffList || []) : (staffList || []), isAssigned: false };
+  };
+
+  const { list: staffOptionsList, isAssigned: hasAssignedStaff } = getStaffOptions();
+
+  // useEffect to handle auto-selection of staff when subject changes
+  React.useEffect(() => {
+    if (isCustomAssignment) {
+      return;
+    }
+    if (!editingCurriculumId) {
+      setSelectedStaffId(null);
+      return;
+    }
+
+    // Match by id first, then by stable code/name for shared S&H curriculum rows.
+    const selectedSubjectObj = findSelectedSubjectStaff();
+
+    const assignedStaff = selectedSubjectObj?.assigned_staff || [];
+    if (assignedStaff.length === 1) {
+      setSelectedStaffId(assignedStaff[0].id);
+    } else {
+      setSelectedStaffId(null);
+    }
+  }, [editingCurriculumId, selectedElectiveSubjectId, subjectStaffList, isCustomAssignment, setSelectedStaffId]);
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
@@ -162,11 +240,58 @@ function CellPopup(props: any) {
                       <div className="mt-3 flex flex-wrap gap-2">
                         <button 
                           onClick={async ()=>{
-                            const crid = a.curriculum_row?.id || null
                             const existingBatchId = a.subject_batch?.id || null
-                            setEditingCurriculumId(crid)
-                            setEditingBatchId(existingBatchId)
-                            if(crid){
+                            const staffId = a.staff?.id || null
+                            
+                            if (a.curriculum_row) {
+                              setIsCustomAssignment(false)
+                              setCustomAssignmentText('')
+                              const crid = a.curriculum_row.id
+                              setEditingCurriculumId(crid)
+                              setEditingBatchId(existingBatchId)
+                              setSelectedStaffId(staffId)
+                              
+                              // Check if it is from another department
+                              const isOther = a.curriculum_row.department_id && sectionDepartmentId && (Number(a.curriculum_row.department_id) !== Number(sectionDepartmentId))
+                              setIsOtherDept(!!isOther)
+                              if (isOther) {
+                                setSelectedOtherDept(a.curriculum_row.department_id)
+                                // Fetch curriculum and staff list for other dept
+                                try {
+                                  const r = await fetchWithAuth(`/api/curriculum/?department=${a.curriculum_row.department_id}&page_size=0`)
+                                  if (r.ok) {
+                                    const d = await r.json()
+                                    const raw = d.results ?? d ?? []
+                                    const items = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' ? Object.values(raw) : [])
+                                    const section = sections.find(s => s.id === sectionId)
+                                    const sectionBatch = section?.batch ?? null
+                                    const sectionRegCode = typeof currentSectionRegulation === 'string' ? currentSectionRegulation : currentSectionRegulation?.code
+                                    const sectionSem = section?.semester ?? (typeof currentSectionRegulation === 'object' ? currentSectionRegulation?.semester ?? null : null)
+                                    const filtered = (items || []).filter((c:any) => {
+                                      if (sectionRegCode && c.regulation && c.regulation !== sectionRegCode) return false
+                                      if (sectionSem && c.semester !== undefined && c.semester !== sectionSem) return false
+                                      if (sectionBatch && (c.batch !== undefined || c.batch_name !== undefined)) {
+                                        if (c.batch !== undefined && String(c.batch) !== String(sectionBatch)) return false
+                                        if (c.batch_name !== undefined && String(c.batch_name) !== String(sectionBatch)) return false
+                                      }
+                                      return true
+                                    })
+                                    setDeptCurriculum(filtered)
+                                  }
+                                } catch(err) { console.error(err) }
+                                
+                                try {
+                                  const sres = await fetchWithAuth(`/api/academics/advisor-staff/?department=${a.curriculum_row.department_id}&page_size=0`)
+                                  if (sres.ok) {
+                                    const sd = await sres.json()
+                                    setOtherDeptStaffList(sd.results || sd || [])
+                                  }
+                                } catch(err) { console.error(err) }
+                              } else {
+                                setSelectedOtherDept(null)
+                              }
+                              
+                              // Load batches
                               const list = await loadBatchesForCurriculum(crid)
                               if(existingBatchId && !list.find((b:any)=> b.id === existingBatchId)){
                                 try{
@@ -180,17 +305,14 @@ function CellPopup(props: any) {
                                   }
                                 }catch(e){ console.error('failed to load existing batch', e) }
                               }
-                            } else if(existingBatchId){
-                              try{
-                                const pres = await fetchWithAuth(`/api/academics/subject-batches/${existingBatchId}/`)
-                                if(pres.ok){
-                                  const pb = await pres.json()
-                                  setEditingAvailableBatches((prev: any) => {
-                                    if(prev.find((x: any)=> x.id === pb.id)) return prev
-                                    return [...prev, pb]
-                                  })
-                                }
-                              }catch(e){ console.error('failed to load existing batch', e) }
+                            } else {
+                              setIsCustomAssignment(true)
+                              setCustomAssignmentText(a.subject_text || '')
+                              setEditingCurriculumId(null)
+                              setEditingBatchId(null)
+                              setSelectedStaffId(staffId)
+                              setIsOtherDept(false)
+                              setSelectedOtherDept(null)
                             }
                           }}
                           className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-1"
@@ -207,10 +329,26 @@ function CellPopup(props: any) {
                         </button>
                         <button 
                           onClick={async ()=>{
-                            if(!editingCurriculumId) return alert('Select new subject from right panel then click Update')
                             const payload:any = {}
-                            if(editingCurriculumId) payload.curriculum_row = editingCurriculumId
-                            if(editingBatchId !== null) payload.subject_batch_id = editingBatchId
+                            if (isCustomAssignment) {
+                              if (!customAssignmentText.trim()) return alert('Subject name is required')
+                              payload.subject_text = customAssignmentText.trim()
+                              payload.curriculum_row = null
+                              payload.subject_batch_id = null
+                            } else {
+                              if (!editingCurriculumId) return alert('Select subject from right panel then click Update')
+                              payload.curriculum_row = editingCurriculumId
+                              payload.subject_batch_id = editingBatchId
+                              payload.subject_text = null
+                              
+                              if (isOtherDept && selectedOtherDept) {
+                                payload.other_department_id = selectedOtherDept
+                                if (lastSelectedCurriculumRaw) payload.original_curriculum_raw = lastSelectedCurriculumRaw
+                                payload.chosen_curriculum_id = editingCurriculumId
+                                payload.curriculum_department_id = editingCurriculumId
+                              }
+                            }
+                            payload.staff_id = selectedStaffId
                             await handleUpdateAssignment(a.id, payload)
                           }}
                           className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
@@ -488,6 +626,32 @@ function CellPopup(props: any) {
                         ))}
                       </select>
                     </div>
+
+                    {editingCurriculumId && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Staff {hasAssignedStaff ? '(Assigned Faculty)' : '(optional)'}
+                        </label>
+                        <select
+                          value={selectedStaffId || ''}
+                          onChange={(e) => setSelectedStaffId(Number(e.target.value) || null)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="">
+                            {hasAssignedStaff ? 'Select assigned staff…' : 'Select staff (optional)…'}
+                          </option>
+                          {staffOptionsList.map((staff: any) => {
+                            const name = staff.name || (staff.user ? `${staff.user.first_name || ''} ${staff.user.last_name || ''}`.trim() || staff.user.username : '') || staff.staff_id;
+                            const subtitle = staff.username ? ` (${staff.username})` : (staff.user?.username ? ` (${staff.user.username})` : '');
+                            return (
+                              <option key={staff.id} value={staff.id}>
+                                {name}{subtitle}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    )}
                   </>
                 ) : !isCustomAssignment ? (
                   <>
@@ -526,6 +690,8 @@ function CellPopup(props: any) {
                             }
                             // ElectiveSubject children bypass regulation — they match by name in backend
                             if (c.is_elective_child) return true
+                            const currentSection = sections.find((s: any) => s.id === sectionId)
+                            if (isSharedSection(currentSection)) return true
                             if (!currentSectionRegulation?.code) return true
                             return c.regulation === currentSectionRegulation.code
                           })
@@ -556,6 +722,32 @@ function CellPopup(props: any) {
                         ))}
                       </select>
                     </div>
+
+                    {editingCurriculumId && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                          Staff {hasAssignedStaff ? '(Assigned Faculty)' : '(optional)'}
+                        </label>
+                        <select
+                          value={selectedStaffId || ''}
+                          onChange={(e) => setSelectedStaffId(Number(e.target.value) || null)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        >
+                          <option value="">
+                            {hasAssignedStaff ? 'Select assigned staff…' : 'Select staff (optional)…'}
+                          </option>
+                          {staffOptionsList.map((staff: any) => {
+                            const name = staff.name || (staff.user ? `${staff.user.first_name || ''} ${staff.user.last_name || ''}`.trim() || staff.user.username : '') || staff.staff_id;
+                            const subtitle = staff.username ? ` (${staff.username})` : (staff.user?.username ? ` (${staff.user.username})` : '');
+                            return (
+                              <option key={staff.id} value={staff.id}>
+                                {name}{subtitle}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1134,8 +1326,13 @@ export default function TimetableEditor(){
           batch: entry.batch,
           batch_regulation: entry.batch_regulation,
           department_id: entry.department_id,
+          department_short_name: entry.department_short_name,
+          department: entry.department,
           // include semester if present on the API response under common keys
-          semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null
+          semester: entry.semester ?? entry.section_semester ?? entry.batch_semester ?? entry.sem ?? null,
+          // include mixed section info for curriculum endpoint selection
+          mixed_section_id: entry.mixed_section_id ?? null,
+          is_mixed_section: entry.is_mixed_section ?? entry.mixed_section ?? false
         }))
         setSections(secs)
         // auto-select first section so advisor doesn't need manual selection
@@ -1175,14 +1372,67 @@ export default function TimetableEditor(){
         setCurrentSectionRegulation(selectedSection.batch_regulation)
       }
       
-      fetchWithAuth(`/api/timetable/curriculum-for-section/?section_id=${sectionId}`)
+      // Check if this is a mixed section and use the appropriate endpoint
+      const isMixed = Boolean(selectedSection?.is_mixed_section || selectedSection?.mixed_section_id)
+      let curriculumUrl = `/api/timetable/curriculum-for-section/?section_id=${sectionId}`
+      if (isMixed && selectedSection?.mixed_section_id) {
+        curriculumUrl = `/api/timetable/curriculum-for-mixed-section/?mixed_section_id=${selectedSection.mixed_section_id}`
+      }
+      
+      fetchWithAuth(curriculumUrl)
         .then(r=>r.json()).then(d=>setCurriculum(d.results || []))
       loadTimetable()
       // fetch aggregated subjects + staff for this section
       fetchWithAuth(`/api/timetable/section/${sectionId}/subjects-staff/`).then(r=>{
-        if(!r.ok) return []
+        if(!r.ok) return null
         return r.json()
-      }).then(d=> setSubjectStaffList(d.results || []))
+      }).then(d=> {
+        const data = d?.results || d || []
+        if(Array.isArray(data) && data.length > 0) {
+          setSubjectStaffList(data)
+        } else {
+          // Fallback: fetch teaching assignments directly for this section as source of truth
+          fetchWithAuth(`/api/academics/teaching-assignments/?section_id=${sectionId}&page_size=0`)
+            .then(r => {
+              if(!r.ok) return null
+              return r.json()
+            })
+            .then(taData => {
+              if(!taData) return
+              const taResults = taData.results || taData || []
+              // Transform teaching assignments into subject+staff format
+              // Deduplicate by curriculum row ID to show each subject only once
+              const seen = new Set<number>()
+              const staffList = taResults
+                .filter((ta: any) => {
+                  const crId = ta.curriculum_row_details?.id || ta.curriculum_row || null
+                  if (!crId) return false // Skip if no curriculum row id
+                  const id = Number(crId)
+                  if (seen.has(id)) return false
+                  seen.add(id)
+                  return true
+                })
+                .map((ta: any) => {
+                  // Extract staff name from staff_details.user
+                  let staffName = '—'
+                  if (ta.staff_details?.user?.first_name || ta.staff_details?.user?.last_name) {
+                    const firstName = ta.staff_details.user.first_name || ''
+                    const lastName = ta.staff_details.user.last_name || ''
+                    staffName = `${firstName} ${lastName}`.trim()
+                  }
+                  return {
+                    id: ta.curriculum_row_details?.id || ta.curriculum_row || null,
+                    course_code: ta.curriculum_row_details?.course_code || ta.curriculum_row?.course_code || '',
+                    course_name: ta.curriculum_row_details?.course_name || ta.curriculum_row?.course_name || '',
+                    department_id: ta.curriculum_row_details?.department_id || ta.curriculum_row?.department_id || null,
+                    staff: staffName
+                  }
+                })
+              setSubjectStaffList(staffList)
+            })
+            .catch(e => console.error('Failed to fetch fallback teaching assignments', e))
+        }
+      })
       // fetch existing special timetables for this section
       fetchWithAuth(`/api/timetable/special-timetables/?section_id=${sectionId}`).then(r=>{
         if(!r.ok) return []
@@ -1271,6 +1521,7 @@ export default function TimetableEditor(){
       if(editingBatchId) payload.subject_batch_id = editingBatchId
       // If user selected a specific elective child, also pass elective_subject_id
       if(selectedElectiveSubjectId) payload.elective_subject_id = selectedElectiveSubjectId
+      if(selectedStaffId) payload.staff_id = selectedStaffId
     }
     // if assigning from Other Dept, include metadata so backend can honor chosen dept/option
     if(isOtherDept && selectedOtherDept) {
@@ -1359,7 +1610,7 @@ export default function TimetableEditor(){
                     const firstName = asg.staff.first_name || '';
                     const lastName = asg.staff.last_name || '';
                     const fullName = `${firstName} ${lastName}`.trim();
-                    return fullName || asg.staff.username || '—';
+                    return asg.staff.name || fullName || asg.staff.username || '—';
                   })()}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
               </div>
@@ -1421,26 +1672,49 @@ export default function TimetableEditor(){
 
   // Create a comprehensive subjects list combining curriculum and staff assignments
   const getCombinedSubjectsList = () => {
-    if (!currentSectionRegulation?.code) return []
-    
-    // Filter curriculum by regulation
-    const regulationFilteredCurriculum = curriculum.filter((subject: any) => 
-      subject.regulation === currentSectionRegulation.code
-    )
-    
-    // Create map of staff assignments
+    const normalizeCode = (value: any) => String(value || '').trim().toUpperCase()
+    const normalizeName = (value: any) => String(value || '').trim().toLowerCase()
+
+    // Create a multi-key map for staff lookups from curriculum data
     const staffMap = new Map()
-    subjectStaffList.forEach((staffSubject: any) => {
-      if (staffSubject.id && staffSubject.staff) {
-        staffMap.set(staffSubject.id, staffSubject.staff)
+    curriculum.forEach((subject: any) => {
+      if (!subject?.staff) return
+      if (subject.id) {
+        staffMap.set(`id:${Number(subject.id)}`, subject.staff)
       }
+      const code = normalizeCode(subject.course_code)
+      const name = normalizeName(subject.course_name)
+      if (code) staffMap.set(`code:${code}`, subject.staff)
+      if (name) staffMap.set(`name:${name}`, subject.staff)
     })
     
-    // Combine curriculum with staff data
-    const combined = regulationFilteredCurriculum.map((subject: any) => ({
-      ...subject,
-      staff: staffMap.get(subject.id) || '—'
-    }))
+    // Use subjectStaffList as the source of truth (already section-specific and has staff names)
+    // Filter by section's department to ensure we only show subjects from that department
+    if (!subjectStaffList || subjectStaffList.length === 0) {
+      return []
+    }
+    
+    const filtered = subjectStaffList.filter((subject: any) => {
+      // If section has a department, only include subjects from that department
+      if (sectionDepartmentId && subject.department_id) {
+        return Number(subject.department_id) === Number(sectionDepartmentId)
+      }
+      // If no department filter, include all
+      return true
+    })
+    
+    // Combine with curriculum staff data if available
+    const combined = filtered.map((subject: any) => {
+      const idKey = `id:${Number(subject.id || 0)}`
+      const codeKey = `code:${normalizeCode(subject.course_code || subject.code)}`
+      const nameKey = `name:${normalizeName(subject.course_name || subject.name)}`
+      const currStaff = staffMap.get(idKey) || staffMap.get(codeKey) || staffMap.get(nameKey)
+      const staff = subject.staff || currStaff || '—'
+      return {
+        ...subject,
+        staff,
+      }
+    })
     
     return combined
   }
@@ -1464,21 +1738,49 @@ export default function TimetableEditor(){
             </div>
             
             <div className="flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-2 sm:gap-3">
-              {(() => {
-                const section = sections.find(x=>x.id===sectionId) || {name:'Section', batch:'', semester:null}
-                return (
-                  <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto">
-                    <div className="flex items-center gap-2">
-                      <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
-                      <span className="font-semibold text-indigo-900 text-sm md:text-base">
-                        {section.name}
-                        {section.batch && ` • ${section.batch}`}
-                        {section.semester && ` • Sem ${section.semester}`}
-                      </span>
+              {sections.length > 1 ? (
+                <div className="px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto flex items-center gap-2">
+                  <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                  <select
+                    value={sectionId || ''}
+                    onChange={(e) => {
+                      const sid = e.target.value ? Number(e.target.value) : null
+                      setSectionId(sid)
+                      const sec = sections.find(s => s.id === sid)
+                      if (sec) {
+                        setSectionDepartmentId(sec.department_id)
+                        setCurrentSectionRegulation(sec.batch_regulation)
+                      }
+                    }}
+                    className="bg-transparent font-semibold text-indigo-900 text-sm focus:outline-none cursor-pointer pr-4"
+                  >
+                    {sections.map((s) => (
+                      <option key={s.id} value={s.id} className="text-gray-900">
+                        {s.name}
+                        {s.batch ? ` • ${s.batch}` : ''}
+                        {s.semester ? ` • Sem ${s.semester}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                (() => {
+                  const section = sections.find(x=>x.id===sectionId) || {name:'Section', batch:'', semester:null}
+                  return (
+                    <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 w-full sm:w-auto">
+                      <div className="flex items-center gap-2">
+                        <GraduationCap className="h-4 w-4 text-indigo-600 flex-shrink-0" />
+                        <span className="font-semibold text-indigo-900 text-sm md:text-base">
+                          {section.name}
+                          {section.batch && ` • ${section.batch}`}
+                          {section.semester && ` • Sem ${section.semester}`}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                )
-              })()}
+                  )
+                })()
+              )}
+
               {currentSectionRegulation && (
                 <div className="px-3 md:px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg border border-emerald-200 w-full sm:w-auto">
                   <div className="flex items-center gap-2">
@@ -1490,16 +1792,31 @@ export default function TimetableEditor(){
                   </div>
                 </div>
               )}
-              {templateId && (
-                <div className="px-3 md:px-4 py-2 bg-gray-50 rounded-lg border border-gray-200 w-full sm:w-auto">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-gray-600 flex-shrink-0" />
-                    <span className="text-sm font-medium text-gray-700">
-                      {(templates.find(t=>t.id===templateId)||{name:'Template'}).name}
-                    </span>
-                  </div>
-                </div>
-              )}
+
+              <div className="px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-200 w-full sm:w-auto flex items-center gap-2">
+                <Clock className="h-4 w-4 text-gray-600 flex-shrink-0" />
+                <select
+                  value={templateId || ''}
+                  onChange={(e) => {
+                    const tid = e.target.value ? Number(e.target.value) : null
+                    setTemplateId(tid)
+                    const active = templates.find((t: any) => t.id === tid)
+                    if (active) {
+                      setPeriods(active.periods || [])
+                    } else {
+                      setPeriods([])
+                    }
+                  }}
+                  className="bg-transparent text-sm font-medium text-gray-700 focus:outline-none cursor-pointer pr-4"
+                >
+                  <option value="" className="text-gray-900">Select Template</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id} className="text-gray-900">
+                      {t.name} {t.is_active ? '(Active)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </div>
@@ -1513,107 +1830,119 @@ export default function TimetableEditor(){
             </div>
           </div>
           
-          {/* Desktop view: Horizontal table */}
-          <div className="hidden md:block overflow-x-auto lg:overflow-visible">
-            <table className="w-full table-fixed">
-              <thead>
-                <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
-                  <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
-                    Day / Period
-                  </th>
-                  {visiblePeriods.map(p=> (
-                    <th key={p.id} className="px-4 py-3">
-                      <div className="text-sm font-bold text-indigo-700">
-                        {p.label || `Period ${p.index || ''}`}
-                      </div>
-                      <div className="text-xs text-gray-600 mt-0.5">
-                        {p.start_time ? `${p.start_time}${p.end_time ? ' - ' + p.end_time : ''}` : (p.is_break? 'Break' : '')}
-                      </div>
-                    </th>
+          {visiblePeriods.length === 0 ? (
+            <div className="p-12 text-center flex flex-col items-center justify-center">
+              <AlertCircle className="h-12 w-12 text-amber-500 mb-3" />
+              <h4 className="text-base font-semibold text-gray-950">No periods found for the selected template</h4>
+              <p className="text-sm text-gray-600 mt-1 max-w-md">
+                Please select a different timetable template from the dropdown in the header to load its core periods and schedule assignments.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Desktop view: Horizontal table */}
+              <div className="hidden md:block overflow-x-auto lg:overflow-visible">
+                <table className="w-full table-fixed">
+                  <thead>
+                    <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b-2 border-gray-200">
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 min-w-[120px] sticky left-0 bg-gradient-to-r from-slate-50 to-blue-50 z-10">
+                        Day / Period
+                      </th>
+                      {visiblePeriods.map(p=> (
+                        <th key={p.id} className="px-4 py-3">
+                          <div className="text-sm font-bold text-indigo-700">
+                            {p.label || `Period ${p.index || ''}`}
+                          </div>
+                          <div className="text-xs text-gray-600 mt-0.5">
+                            {p.start_time ? `${p.start_time}${p.end_time ? ' - ' + p.end_time : ''}` : (p.is_break? 'Break' : '')}
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {DAYS.map((d,di)=> (
+                      <tr key={d} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
+                        {visiblePeriods.map(p=> {
+                          const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
+                          return (
+                            <td 
+                              key={p.id} 
+                              className={`px-4 py-3 align-top ${
+                                isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
+                              }`}
+                            >
+                              {renderCell(di+1, p)}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile view: Day tabs + Period/Subject columns */}
+              <div className="md:hidden p-4">
+                {/* Day tabs */}
+                <div className="grid grid-cols-7 gap-1 mb-4">
+                  {DAYS.map((d, di) => (
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDay(di)}
+                      className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        selectedDay === di
+                          ? 'bg-indigo-600 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {d}
+                    </button>
                   ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {DAYS.map((d,di)=> (
-                  <tr key={d} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-bold text-gray-900 bg-gray-50 sticky left-0 z-10">{d}</td>
-                    {visiblePeriods.map(p=> {
-                      const isSelected = editingCell && editingCell.day === (di+1) && editingCell.periodId === p.id
-                      return (
-                        <td 
-                          key={p.id} 
-                          className={`px-4 py-3 align-top ${
-                            isSelected ? 'bg-indigo-50 border-2 border-indigo-300 shadow-md' : ''
-                          }`}
-                        >
-                          {renderCell(di+1, p)}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </div>
 
-          {/* Mobile view: Day tabs + Period/Subject columns */}
-          <div className="md:hidden p-4">
-            {/* Day tabs */}
-            <div className="grid grid-cols-7 gap-1 mb-4">
-              {DAYS.map((d, di) => (
-                <button
-                  key={d}
-                  onClick={() => setSelectedDay(di)}
-                  className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    selectedDay === di
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-
-            {/* Period/Subject table for selected day */}
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Assignment</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {(() => {
-                    const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
-                    
-                    return nonBreakPeriods.map((p: any) => {
-                      const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
-                      
-                      return (
-                        <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
-                          <td className="px-3 py-3 align-top">
-                            <div className="text-xs font-semibold text-gray-900">
-                              {p.label || `P${p.index || ''}`}
-                            </div>
-                            {(p.start_time || p.end_time) && (
-                              <div className="text-xs text-gray-500 mt-0.5">
-                                {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
-                              </div>
-                            )}
-                          </td>
-                          <td className={`px-3 py-2 ${isSelected ? 'border-2 border-indigo-300' : ''}`}>
-                            {renderCell(selectedDay + 1, p)}
-                          </td>
-                        </tr>
-                      )
-                    })
-                  })()}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                {/* Period/Subject table for selected day */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700 w-24">Period</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-indigo-700">Assignment</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {(() => {
+                        const nonBreakPeriods = visiblePeriods.filter((p: any) => !p.is_break && !p.is_lunch)
+                        
+                        return nonBreakPeriods.map((p: any) => {
+                          const isSelected = editingCell && editingCell.day === (selectedDay + 1) && editingCell.periodId === p.id
+                          
+                          return (
+                            <tr key={p.id} className={`${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+                              <td className="px-3 py-3 align-top">
+                                <div className="text-xs font-semibold text-gray-900">
+                                  {p.label || `P${p.index || ''}`}
+                                </div>
+                                {(p.start_time || p.end_time) && (
+                                  <div className="text-xs text-gray-500 mt-0.5">
+                                    {p.start_time}{p.start_time && p.end_time ? '–' : ''}{p.end_time}
+                                  </div>
+                                )}
+                              </td>
+                              <td className={`px-3 py-2 ${isSelected ? 'border-2 border-indigo-300' : ''}`}>
+                                {renderCell(selectedDay + 1, p)}
+                              </td>
+                            </tr>
+                          )
+                        })
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Subjects & Staff Reference */}
@@ -1721,6 +2050,7 @@ export default function TimetableEditor(){
           selectedStaffId={selectedStaffId}
           setSelectedStaffId={setSelectedStaffId}
           staffList={staffList}
+          subjectStaffList={subjectStaffList}
           sectionId={sectionId}
           shortLabel={shortLabel}
           loadBatchesForCurriculum={loadBatchesForCurriculum}

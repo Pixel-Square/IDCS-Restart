@@ -480,8 +480,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Student: show My Attendance link for students
   if (flags.is_student) {
-    items.push({ key: 'student_academics', label: 'My Marks', to: '/student/academics' });
+    items.push({ key: 'student_academics', label: 'My Marks', to: '/academic-v2/student/dashboard' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+  }
+
+  // Staff: Academic 2.1 faculty pages
+  if (flags.is_staff && permsLower.includes('academic_v2.page.staff') && !items.some((item) => item.key === 'academic_v2')) {
+    items.push({ key: 'academic_v2', label: 'Academic 2.1', to: '/academic-v2/courses' });
   }
 
   // Staff assigned subjects page
@@ -563,6 +568,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Show Academic for all staff
   if (flags.is_staff && !items.some(item => item.key === 'academic')) {
     items.push({ key: 'academic', label: 'Academic', to: '/academic' });
+  }
+
+  // Academic 2.1 Admin for IQAC - collapsible group
+  if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
+    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '/academic-v2/admin' });
   }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
@@ -679,6 +689,24 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
   }
 
+  // Academic Performance (accessible to all users)
+  if (!items.some((item) => item.key === 'academic_performance')) {
+    items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
+  }
+
+  // Visual Admin & Academic Visuals entries
+  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN') || Boolean((data as any)?.is_superuser);
+  if (isVisualAdmin) {
+    if (!items.some((item) => item.key === 'visual_admin_dashboard')) {
+      items.push({ key: 'visual_admin_dashboard', label: 'Visual Admin', to: '/visual-admin' });
+    }
+    if (!items.some((item) => item.key === 'academic_visuals')) {
+      items.push({ key: 'academic_visuals', label: 'Academic Visuals', to: '/academic-visuals' });
+    }
+  }
+
+
+
   // Add Token Raise for all users at the end (no permission check needed)
   items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
 
@@ -693,7 +721,24 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+        {/* Custom scrollbar styles */}
+        <style>{`
+          aside::-webkit-scrollbar {
+            width: 8px;
+          }
+          aside::-webkit-scrollbar-track {
+            background: #f3f4f6;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+          }
+        `}</style>
         {/* Header - Hidden */}
         <div className="hidden" />
 
@@ -986,6 +1031,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       </li>
                     </ul>
                   ) : null}
+
                 </li>
               );
             })}

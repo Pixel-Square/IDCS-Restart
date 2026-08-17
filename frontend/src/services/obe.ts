@@ -403,9 +403,24 @@ export type EnabledAssessmentsMeta = {
   } | null;
 };
 
+export type EnabledAssessmentState = {
+  key: string;
+  locked: boolean;
+  reason?: string | null;
+  cycle_id?: string | null;
+  cycle_name?: string | null;
+  cycle_code?: string | null;
+  cycle_active?: boolean | null;
+  semester_active?: boolean | null;
+  semester_id?: string | null;
+  exam_assignment_id?: string | null;
+  exam_display_name?: string | null;
+};
+
 export type EnabledAssessmentsInfoResponse = {
   enabled_assessments: string[];
   meta?: EnabledAssessmentsMeta;
+  assessment_states?: EnabledAssessmentState[];
 };
 
 export async function fetchTeachingAssignmentEnabledAssessmentsInfo(teachingAssignmentId: number): Promise<EnabledAssessmentsInfoResponse> {
@@ -417,6 +432,7 @@ export async function fetchTeachingAssignmentEnabledAssessmentsInfo(teachingAssi
   return {
     enabled_assessments: Array.isArray(data?.enabled_assessments) ? data.enabled_assessments.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : [],
     meta: data?.meta || undefined,
+    assessment_states: Array.isArray(data?.assessment_states) ? data.assessment_states : [],
   };
 }
 
@@ -438,6 +454,7 @@ export async function setTeachingAssignmentEnabledAssessmentsInfo(teachingAssign
   return {
     enabled_assessments: Array.isArray(data?.enabled_assessments) ? data.enabled_assessments : [],
     meta: data?.meta || undefined,
+    assessment_states: Array.isArray(data?.assessment_states) ? data.assessment_states : [],
   };
 }
 
@@ -816,6 +833,7 @@ export type QpPatternExam = 'CIA' | 'CIA1' | 'CIA2' | 'MODEL' | 'SSA1' | 'SSA2' 
 export type QpPatternConfig = {
   marks: number[];
   cos?: Array<number | string>;
+  btls?: Array<number>;
 };
 
 export type QpPatternResponse = {
@@ -866,6 +884,17 @@ function normalizeQpPattern(raw: any): QpPatternConfig {
     // IMPORTANT: preserve positional alignment (cos[i] corresponds to marks[i]).
     // Filtering entries can shift indices and apply the wrong CO mapping.
     if (cos) out.cos = cos;
+
+    // BTL (Bloom's Taxonomy Level) per question
+    const btlsRaw = Array.isArray((raw as any).btls) ? (raw as any).btls : undefined;
+    const btls = btlsRaw
+      ? btlsRaw.map((v: any) => {
+          const n = Number(v);
+          return Number.isFinite(n) && n >= 1 && n <= 6 ? n : 1;
+        })
+      : undefined;
+    if (btls) out.btls = btls;
+
     return out;
   }
 
@@ -915,6 +944,7 @@ export async function upsertIqacQpPattern(payload: { class_type: string; questio
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
       cos: Array.isArray(payload.pattern?.cos) ? payload.pattern.cos : undefined,
+      btls: Array.isArray(payload.pattern?.btls) ? payload.pattern.btls : undefined,
     },
   };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });
@@ -1030,6 +1060,7 @@ export async function upsertIqacBatchQpPattern(payload: { batch_id: number; clas
     pattern: {
       marks: Array.isArray(payload.pattern?.marks) ? payload.pattern.marks : [],
       cos: Array.isArray(payload.pattern?.cos) ? payload.pattern.cos : undefined,
+      btls: Array.isArray(payload.pattern?.btls) ? payload.pattern.btls : undefined,
     },
   };
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });

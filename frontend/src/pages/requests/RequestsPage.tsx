@@ -5,6 +5,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import ObeRequestsPage from '../iqac/ObeRequestsPage';
 import ObeEditRequestsPage from '../hod/ObeEditRequestsPage';
 import ApplicationsInboxPage from '../applications/ApplicationsInboxPage';
+import ApprovalInboxPage from '../Academic 2.1/admin/ApprovalInboxPage';
 import { fetchApplicationsNav } from '../../services/applications';
 
 type RequestsPageProps = {
@@ -40,6 +41,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
   const canSeeObeMasterRequests = perms.includes('obe.master_obe_requests');
   const canSeeHodObeRequests = perms.includes('obe.hod_obe_requests');
   const canSeeProfileImageUnlockRequests = perms.includes('accounts.profile_image_unlock_approve');
+  const canSeeAc21Approvals = roles.includes('IQAC') || roles.includes('HOD') || roles.includes('ADMIN');
 
   React.useEffect(() => {
     let mounted = true;
@@ -126,14 +128,36 @@ export default function RequestsPage({ user }: RequestsPageProps) {
     });
   }
 
+  if (canSeeAc21Approvals) {
+    links.push({
+      key: 'ac21-approvals',
+      title: 'AC 2.1: Pending Approvals',
+      description: 'Review faculty edit requests for Academic 2.1 mark entry.',
+      to: '/requests?section=ac21-approvals',
+      icon: ClipboardList,
+    });
+  }
+
   const showObeMasterSection = section === 'obe-master-requests' && canSeeObeMasterRequests;
   const showObeHodSection = section === 'obe-hod-requests' && canSeeHodObeRequests;
   const showApplicationsInboxSection = section === 'applications-inbox' && canSeeApplicationsInbox;
+  const showAc21ApprovalsSection = section === 'ac21-approvals' && canSeeAc21Approvals;
 
   return (
     <DashboardLayout>
       <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
         {(showObeMasterSection || showObeHodSection || showApplicationsInboxSection) && (
+          <div className="mb-4">
+            <Link
+              to="/requests"
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Requests Hub
+            </Link>
+          </div>
+        )}
+        {showAc21ApprovalsSection && (
           <div className="mb-4">
             <Link
               to="/requests"
@@ -175,7 +199,13 @@ export default function RequestsPage({ user }: RequestsPageProps) {
           </div>
         ) : null}
 
-        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && links.length === 0 ? (
+        {showAc21ApprovalsSection ? (
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+            <ApprovalInboxPage />
+          </div>
+        ) : null}
+
+        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && !showAc21ApprovalsSection && links.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500 shadow-sm">
             <Bell className="h-10 w-10 mx-auto text-slate-300 mb-3" />
             <h3 className="text-lg font-semibold text-slate-700">No Request Workflows</h3>
@@ -183,7 +213,7 @@ export default function RequestsPage({ user }: RequestsPageProps) {
           </div>
         ) : null}
 
-        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && links.length > 0 ? (
+        {!showObeMasterSection && !showObeHodSection && !showApplicationsInboxSection && !showAc21ApprovalsSection && links.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {links.map((item) => {
               const Icon = item.icon;

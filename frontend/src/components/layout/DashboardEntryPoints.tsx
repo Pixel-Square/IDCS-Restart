@@ -40,10 +40,12 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const [showPopup, setShowPopup] = useState(false);
   const [markingReadId, setMarkingReadId] = useState<string | null>(null);
 
+  const rootAvatarValue = String((user as any)?.profile_image || '').trim();
+  const nestedAvatarValue = String((user as any)?.profile?.profile_image || '').trim();
+  const avatarSourceValue = rootAvatarValue || nestedAvatarValue;
+
   const avatarUrlCandidates = React.useMemo(() => {
-    const rootValue = String((user as any)?.profile_image || '').trim();
-    const nestedValue = String((user as any)?.profile?.profile_image || '').trim();
-    const raw = rootValue || nestedValue;
+    const raw = avatarSourceValue;
     if (!raw) return [] as string[];
 
     const normalized = raw.replace(/\\+/g, '/');
@@ -52,19 +54,23 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
     }
 
     if (normalized.startsWith('/')) {
-      const direct = normalized;
-      const apiBaseUrl = `${getApiBase()}${normalized}`;
-      return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
+      // Use relative path first; avoid duplicate absolute+relative retries for the same resource.
+      return [normalized];
     }
 
     const direct = `/media/${normalized}`;
     const apiBaseUrl = `${getApiBase()}/media/${normalized}`;
-    return direct === apiBaseUrl ? [direct] : [direct, apiBaseUrl];
-  }, [user]);
+    const unique = new Set<string>();
+    for (const candidate of [direct, apiBaseUrl]) {
+      const value = String(candidate || '').trim();
+      if (value) unique.add(value);
+    }
+    return Array.from(unique);
+  }, [avatarSourceValue]);
 
   useEffect(() => {
     setAvatarCandidateIndex(0);
-  }, [avatarUrlCandidates]);
+  }, [avatarSourceValue]);
 
   const currentAvatarUrl = avatarUrlCandidates[avatarCandidateIndex] || '';
   
@@ -287,7 +293,13 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
                 src={currentAvatarUrl}
                 alt="Profile"
                 className="w-full h-full object-cover"
-                onError={() => setAvatarCandidateIndex((prev) => prev + 1)}
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  setAvatarCandidateIndex((prev) => {
+                    const next = prev + 1;
+                    return next < avatarUrlCandidates.length ? next : avatarUrlCandidates.length;
+                  });
+                }}
               />
             ) : (
               <User className="w-7 h-7 text-white" />

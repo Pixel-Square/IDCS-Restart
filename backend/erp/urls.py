@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/coe/', include('COE.urls')),
     path('api/curriculum/', include('curriculum.urls')),
     path('api/obe/', include('OBE.urls')),
+    path('api/academic-v2/', include('academic_v2.urls')),
     path('api/template/', include('template_api.urls')),
     path('api/canva/',    include('template_api.canva_urls')),
     path('api/import/', include('question_bank.urls')),
@@ -49,6 +50,7 @@ urlpatterns = [
     # College search API (public for external staff registration)
     path('api/colleges/', include('college.urls')),
     path('api/lms/', include('lms.urls')),
+    path('api/coder/', include('coder.urls')),
 ]
 
 # Admin dashboard data endpoint (counts for models) - always available

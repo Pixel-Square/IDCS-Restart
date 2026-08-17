@@ -8,9 +8,4 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='teachingassignment',
-            name='enabled_assessments',
-            field=models.JSONField(blank=True, default=list),
-        ),
     ]

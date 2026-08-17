@@ -13,6 +13,7 @@ from .models import (
     Course,
     Semester,
     Section,
+    MixedSection,
     Batch,
     BatchYear,
     Subject,
@@ -117,10 +118,10 @@ class StaffProfileForm(forms.ModelForm):
 class StudentProfileAdmin(admin.ModelAdmin):
     form = StudentProfileForm
     list_display = ('user', 'reg_no', 'get_department', 'batch', 'current_section_display', 'status', 'get_section_dept')
-    search_fields = ('reg_no', 'user__username', 'user__email', 'section__name')
+    search_fields = ('reg_no', 'user__username', 'user__email')
+    # filter by the department through the section->semester->course relation
     list_filter = ('section__batch__course__department', 'batch', 'home_department')
-    list_select_related = ('user', 'section__batch__course__department', 'home_department')
-    raw_id_fields = ('user', 'section', 'home_department')
+    raw_id_fields = ('home_department',)
     actions = ('deactivate_students', 'mark_alumni', 'delete_profiles_and_users')
 
     change_list_template = 'admin/academics/studentprofile/change_list.html'
@@ -678,8 +679,6 @@ class StaffProfileAdmin(admin.ModelAdmin):
     list_display = ('staff_id', 'internal_id', 'rfid_uid', 'get_full_name', 'current_department_display', 'designation', 'status')
     search_fields = ('staff_id', 'internal_id', 'rfid_uid', 'user__username', 'user__email', 'user__first_name', 'user__last_name')
     list_filter = ('department', 'designation')
-    list_select_related = ('user', 'department')
-    raw_id_fields = ('user', 'department')
     
     def get_queryset(self, request):
         """Optimize queryset with select_related for user and department."""
@@ -1041,55 +1040,6 @@ class AcademicYearAdmin(admin.ModelAdmin):
     list_editable = ('is_active',)
     list_filter = ('parity', 'is_active')
     search_fields = ('name',)
-    actions = ['shift_semester_action']
-
-    @admin.action(description='Shift all sections to semesters for this year')
-    def shift_semester_action(self, request, queryset):
-        if queryset.count() != 1:
-            self.message_user(request, "Please select exactly one academic year to shift to.", messages.ERROR)
-            return
-
-        instance = queryset.first()
-        
-        # We manually trigger the logic here
-        from django.db import transaction
-        from .models import Section, Semester, AcademicYear
-        
-        updated_count = 0
-        with transaction.atomic():
-            AcademicYear.objects.all().update(is_active=False)
-            instance.is_active = True
-            instance.save(update_fields=['is_active'])
-
-            try:
-                acad_start = int(str(instance.name).split('-')[0])
-            except Exception:
-                self.message_user(request, f"Invalid year format in {instance.name}", messages.ERROR)
-                return
-
-            sections = Section.objects.all().select_related('batch')
-            for sec in sections:
-                try:
-                    start_year = getattr(sec.batch, 'start_year', None)
-                    if start_year is None:
-                        try:
-                            start_year = int(str(sec.batch.name).split('-')[0])
-                        except Exception:
-                            start_year = None
-                    if start_year is None: continue
-                    delta = acad_start - int(start_year)
-                    offset = 1 if (instance.parity or '').upper() == 'ODD' else 2
-                    sem_number = delta * 2 + offset
-                    if sem_number > 0:
-                        sem_obj, _ = Semester.objects.get_or_create(number=sem_number)
-                        if sec.semester_id != sem_obj.id:
-                            sec.semester = sem_obj
-                            sec.save(update_fields=['semester'])
-                            updated_count += 1
-                except Exception:
-                    continue
-
-        self.message_user(request, f"Activated {instance.name}. Shifted {updated_count} sections.")
 
 
 @admin.register(Department)
@@ -1129,6 +1079,31 @@ class SectionAdmin(admin.ModelAdmin):
     raw_id_fields = ('managing_department',)
 
 
+@admin.register(MixedSection)
+class MixedSectionAdmin(admin.ModelAdmin):
+    list_display = ('name', 'batch', 'semester', 'academic_year', 'is_active', 'get_section_count')
+    search_fields = ('name', 'batch__name')
+    list_filter = ('batch', 'semester', 'academic_year', 'is_active')
+    filter_horizontal = ('sections',)
+    raw_id_fields = ('batch', 'semester', 'academic_year')
+
+    fieldsets = (
+        ('Basic Info', {
+            'fields': ('name', 'description'),
+        }),
+        ('Association', {
+            'fields': ('batch', 'semester', 'academic_year', 'sections'),
+        }),
+        ('Status', {
+            'fields': ('is_active',),
+        }),
+    )
+
+    def get_section_count(self, obj):
+        return obj.sections.count()
+    get_section_count.short_description = 'Sections Count'
+
+
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
     list_display = ('code', 'name', 'course', 'semester')
@@ -1160,11 +1135,12 @@ class BatchYearAdmin(admin.ModelAdmin):
 
 @admin.register(TeachingAssignment)
 class TeachingAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('staff', 'subject_display', 'elective_subject', 'section', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department', 'staff__department')
-    search_fields = ('staff__user__username', 'staff__staff_id', 'subject__code', 'subject__name', 'elective_subject__course_code', 'elective_subject__course_name', 'section__name')
-    list_select_related = ('staff__user', 'subject', 'elective_subject', 'section__batch__course__department', 'academic_year')
-    raw_id_fields = ('staff', 'subject', 'elective_subject', 'section', 'curriculum_row', 'academic_year')
+    list_display = ('staff', 'subject_display', 'section_display', 'academic_year', 'is_active')
+    search_fields = (
+        'staff__staff_id', 'staff__user__username', 'subject__code', 'subject__name', 'section__name'
+    )
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
+    raw_id_fields = ('staff', 'curriculum_row', 'section', 'academic_year')
 
     class TeachingAssignmentForm(forms.ModelForm):
         class Meta:
@@ -1350,6 +1326,35 @@ class TeachingAssignmentAdmin(admin.ModelAdmin):
 
     subject_display.short_description = 'Subject (Curriculum)'
 
+    def section_display(self, obj):
+        if obj.section:
+            return str(obj.section)
+        
+        # If no section, check if it is an elective
+        category = None
+        if getattr(obj, 'elective_subject', None):
+            parent = getattr(obj.elective_subject, 'parent', None)
+            if parent and getattr(parent, 'category', None):
+                category = str(parent.category).lower()
+        elif getattr(obj, 'curriculum_row', None) and getattr(obj.curriculum_row, 'is_elective', False):
+            if getattr(obj.curriculum_row, 'category', None):
+                category = str(obj.curriculum_row.category).lower()
+                
+        if category is not None:
+            if 'open elective' in category or 'oe' in category.split():
+                return 'OE'
+            elif 'professional elective' in category or 'pe' in category.split():
+                return 'PE'
+            elif 'emerging' in category:
+                return 'EE'
+            return str(category).title()
+            
+        if getattr(obj, 'custom_subject', None):
+            return obj.get_custom_subject_display()
+            
+        return '-'
+    section_display.short_description = 'Section'
+
 
 @admin.register(StudentMentorMap)
 class StudentMentorMapAdmin(admin.ModelAdmin):
@@ -1361,10 +1366,16 @@ class StudentMentorMapAdmin(admin.ModelAdmin):
 
 @admin.register(SectionAdvisor)
 class SectionAdvisorAdmin(admin.ModelAdmin):
-    list_display = ('section', 'advisor', 'academic_year', 'is_active')
-    list_filter = ('academic_year', 'is_active', 'section__batch__course__department')
-    search_fields = ('section__name', 'advisor__staff_id', 'advisor__user__username')
-    raw_id_fields = ('section', 'advisor', 'academic_year')
+    list_display = ('section', 'mixed_section', 'advisor', 'academic_year', 'is_active')
+    list_filter = ('academic_year', 'is_active', 'section__batch__course__department', 'mixed_section__batch__department')
+    search_fields = ('section__name', 'mixed_section__name', 'advisor__staff_id', 'advisor__user__username')
+    raw_id_fields = ('section', 'mixed_section', 'advisor', 'academic_year')
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_foreignkey(db_field, request, **kwargs)
+        if db_field.name in {'section', 'mixed_section'}:
+            formfield.help_text = 'Choose either a regular section or a mixed section, not both.'
+        return formfield
 
 
 @admin.register(DepartmentRole)

@@ -11,10 +11,65 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from academics.models import Section
 from rest_framework.exceptions import PermissionDenied
+import re
 from django.db.models import OuterRef, Exists, Q
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_int(val):
+    try:
+        return int(val) if val is not None else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _normalize_class_type(raw_class_type, curriculum_row=None):
+    raw = str(raw_class_type or '').strip()
+    if not raw:
+        return 'THEORY'
+    normalized = raw.upper().strip()
+    compact = re.sub(r'[^A-Z0-9]+', '', normalized)
+    if not compact:
+        return 'THEORY'
+    if compact.isdigit():
+        if curriculum_row is not None:
+            l = _coerce_int(getattr(curriculum_row, 'l', None)) or 0
+            t = _coerce_int(getattr(curriculum_row, 't', None)) or 0
+            p = _coerce_int(getattr(curriculum_row, 'p', None)) or 0
+            s = _coerce_int(getattr(curriculum_row, 's', None)) or 0
+            if p or s:
+                return 'TCPL' if l else 'PRACTICAL'
+            if l:
+                return 'LAB'
+        return 'THEORY'
+    if 'TCPR' in compact:
+        return 'TCPR'
+    if 'TCPL' in compact:
+        return 'TCPL'
+    if compact == 'THEORYPMBL' or compact == 'THEORY' or compact.startswith('THEORY'):
+        return 'THEORY'
+    if compact == 'PRBL' or compact == 'PROJECT' or 'PROJECT' in compact:
+        return 'PROJECT'
+    if compact == 'LAB' or compact == 'L' or compact.startswith('LAB'):
+        return 'LAB'
+    if compact == 'PRACTICAL' or compact.startswith('PRACT'):
+        return 'PRACTICAL'
+    if compact == 'AUDIT':
+        return 'AUDIT'
+    if compact == 'SPECIAL':
+        return 'SPECIAL'
+    return normalized
+
+
+def _get_staff_name_helper(u, sp):
+    if not u:
+        return getattr(sp, 'staff_id', '')
+    name = u.get_full_name().strip()
+    if not name:
+        name = u.username
+    return name or getattr(sp, 'staff_id', '')
 
 
 def _get_student_core_department_id(student_profile) -> int | None:
@@ -91,8 +146,118 @@ def _apply_shared_section_student_dept_filter(qs, sec, student_profile):
         return qs
 
 
+def _resolve_section_curriculum_department_ids(sec):
+    """Resolve the curriculum department(s) that should drive a section's subject list.
+
+    Preference order:
+    1. Regular course department.
+    2. Explicit batch department when it is not the shared S&H manager.
+    3. Explicit managing department when it is not the shared S&H manager.
+    4. For shared sections, a single observed home_department across active PRIMARY students.
+
+    Returns a list of department IDs. An empty list means the caller should fall back
+    to the shared-section union logic.
+    """
+    try:
+        batch = getattr(sec, 'batch', None)
+        course = getattr(batch, 'course', None) if batch else None
+        if course is not None:
+            dept_id = getattr(course, 'department_id', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        batch_dept = getattr(batch, 'department', None) if batch else None
+        if batch_dept is not None and not getattr(batch_dept, 'is_sh_main', False):
+            dept_id = getattr(batch_dept, 'pk', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        managing_dept = getattr(sec, 'managing_department', None)
+        if managing_dept is not None and not getattr(managing_dept, 'is_sh_main', False):
+            dept_id = getattr(managing_dept, 'pk', None)
+            if dept_id:
+                return [int(dept_id)]
+
+        if getattr(batch, 'course_id', None) is None:
+            from academics.models import StudentSectionAssignment
+
+            home_dept_ids = list(
+                StudentSectionAssignment.objects.filter(
+                    section=sec,
+                    end_date__isnull=True,
+                    section_type='PRIMARY',
+                    student__home_department__isnull=False,
+                ).values_list('student__home_department_id', flat=True).distinct()
+            )
+            unique_home_dept_ids = sorted({int(dept_id) for dept_id in home_dept_ids if dept_id})
+            if len(unique_home_dept_ids) == 1:
+                return unique_home_dept_ids
+    except Exception:
+        pass
+
+    return []
+
+
 class CurriculumBySectionView(APIView):
     permission_classes = (IsAuthenticated,)
+
+    def _finalize_results(self, rows, sem_num):
+        # Propagate known non-empty codes across same-name rows first.
+        code_by_name = {}
+        for row in rows:
+            name_key = (row.get('course_name') or '').strip().lower()
+            code_val = (row.get('course_code') or '').strip()
+            if name_key and code_val and name_key not in code_by_name:
+                code_by_name[name_key] = code_val
+
+        for row in rows:
+            if (row.get('course_code') or '').strip():
+                continue
+            name_key = (row.get('course_name') or '').strip().lower()
+            if name_key and name_key in code_by_name:
+                row['course_code'] = code_by_name[name_key]
+
+        # If still missing, derive from canonical model sources used by Subject records.
+        try:
+            from academics.models import Subject, TeachingAssignment
+
+            for row in rows:
+                if (row.get('course_code') or '').strip():
+                    continue
+                row_name = (row.get('course_name') or '').strip()
+                if not row_name:
+                    continue
+
+                # 1) Legacy TeachingAssignment.subject mapping for this name.
+                code_from_ta_subject = (
+                    TeachingAssignment.objects.filter(
+                        subject__isnull=False,
+                        subject__name__iexact=row_name,
+                        is_active=True,
+                    )
+                    .exclude(subject__code__isnull=True)
+                    .exclude(subject__code='')
+                    .values_list('subject__code', flat=True)
+                    .first()
+                )
+                if code_from_ta_subject:
+                    row['course_code'] = code_from_ta_subject
+                    continue
+
+                # 2) Subject table by name + semester as a stable fallback.
+                code_from_subject = (
+                    Subject.objects.filter(name__iexact=row_name, semester__number=sem_num)
+                    .exclude(code__isnull=True)
+                    .exclude(code='')
+                    .values_list('code', flat=True)
+                    .first()
+                )
+                if code_from_subject:
+                    row['course_code'] = code_from_subject
+        except Exception:
+            pass
+
+        return rows
 
     def get(self, request):
         sec_id = request.query_params.get('section_id') or request.query_params.get('section')
@@ -112,6 +277,35 @@ class CurriculumBySectionView(APIView):
         # Shared section: batch has no course (e.g. S&H Year-1).  Derive curriculum
         # from the home-departments of students currently enrolled in this section.
         if getattr(sec.batch, 'course_id', None) is None:
+            curriculum_dept_ids = _resolve_section_curriculum_department_ids(sec)
+            if curriculum_dept_ids:
+                try:
+                    from curriculum.models import CurriculumDepartment
+
+                    qs = CurriculumDepartment.objects.filter(
+                        department_id__in=curriculum_dept_ids,
+                        semester__number=sem_num,
+                    )
+
+                    data = []
+                    for c in qs:
+                        data.append({
+                            'id': c.pk,
+                            'course_code': c.course_code,
+                            'course_name': c.course_name,
+                            'c': getattr(c, 'c', None),
+                            'total_hours': getattr(c, 'total_hours', None),
+                            'effective_class_hours': _get_effective_class_hours(c),
+                            'regulation': c.regulation,
+                            'class_type': _normalize_class_type(c.class_type, c),
+                            'is_elective': c.is_elective,
+                            'is_dept_core': getattr(c, 'is_dept_core', False),
+                            'department_id': c.department_id,
+                            'department_code': getattr(c.department, 'code', None),
+                        })
+                    return Response({'results': self._finalize_results(data, sem_num)})
+                except Exception:
+                    return Response({'results': []})
             return self._shared_section_curriculum(sec, sem_num)
 
         dept = getattr(sec.batch.course, 'department', None)
@@ -119,13 +313,8 @@ class CurriculumBySectionView(APIView):
             return Response({'results': []})
 
         try:
-            from curriculum.models import CurriculumDepartment, ElectiveSubject, DepartmentGroupMapping
+            from curriculum.models import CurriculumDepartment
             qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
-
-            # Find department groups that this department belongs to (for cross-dept elective matching)
-            group_ids = list(DepartmentGroupMapping.objects.filter(
-                department=dept, is_active=True
-            ).values_list('group_id', flat=True))
 
             data = []
             for c in qs:
@@ -137,14 +326,16 @@ class CurriculumBySectionView(APIView):
                     'course_code': c.course_code,
                     'course_name': c.course_name,
                     'regulation': c.regulation,
-                    'class_type': c.class_type,
+                    'class_type': _normalize_class_type(c.class_type, c),
                     'is_elective': c.is_elective,
                     'is_dept_core': getattr(c, 'is_dept_core', False),
+                    'department_id': c.department_id,
+                    'department_code': getattr(c.department, 'code', None),
                 })
                 # NOTE: Removed individual elective subject listing
                 # Staff now assigns the elective GROUP (e.g., "EE - Elective Elective")
                 # Students will see their chosen elective via ElectiveChoice when viewing timetable
-            return Response({'results': data})
+            return Response({'results': self._finalize_results(data, sem_num)})
         except Exception:
             return Response({'results': []})
 
@@ -204,7 +395,8 @@ class CurriculumBySectionView(APIView):
                 semester__number=sem_num,
             ).select_related('department').order_by('is_dept_core', 'course_code', 'department_id')
 
-            # Dept-core subjects owned by managing/S&H dept take priority and appear once.
+            # Dept-core subjects are kept distinct per department so Mechanical and
+            # Civil variants can both appear in HOD screens.
             # Regular shared subjects are deduplicated by course_code (or course_name for
             # null-code entries) across home depts.  Managing-dept entries always win when
             # the same key appears in both managing and home depts.
@@ -222,49 +414,339 @@ class CurriculumBySectionView(APIView):
                     # Last resort: individual row keyed by pk so it always shows
                     key = f'pk:{c.pk}'
 
-                if c.is_dept_core or c.is_elective:
-                    # Single entry; managing-dept row wins if duplicate.
-                    # is_elective (e.g. Language Elective) uses same model so the
-                    # managing-dept row becomes the stable parent for ElectiveSubject FKs.
-                    if key not in seen or is_managing:
-                        seen[key] = {
+                if c.is_elective:
+                    # Elective parents stay shared, with the managing-dept row
+                    # winning when the same parent appears in multiple departments.
+                    dedupe_key = key
+                    if dedupe_key not in seen or is_managing:
+                        prev = seen.get(dedupe_key, {}) if dedupe_key in seen else {}
+                        prev_code = (prev.get('course_code') or '').strip() if isinstance(prev, dict) else ''
+                        effective_code = code if code else (prev_code or None)
+                        seen[dedupe_key] = {
                             'id': c.pk,
-                            'course_code': code,
+                            'course_code': effective_code,
+                            'mnemonic': getattr(c, 'mnemonic', None),
                             'course_name': c.course_name,
                             'regulation': c.regulation,
                             'semester': sem_num,
-                            'class_type': c.class_type,
+                            'class_type': _normalize_class_type(c.class_type, c),
                             'is_elective': c.is_elective,
-                            'is_dept_core': c.is_dept_core,
+                            'is_dept_core': getattr(c, 'is_dept_core', False),
+                            'department_id': c.department_id,
+                            'department_code': getattr(c.department, 'code', None),
                         }
-                    # Don't collect home_dept_codes for these;
-                    # per-dept resolution happens via ElectiveSubject.department
                 elif key not in seen:
                     seen[key] = {
                         'id': c.pk,
                         'course_code': code,
+                        'mnemonic': getattr(c, 'mnemonic', None),
                         'course_name': c.course_name,
                         'regulation': c.regulation,
                         'semester': sem_num,
-                        'class_type': c.class_type,
+                        'class_type': _normalize_class_type(c.class_type, c),
                         'is_elective': c.is_elective,
-                        'is_dept_core': False,
+                        'is_dept_core': getattr(c, 'is_dept_core', False),
                         'home_dept_ids': [c.department_id],
                         'home_dept_codes': [getattr(c.department, 'short_name', None)],
                     }
                 else:
-                    if not seen[key].get('is_dept_core'):
-                        # Managing-dept entry should be the representative row
-                        if is_managing:
-                            seen[key]['id'] = c.pk
+                    # Managing-dept entry should be the representative row
+                    if is_managing:
+                        seen[key]['id'] = c.pk
+                        if code:
                             seen[key]['course_code'] = code
-                            seen[key]['course_name'] = c.course_name
-                        seen[key]['home_dept_ids'].append(c.department_id)
-                        seen[key]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
+                        seen[key]['course_name'] = c.course_name
+                    elif (not seen[key].get('course_code')) and code:
+                        # Keep a usable subject code for shared rows when available
+                        # from non-managing department variants.
+                        seen[key]['course_code'] = code
+                    if getattr(c, 'is_dept_core', False):
+                        seen[key]['is_dept_core'] = True
+                    seen[key]['home_dept_ids'].append(c.department_id)
+                    seen[key]['home_dept_codes'].append(getattr(c.department, 'short_name', None))
 
-            return Response({'results': list(seen.values())})
+            rows = list(seen.values())
+
+            return Response({'results': self._finalize_results(rows, sem_num)})
         except Exception:
             return Response({'results': []})
+
+
+class MixedSectionCurriculumView(APIView):
+    """
+    API endpoint to retrieve curriculum for a Mixed Section.
+    
+    A mixed section groups multiple regular sections. This endpoint resolves
+    curriculum by:
+    1. Getting department + semester from the mixed section's batch
+    2. For each chosen section, extracting its department + semester
+    3. Querying CurriculumDepartment for all (dept_id, semester) pairs
+    4. Deduplicating by course_code and returning with department info
+    
+    Query params:
+    - mixed_section_id (required): ID of the MixedSection
+    """
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        mixed_section_id = request.query_params.get('mixed_section_id') or request.query_params.get('mixed_section')
+        debug = request.query_params.get('debug') == '1'
+        if not mixed_section_id:
+            return Response({'results': []})
+
+        try:
+            from academics.models import MixedSection
+            mixed_sec = MixedSection.objects.select_related(
+                'batch__course__department',
+                'batch__department',
+                'semester'
+            ).prefetch_related(
+                'sections__batch__course__department',
+                'sections__batch__department',
+                'sections__managing_department'
+            ).get(pk=int(mixed_section_id))
+        except Exception as e:
+            if debug:
+                return Response({'error': str(e), 'results': []})
+            return Response({'results': []})
+
+        sem_num = getattr(mixed_sec.semester, 'number', None)
+        if sem_num is None:
+            return Response({'results': [], 'debug': {'error': 'No semester found for mixed section'}})
+
+        # Collect all (department_id, semester) pairs to query
+        dept_sem_pairs = set()
+        dept_section_map = {}  # Track which sections contribute which departments
+        section_details = {}  # Track section details for debugging
+        
+        # 1. From mixed section's batch
+        batch_dept_id = None
+        logger.info(f'[MixedSection {mixed_section_id}] Processing batch...')
+        if mixed_sec.batch:
+            logger.info(f'  - Batch ID: {mixed_sec.batch.id}, Name: {mixed_sec.batch.name}')
+            if mixed_sec.batch.course and getattr(mixed_sec.batch.course, 'department_id', None):
+                batch_dept_id = mixed_sec.batch.course.department_id
+                logger.info(f'  - Found dept from batch.course: {batch_dept_id}')
+            elif getattr(mixed_sec.batch, 'department_id', None):
+                batch_dept_id = mixed_sec.batch.department_id
+                logger.info(f'  - Found dept from batch.department: {batch_dept_id}')
+        
+        if batch_dept_id:
+            dept_sem_pairs.add((batch_dept_id, sem_num))
+            if batch_dept_id not in dept_section_map:
+                dept_section_map[batch_dept_id] = []
+            dept_section_map[batch_dept_id].append(('batch', None))
+        else:
+            logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve batch department')
+        
+        # 2. From each chosen section - MUST resolve department from each chosen section
+        chosen_sections = list(mixed_sec.sections.all())
+        logger.info(f'[MixedSection {mixed_section_id}] Found {len(chosen_sections)} chosen sections')
+        
+        for i, section in enumerate(chosen_sections):
+            dept_id = None
+            section_sem = getattr(section.semester, 'number', None) or sem_num
+            logger.info(f'  Section {i+1}/{len(chosen_sections)}: ID={section.id}, Name={section.name}, Batch={section.batch_id}, Sem={section_sem}')
+            
+            # Priority: section.batch.course.department > section.batch.department > section.managing_department
+            if section.batch:
+                batch = section.batch
+                logger.info(f'    - Section batch found: ID={batch.id}, name={batch.name}')
+                if getattr(batch, 'course', None):
+                    course = batch.course
+                    logger.info(f'      - Section batch has course: ID={course.id}')
+                    if getattr(course, 'department_id', None):
+                        dept_id = course.department_id
+                        logger.info(f'      - Using course.department_id: {dept_id}')
+                
+                if not dept_id and getattr(batch, 'department_id', None):
+                    dept_id = batch.department_id
+                    logger.info(f'      - Using batch.department_id: {dept_id}')
+            
+            if not dept_id and getattr(section, 'managing_department_id', None):
+                dept_id = section.managing_department_id
+                logger.info(f'    - Using section.managing_department_id: {dept_id}')
+            
+            if dept_id:
+                dept_sem_pairs.add((dept_id, section_sem))
+                if dept_id not in dept_section_map:
+                    dept_section_map[dept_id] = []
+                dept_section_map[dept_id].append(('section', section.id, section.name))
+                section_details[section.id] = {'name': section.name, 'dept_id': dept_id, 'sem': section_sem}
+                logger.info(f'    ✓ Resolved dept {dept_id} for section {section.id}')
+            else:
+                # Log if we couldn't resolve department for a chosen section
+                logger.warning(f'[MixedSection {mixed_section_id}] Could not resolve department for chosen section {section.id} ({section.name})')
+                section_details[section.id] = {'name': section.name, 'dept_id': None, 'sem': section_sem, 'error': 'No department found'}
+        
+        if not dept_sem_pairs:
+            return Response({'results': []})
+
+        logger.info(f'[MixedSection {mixed_section_id}] Querying curriculum for dept-sem pairs: {dept_sem_pairs}')
+
+        try:
+            from curriculum.models import CurriculumDepartment
+            
+            # Query curriculum for all department-semester pairs
+            all_rows = []
+            courses_per_dept = {}  # Track courses found per department
+            for dept_id, sem_num_val in dept_sem_pairs:
+                try:
+                    rows = CurriculumDepartment.objects.filter(
+                        department_id=dept_id,
+                        semester__number=sem_num_val
+                    ).select_related('department')
+                    row_count = len(rows) if hasattr(rows, '__len__') else rows.count()
+                    courses_per_dept[f'dept_{dept_id}_sem_{sem_num_val}'] = row_count
+                    logger.info(f'  - Dept {dept_id}, Sem {sem_num_val}: Found {row_count} courses')
+                    all_rows.extend(rows)
+                except Exception as e:
+                    logger.warning(f'Failed to fetch curriculum for dept {dept_id}, sem {sem_num_val}: {e}')
+                    courses_per_dept[f'dept_{dept_id}_sem_{sem_num_val}'] = f'ERROR: {str(e)}'
+                    continue
+            
+            logger.info(f'[MixedSection {mixed_section_id}] Total curriculum records fetched: {len(all_rows)}')
+            
+            if not all_rows:
+                # No curriculum found - return empty with debug info if requested
+                msg = f'No curriculum found for mixed section {mixed_section_id} with dept-sem pairs: {dept_sem_pairs}'
+                logger.warning(msg)
+                if debug:
+                    return Response({
+                        'results': [], 
+                        'debug': {
+                            'message': msg, 
+                            'dept_sem_pairs': list(dept_sem_pairs), 
+                            'dept_section_map': dept_section_map,
+                            'section_details': section_details,
+                            'courses_per_dept': courses_per_dept
+                        }
+                    })
+                return Response({'results': []})
+            
+            # Deduplicate by course_code, preserving department info
+            # Each course maps to all departments that have it
+            seen = {}
+            for c in all_rows:
+                code = (c.course_code or '').strip()
+                if not code:
+                    code = None
+                
+                # Use course code as key if available, otherwise use pk
+                key = code if code else f'pk:{c.pk}'
+                
+                if key not in seen:
+                    seen[key] = {
+                        'id': c.pk,
+                        'course_code': code,
+                        'mnemonic': getattr(c, 'mnemonic', None),
+                        'course_name': c.course_name,
+                        'regulation': c.regulation,
+                        'semester': sem_num,
+                        'class_type': _normalize_class_type(c.class_type, c),
+                        'is_elective': c.is_elective,
+                        'is_dept_core': getattr(c, 'is_dept_core', False),
+                        'departments': []
+                    }
+                
+                # Add department info if not already present
+                existing_depts = [d['id'] for d in seen[key].get('departments', [])]
+                if c.department_id not in existing_depts:
+                    seen[key]['departments'].append({
+                        'id': c.department_id,
+                        'code': getattr(c.department, 'code', None),
+                        'name': getattr(c.department, 'name', None),
+                        'short_name': getattr(c.department, 'short_name', None),
+                    })
+            
+            results = list(seen.values())
+            msg = f'Mixed section {mixed_section_id}: Deduplicated to {len(results)} courses from {len(dept_sem_pairs)} dept-sem pairs'
+            logger.info(msg)
+            # Finalize results to fill in missing course codes if needed
+            final_results = self._finalize_results(results, sem_num)
+            resp = {'results': final_results}
+            if debug:
+                resp['debug'] = {
+                    'message': msg,
+                    'dept_sem_pairs': sorted(list(dept_sem_pairs)),
+                    'dept_section_map': {k: v for k, v in dept_section_map.items()},
+                    'section_details': section_details,
+                    'courses_per_dept': courses_per_dept,
+                    'chosen_sections': [{'id': s.id, 'name': s.name} for s in chosen_sections],
+                    'courses_count': len(final_results)
+                }
+            return Response(resp)
+        except Exception as e:
+            error_msg = f'Error in MixedSectionCurriculumView: {str(e)}'
+            logger.exception(error_msg)
+            if debug:
+                return Response({
+                    'results': [], 
+                    'debug': {
+                        'error': error_msg, 
+                        'exception': str(e),
+                        'dept_sem_pairs': sorted(list(dept_sem_pairs)) if dept_sem_pairs else [],
+                        'section_details': section_details
+                    }
+                })
+            return Response({'results': []})
+
+    def _finalize_results(self, rows, sem_num):
+        """Fill in missing course codes from Subject table as fallback."""
+        code_by_name = {}
+        for row in rows:
+            name_key = (row.get('course_name') or '').strip().lower()
+            code_val = (row.get('course_code') or '').strip()
+            if name_key and code_val and name_key not in code_by_name:
+                code_by_name[name_key] = code_val
+
+        for row in rows:
+            if (row.get('course_code') or '').strip():
+                continue
+            name_key = (row.get('course_name') or '').strip().lower()
+            if name_key and name_key in code_by_name:
+                row['course_code'] = code_by_name[name_key]
+
+        try:
+            from academics.models import Subject, TeachingAssignment
+            
+            for row in rows:
+                if (row.get('course_code') or '').strip():
+                    continue
+                row_name = (row.get('course_name') or '').strip()
+                if not row_name:
+                    continue
+
+                # Try to find code from TeachingAssignment.subject
+                code_from_ta_subject = (
+                    TeachingAssignment.objects.filter(
+                        subject__isnull=False,
+                        subject__name__iexact=row_name,
+                        is_active=True,
+                    )
+                    .exclude(subject__code__isnull=True)
+                    .exclude(subject__code='')
+                    .values_list('subject__code', flat=True)
+                    .first()
+                )
+                if code_from_ta_subject:
+                    row['course_code'] = code_from_ta_subject
+                    continue
+
+                # Try to find code from Subject table
+                code_from_subject = (
+                    Subject.objects.filter(name__iexact=row_name, semester__number=sem_num)
+                    .exclude(code__isnull=True)
+                    .exclude(code='')
+                    .values_list('code', flat=True)
+                    .first()
+                )
+                if code_from_subject:
+                    row['course_code'] = code_from_subject
+        except Exception:
+            pass
+
+        return rows
 
 
 class SectionTimetableView(APIView):
@@ -313,21 +795,19 @@ class SectionTimetableView(APIView):
             # determine staff to present.
             # Priority: batch staff (if present) > explicit staff on assignment > TeachingAssignment resolved staff
             staff_obj = None
+            staff_list = []
             if sb and getattr(sb, 'staff', None):
                 staff_obj = sb.staff
             elif a.staff:
                 staff_obj = a.staff
             else:
                 try:
-                    from academics.models import TeachingAssignment
                     if getattr(a, 'curriculum_row', None) and getattr(a, 'section', None):
-                        ta = TeachingAssignment.objects.filter(
-                            section=a.section,
-                            curriculum_row=a.curriculum_row,
-                            is_active=True,
-                        ).select_related('staff', 'staff__user').first()
-                        if ta and getattr(ta, 'staff', None):
-                            staff_obj = ta.staff
+                        from timetable.serializers import get_teaching_assignments_for_section_and_curriculum
+                        staff_list = get_teaching_assignments_for_section_and_curriculum(a.section, a.curriculum_row)
+                        if staff_list:
+                            if len(staff_list) == 1:
+                                staff_obj = staff_list[0]
                 except Exception:
                     staff_obj = None
 
@@ -413,7 +893,44 @@ class SectionTimetableView(APIView):
                     'course_code': a.curriculum_row.course_code,
                     'course_name': a.curriculum_row.course_name,
                     'mnemonic': getattr(a.curriculum_row, 'mnemonic', None),
+                    'department_id': getattr(a.curriculum_row, 'department_id', None),
                 } if a.curriculum_row else None
+
+            staff_data = None
+            if staff_obj:
+                u = getattr(staff_obj, 'user', None)
+                staff_data = {
+                    'id': staff_obj.pk,
+                    'staff_id': getattr(staff_obj, 'staff_id', None),
+                    'name': _get_staff_name_helper(u, staff_obj),
+                    'username': getattr(u, 'username', None),
+                    'first_name': getattr(u, 'first_name', ''),
+                    'last_name': getattr(u, 'last_name', '')
+                }
+            elif staff_list and len(staff_list) > 1:
+                names = []
+                usernames = []
+                staff_ids = []
+                for sp in staff_list:
+                    u = getattr(sp, 'user', None)
+                    full_name = _get_staff_name_helper(u, sp)
+                    if full_name:
+                        names.append(full_name)
+                    usernames.append(u.username if u else '')
+                    staff_ids.append(getattr(sp, 'staff_id', ''))
+                
+                combined_name = ", ".join(sorted(names))
+                combined_username = ", ".join(sorted(filter(None, usernames)))
+                combined_staff_id = ", ".join(sorted(filter(None, staff_ids)))
+                
+                staff_data = {
+                    'id': None,
+                    'staff_id': combined_staff_id,
+                    'username': combined_username,
+                    'name': combined_name,
+                    'first_name': '',
+                    'last_name': ''
+                }
 
             new_entry = {
                 'id': getattr(a, 'id', None),
@@ -428,13 +945,7 @@ class SectionTimetableView(APIView):
                 'subject_text': subj_text,
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
-                'staff': {
-                    'id': staff_obj.pk, 
-                    'staff_id': getattr(staff_obj, 'staff_id', None), 
-                    'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
-                    'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
-                    'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', '')
-                } if staff_obj else None,
+                'staff': staff_data,
             }
 
             # Avoid duplicate entries for the same period: prefer student-specific batch
@@ -579,21 +1090,19 @@ class SectionTimetableView(APIView):
 
                     # determine staff for special entry (same priority as normal assignments)
                     staff_obj = None
+                    special_staff_list = []
                     if sb and getattr(sb, 'staff', None):
                         staff_obj = sb.staff
                     elif getattr(e, 'staff', None):
                         staff_obj = e.staff
                     else:
                         try:
-                            from academics.models import TeachingAssignment
                             if getattr(e, 'curriculum_row', None) and sec is not None:
-                                ta = TeachingAssignment.objects.filter(
-                                    section=sec,
-                                    curriculum_row=e.curriculum_row,
-                                    is_active=True,
-                                ).select_related('staff', 'staff__user').first()
-                                if ta and getattr(ta, 'staff', None):
-                                    staff_obj = ta.staff
+                                from timetable.serializers import get_teaching_assignments_for_section_and_curriculum
+                                special_staff_list = get_teaching_assignments_for_section_and_curriculum(sec, e.curriculum_row)
+                                if special_staff_list:
+                                    if len(special_staff_list) == 1:
+                                        staff_obj = special_staff_list[0]
                         except Exception:
                             staff_obj = None
 
@@ -610,13 +1119,24 @@ class SectionTimetableView(APIView):
                         'subject_text': subj_text,
                         'elective_subject_id': elective_id,
                         'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
-                        'staff': {
-                            'id': getattr(staff_obj, 'pk', None),
-                            'staff_id': getattr(staff_obj, 'staff_id', None),
-                            'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
-                            'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
-                            'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', ''),
-                        } if staff_obj else None,
+                        'staff': (
+                            {
+                                'id': getattr(staff_obj, 'pk', None),
+                                'staff_id': getattr(staff_obj, 'staff_id', None),
+                                'username': getattr(getattr(staff_obj, 'user', None), 'username', None),
+                                'first_name': getattr(getattr(staff_obj, 'user', None), 'first_name', ''),
+                                'last_name': getattr(getattr(staff_obj, 'user', None), 'last_name', ''),
+                            } if staff_obj else (
+                                {
+                                    'id': None,
+                                    'staff_id': ", ".join(sorted(filter(None, [getattr(sp, 'staff_id', '') for sp in special_staff_list]))),
+                                    'username': ", ".join(sorted(filter(None, [getattr(getattr(sp, 'user', None), 'username', None) for sp in special_staff_list]))),
+                                    'name': ", ".join(sorted(filter(None, [getattr(sp, 'user', None).get_full_name() if getattr(sp, 'user', None) else getattr(sp, 'staff_id', '') for sp in special_staff_list]))),
+                                    'first_name': '',
+                                    'last_name': ''
+                                } if special_staff_list and len(special_staff_list) > 1 else None
+                            )
+                        ),
                         'section': {'id': getattr(sec, 'pk', None), 'name': getattr(sec, 'name', None)} if sec else None,
                         'is_special': True,
                         'is_swap': (getattr(e.timetable, 'name', '') or '').startswith('[SWAP]'),
@@ -710,8 +1230,11 @@ class SectionSubjectsStaffView(APIView):
 
             active_ay = AcademicYear.objects.filter(is_active=True).order_by('-id').first()
 
-            # Shared section (S&H-type): derive dept curriculum from enrolled students' home depts
+            # Shared section (S&H-type): prefer a single explicit curriculum department
+            # when the section is already anchored to one; otherwise fall back to the
+            # union of enrolled students' home departments.
             if getattr(sec.batch, 'course_id', None) is None:
+                curriculum_dept_ids = _resolve_section_curriculum_department_ids(sec)
                 from academics.models import StudentSectionAssignment
                 home_dept_ids = list(
                     StudentSectionAssignment.objects.filter(
@@ -797,14 +1320,20 @@ class SectionSubjectsStaffView(APIView):
                     batch_dept_id2 = sec.batch.department_id
                 except Exception:
                     pass
-                all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
-                if not all_ids:
-                    return Response({'results': []})
-                # Union of all dept curriculum rows, deduplicated by course_code or course_name
-                qs_all = CurriculumDepartment.objects.filter(
-                    department_id__in=all_ids,
-                    semester__number=sem_num,
-                ).order_by('course_code', 'department_id')
+                if curriculum_dept_ids:
+                    qs_all = CurriculumDepartment.objects.filter(
+                        department_id__in=curriculum_dept_ids,
+                        semester__number=sem_num,
+                    ).order_by('course_code', 'department_id')
+                else:
+                    all_ids = list(set(home_dept_ids + [x for x in [managing_dept_id2, batch_dept_id2] if x]))
+                    if not all_ids:
+                        return Response({'results': []})
+                    # Union of all dept curriculum rows, deduplicated by course_code or course_name
+                    qs_all = CurriculumDepartment.objects.filter(
+                        department_id__in=all_ids,
+                        semester__number=sem_num,
+                    ).order_by('course_code', 'department_id')
                 seen: dict = {}
                 for c in qs_all:
                     key = f'code:{c.course_code}' if c.course_code else f'name:{(c.course_name or "").strip().lower()}' or f'pk:{c.pk}'
@@ -851,7 +1380,33 @@ class SectionSubjectsStaffView(APIView):
                     keys.append(f'pk:{getattr(cd, "pk", None)}')
                 return keys
 
-            # Map subject -> set(staff names) using course_code/name so it works
+            def _looks_like_lab_course(course_name):
+                return 'LAB' in str(course_name or '').upper() or 'LABORATORY' in str(course_name or '').upper()
+
+            lab_row_multipliers: dict[str, int] = {}
+            try:
+                course_codes = sorted({str(getattr(c, 'course_code', '')).strip().upper() for c in qs if getattr(c, 'course_code', None)})
+                regulations = sorted({str(getattr(c, 'regulation', '')).strip() for c in qs if getattr(c, 'regulation', None)})
+                if course_codes:
+                    lab_qs = CurriculumDepartment.objects.filter(
+                        course_code__in=course_codes,
+                        semester__number=sem_num,
+                    )
+                    if regulations:
+                        lab_qs = lab_qs.filter(regulation__in=regulations)
+
+                    for lab_row in lab_qs:
+                        normalized_type = _normalize_class_type(getattr(lab_row, 'class_type', None), lab_row)
+                        if normalized_type not in ('LAB', 'PRACTICAL', 'PURE_LAB') and not _looks_like_lab_course(getattr(lab_row, 'course_name', None)):
+                            continue
+                        code_key = str(getattr(lab_row, 'course_code', '') or '').strip().upper()
+                        if not code_key:
+                            continue
+                        lab_row_multipliers[code_key] = lab_row_multipliers.get(code_key, 0) + 1
+            except Exception:
+                lab_row_multipliers = {}
+
+            # Map subject -> dict of staff profiles using course_code/name so it works
             # across departments (Program Core / shared curriculum rows) and
             # also maps elective-subject teaching assignments back to the parent.
             staff_by_key: dict = {}
@@ -865,14 +1420,25 @@ class SectionSubjectsStaffView(APIView):
                 tas = tas.filter(academic_year=active_ay)
             tas = tas.select_related('staff__user', 'curriculum_row', 'elective_subject', 'elective_subject__parent')
             for ta in tas:
-                staff_name = _staff_display(getattr(ta, 'staff', None))
+                sp = getattr(ta, 'staff', None)
+                if not sp:
+                    continue
+                staff_name = _staff_display(sp)
                 if not staff_name:
                     continue
+
+                u = getattr(sp, 'user', None)
+                staff_info = {
+                    'id': sp.id,
+                    'name': staff_name,
+                    'staff_id': getattr(sp, 'staff_id', None),
+                    'username': getattr(u, 'username', None) if u else None
+                }
 
                 cr = getattr(ta, 'curriculum_row', None)
                 if cr is not None:
                     for k in _keys_for_curriculum(cr):
-                        staff_by_key.setdefault(k, set()).add(staff_name)
+                        staff_by_key.setdefault(k, {})[sp.id] = staff_info
 
                 # Electives / dept-core teaching assignments may be stored against
                 # the elective_subject; map them to the parent curriculum row too.
@@ -880,7 +1446,7 @@ class SectionSubjectsStaffView(APIView):
                 parent = getattr(es, 'parent', None) if es is not None else None
                 if parent is not None:
                     for k2 in _keys_for_curriculum(parent):
-                        staff_by_key.setdefault(k2, set()).add(staff_name)
+                        staff_by_key.setdefault(k2, {})[sp.id] = staff_info
 
             # also consider direct timetable assignments that may override
             from .models import TimetableAssignment
@@ -888,30 +1454,47 @@ class SectionSubjectsStaffView(APIView):
             for a in tassigns:
                 cr = getattr(a, 'curriculum_row', None)
                 if cr is not None:
-                    staff_name = _staff_display(getattr(a, 'staff', None))
-                    if staff_name:
-                        for k in _keys_for_curriculum(cr):
-                            staff_by_key.setdefault(k, set()).add(staff_name)
+                    sp = getattr(a, 'staff', None)
+                    if sp:
+                        staff_name = _staff_display(sp)
+                        if staff_name:
+                            u = getattr(sp, 'user', None)
+                            staff_info = {
+                                'id': sp.id,
+                                'name': staff_name,
+                                'staff_id': getattr(sp, 'staff_id', None),
+                                'username': getattr(u, 'username', None) if u else None
+                            }
+                            for k in _keys_for_curriculum(cr):
+                                staff_by_key.setdefault(k, {}).setdefault(sp.id, staff_info)
 
             for c in qs:
                 staff_val = None
+                assigned_staff = []
                 try:
-                    merged = set()
+                    merged_staff = {}
                     for k in _keys_for_curriculum(c):
                         if k in staff_by_key:
-                            merged |= set(staff_by_key.get(k) or set())
-                    if merged:
-                        staff_val = ', '.join(sorted(merged))
+                            merged_staff.update(staff_by_key[k])
+                    if merged_staff:
+                        assigned_staff = list(merged_staff.values())
+                        staff_val = ', '.join(sorted([s['name'] for s in assigned_staff]))
                 except Exception:
                     staff_val = None
+                    assigned_staff = []
+
                 results.append({
                     'id': c.id,
                     'course_code': c.course_code,
+                    'mnemonic': getattr(c, 'mnemonic', None),
                     'course_name': c.course_name,
                     'regulation': c.regulation,
-                    'class_type': c.class_type,
+                    'class_type': _normalize_class_type(c.class_type, c),
+                    'lab_row_multiplier': lab_row_multipliers.get(str(c.course_code or '').strip().upper(), 1),
                     'is_elective': c.is_elective,
-                    'staff': staff_val
+                    'is_dept_core': getattr(c, 'is_dept_core', False),
+                    'staff': staff_val,
+                    'assigned_staff': assigned_staff
                 })
 
             # --- Elective subjects (ElectiveSubject rows, keyed by their own pk) ---
@@ -931,7 +1514,16 @@ class SectionSubjectsStaffView(APIView):
                 if ta.elective_subject and ta.staff:
                     staff_name = _staff_display(ta.staff)
                     if staff_name:
-                        elective_staff_map[ta.elective_subject_id] = staff_name
+                        u = getattr(ta.staff, 'user', None)
+                        staff_info = {
+                            'id': ta.staff.id,
+                            'name': staff_name,
+                            'staff_id': getattr(ta.staff, 'staff_id', None),
+                            'username': getattr(u, 'username', None) if u else None
+                        }
+                        # Deduplicate by staff ID
+                        staff_dict_for_es = elective_staff_map.setdefault(ta.elective_subject_id, {})
+                        staff_dict_for_es[ta.staff.id] = staff_info
 
             # 2. Fetch all ElectiveSubject rows for this section's dept+sem and add to results
             # Electives are only defined per-department; skip for shared sections (dept=None)
@@ -940,23 +1532,47 @@ class SectionSubjectsStaffView(APIView):
                 semester__number=sem_num,
             ).select_related('parent') if dept is not None else []
             for es in elective_qs:
+                staff_dict = elective_staff_map.get(es.pk, {})
+                assigned_staff = list(staff_dict.values())
+                staff_val = ', '.join(sorted([s['name'] for s in assigned_staff])) if assigned_staff else None
                 results.append({
                     'id': es.pk,
                     'course_code': es.course_code,
                     'course_name': es.course_name,
                     'regulation': es.regulation,
-                    'class_type': es.class_type,
+                    'class_type': _normalize_class_type(es.class_type, es),
                     'is_elective': True,
                     'is_elective_child': True,
                     'parent_id': es.parent_id,
-                    'staff': elective_staff_map.get(es.pk),
+                    'staff': staff_val,
+                    'assigned_staff': assigned_staff
                 })
 
             # include any timetable-only subjects (no curriculum_row) with staff
             for a in tassigns:
                 if not getattr(a, 'curriculum_row', None) and (a.subject_text or getattr(a, 'staff', None)):
                     key = f"txt-{(a.subject_text or '')[:100]}"
-                    results.append({'id': key, 'course_code': None, 'course_name': a.subject_text, 'staff': _staff_display(getattr(a, 'staff', None))})
+                    sp = getattr(a, 'staff', None)
+                    assigned_staff = []
+                    staff_val = None
+                    if sp:
+                        staff_name = _staff_display(sp)
+                        if staff_name:
+                            staff_val = staff_name
+                            u = getattr(sp, 'user', None)
+                            assigned_staff = [{
+                                'id': sp.id,
+                                'name': staff_name,
+                                'staff_id': getattr(sp, 'staff_id', None),
+                                'username': getattr(u, 'username', None) if u else None
+                            }]
+                    results.append({
+                        'id': key,
+                        'course_code': None,
+                        'course_name': a.subject_text,
+                        'staff': staff_val,
+                        'assigned_staff': assigned_staff
+                    })
 
         except Exception:
             return Response({'results': []})
@@ -1359,7 +1975,109 @@ class PeriodSwapView(APIView):
         return Response({'message': 'Swap retained', 'new_date': next_date_str})
 
 
+from rest_framework.decorators import action
+
 class TimetableTemplateViewSet(viewsets.ModelViewSet):
+
+    @action(detail=False, methods=['post'])
+    def save_frontend_template(self, request):
+        data = request.data
+        template_id = data.get('id')
+        name = data.get('name')
+        semester_type = data.get('semesterType', 'odd').upper()
+        columns = data.get('columns', [])
+        rows = data.get('rows', [])
+        
+        # We will store the exact JSON config in the description field so the frontend can reconstruct it.
+        import json
+        description = json.dumps({
+            'columns': columns,
+            'rows': rows,
+            'semesterType': data.get('semesterType', 'odd')
+        })
+
+        if template_id and str(template_id).startswith('template-'):
+            # It's a newly created one from frontend, not yet in DB
+            template = TimetableTemplate.objects.create(
+                name=name,
+                parity=semester_type,
+                description=description,
+                created_by=request.user,
+                is_active=True
+            )
+        elif template_id:
+            try:
+                template = TimetableTemplate.objects.get(pk=template_id)
+                template.name = name
+                template.parity = semester_type
+                template.description = description
+                template.save()
+                # delete old slots
+                template.periods.all().delete()
+            except TimetableTemplate.DoesNotExist:
+                template = TimetableTemplate.objects.create(
+                    name=name,
+                    parity=semester_type,
+                    description=description,
+                    created_by=request.user,
+                    is_active=True
+                )
+        else:
+            template = TimetableTemplate.objects.create(
+                name=name,
+                parity=semester_type,
+                description=description,
+                created_by=request.user,
+                is_active=True
+            )
+
+        # Create slots based on columns
+        import datetime
+        import re
+        
+        def parse_time(t_str):
+            if not t_str: return None
+            try:
+                match = re.match(r'(\d+):(\d+)\s*(AM|PM)', t_str.strip(), re.IGNORECASE)
+                if match:
+                    h, m, ap = match.groups()
+                    h = int(h)
+                    m = int(m)
+                    if ap.upper() == 'PM' and h < 12:
+                        h += 12
+                    elif ap.upper() == 'AM' and h == 12:
+                        h = 0
+                    return datetime.time(h, m)
+            except Exception:
+                pass
+            return None
+
+        for idx, col in enumerate(columns):
+            start_time = None
+            end_time = None
+            if col.get('timing'):
+                parts = col.get('timing').split('-')
+                if len(parts) == 2:
+                    start_time = parse_time(parts[0])
+                    end_time = parse_time(parts[1])
+            
+            period_name = col.get('period', '')
+            is_break = period_name.lower() == 'break'
+            is_lunch = period_name.lower() == 'lunch'
+            
+            TimetableSlot.objects.create(
+                template=template,
+                index=idx + 1,
+                label=period_name,
+                is_break=is_break,
+                is_lunch=is_lunch,
+                start_time=start_time,
+                end_time=end_time
+            )
+
+        # Return the template
+        return Response({'id': template.id, 'status': 'success'})
+
     queryset = TimetableTemplate.objects.all().prefetch_related('periods')
     serializer_class = TimetableTemplateSerializer
     permission_classes = (IsAuthenticated,)

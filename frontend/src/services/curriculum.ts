@@ -381,9 +381,16 @@ export async function fetchDeptRows(params?: { is_elective?: boolean; semester?:
   if (params?.is_elective !== undefined) qs.set('is_elective', String(params.is_elective));
   if (params?.semester) qs.set('semester', String(params.semester));
   const url = `/api/curriculum/department/${qs.toString() ? '?' + qs.toString() : ''}`;
+export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }): Promise<DeptRow[]> {
+  if (params?.department_id) qs.set('department_id', String(params.department_id));
+  if (params?.regulation) qs.set('regulation', params.regulation);
+  if (params?.batch_id) qs.set('batch_id', String(params.batch_id));
+  qs.set('page_size', '0');
+  const url = `/api/curriculum/department/?${qs.toString()}`;
   const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch dept rows');
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.results || []);
 }
 
 export async function fetchDeptRow(id: number): Promise<DeptRow> {

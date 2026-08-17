@@ -10,19 +10,11 @@ from .views import (
     CurriculumDepartmentsView,
     CurriculumPendingCountView,
     QuestionPaperTypeListView,
-    ElectivePollView,
-    ElectivePollDetailView,
-    ActiveStudentPollsView,
-    HodElectivePollStatusView,
-    ElectivePollSubjectStatusView,
-    ElectivePollSeatCountView,
-    SubmitElectiveChoiceView,
-    ElectivePollExportView,
+    ClassTypeListView,
 )
 from .elective_import_views import (
     ElectiveChoiceTemplateDownloadView,
-    ElectiveChoiceBulkImportView,
-    ElectivePollSubjectTemplateDownloadView
+    ElectiveChoiceBulkImportView
 )
 
 router = DefaultRouter()
@@ -37,18 +29,10 @@ urlpatterns = [
     path('master/import/', MasterImportView.as_view(), name='curriculum-master-import'),
     path('elective-choices/template/', ElectiveChoiceTemplateDownloadView.as_view(), name='elective-choices-template'),
     path('elective-choices/import/', ElectiveChoiceBulkImportView.as_view(), name='elective-choices-import'),
-    path('elective-polls/template/', ElectivePollSubjectTemplateDownloadView.as_view(), name='elective-polls-template'),
     path('elective-choices/', ElectiveChoicesView.as_view(), name='elective-choices'),
     path('departments/', CurriculumDepartmentsView.as_view(), name='curriculum-departments'),
     path('pending-count/', CurriculumPendingCountView.as_view(), name='curriculum-pending-count'),
     path('qp-types/', QuestionPaperTypeListView.as_view(), name='curriculum-qp-types'),
-    path('elective-polls/active-for-student/', ActiveStudentPollsView.as_view(), name='elective-polls-active-student'),
-    path('elective-polls/seat-counts/', ElectivePollSeatCountView.as_view(), name='elective-polls-seat-counts'),
-    path('elective-polls/hod-status/', HodElectivePollStatusView.as_view(), name='elective-polls-hod-status'),
-    path('elective-polls/', ElectivePollView.as_view(), name='elective-polls'),
-    path('elective-polls/<int:pk>/', ElectivePollDetailView.as_view(), name='elective-poll-detail'),
-    path('elective-polls/<int:poll_id>/subjects/<int:subject_id>/', ElectivePollSubjectStatusView.as_view(), name='elective-poll-subject-status'),
-    path('elective-polls/<int:pk>/submit/', SubmitElectiveChoiceView.as_view(), name='elective-poll-submit'),
-    path('elective-polls/<int:pk>/export/', ElectivePollExportView.as_view(), name='elective-poll-export'),
+    path('class-types/', ClassTypeListView.as_view(), name='curriculum-class-types'),
     path('', include(router.urls)),
 ]

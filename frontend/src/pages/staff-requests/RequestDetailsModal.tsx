@@ -47,6 +47,14 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
     }
   };
 
+  const initials = (name: string) =>
+    (name || '')
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(s => s[0]?.toUpperCase())
+      .join('') || 'U';
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
@@ -80,6 +88,29 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
               {request.status === 'pending' && <Clock size={16} />}
               {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
             </span>
+          </div>
+
+          {/* Applicant Card */}
+          <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center gap-3">
+            {request.applicant.profile_image ? (
+              <img
+                src={request.applicant.profile_image}
+                alt={request.applicant.full_name || request.applicant.username}
+                className="w-12 h-12 rounded-full object-cover border border-gray-200 bg-white"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                {initials(request.applicant.full_name || request.applicant.username)}
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900 truncate">
+                {request.applicant.full_name || request.applicant.username}
+              </div>
+              <div className="text-xs text-gray-600 truncate">
+                {request.applicant.staff_id || request.applicant.username}
+              </div>
+            </div>
           </div>
         </div>
 

@@ -1,21 +1,33 @@
+import json
 import random
 import string
-import json
 import urllib.error
 import urllib.request
-from rest_framework import status
+
+from django.db import transaction
+from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework import serializers
-from django.db import transaction
-from academics.models import ExtStaffProfile
-from django.contrib.auth import get_user_model
 
-User = get_user_model()
+from academics.models import ExtStaffProfile, StaffProfile
 
 
-class ExternalStaffSerializer(serializers.ModelSerializer):
-    """Serialize ExtStaffProfile into the shape the COE frontend expects."""
+class StaffExternalStaffSerializer(serializers.ModelSerializer):
+    """Serialize StaffProfile external staff into the shape the COE frontend expects."""
+
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    department_name = serializers.CharField(source='department.name', read_only=True, default='')
+
+    class Meta:
+        model = StaffProfile
+        fields = ['id', 'staff_id', 'first_name', 'last_name', 'email', 'department_name', 'login_code']
+
+
+class AcademicExternalStaffSerializer(serializers.ModelSerializer):
+    """Serialize academics.ExtStaffProfile into the same shape used by COE."""
+
     staff_id = serializers.CharField(source='external_id', read_only=True)
     first_name = serializers.CharField(source='user.first_name', read_only=True)
     last_name = serializers.CharField(source='user.last_name', read_only=True)
@@ -28,16 +40,44 @@ class ExternalStaffSerializer(serializers.ModelSerializer):
         fields = ['id', 'staff_id', 'first_name', 'last_name', 'email', 'department_name', 'login_code']
 
     def get_login_code(self, obj):
-        return getattr(obj, 'login_code', None) or None
+        return None
+
+
+def _apply_strict_filter(qs, strict: bool):
+    if not strict:
+        return qs
+    return qs.exclude(user__email__iendswith='@example.com').exclude(user__email__exact='')
+
+
+def _admin_source_queryset():
+    exact_qs = StaffProfile.objects.filter(status='EXTERNAL').select_related('user', 'department')
+    if exact_qs.exists():
+        return exact_qs
+
+    ci_qs = StaffProfile.objects.filter(status__iexact='EXTERNAL').select_related('user', 'department')
+    if ci_qs.exists():
+        return ci_qs
+
+    return StaffProfile.objects.filter(status__icontains='EXTERNAL').select_related('user', 'department')
+
+
+def _serialize_staffprofile_external_staff(staff_qs, strict: bool):
+    staff_qs = _apply_strict_filter(staff_qs, strict).order_by('staff_id')
+    return StaffExternalStaffSerializer(staff_qs, many=True).data
+
+
+def _serialize_extstaffprofile(staff_qs, strict: bool):
+    staff_qs = _apply_strict_filter(staff_qs, strict).order_by('external_id')
+    return AcademicExternalStaffSerializer(staff_qs, many=True).data
 
 
 def _serialize_local_external_staff(strict: bool):
-    staff = ExtStaffProfile.objects.filter(is_active=True).select_related('user')
-    if strict:
-        staff = staff.exclude(user__email__iendswith='@example.com').exclude(user__email__exact='')
-    staff = staff.order_by('external_id')
-    serializer = ExternalStaffSerializer(staff, many=True)
-    return serializer.data
+    staff = StaffProfile.objects.filter(status__iexact='EXTERNAL').select_related('user', 'department')
+    return _serialize_staffprofile_external_staff(staff, strict)
+
+
+def _serialize_admin_source_staff(strict: bool):
+    return _serialize_staffprofile_external_staff(_admin_source_queryset(), strict)
 
 
 class ExternalStaffListView(APIView):
@@ -46,15 +86,31 @@ class ExternalStaffListView(APIView):
         return Response(_serialize_local_external_staff(strict))
 
 
+class ExternalStaffAdminSourceView(APIView):
+    """Expose the same source used by the admin External Staff proxy list."""
+
+    def get(self, request):
+        strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
+        return Response(_serialize_admin_source_staff(strict))
+
+
+class ExternalStaffAcademicsProfilesView(APIView):
+    """Expose academics ExtStaffProfile rows in the same shape as external staff API."""
+
+    def get(self, request):
+        strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
+        qs = ExtStaffProfile.objects.filter(is_active=True).select_related('user')
+        return Response(_serialize_extstaffprofile(qs, strict))
+
+
 class ExternalStaffDbMirrorView(APIView):
     """Fetch external staff from db.krgi.co.in first, then fallback to local DB."""
 
     def get(self, request):
         strict = str(request.query_params.get('strict', '0')).lower() in ('1', 'true', 'yes')
         target = f"https://db.krgi.co.in/api/coe/external-staff/?strict={'1' if strict else '0'}"
-        headers = {
-            'Accept': 'application/json',
-        }
+        headers = {'Accept': 'application/json'}
+
         auth = request.META.get('HTTP_AUTHORIZATION')
         if auth:
             headers['Authorization'] = auth
@@ -76,11 +132,18 @@ class ExternalStaffDbMirrorView(APIView):
 
 class AssignExternalCodesView(APIView):
     def post(self, request):
-        # ExtStaffProfile doesn't have a login_code field yet.
-        # For now, return a count of external staff as a placeholder.
-        staff_list = ExtStaffProfile.objects.filter(is_active=True)
-        count = staff_list.count()
+        strict = str(request.query_params.get('strict', '1')).lower() in ('1', 'true', 'yes')
+        staff_qs = _apply_strict_filter(_admin_source_queryset(), strict)
+        updated_count = 0
+
+        with transaction.atomic():
+            for staff in staff_qs:
+                code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                staff.login_code = code
+                staff.save(update_fields=['login_code'])
+                updated_count += 1
+
         return Response({
-            'message': f'{count} external staff members found. Login code feature is pending model update.',
-            'assigned_count': 0,
+            'message': f'Assigned login codes for {updated_count} external staff members.',
+            'assigned_count': updated_count,
         })

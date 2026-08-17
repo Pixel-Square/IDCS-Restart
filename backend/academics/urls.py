@@ -3,6 +3,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     SectionAdvisorViewSet,
+    MixedSectionViewSet,
     HODStaffListView,
     StaffsPageView,
     DepartmentStaffListView,
@@ -61,6 +62,7 @@ from .views import ExtStaffFormSettingsView, ExtStaffPublicFormView, ExtStaffChe
 
 router = DefaultRouter()
 router.register(r'section-advisors', SectionAdvisorViewSet, basename='section-advisor')
+router.register(r'mixed-sections', MixedSectionViewSet, basename='mixed-section')
 router.register(r'teaching-assignments', TeachingAssignmentViewSet, basename='teaching-assignment')
 router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
 router.register(r'semesters', SemesterViewSet, basename='semester')

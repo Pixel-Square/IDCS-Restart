@@ -9,7 +9,7 @@ from django.utils.html import format_html
 from django.utils.http import urlencode
 from django import forms
 
-from .models import Cia1Mark, ObeMarkTableLock, ClassTypeWeights, FinalInternalMark
+from .models import Cia1Mark, ObeMarkTableLock, ClassTypeWeights, FinalInternalMark, CourseQuestionBank, CourseQuestionBankLog
 from .services.final_internal_marks import recompute_final_internal_marks
 
 
@@ -355,7 +355,31 @@ class FinalInternalMarkAdmin(admin.ModelAdmin):
     course_name.short_description = 'Course Name'
 
     def section_name(self, obj):
-        return getattr(getattr(getattr(obj, 'teaching_assignment', None), 'section', None), 'name', '-')
+        ta = getattr(obj, 'teaching_assignment', None)
+        if not ta:
+            return '-'
+        sec = getattr(ta, 'section', None)
+        if sec:
+            return getattr(sec, 'name', '-')
+            
+        category = None
+        if getattr(ta, 'elective_subject', None):
+            parent = getattr(ta.elective_subject, 'parent', None)
+            if parent and getattr(parent, 'category', None):
+                category = str(parent.category).lower()
+        elif getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'is_elective', False):
+            if getattr(ta.curriculum_row, 'category', None):
+                category = str(ta.curriculum_row.category).lower()
+                
+        if category is not None:
+            if 'open elective' in category or 'oe' in category.split():
+                return 'OE'
+            elif 'professional elective' in category or 'pe' in category.split():
+                return 'PE'
+            elif 'emerging' in category:
+                return 'EE'
+            return str(category).title()
+        return '-'
 
     section_name.short_description = 'Section'
 
@@ -471,9 +495,45 @@ def _build_default_admin(model):
     return type(f'{model.__name__}AutoAdmin', (admin.ModelAdmin,), attrs)
 
 
+@admin.register(CourseQuestionBank)
+class CourseQuestionBankAdmin(admin.ModelAdmin):
+    list_display = ('course_code', 's_no', 'question_text_preview', 'course_outcome', 'btl', 'marks', 'is_finalized', 'created_by', 'updated_at')
+    search_fields = ('course_code', 'course_name', 'question_text', 'course_outcome')
+    list_filter = ('is_finalized', 'course_code', 'created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at', 'finalized_at')
+    fieldsets = (
+        ('Course Info', {'fields': ('course_code', 'course_name')}),
+        ('Question Details', {'fields': ('s_no', 'question_text', 'course_outcome', 'part', 'btl', 'marks')}),
+        ('Finalization', {'fields': ('is_finalized', 'finalized_by', 'finalized_at')}),
+        ('Audit', {'fields': ('created_by', 'created_at', 'updated_at')}),
+    )
+    
+    def question_text_preview(self, obj):
+        return obj.question_text[:60] + '...' if len(obj.question_text) > 60 else obj.question_text
+    question_text_preview.short_description = 'Question'
+
+
+@admin.register(CourseQuestionBankLog)
+class CourseQuestionBankLogAdmin(admin.ModelAdmin):
+    list_display = ('get_course_code', 'action', 'edited_by', 'edited_at')
+    search_fields = ('question_bank__course_code', 'edited_by__user__username', 'action')
+    list_filter = ('action', 'edited_at')
+    readonly_fields = ('edited_at', 'old_values', 'new_values')
+    fieldsets = (
+        ('Question Bank', {'fields': ('question_bank',)}),
+        ('Action Details', {'fields': ('action', 'edited_by', 'edited_at')}),
+        ('Changes', {'fields': ('old_values', 'new_values'), 'classes': ('collapse',)}),
+    )
+    
+    def get_course_code(self, obj):
+        return obj.question_bank.course_code if obj.question_bank else '-'
+    get_course_code.short_description = 'Course Code'
+    get_course_code.admin_order_field = 'question_bank__course_code'
+
+
 if obe_app_config:
     for model in obe_app_config.get_models():
-        if model not in admin.site._registry:
+        if model not in admin.site._registry and model not in (CourseQuestionBank, CourseQuestionBankLog):
             try:
                 admin.site.register(model, _build_default_admin(model))
             except AlreadyRegistered:

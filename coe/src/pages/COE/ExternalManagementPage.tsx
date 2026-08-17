@@ -1,20 +1,27 @@
 import React, { useEffect, useState } from 'react';
-import { fetchExternalStaff, assignExternalCodes, type ExternalStaffProfile } from '../../services/coe';
+import { fetchExternalStaffWithSource, assignExternalCodes, type ExternalStaffProfile } from '../../services/coe';
 
 export default function ExternalManagementPage() {
   const [staff, setStaff] = useState<ExternalStaffProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [dataSource, setDataSource] = useState<string>('');
+  const [dataNote, setDataNote] = useState<string>('');
 
   const loadStaff = async () => {
     try {
       setLoading(true);
-      const data = await fetchExternalStaff();
-      setStaff(data);
+      const result = await fetchExternalStaffWithSource();
+      setStaff(result.rows);
+      setDataSource(result.source);
+      setDataNote(result.note || '');
       setError(null);
-    } catch (err) {
-      setError('Failed to connect to the database and load external staff members.');
+    } catch (err: any) {
+      const detail = err?.message ? ` (${err.message})` : '';
+      setError(`Failed to connect to the database and load external staff members${detail}.`);
+      setDataSource('');
+      setDataNote('');
     } finally {
       setLoading(false);
     }
@@ -32,7 +39,7 @@ export default function ExternalManagementPage() {
       alert(res.message || 'Login codes assigned successfully.');
       await loadStaff();
     } catch (err) {
-      alert('Failed to assign codes. Please check backend connectivity.');
+      alert('Unable to assign codes right now. Please check backend connectivity and try again.');
     } finally {
       setProcessing(false);
     }
@@ -57,6 +64,13 @@ export default function ExternalManagementPage() {
       {error && (
         <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
           <p className="text-red-700 font-medium">{error}</p>
+        </div>
+      )}
+
+      {!error && (dataSource || dataNote) && (
+        <div className="mb-4 rounded-md border border-[#d9b7ac] bg-[#fff7f4] px-4 py-2 text-xs text-[#6f1d34]">
+          <span className="font-semibold">Data source:</span> {dataSource || 'unknown'}
+          {dataNote ? <span className="ml-2">| {dataNote}</span> : null}
         </div>
       )}
 

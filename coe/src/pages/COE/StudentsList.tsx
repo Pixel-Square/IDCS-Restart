@@ -10,10 +10,12 @@ import {
   CoeCourseStudent,
   CoeDepartmentCourseMap,
   CoeStudentsMapResponse,
+  fetchCoeFilterOptions,
   fetchCoeStudentsMap,
   resetCoeStudentDummies,
   saveCoeStudentDummies,
 } from '../../services/coe';
+import fetchWithAuth from '../../services/fetchAuth';
 import {
   CourseSelection,
   getCourseKey,
@@ -31,8 +33,11 @@ import { kvHydrate, kvSave } from '../../utils/coeKvStore';
 import { getBundleFinalizeConfig, hydrateBundleFinalizeStore, readBundleFinalizeMap } from '../../utils/coeBundleFinalizeStore';
 import { hydrateShuffledListStore, readShuffleLocks, writeShuffleLocks, markFilterAsShuffled, unmarkFilterAsShuffled, isFilterShuffled, readShuffledLists, writeShuffledLists, getPersistedShuffledForFilter, setPersistedShuffledForFilter, clearPersistedShuffledForFilter, PersistedShuffledByDummy } from './shuffledListStore';
 import { hydrateMarksStore, getMarksQpType } from './marksStore';
+<<<<<<< HEAD
 import fetchWithAuth from '../../services/fetchAuth';
 import { isSameDept } from '../../utils/deptAliases';
+=======
+>>>>>>> 0803e45 (Questionbank)
 
 const DEPARTMENT_DUMMY_DIGITS: Record<string, string> = {
   AIDS: '1',
@@ -79,6 +84,7 @@ type AugStudent = CoeCourseStudent & {
   dummy: string;
   bundleName?: string;
   saved_qp_type?: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
+  class_type?: string;
 };
 type AugCourse = CoeCourseGroup & { students: AugStudent[]; shuffled?: boolean };
 type AugDept = CoeDepartmentCourseMap & { courses: AugCourse[] };
@@ -93,6 +99,7 @@ type PersistedBundleInfo = { name: string; scripts: number };
 type CourseBundleDummyMap = Record<string, { courseDummies: string[]; bundles: Record<string, string[]> }>;
 type CourseBundleDummyStore = Record<string, CourseBundleDummyMap>;
 type PersistedAssigningStore = Record<string, Array<{ courseKey: string; valuators?: Array<{ bundles?: PersistedBundleInfo[] }> }>>;
+type CourseMeta = { classType?: string; qpType?: string };
 
 function readAssigningStoreForBundleDummies(): PersistedAssigningStore {
   if (typeof window === 'undefined') return {};
@@ -150,8 +157,12 @@ export default function StudentsList() {
   const [activeEntryParams, setActiveEntryParams] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const processedRetrivalApplyKeyRef = useRef<string>('');
+<<<<<<< HEAD
   // Refresh tick to force re-enrichment when navigating back to this page (e.g., after adding students via AdditionalPage)
   const [localStorageRefreshTick, setLocalStorageRefreshTick] = useState(0);
+=======
+  const [courseMetaMap, setCourseMetaMap] = useState<Record<string, CourseMeta>>({});
+>>>>>>> 0803e45 (Questionbank)
 
   // Fetch departments on mount
   useEffect(() => {
@@ -160,23 +171,12 @@ export default function StudentsList() {
 
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-          setDepartment('ALL');
-        } else {
-          console.warn('Failed to fetch departments, using defaults');
-          setDepartments(['ALL']);
-        }
+        setDepartments(options.departments);
+        setSemesters(options.semesters);
+        setDepartment(options.departments[0] || 'ALL');
+        setSemester(options.semesters[0] || 'SEM1');
       } catch (err) {
         if (active) console.warn('Error fetching departments:', err);
       } finally {
@@ -189,6 +189,7 @@ export default function StudentsList() {
     };
   }, []);
 
+<<<<<<< HEAD
   // Fetch semesters on mount
   useEffect(() => {
     let active = true;
@@ -218,6 +219,9 @@ export default function StudentsList() {
   }, []);
 
   // Hydrate all KV stores from DB on mount and trigger refresh tick to re-read localStorage
+=======
+  // Hydrate all KV stores from DB on mount
+>>>>>>> 0803e45 (Questionbank)
   useEffect(() => {
     Promise.all([
       hydrateShuffledListStore(),
@@ -278,6 +282,95 @@ export default function StudentsList() {
 
   const getCurrentFilterKey = () => `${department}::${semester}`;
 
+  const normalizeCourseCode = (value: unknown): string =>
+    String(value || '').trim().toUpperCase();
+
+  const getQpTypeValue = (row: any): string => {
+    return String(row?.question_paper_type || row?.qp_type || '').trim().toUpperCase();
+  };
+
+  const readListPayload = (payload: any): any[] => {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.results)) return payload.results;
+    if (Array.isArray(payload?.teaching_assignments)) return payload.teaching_assignments;
+    return [];
+  };
+
+  const buildCourseMetaMap = async (courseCodes: string[]): Promise<Record<string, CourseMeta>> => {
+    const courseSet = new Set(courseCodes.map(normalizeCourseCode).filter(Boolean));
+    if (courseSet.size === 0) return {};
+
+    const [taRes, deptRes, electiveRes] = await Promise.all([
+      fetchWithAuth('/api/academics/my-teaching-assignments/'),
+      fetchWithAuth('/api/curriculum/department/'),
+      fetchWithAuth('/api/curriculum/elective/?page_size=0'),
+    ]);
+
+    const [taData, deptData, electiveData] = await Promise.all([
+      taRes.ok ? taRes.json() : Promise.resolve([]),
+      deptRes.ok ? deptRes.json() : Promise.resolve([]),
+      electiveRes.ok ? electiveRes.json() : Promise.resolve([]),
+    ]);
+
+    const taList = readListPayload(taData);
+    const deptRows = readListPayload(deptData);
+    const electiveRows = readListPayload(electiveData);
+
+    const taMap = new Map<string, CourseMeta>();
+    taList.forEach((row) => {
+      const code = normalizeCourseCode(row?.subject_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      const qpType = String(row?.question_paper_type || '').trim().toUpperCase();
+      const prev = taMap.get(code) || {};
+      taMap.set(code, {
+        classType: prev.classType || classType || undefined,
+        qpType: prev.qpType || qpType || undefined,
+      });
+    });
+
+    const deptMap = new Map<string, CourseMeta>();
+    deptRows.forEach((row) => {
+      const code = normalizeCourseCode(row?.course_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      const qpType = getQpTypeValue(row);
+      const prev = deptMap.get(code) || {};
+      const nextQp = prev.qpType && prev.qpType !== 'QP1' ? prev.qpType : (qpType || prev.qpType);
+      deptMap.set(code, {
+        classType: prev.classType || classType || undefined,
+        qpType: nextQp || undefined,
+      });
+    });
+
+    const electiveMap = new Map<string, CourseMeta>();
+    electiveRows.forEach((row) => {
+      const code = normalizeCourseCode(row?.course_code);
+      if (!courseSet.has(code)) return;
+      const classType = String(row?.class_type || '').trim();
+      const qpType = getQpTypeValue(row);
+      const prev = electiveMap.get(code) || {};
+      electiveMap.set(code, {
+        classType: prev.classType || classType || undefined,
+        qpType: prev.qpType || qpType || undefined,
+      });
+    });
+
+    const finalMap: Record<string, CourseMeta> = {};
+    courseSet.forEach((code) => {
+      const ta = taMap.get(code);
+      const dept = deptMap.get(code);
+      const elective = electiveMap.get(code);
+      const classType = ta?.classType || dept?.classType || elective?.classType;
+      let qpType = dept?.qpType || elective?.qpType || ta?.qpType || '';
+      qpType = String(qpType || '').trim().toUpperCase();
+      if (!qpType || qpType === 'TCPR') qpType = 'QP1';
+      finalMap[code] = { classType: classType || undefined, qpType };
+    });
+
+    return finalMap;
+  };
+
   const closePdfPreview = () => {
     setPdfPreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -300,20 +393,21 @@ export default function StudentsList() {
       .replace(/\s+/g, '_')
       .slice(0, 120);
 
-  const handleOpenMarkEntry = (e: React.MouseEvent, student: AugStudent, qpType: string, deptName: string, semName: string) => {
+  const handleOpenMarkEntry = (e: React.MouseEvent, student: AugStudent, qpType: string, classType: string, deptName: string, semName: string) => {
     e.preventDefault();
     setActiveEntryParams({
       code: student.dummy ? student.dummy : (student.reg_no || ''),
       reg_no: student.reg_no || '',
       name: student.name || '',
       qp_type: qpType,
+      class_type: classType || '',
       dept: deptName,
       sem: semName,
       dummy_number: student.dummy || ''
     });
   };
 
-  const getMarkEntryHref = (student: AugStudent, qpType: string, deptName: string, semName: string) => {
+  const getMarkEntryHref = (student: AugStudent, qpType: string, classType: string, deptName: string, semName: string) => {
     return '#';
   };
 
@@ -442,6 +536,35 @@ export default function StudentsList() {
   useEffect(() => {
     fetchCourseSelectionMapFromApi(department, semester).then(setSelectionMap);
   }, [department, semester]);
+
+  useEffect(() => {
+    if (!data) {
+      setCourseMetaMap({});
+      return;
+    }
+
+    const courseCodes = new Set<string>();
+    data.departments.forEach((dept) => {
+      (dept.courses || []).forEach((course) => {
+        const code = normalizeCourseCode(course.course_code);
+        if (code) courseCodes.add(code);
+      });
+    });
+
+    let active = true;
+    buildCourseMetaMap(Array.from(courseCodes))
+      .then((map) => {
+        if (active) setCourseMetaMap(map);
+      })
+      .catch(() => {
+        if (active) setCourseMetaMap({});
+      });
+
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   // Build enriched data with stable per-row dummy and enrollmentId whenever API `data` or `semester` changes
   useEffect(() => {
@@ -853,8 +976,7 @@ export default function StudentsList() {
         setData(res);
       } catch (err) {
         if (!active) return;
-        const message = err instanceof Error ? err.message : 'Failed to load students mapping.';
-        setError(message);
+        setError('Unable to load students data right now. Please try again.');
       } finally {
         // eslint-disable-next-line no-unsafe-finally
         if (!active) return;
@@ -1201,10 +1323,12 @@ export default function StudentsList() {
             courseName: course.course_name || '',
           });
           const conf = selectionMap[courseKey];
-          const qpType = conf?.qpType || 'QP1';
+          const metaKey = normalizeCourseCode(course.course_code);
+          const fixedQpType = courseMetaMap[metaKey]?.qpType || '';
+          const qpType = fixedQpType || conf?.qpType || 'QP1';
 
           (course.students as AugStudent[]).forEach((student) => {
-             records.push({
+               records.push({
                reg_no: student.reg_no,
                dummy: student.dummy,
                semester: semester,
@@ -1223,7 +1347,7 @@ export default function StudentsList() {
       alert(`Successfully saved mappings!\nCreated: ${res.created}\nUpdated: ${res.updated}`);
     } catch (err) {
       console.error(err);
-      alert('Failed to save mappings. check console for details.');
+      alert('Unable to save mappings right now. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -1291,7 +1415,7 @@ export default function StudentsList() {
       alert(`Reset completed.\nDeleted mappings: ${res.deleted}`);
     } catch (err) {
       console.error(err);
-      alert('Failed to reset mappings. check console for details.');
+      alert('Unable to reset mappings right now. Please try again.');
     } finally {
       setResetting(false);
     }
@@ -1321,7 +1445,7 @@ export default function StudentsList() {
       previewPdf(doc, fileName);
     } catch (err) {
       console.error(err);
-      alert('Failed to generate course PDFs. Check console for details.');
+      alert('Unable to generate course PDFs right now. Please try again.');
     } finally {
       setDownloading(false);
     }
@@ -1514,7 +1638,10 @@ export default function StudentsList() {
                       courseCode: course.course_code,
                       courseName: course.course_name,
                     });
-                    const qpType = selectionMap[courseKey]?.qpType || 'QP1';
+                    const metaKey = normalizeCourseCode(course.course_code);
+                    const fixedQpType = courseMetaMap[metaKey]?.qpType || '';
+                    const courseClassType = courseMetaMap[metaKey]?.classType || '';
+                    const qpType = fixedQpType || selectionMap[courseKey]?.qpType || 'QP1';
                     const courseUiKey = `${deptBlock.department}::${course.course_code || ''}::${course.course_name || ''}::${courseIndex}`;
                     return (
                     <div key={courseUiKey} className="rounded-lg border border-gray-100 bg-gray-50 p-4">
@@ -1559,7 +1686,7 @@ export default function StudentsList() {
                                           href="#"
                                           
                                           
-                                          onClick={(e) => handleOpenMarkEntry(e, student, qpType, deptBlock.department, semester)}
+                                          onClick={(e) => handleOpenMarkEntry(e, student, qpType, courseClassType, deptBlock.department, semester)}
 className="font-medium text-blue-700 underline hover:text-blue-800"
                                         >
                                           {dummy}
@@ -1638,6 +1765,7 @@ className="font-medium text-blue-700 underline hover:text-blue-800"
           embeddedRegNo={activeEntryParams.reg_no}
           embeddedName={activeEntryParams.name}
           embeddedQpType={activeEntryParams.qp_type}
+          embeddedClassType={activeEntryParams.class_type}
           embeddedDept={activeEntryParams.dept}
           embeddedSem={activeEntryParams.sem}
           embeddedDummy={activeEntryParams.dummy_number}

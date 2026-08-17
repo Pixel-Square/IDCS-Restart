@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import React, { useState, useEffect } from 'react';
 import fetchWithAuth from '../../services/fetchAuth';
 import { CoeStudentsMapResponse, fetchCoeStudentsMap } from '../../services/coe';
@@ -5,6 +6,10 @@ import { getCourseKey } from './courseSelectionStorage';
 import { kvSave } from '../../utils/coeKvStore';
 import { readShuffledLists, writeShuffledLists } from './shuffledListStore';
 import { getBundleFinalizeConfig } from '../../utils/coeBundleFinalizeStore';
+=======
+import React, { useState, useEffect, useMemo } from 'react';
+import { CoeStudentsMapResponse, fetchCoeStudentsMap, fetchCoeFilterOptions } from '../../services/coe';
+>>>>>>> 0803e45 (Questionbank)
 
 const COURSE_BUNDLE_DUMMY_STORE_KEY = 'coe-course-bundle-dummies-v1';
 const ADDITIONAL_STUDENTS_LOG_KEY = 'coe-additional-students-log-v1';
@@ -186,41 +191,14 @@ export default function AdditionalPage() {
     let active = true;
     (async () => {
       try {
-        const res = await fetchWithAuth('/api/academics/departments/');
+        const options = await fetchCoeFilterOptions();
         if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const depts = data.results || data || [];
-          const deptNames = depts
-            .map((d: any) => {
-              const label = d?.short_name || d?.code || d?.name || d;
-              return label ? String(label).trim().toUpperCase() : null;
-            })
-            .filter(Boolean);
-          setDepartments(['ALL', ...(deptNames as string[])]);
-        }
+        setDepartments(options.departments);
+        setDept(options.departments[0] || 'ALL');
+        setSemesters(options.semesters);
+        setSem(options.semesters[0] || 'SEM1');
       } catch (err) {
         console.warn('Error fetching departments:', err);
-      }
-    })();
-    return () => { active = false; };
-  }, []);
-
-  // Fetch semesters on mount
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const res = await fetchWithAuth('/api/academics/semesters/');
-        if (!active) return;
-        if (res.ok) {
-          const data = await res.json();
-          const sems = data.results || data || [];
-          const semNames = sems.map((s: any) => s.name || s.code || s).filter(Boolean);
-          setSemesters(semNames.length > 0 ? semNames : ['SEM1']);
-        }
-      } catch (err) {
-        console.warn('Error fetching semesters:', err);
       }
     })();
     return () => { active = false; };

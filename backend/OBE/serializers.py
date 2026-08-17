@@ -10,6 +10,8 @@ from .models import (
     Cia2PublishedSheet,
     ClassTypeWeights,
     CoTargetRevision,
+    CourseQuestionBank,
+    CourseQuestionBankLog,
     Formative1Mark,
     Formative2Mark,
     InternalMarkMapping,
@@ -237,6 +239,52 @@ class ObePublishRequestSerializer(UserFriendlyModelSerializer):
     class Meta:
         model = ObePublishRequest
         fields = '__all__'
+
+
+class CourseQuestionBankSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField(read_only=True)
+    finalized_by_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = CourseQuestionBank
+        fields = (
+            'id', 'course_code', 'course_name', 's_no', 'question_text', 'subtopics', 'question_type',
+            'course_outcome', 'part', 'btl', 'marks', 'college', 'is_finalized',
+            'created_by', 'created_by_name', 'finalized_by', 'finalized_by_name',
+            'created_at', 'updated_at', 'finalized_at'
+        )
+        read_only_fields = ('created_at', 'updated_at', 'finalized_at')
+
+    def get_created_by_name(self, obj):
+        if obj.created_by and obj.created_by.user:
+            return f"{obj.created_by.user.first_name} {obj.created_by.user.last_name}".strip() or obj.created_by.user.username
+        return ''
+
+    def get_finalized_by_name(self, obj):
+        if obj.finalized_by and obj.finalized_by.user:
+            return f"{obj.finalized_by.user.first_name} {obj.finalized_by.user.last_name}".strip() or obj.finalized_by.user.username
+        return ''
+
+
+class CourseQuestionBankLogSerializer(serializers.ModelSerializer):
+    course_code = serializers.SerializerMethodField(read_only=True)
+    edited_by_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = CourseQuestionBankLog
+        fields = (
+            'id', 'question_bank', 'course_code', 'action', 'edited_by',
+            'edited_by_name', 'old_values', 'new_values', 'edited_at'
+        )
+        read_only_fields = ('edited_at',)
+
+    def get_course_code(self, obj):
+        return obj.question_bank.course_code if obj.question_bank else ''
+
+    def get_edited_by_name(self, obj):
+        if obj.edited_by and obj.edited_by.user:
+            return f"{obj.edited_by.user.first_name} {obj.edited_by.user.last_name}".strip() or obj.edited_by.user.username
+        return ''
 
 
 class ObeEditRequestSerializer(UserFriendlyModelSerializer):

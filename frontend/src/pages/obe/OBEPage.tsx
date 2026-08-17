@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, ClipboardList, TrendingUp, BarChart2 } from 'lucide-react';
 
 import CDAPPage from '../lca/CDAPPage';
@@ -11,6 +11,7 @@ import '../../styles/obe-theme.css';
 
 import { getCachedMe, getMe } from '../../services/auth';
 import ClassResultAnalysisPage from './class_result_analysis/ClassResultAnalysisPage';
+import QuestionBankPage from '../QuestionBankPage';
 import { fetchAssignedSubjects } from '../../services/staff';
 import {
   fetchMyTeachingAssignments,
@@ -90,7 +91,7 @@ type OBEItem = {
   achieved: string;
 };
 
-type TabKey = 'courses' | 'exam' | 'progress' | 'class_result';
+type TabKey = 'courses' | 'exam' | 'progress' | 'class_result' | 'question_bank';
 
 type ObeProgressExam = {
   assessment: string;
@@ -1212,6 +1213,23 @@ export default function OBEPage(): JSX.Element {
     ? (data.reduce((sum, it) => sum + parsePercent(it.achieved), 0) / totalItems).toFixed(1) + '%'
     : 'N/A';
 
+  const questionBankTeachingAssignment = React.useMemo(() => {
+    for (const it of assignments) {
+      const code = String((it as any)?.subject_code || '').trim();
+      const taId = Number((it as any)?.id);
+      if (!code || !Number.isFinite(taId) || taId <= 0) continue;
+      try {
+        const stored = window.localStorage.getItem(`markEntry_selectedTa_${code}`);
+        if (stored != null && Number(stored) === taId) {
+          return it;
+        }
+      } catch {
+        // ignore storage errors and keep searching
+      }
+    }
+    return null;
+  }, [assignments]);
+
       return (
         <main className="obe-page" style={{ padding: '32px 48px', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif', minHeight: '100vh', background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)' }}>
           <header style={{ marginBottom: 32, background: '#fff', padding: '28px 32px', borderRadius: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)' }}>
@@ -1301,6 +1319,23 @@ export default function OBEPage(): JSX.Element {
                     📊 Class Result Analysis
                   </button>
                 )}
+                <button
+                  onClick={() => setActiveTab('question_bank')}
+                  style={{
+                    padding: '10px 24px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: activeTab === 'question_bank' ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 'transparent',
+                    color: activeTab === 'question_bank' ? '#fff' : '#64748b',
+                    cursor: 'pointer',
+                    fontWeight: activeTab === 'question_bank' ? 600 : 500,
+                    fontSize: 15,
+                    transition: 'all 0.2s ease',
+                    boxShadow: activeTab === 'question_bank' ? '0 2px 8px rgba(245,158,11,0.25)' : 'none'
+                  }}
+                >
+                  📚 Question Bank
+                </button>
               </div>
 
               {/* Courses tab content */}
@@ -1644,6 +1679,18 @@ export default function OBEPage(): JSX.Element {
               {activeTab === 'class_result' && canViewProgress && (
                 <section aria-label="Class Result Analysis" style={{ background: '#f8fafc', padding: 0, borderRadius: 16, overflow: 'hidden' }}>
                   <ClassResultAnalysisPage canViewProgress={canViewProgress} />
+                </section>
+              )}
+
+              {/* Question Bank tab */}
+              {activeTab === 'question_bank' && questionBankTeachingAssignment && (
+                <section aria-label="Question Bank" style={{ background: '#f8fafc', padding: 0, borderRadius: 16, overflow: 'hidden' }}>
+                  <QuestionBankPage courseCode={questionBankTeachingAssignment.subject_code || ''} courseName={questionBankTeachingAssignment.subject_name || (questionBankTeachingAssignment as any).name} />
+                </section>
+              )}
+              {activeTab === 'question_bank' && !questionBankTeachingAssignment && (
+                <section aria-label="Question Bank" style={{ background: '#f8fafc', padding: 28, borderRadius: 16, textAlign: 'center', color: '#94a3b8' }}>
+                  <div style={{ fontSize: 16, fontWeight: 500 }}>Please select a course first to view the Question Bank</div>
                 </section>
               )}
 

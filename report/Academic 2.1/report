@@ -1,0 +1,165 @@
+Academic 2.1 — Working and Flow Report
+
+Objective:
+- Describe the purpose, architecture, pages, data flow, and role-based controls for the Academic 2.1 module implemented in the frontend at `frontend/src/pages/Academic 2.1`.
+
+Overview / Explanation:
+- Academic 2.1 is a modular React-based feature set providing student-facing "My Marks" views, faculty mark-entry and analysis tools, and admin management (exam/cycle/weightage/publish controls and bypass tools).
+- Pages are lazy-loaded via `routes.tsx` under route prefixes like `/academic-v2/...`.
+- The frontend talks to a REST backend under `/api/academic-v2/` for student/faculty/admin operations and uses shared services (`fetchWithAuth`, `services/obe`) for authenticated requests.
+
+High-level Flowchart (textual):
+- Navigation/menu -> Route (lazy-load page) -> Page component -> fetchWithAuth / services -> backend API -> database
+- Admin pages (manage cycles, exam assignments, publish control) -> update backend -> triggers recalculation or publish flags
+- Faculty pages (course list -> mark-entry -> submit exam marks) -> backend stores marks and updates co-attainment / analysis data
+- Student pages (dashboard -> course list -> course detail) -> read-only views showing entered marks and computed percentages
+
+Connections of Pages (routes summary from `routes.tsx`):
+- Admin:
+  - /academic-v2/admin -> AcademicV2AdminDashboard
+  - /academic-v2/admin/publish-control -> PublishControlPage
+  - /academic-v2/admin/exam-management -> ExamManagementPage
+  - /academic-v2/admin/qp-patterns -> QpPatternEditorPage
+  - /academic-v2/admin/approvals -> ApprovalInboxPage
+  - /academic-v2/admin/internal-marks -> InternalMarkAdminPage
+  - /academic-v2/admin/pass-mark -> SettingsPage
+  - /academic-v2/admin/google-sheets -> GoogleSheetsPage
+  - /academic-v2/admin/co-attainment-config -> co-attainment config page
+  - /academic-v2/admin/course-manager -> CourseManagerDashboard
+  - /academic-v2/admin/course-manager/courses -> CourseManagerPage
+  - /academic-v2/admin/course-manager/:taId/faculty -> CourseFacultyPage
+  - /academic-v2/admin/bypass/:sessionId/course/:courseId -> AdminBypassCoursePage
+  - /academic-v2/admin/bypass/logs -> BypassLogsPage
+- Faculty:
+  - /academic-v2/courses -> CourseListPage (faculty)
+  - /academic-v2/course/:courseId -> InternalMarkPage (faculty mark details)
+  - /academic-v2/exam/:examId -> MarkEntryPage (faculty mark entry for an exam)
+- Student:
+  - /academic-v2/student/dashboard -> Student Dashboard
+  - /academic-v2/student/courses -> CourseList (student)
+  - /academic-v2/student/course/:courseId -> CourseDetail (student view)
+
+Pages included (source files inside `frontend/src/pages/Academic 2.1`):
+- index.ts (module exports)
+- routes.tsx (route & navigation config)
+- types.ts (shared types)
+
+Students subfolder:
+- students/index.ts — re-exports student pages
+- students/DashboardPage.tsx — student dashboard, summary metrics
+- students/CourseListPage.tsx — student "My Courses" list with entered percentage and navigation
+- students/CourseDetailPage.tsx — per-course detail showing cycles, exams, donuts and exam status
+- students/MyMarksLayout.tsx — shared layout and sub-nav for student views
+
+Faculty subfolder (selected files):
+- faculty/CourseListPage.tsx — faculty view of assigned courses; combines teaching assignments and academic-v2 status; links to mark entry and internal mark pages
+- faculty/FacultyCourseDashboard.tsx — faculty course dashboard (overview and quick actions)
+- faculty/MarkEntryPage.tsx — mark entry UI for an exam; loads exam items and allows entering student marks
+- faculty/InternalMarkPage.tsx — internal mark overview for a course (faculty)
+- faculty/CqiEntryPage.tsx — CQI / course quality input page for faculty
+- faculty/LearnerCentricApproachPage.tsx, LCAWorkflowPage.tsx — pages for learner-centric workflows and export
+- faculty/result_analysis/ResultAnalysisPage.tsx — mark distribution, bell curves, ranking, mark sheets
+- faculty/coattainment/COattainmentTable.tsx and related components — co-attainment display and weight configuration
+- Other utility components: COSummaryExport.ts, ResetNoticePopup.tsx
+
+Admin subfolder (selected files):
+- admin/AcademicV2AdminDashboard.tsx — landing dashboard for admin with quick links and status
+- admin/PublishControlPage.tsx — control publish windows, due dates, and publish operations
+- admin/ExamManagementPage.tsx — manage cycles, exam templates, assignments
+- admin/QpPatternEditorPage.tsx — edit question paper patterns and templates
+- admin/ExamAssignmentAdminPage.tsx — create & edit exam assignments
+- admin/ApprovalInboxPage.tsx — review and approve changes from faculty
+- admin/InternalMarkAdminPage.tsx — admin monitoring of internal marks across departments
+- admin/SettingsPage.tsx — pass mark and global settings
+- admin/GoogleSheetsPage.tsx — integrations and sheet sync UI
+- admin/WeightagePage.tsx — manage weightage per cycle/QP
+- admin/CourseManagerDashboard.tsx / CourseManagerPage.tsx / CourseFacultyPage.tsx — course manager tools and bypass management
+- admin/bypass/* — bypass sharing, landing, and small standalone UIs for sharing bypassed data
+- admin/coattainment/* — co-attainment settings and weights pages
+- admin/cdap/CDAPTemplateEditorPage.tsx — CDAP template editor (specific admin editor)
+- admin/QpExamAssignmentEditorPopup.tsx, QpCqiEditorPopup.tsx — editor popups used across admin flows
+
+Components:
+- components/ExamTableToolbar.tsx — toolbar used on tables (filters, quick actions, status badges, quick filter)
+
+Database structure (inferred from APIs and page data):
+- Entities referenced or implied:
+  - Course / TeachingAssignment (ta_id): course metadata, faculty assignment, class type, section
+  - Exam / Cycle: cycle_id, cycle_name, cycle_order, exam_id, exam metadata, max_marks, qp_type
+  - Marks/Entries: mark rows per student per exam (obtained marks, absent flag, payload), obtained_weight and weight fields
+  - Publish & Config: publish windows, pass-mark settings, weightage definitions
+  - CO/PO mappings and co-attainment weight records
+  - Approval requests: edit requests from faculty awaiting admin approval
+  - Bypass session stores: temporary shared snapshots for bypass flows
+- Typical table names (backend likely): academic_v2_course, academic_v2_cycle, academic_v2_exam, academic_v2_markentry, academic_v2_publish, academic_v2_weightage, academic_v2_coattainment, academic_v2_approval, academic_v2_bypass
+
+APIs observed (examples from frontend calls):
+- GET /api/academic-v2/student/my-marks-config/
+- GET /api/academic-v2/student/my-courses/
+- GET /api/academic-v2/student/my-courses/{courseId}/
+- GET /api/academic-v2/faculty/courses/ (status map)
+- Endpoints for admin: /api/academic-v2/admin/... (exam assignments, qp patterns, publish controls)
+- Endpoints for co-attainment, weightage and settings under academic-v2 namespace
+
+Modules inside the Academic 2.1 frontend bundle:
+- Student module: `students/*` (dashboard, course list, course detail, layout)
+- Faculty module: `faculty/*` (course list, mark entry, result analysis, coattainment)
+- Admin module: `admin/*` (publish, exam mgmt, course manager, bypass, settings)
+- Shared components: `components/*`, `types.ts`, `index.ts` (exports)
+- Sub-modules: `admin/bypass`, `admin/coattainment`, `faculty/result_analysis`
+
+Role-based Auth (inferred):
+- Roles implied: `student`, `faculty`, `admin`, `course_manager` (or bypass manager), possibly `exam_staff` and `coordinator`.
+- Authentication: front-end uses `fetchWithAuth` which attaches auth token and backend enforces role-based permissions per endpoint.
+- Access controls per role:
+  - Student: read-only routes under `/academic-v2/student/*` (view own marks, course dashboard)
+  - Faculty: faculty routes include `/academic-v2/courses`, `/academic-v2/course/:courseId`, `/academic-v2/exam/:examId` for mark entry and analysis; faculty can CRUD mark entries for their assigned courses and request approvals
+  - Admin: full access to admin routes to manage cycles, assignments, QP patterns, publish control, weightages, approvals, and bypass flows
+  - Course Manager / Bypass Roles: additional controls to bypass mark entry or share snapshots via `admin/bypass` pages
+
+Roles uses & controls (summary):
+- `student`:
+  - Use: view marks, check cycle performance, see exam-level status and donut score
+  - Controls: cannot edit marks; visibility may be gated by profile completeness (profile photo/mobile) and publish flags
+- `faculty`:
+  - Use: view assigned courses, enter marks, view result analysis, export CO summary, manage LCA workflows
+  - Controls: can edit marks for assigned courses and exams; some edits require approval (sent to ApprovalInbox)
+- `admin`:
+  - Use: manage exams, publish cycles, set weightage, approve faculty edits, run Google Sheets sync
+  - Controls: can publish or unpublish marks, modify weightage and patterns, and access all student/faculty data
+- `course_manager` / `bypass`:
+  - Use: manage special bypass cases, share bypassed snapshots
+  - Controls: create bypass sessions and share them; internal mark bypass flows
+
+Backend (inferred architecture):
+- Likely a Django / DRF backend (repo contains `backend/` and `manage.py`) exposing REST APIs under `/api/academic-v2/`.
+- Responsibilities:
+  - Authentication and role enforcement
+  - Persistent storage of exams, marks, cycles, weightages, publish flags
+  - Business logic: mark weight calculations, co-attainment calculations, rank and bell-curve computations
+  - Admin endpoints for approvals, Google Sheets sync, and bypass snapshot management
+
+Frontend details:
+- Tech: React + TypeScript with React Router (lazy routes), Tailwind CSS utility classes, modular pages under `frontend/src/pages/Academic 2.1`
+- Data access: `fetchWithAuth` for authenticated requests, `services/obe` for teaching assignments
+- UI patterns: layout components (MyMarksLayout), table toolbars (ExamTableToolbar), popup editors (QpExamAssignmentEditorPopup)
+- Code-splitting: pages are `React.lazy` loaded in `routes.tsx` for reduced initial bundle size
+
+Notes on specific pages (brief):
+- `students/CourseDetailPage` — detailed per-course cycles & exam cards; guards visibility via `my-marks-config` flags
+- `students/CourseListPage` — student list view using `my-courses` API
+- `faculty/CourseListPage` — uses `fetchMyTeachingAssignments` + academic-v2 course status map
+- `admin/PublishControlPage` — control publish windows and semester configs
+- `admin/ExamAssignmentAdminPage` / `QpPatternEditorPage` — create templates and assign QPs for exams
+- `admin/bypass/*` — multiple small components to support bypass sharing and context
+
+Recommendations / Next steps:
+- Verify backend endpoint list by scanning `backend/` academic_v2 app for exact API paths and model names to formalize DB schema mapping.
+- Add an `admin` or `ops` doc that maps each frontend page to the exact backend endpoints and required permissions.
+- Add small sequence diagrams (or exportable Mermaid diagrams) for publish flow, mark entry → approval → publish, and bypass sharing flow.
+
+Report prepared from the files inside `frontend/src/pages/Academic 2.1` (pages enumerated above). If you want, I can:
+- Expand this into a Markdown file with diagrams and exact API contract snippets.
+- Extract exact backend model names by scanning `backend/academic_v2` models and serializers.
+
+-- End of report
