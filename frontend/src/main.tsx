@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { SidebarProvider } from './components/layout/SidebarContext';
 import AppDialog from './components/AppDialog';
 import Login from "./pages/auth/Login";
@@ -65,7 +65,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/*" element={<App />} />
         </Routes>
         <AppDialog />
-        <App />
       </SidebarProvider>
     </BrowserRouter>
   </React.StrictMode>,
