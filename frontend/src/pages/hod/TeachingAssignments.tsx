@@ -1464,7 +1464,7 @@ export default function TeachingAssignmentsPage(){
                                             {st.staff_id} - {getStaffDisplayName(st)}
                                           </option>
                                         ))}
-                                      </select>
+                                      </SearchableStaffSelect>
                                     ) : existingAssignment ? (
                                       <div className="text-sm text-gray-900 font-medium">
                                         {getAssignmentStaffDisplay(existingAssignment)}
@@ -1729,7 +1729,7 @@ export default function TeachingAssignmentsPage(){
                                       {getFilteredStaffForDeptCore().map(st => (
                                         <option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>
                                       ))}
-                                    </select>
+                                    </SearchableStaffSelect>
                                   ) : existingAssignment ? (
                                     <span className="text-sm text-gray-900 font-medium">
                                       {getAssignmentStaffDisplay(existingAssignment)}

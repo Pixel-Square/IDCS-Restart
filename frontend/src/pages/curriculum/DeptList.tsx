@@ -338,7 +338,7 @@ export default function DeptList() {
     return () => { cancelled = true; };
   }, [deleteTarget]);
 
-  const [currentDept, setCurrentDept] = useState<number | null>(null);
+
 
   useEffect(() => {
     if (uniqueDepts.length === 1) {

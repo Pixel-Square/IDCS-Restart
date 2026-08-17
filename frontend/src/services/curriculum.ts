@@ -376,12 +376,9 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
   }
 }
 
-export async function fetchDeptRows(params?: { is_elective?: boolean; semester?: number }): Promise<DeptRow[]> {
+export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number; is_elective?: boolean }): Promise<DeptRow[]> {
   const qs = new URLSearchParams();
   if (params?.is_elective !== undefined) qs.set('is_elective', String(params.is_elective));
-  if (params?.semester) qs.set('semester', String(params.semester));
-  const url = `/api/curriculum/department/${qs.toString() ? '?' + qs.toString() : ''}`;
-export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }): Promise<DeptRow[]> {
   if (params?.department_id) qs.set('department_id', String(params.department_id));
   if (params?.regulation) qs.set('regulation', params.regulation);
   if (params?.batch_id) qs.set('batch_id', String(params.batch_id));
