@@ -4,6 +4,7 @@ import { SearchableDropdown } from '../../../components/ui/SearchableDropdown';
 import fetchWithAuth from '../../../services/fetchAuth';
 import { fetchDepartmentStaff } from '../../../services/staff';
 import TeachingAssignSection from './TeachingAssignSection';
+import GroupAllocationModal, { GroupAllocation } from './GroupAllocationModal';
 
 const DEPARTMENT_OPTIONS = [
   { label: 'CIVIL Engineering', value: 'civil' },
@@ -427,19 +428,114 @@ const getTemplateLabBlocks = (template: SemesterTemplate) => {
   });
 };
 
+const getConsecutiveBlocksForTemplate = (template: SemesterTemplate, blockSize: number) => {
+  const blocks: Array<{ keys: string[]; day: string }> = [];
+  template.rows.forEach((row) => {
+    const validCols = template.columns.filter((c) => c.period !== 'Break' && c.period !== 'Lunch');
+    for (let i = 0; i <= validCols.length - blockSize; i += 1) {
+      const window = validCols.slice(i, i + blockSize);
+      const firstIdx = template.columns.indexOf(window[0]);
+      const lastIdx = template.columns.indexOf(window[window.length - 1]);
+      if (lastIdx - firstIdx === blockSize - 1) {
+        blocks.push({
+          keys: window.map((c) => `${row.id}-${c.id}`),
+          day: row.day,
+        });
+      }
+    }
+  });
+  return blocks;
+};
+
+const hashString = (str: string): number => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return Math.abs(hash);
+};
+
 const buildGeneratedSection = (
   snapshot: SectionSnapshot,
   template: SemesterTemplate,
   globalFacultyUsage: Record<string, Set<string>>,
-  runSeed: number
+  generationSeed: number,
+  sectionIndex: number,
+  groupAllocations: GroupAllocation[] = []
 ): GeneratedSectionTimetable => {
   const cells: Record<string, GeneratedCell> = {};
   const warnings: string[] = [];
   const slots = getTemplateSlots(template);
   const occupied = new Set<string>();
+  const runSeed = generationSeed + sectionIndex + 1;
   const rng = createSeededRng(runSeed);
 
-  const allSubjects = [...(snapshot.subjectStaff || [])].filter((row) => getSubjectLabel(row));
+  // Find Group Allocations that match this section / mixed section
+  const matchingGroups = groupAllocations.filter((g) => {
+    const secIdStr = String(snapshot.sectionId);
+    const keyMatch = g.selectedSectionKeys.some((k) => k.includes(secIdStr) || k.includes(snapshot.sectionKey)) ||
+                     g.selectedMixedSectionKeys.some((k) => k.includes(secIdStr) || k.includes(snapshot.sectionKey));
+    if (keyMatch) return true;
+
+    const yearMatch = !snapshot.year || g.selectedYears.includes(snapshot.year);
+    const deptMatch = !snapshot.department || g.selectedDepartments.length === 0 ||
+                      g.selectedDepartments.some((d) => (snapshot.department || '').toUpperCase().includes(d.toUpperCase()));
+    return yearMatch && deptMatch && (g.selectedSectionKeys.length === 0 && g.selectedMixedSectionKeys.length === 0);
+  });
+
+  // Extract all Exception Courses from matching groups
+  const allExceptionCourses = matchingGroups.flatMap((g) => g.exceptionCourses || []);
+
+  // Pre-assign Group Allocation Block Periods consistently across sections & randomized per generation
+  matchingGroups.forEach((g, gIdx) => {
+    const blockSize = g.blockPeriodEnabled ? Math.max(1, g.blockPeriodCount || 2) : 1;
+    const availableBlocks = getConsecutiveBlocksForTemplate(template, blockSize);
+
+    if (availableBlocks.length > 0) {
+      // Deterministic seed for group 'g' across sections in this generation run
+      const groupSeed = hashString(`${generationSeed}-${g.id || g.groupName}-${gIdx}`);
+      const groupRng = createSeededRng(groupSeed);
+      const shuffledBlocks = shuffleWithRng(availableBlocks, groupRng);
+
+      // Pick first non-overlapping block or fallback
+      const selectedBlock = shuffledBlocks.find((b) => b.keys.every((k) => !occupied.has(k))) || shuffledBlocks[0];
+
+      selectedBlock.keys.forEach((key) => {
+        occupied.add(key);
+        cells[key] = {
+          subject: g.groupName,
+          faculty: 'Group Allocation',
+          kind: 'theory',
+          note: `Group: ${g.groupName}` + (g.blockPeriodEnabled ? ` (${g.blockPeriodCount} Block Periods)` : ''),
+        };
+      });
+    }
+  });
+
+  // Filter out Exception Courses and subjects with no staff assigned for this section
+  const rawSubjects = [...(snapshot.subjectStaff || [])];
+  const filteredSubjects = rawSubjects.filter((subject) => {
+    if (!getSubjectLabel(subject)) return false;
+
+    // Must have assigned staff for this section
+    const assigned = Array.isArray(subject?.assigned_staff) ? subject.assigned_staff : [];
+    const hasStaff = assigned.length > 0 || Boolean(subject?.staff);
+    if (!hasStaff) return false;
+
+    if (allExceptionCourses.length === 0) return true;
+    const sCode = getSubjectCode(subject).toUpperCase();
+    const sName = getSubjectName(subject).toUpperCase();
+    const isExcepted = allExceptionCourses.some((e) => {
+      const eCode = (e.course_code || '').toUpperCase();
+      const eName = (e.course_name || '').toUpperCase();
+      return (eCode && sCode.includes(eCode)) || (eName && sName.includes(eName));
+    });
+    return !isExcepted;
+  });
+
+  const allSubjects = filteredSubjects;
   const pureLabSubjects = consolidatePureLabSubjects(allSubjects.filter(isPureLabSubject));
   const hybridLabSubjects = allSubjects.filter(isHybridLabSubject);
   const theoryOnlySubjects = allSubjects.filter((row) => !isPureLabSubject(row) && !isHybridLabSubject(row));
@@ -735,6 +831,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
   const [selectedFaculty, setSelectedFaculty] = useState('');
   const [facultyOptions, setFacultyOptions] = useState<{label: string, value: string}[]>([]);
   const [showTeachingAssign, setShowTeachingAssign] = useState(false);
+  const [showGroupModal, setShowGroupModal] = useState(false);
   const [sectionSnapshots, setSectionSnapshots] = useState<Record<string, SectionSnapshot>>({});
   const [generatedSections, setGeneratedSections] = useState<GeneratedSectionTimetable[]>([]);
   
@@ -1028,8 +1125,21 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
 
         const globalFacultyUsage: Record<string, Set<string>> = {};
         const generationSeed = Date.now();
+
+        // Load saved Group Allocations
+        let groupAllocations: GroupAllocation[] = [];
+        try {
+          const storedAllocations = localStorage.getItem('iqac_timetable_group_allocations');
+          if (storedAllocations) {
+            const parsed = JSON.parse(storedAllocations);
+            if (Array.isArray(parsed)) groupAllocations = parsed;
+          }
+        } catch (e) {
+          console.error('Failed to load group allocations during generation:', e);
+        }
+
         const results = workingSnapshots.map((snapshot, index) =>
-          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed + index + 1)
+          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed, index, groupAllocations)
         );
 
         setGeneratedSections(results);
@@ -1152,7 +1262,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
               </div>
             </div>
 
-            <div className="border border-gray-200 p-4 rounded-lg bg-gray-50 mb-6">
+            <div className="border border-gray-200 p-4 rounded-lg bg-gray-50 mb-6 flex flex-wrap gap-4 items-center">
               <button 
                 onClick={() => setShowTeachingAssign(!showTeachingAssign)}
                 className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors font-semibold"
@@ -1160,8 +1270,17 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                 {showTeachingAssign ? 'Hide Teaching Assign' : 'Teaching Assign'}
               </button>
 
+              <button 
+                onClick={() => setShowGroupModal(true)}
+                className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
+              >
+                🏢 Group Allocation
+              </button>
+
               {showTeachingAssign && (
-                <TeachingAssignSection facultyOptions={facultyOptions} onSectionSnapshot={handleSectionSnapshot} />
+                <div className="w-full mt-4">
+                  <TeachingAssignSection facultyOptions={facultyOptions} onSectionSnapshot={handleSectionSnapshot} />
+                </div>
               )}
             </div>
 
@@ -1422,6 +1541,10 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
             </div>
           </div>
         </div>
+        <GroupAllocationModal
+          isOpen={showGroupModal}
+          onClose={() => setShowGroupModal(false)}
+        />
       </div>
     );
   }

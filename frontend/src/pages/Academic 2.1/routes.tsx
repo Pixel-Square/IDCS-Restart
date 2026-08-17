@@ -17,6 +17,7 @@ const InternalMarkAdminPage = React.lazy(() => import('./admin/InternalMarkAdmin
 const PassMarkSettingsPage = React.lazy(() => import('./admin/SettingsPage'));
 const GoogleSheetsPage = React.lazy(() => import('./admin/GoogleSheetsPage'));
 const CoAttainmentConfigPage = React.lazy(() => import('./admin/coattainment/CoAttainmentConfig'));
+const ExportImportManagerPage = React.lazy(() => import('./admin/export_import/ExportImportManagerPage'));
 const CourseListPage = React.lazy(() => import('./faculty/CourseListPage'));
 const MarkEntryPage = React.lazy(() => import('./faculty/MarkEntryPage'));
 const InternalMarkPage = React.lazy(() => import('./faculty/InternalMarkPage'));
@@ -35,6 +36,10 @@ export const academicV2Routes: RouteObject[] = [
   {
     path: 'academic-v2/admin',
     element: <AcademicV2AdminDashboard />,
+  },
+  {
+    path: 'academic-v2/admin/export-import-manager',
+    element: <ExportImportManagerPage />,
   },
   {
     path: 'academic-v2/admin/publish-control',

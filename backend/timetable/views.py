@@ -14,6 +14,7 @@ from rest_framework.exceptions import PermissionDenied
 import re
 from django.db.models import OuterRef, Exists, Q
 import logging
+from curriculum.models import CurriculumDepartment
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,22 @@ def _normalize_class_type(raw_class_type, curriculum_row=None):
     if compact == 'SPECIAL':
         return 'SPECIAL'
     return normalized
+
+
+def _get_effective_class_hours(c):
+    try:
+        if hasattr(c, 'effective_class_hours') and c.effective_class_hours is not None:
+            return c.effective_class_hours
+        tot = getattr(c, 'total_hours', None)
+        if tot is not None:
+            return tot
+        l = _coerce_int(getattr(c, 'l', None)) or 0
+        t = _coerce_int(getattr(c, 't', None)) or 0
+        p = _coerce_int(getattr(c, 'p', None)) or 0
+        s = _coerce_int(getattr(c, 's', None)) or 0
+        return l + t + p + s
+    except Exception:
+        return 0
 
 
 def _get_staff_name_helper(u, sp):
@@ -280,8 +297,6 @@ class CurriculumBySectionView(APIView):
             curriculum_dept_ids = _resolve_section_curriculum_department_ids(sec)
             if curriculum_dept_ids:
                 try:
-                    from curriculum.models import CurriculumDepartment
-
                     qs = CurriculumDepartment.objects.filter(
                         department_id__in=curriculum_dept_ids,
                         semester__number=sem_num,
@@ -313,7 +328,6 @@ class CurriculumBySectionView(APIView):
             return Response({'results': []})
 
         try:
-            from curriculum.models import CurriculumDepartment
             qs = CurriculumDepartment.objects.filter(department=dept, semester__number=sem_num)
 
             data = []
@@ -325,12 +339,15 @@ class CurriculumBySectionView(APIView):
                     'id': c.pk,
                     'course_code': c.course_code,
                     'course_name': c.course_name,
+                    'c': getattr(c, 'c', None),
+                    'total_hours': getattr(c, 'total_hours', None),
+                    'effective_class_hours': _get_effective_class_hours(c),
                     'regulation': c.regulation,
                     'class_type': _normalize_class_type(c.class_type, c),
                     'is_elective': c.is_elective,
                     'is_dept_core': getattr(c, 'is_dept_core', False),
-                    'department_id': c.department_id,
-                    'department_code': getattr(c.department, 'code', None),
+                    'department_id': getattr(c, 'department_id', None),
+                    'department_code': getattr(getattr(c, 'department', None), 'code', None),
                 })
                 # NOTE: Removed individual elective subject listing
                 # Staff now assigns the elective GROUP (e.g., "EE - Elective Elective")
@@ -1406,15 +1423,13 @@ class SectionSubjectsStaffView(APIView):
             except Exception:
                 lab_row_multipliers = {}
 
-            # Map subject -> dict of staff profiles using course_code/name so it works
-            # across departments (Program Core / shared curriculum rows) and
-            # also maps elective-subject teaching assignments back to the parent.
+            # Map subject -> dict of staff profiles using course_code/pk so it works
+            # for the specific section's assigned subjects and doesn't leak from other sections.
             staff_by_key: dict = {}
 
             tas = TeachingAssignment.objects.filter(
                 is_active=True,
-            ).filter(
-                Q(section_id__in=section_ids_for_teaching_assignments) | Q(section__isnull=True)
+                section_id__in=section_ids_for_teaching_assignments,
             )
             if active_ay is not None:
                 tas = tas.filter(academic_year=active_ay)
@@ -1500,13 +1515,11 @@ class SectionSubjectsStaffView(APIView):
             # --- Elective subjects (ElectiveSubject rows, keyed by their own pk) ---
             # Build a staff map for elective subjects: keyed by ElectiveSubject.pk
             elective_staff_map = {}
-            # 1. From TeachingAssignment with elective_subject (section match or null section)
             elective_tas = TeachingAssignment.objects.filter(
                 elective_subject__isnull=False,
                 elective_subject__semester__number=sem_num,
                 is_active=True,
-            ).filter(
-                Q(section_id__in=section_ids_for_teaching_assignments) | Q(section__isnull=True)
+                section_id__in=section_ids_for_teaching_assignments,
             ).select_related('staff__user', 'elective_subject')
             if active_ay is not None:
                 elective_tas = elective_tas.filter(academic_year=active_ay)

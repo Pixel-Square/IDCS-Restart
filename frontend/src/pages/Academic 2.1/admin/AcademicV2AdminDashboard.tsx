@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldAlert,
   FileSpreadsheet,
+  FileArchive,
 } from 'lucide-react';
 
 interface AdminPage {
@@ -31,6 +32,13 @@ const adminPages: AdminPage[] = [
     description: 'Manage academic cycles, exam assignments, and class types',
     icon: <Grid3x3 size={32} />,
     order: 1,
+  },
+  {
+    title: 'Export/Import Manager',
+    path: '/academic-v2/admin/export-import-manager',
+    description: 'Configure groups, filter semesters, export ZIP course Excel templates, and import bulk mark entries',
+    icon: <FileArchive size={32} />,
+    order: 2,
   },
   {
     title: 'QP Patterns',

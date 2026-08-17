@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from django.test import SimpleTestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from timetable.views import SectionSubjectsStaffView, SectionTimetableView
+from timetable.views import CurriculumBySectionView, SectionSubjectsStaffView, SectionTimetableView
 
 
 class _FakeQuerySet:
@@ -266,10 +266,10 @@ class CurriculumBySectionViewIntegrationTests(SimpleTestCase):
         section_chain.get.return_value = section
 
         def curriculum_filter_side_effect(*args, **kwargs):
-            if kwargs.get("department_id__in") == [physics_dept.pk]:
+            dept = kwargs.get("department")
+            dept_in = kwargs.get("department_id__in")
+            if (dept and getattr(dept, "pk", None) == physics_dept.pk) or dept_in == [physics_dept.pk]:
                 return _FakeQuerySet([physics_row])
-            if kwargs.get("department_id__in") == [chemistry_dept.pk]:
-                return _FakeQuerySet([])
             return _FakeQuerySet([])
 
         with patch("timetable.views.Section.objects.select_related", return_value=section_chain), patch(
@@ -286,7 +286,6 @@ class CurriculumBySectionViewIntegrationTests(SimpleTestCase):
         self.assertTrue(curriculum_filter.called)
 
 
->>>>>>> 4c2ca77 (naveen6)
 class SectionSubjectsStaffViewIntegrationTests(SimpleTestCase):
     def test_shared_section_returns_multi_faculty_assigned_staff(self):
         section = SimpleNamespace(
