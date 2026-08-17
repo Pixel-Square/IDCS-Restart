@@ -37,6 +37,15 @@ class HasReportingApiKey(BasePermission):
         return can_access_reporting(getattr(request, 'user', None))
 
 
+class CanViewPowerBIDataOrApiKey(BasePermission):
+    message = 'You do not have reporting access.'
+
+    def has_permission(self, request, view):
+        if is_reporting_api_key_auth(request):
+            return True
+        return can_access_reporting(getattr(request, 'user', None))
+
+
 def can_access_course_dashboard(user) -> bool:
     if not user or not getattr(user, 'is_authenticated', False):
         return False

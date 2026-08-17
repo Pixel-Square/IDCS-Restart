@@ -6,10 +6,12 @@ from django.db.utils import ProgrammingError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from .authentication import ReportingApiKeyAuthentication
 from .permissions import (
     CanViewCourseDashboardOrApiKey,
     CanViewPowerBIDataOrApiKey,
+    HasReportingApiKey,
     can_access_reporting,
     is_reporting_api_key_auth,
 )

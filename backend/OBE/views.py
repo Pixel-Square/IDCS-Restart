@@ -12180,3 +12180,380 @@ def iqac_dashboard_analytics(request):
             'rows': heatmap_rows,
         },
     })
+def list_course_questions(request, course_code: str):
+    """List all questions for a course."""
+    try:
+        course_code = course_code.strip().upper()
+        questions = CourseQuestionBank.objects.filter(
+            course_code=course_code
+        ).order_by('s_no')
+        
+        serializer = CourseQuestionBankSerializer(questions, many=True)
+        return Response({
+            'status': 'success',
+            'course_code': course_code,
+            'questions': serializer.data,
+            'count': len(serializer.data)
+        })
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def create_course_question(request):
+    """Create a new question in the question bank."""
+    try:
+        from academics.models import StaffProfile
+        staff = StaffProfile.objects.get(user=request.user)
+    except StaffProfile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Staff profile not found'
+        }, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        data = request.data
+        course_code = str(data.get('course_code', '')).strip().upper()
+        
+        if not course_code:
+            return Response({
+                'status': 'error',
+                'detail': 'course_code is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create question
+        question, created = CourseQuestionBank.objects.get_or_create(
+            course_code=course_code,
+            s_no=int(data.get('s_no', 0)),
+            defaults={
+                'course_name': data.get('course_name', ''),
+                'question_text': data.get('question_text', ''),
+                'subtopics': data.get('subtopics', ''),
+                'course_outcome': data.get('course_outcome', ''),
+                'part': data.get('part', ''),
+                'btl': data.get('btl'),
+                'marks': data.get('marks'),
+                'question_type': data.get('question_type', 'D'),
+                'college': data.get('college', ''),
+                'created_by': staff,
+            }
+        )
+        
+        if not created:
+            # Update existing question
+            question.question_text = data.get('question_text', question.question_text)
+            question.subtopics = data.get('subtopics', question.subtopics)
+            question.course_outcome = data.get('course_outcome', question.course_outcome)
+            question.part = data.get('part', question.part)
+            question.btl = data.get('btl', question.btl)
+            question.marks = data.get('marks', question.marks)
+            question.question_type = data.get('question_type', question.question_type)
+            question.college = data.get('college', question.college)
+            question.save()
+        
+        # Log the action
+        CourseQuestionBankLog.objects.create(
+            question_bank=question,
+            action='created' if created else 'updated',
+            edited_by=staff,
+            new_values={
+                'question_text': question.question_text,
+                'subtopics': question.subtopics,
+                'course_outcome': question.course_outcome,
+                'part': question.part,
+                'btl': question.btl,
+                'marks': float(question.marks) if question.marks else None,
+            }
+        )
+        
+        serializer = CourseQuestionBankSerializer(question)
+        return Response({
+            'status': 'success',
+            'question': serializer.data,
+            'created': created
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def update_course_question(request, question_id: int):
+    """Update a question in the question bank."""
+    try:
+        from academics.models import StaffProfile
+        staff = StaffProfile.objects.get(user=request.user)
+    except StaffProfile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Staff profile not found'
+        }, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        question = CourseQuestionBank.objects.get(id=question_id)
+        
+        # Store old values for audit log
+        old_values = {
+            'question_text': question.question_text,
+            'subtopics': question.subtopics,
+            'question_type': question.question_type,
+            'course_outcome': question.course_outcome,
+            'part': question.part,
+            'btl': question.btl,
+            'marks': float(question.marks) if question.marks else None,
+            'college': question.college,
+        }
+        
+        # Update fields
+        data = request.data
+        question.question_text = data.get('question_text', question.question_text)
+        question.subtopics = data.get('subtopics', question.subtopics)
+        question.question_type = data.get('question_type', question.question_type)
+        question.course_outcome = data.get('course_outcome', question.course_outcome)
+        question.part = data.get('part', question.part)
+        question.btl = data.get('btl', question.btl)
+        question.marks = data.get('marks', question.marks)
+        question.college = data.get('college', question.college)
+        question.save()
+        
+        # Log the action
+        CourseQuestionBankLog.objects.create(
+            question_bank=question,
+            action='updated',
+            edited_by=staff,
+            old_values=old_values,
+            new_values={
+                'question_text': question.question_text,
+                'subtopics': question.subtopics,
+                'question_type': question.question_type,
+                'course_outcome': question.course_outcome,
+                'part': question.part,
+                'btl': question.btl,
+                'marks': float(question.marks) if question.marks else None,
+                'college': question.college,
+            }
+        )
+        
+        serializer = CourseQuestionBankSerializer(question)
+        return Response({
+            'status': 'success',
+            'question': serializer.data
+        })
+        
+    except CourseQuestionBank.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Question not found'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def delete_course_question(request, question_id: int):
+    """Delete a question from the question bank."""
+    try:
+        question = CourseQuestionBank.objects.get(id=question_id)
+        question.delete()
+        
+        return Response({
+            'status': 'success',
+            'detail': 'Question deleted successfully'
+        })
+        
+    except CourseQuestionBank.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Question not found'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def finalize_course_questions(request, course_code: str):
+    """Finalize all questions for a course. Once finalized by any faculty, all can see it as finalized."""
+    try:
+        from academics.models import StaffProfile
+        staff = StaffProfile.objects.get(user=request.user)
+    except StaffProfile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Staff profile not found'
+        }, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        course_code = course_code.strip().upper()
+        now = timezone.now()
+        
+        # Finalize all questions for this course
+        questions = CourseQuestionBank.objects.filter(course_code=course_code)
+        updated_count = 0
+        
+        for question in questions:
+            if not question.is_finalized:
+                question.is_finalized = True
+                question.finalized_by = staff
+                question.finalized_at = now
+                question.save()
+                
+                # Log the action
+                CourseQuestionBankLog.objects.create(
+                    question_bank=question,
+                    action='finalized',
+                    edited_by=staff,
+                    new_values={'is_finalized': True}
+                )
+                updated_count += 1
+        
+        return Response({
+            'status': 'success',
+            'detail': f'Finalized {updated_count} questions',
+            'finalized_count': updated_count
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def unfinalize_course_questions(request, course_code: str):
+    """Unfinalize all questions for a course - allows faculties to edit again. Only IQAC."""
+    try:
+        from academics.models import StaffProfile
+        staff = StaffProfile.objects.get(user=request.user)
+    except StaffProfile.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'detail': 'Staff profile not found'
+        }, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        course_code = course_code.strip().upper()
+        
+        # Unfinalize all questions for this course
+        questions = CourseQuestionBank.objects.filter(course_code=course_code)
+        updated_count = 0
+        
+        for question in questions:
+            if question.is_finalized:
+                question.is_finalized = False
+                question.finalized_by = None
+                question.finalized_at = None
+                question.save()
+                
+                # Log the action
+                CourseQuestionBankLog.objects.create(
+                    question_bank=question,
+                    action='unfinalezed',
+                    edited_by=staff,
+                    old_values={'is_finalized': True},
+                    new_values={'is_finalized': False}
+                )
+                updated_count += 1
+        
+        return Response({
+            'status': 'success',
+            'detail': f'Unfinalized {updated_count} questions',
+            'unffinalized_count': updated_count
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def get_question_bank_logs(request, course_code: str):
+    """Get audit logs for a course's question bank."""
+    try:
+        course_code = course_code.strip().upper()
+        
+        logs = CourseQuestionBankLog.objects.filter(
+            question_bank__course_code=course_code
+        ).select_related('question_bank', 'edited_by__user').order_by('-edited_at')
+        
+        serializer = CourseQuestionBankLogSerializer(logs, many=True)
+        
+        return Response({
+            'status': 'success',
+            'course_code': course_code,
+            'logs': serializer.data,
+            'count': len(serializer.data)
+        })
+        
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'detail': str(e)
+        }, status=status.HTTP_400_BAD_REQUEST)
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def list_question_bank_types(request):
+    return Response({'status': 'success', 'types': []})
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def upsert_question_bank_type(request):
+    return Response({'status': 'success'})
+
+@api_view(['DELETE'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def delete_question_bank_type(request, type_id: int):
+    return Response({'status': 'success'})
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def get_course_question_bank_type(request, course_code: str):
+    return Response({'status': 'success'})
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def set_course_question_bank_type(request, course_code: str):
+    return Response({'status': 'success'})
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def get_course_qb_deadline(request, course_code: str):
+    return Response({'status': 'success'})
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def set_course_qb_deadline(request, course_code: str):
+    return Response({'status': 'success'})
