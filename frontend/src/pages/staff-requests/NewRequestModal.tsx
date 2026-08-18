@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { createRequest, filterTemplatesForDate } from '../../services/staffRequests';
-import type { RequestTemplate, FormField } from '../../types/staffRequests';
+import type { RequestTemplate, FormField, StaffRequest } from '../../types/staffRequests';
 import DynamicFormRenderer from './DynamicFormRenderer';
 
 interface Props {
@@ -22,6 +22,7 @@ interface Props {
     gi_time?: string | null;
     overall_status?: string | null;
   } | null;
+  existingRequests?: StaffRequest[];
 }
 
 export default function NewRequestModal({
@@ -32,6 +33,7 @@ export default function NewRequestModal({
   preselectedTemplateId,
   prefilledFormData,
   attendanceSnapshot,
+  existingRequests = [],
 }: Props) {
   const [templates, setTemplates] = useState<RequestTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<RequestTemplate | null>(null);
@@ -169,6 +171,53 @@ export default function NewRequestModal({
     if (missingFields.length > 0) {
       setError(`Please fill in required fields: ${missingFields.join(', ')}`);
       return;
+    }
+
+    // Duplicate Request Validation
+    const getIsoDate = (v: any) => {
+      if (!v) return null;
+      if (typeof v === 'string') return String(v).slice(0, 10);
+      try {
+        return (new Date(v)).toISOString().slice(0, 10);
+      } catch {
+        return String(v).slice(0, 10);
+      }
+    };
+
+    const newStart = getIsoDate(formData.start_date || formData.from_date || formData.startDate || formData.fromDate || formData.date);
+    const newEnd = getIsoDate(formData.end_date || formData.to_date || formData.endDate || formData.toDate || formData.date) || newStart;
+    const newSession = formData.session || formData.fn_an || formData.fn_or_an;
+
+    if (newStart) {
+      const isDuplicate = existingRequests.some(req => {
+        if (req.template?.id !== selectedTemplate.id) return false;
+        if ((req.status as string) === 'deleted' || (req.status as string) === 'cancelled') return false;
+        
+        const isVacation = (req.template?.name || '').toLowerCase().includes('vacation application');
+        if (isVacation && req.form_data?.vacation_cancelled) return false;
+
+        const reqStart = getIsoDate(req.form_data?.start_date || req.form_data?.from_date || req.form_data?.startDate || req.form_data?.fromDate || req.form_data?.date);
+        const reqEnd = getIsoDate(req.form_data?.end_date || req.form_data?.to_date || req.form_data?.endDate || req.form_data?.toDate || req.form_data?.date) || reqStart;
+        const reqSession = req.form_data?.session || req.form_data?.fn_an || req.form_data?.fn_or_an;
+
+        if (!reqStart) return false;
+
+        // Check date overlap
+        const hasOverlap = newStart <= reqEnd && newEnd >= reqStart;
+        if (!hasOverlap) return false;
+
+        // Check session
+        if (newSession && reqSession && newSession !== reqSession) {
+          return false; // Different sessions (e.g., FN vs AN) -> not a duplicate
+        }
+
+        return true;
+      });
+
+      if (isDuplicate) {
+        setError(`You have already submitted a request for ${selectedTemplate.name} on the selected date(s)${newSession ? ` (${newSession})` : ''}.`);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -319,11 +368,7 @@ export default function NewRequestModal({
                     </button>
                   </div>
 
-                  {error && (
-                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
-                      {error}
-                    </div>
-                  )}
+
 
                   <DynamicFormRenderer
                     fields={selectedTemplate.form_schema}
@@ -430,22 +475,30 @@ export default function NewRequestModal({
 
         {/* Footer */}
         {selectedTemplate && (
-          <div className="border-t border-gray-200 px-6 py-4 flex justify-end gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={submitting}
-              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
-            >
-              {submitting ? 'Submitting...' : 'Submit Request'}
-            </button>
+          <div className="border-t border-gray-200 px-6 py-4 flex flex-col gap-3">
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm flex items-center gap-2">
+                <span className="font-semibold">⚠️</span>
+                <span className="flex-1">{error}</span>
+              </div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={submitting}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={submitting}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                {submitting ? 'Submitting...' : 'Submit Request'}
+              </button>
+            </div>
           </div>
         )}
       </div>

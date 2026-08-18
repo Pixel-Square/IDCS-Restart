@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle, Trash2 } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, Plus, AlertTriangle, Trash2, Search, Filter, Download, RotateCcw } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
 import { getMyRequests, getColClaimableInfo, getActiveTemplates, deleteMyPendingRequest, getVacationDashboard } from '../../services/staffRequests';
@@ -68,6 +68,13 @@ export default function MyCalendarPage() {
   const [prefilledFormData, setPrefilledFormData] = useState<Record<string, any> | undefined>(undefined);
   const [lateEntryTemplateId, setLateEntryTemplateId] = useState<number | null>(null);
   const [mobileWeekIndex, setMobileWeekIndex] = useState(0);
+  const [requestSearchQuery, setRequestSearchQuery] = useState('');
+  const [requestFilterType, setRequestFilterType] = useState('all');
+  const [requestFilterStatus, setRequestFilterStatus] = useState('all');
+  const [requestFilterFromDate, setRequestFilterFromDate] = useState('');
+  const [requestFilterToDate, setRequestFilterToDate] = useState('');
+  const [requestCurrentPage, setRequestCurrentPage] = useState(1);
+  const REQUESTS_PER_PAGE = 5;
   const [vacationDashboard, setVacationDashboard] = useState<any | null>(null);
   const [vacationLoading, setVacationLoading] = useState(false);
   const [selectedVacationSlotIds, setSelectedVacationSlotIds] = useState<number[]>([]);
@@ -1187,16 +1194,221 @@ export default function MyCalendarPage() {
 
         {/* My Requests Section */}
         <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">My Requests</h2>
-
-          {myRequests.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <AlertCircle className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-              <p>No requests submitted yet</p>
+          <div className="flex flex-col gap-4 mb-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <h2 className="text-xl font-bold text-gray-900">My Requests</h2>
+              {/* Download Button */}
+              <div className="flex items-center gap-2">
+                <div className="relative group">
+                  <button
+                    className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download
+                  </button>
+                  <div className="absolute right-0 mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block group-focus-within:block">
+                    <button
+                      onClick={async () => {
+                        const lq = requestSearchQuery.toLowerCase();
+                        const fr = myRequests.filter(req => {
+                          const mT = requestFilterType === 'all' || req.template?.name === requestFilterType;
+                          const mS = requestFilterStatus === 'all' || req.status === requestFilterStatus;
+                          let mSr = true;
+                          if (lq) {
+                            const t = (req.template?.name || '').toLowerCase();
+                            const fd = Object.values(req.form_data || {}).join(' ').toLowerCase();
+                            const d = new Date(req.created_at).toLocaleDateString('en-IN').toLowerCase();
+                            mSr = t.includes(lq) || fd.includes(lq) || d.includes(lq);
+                          }
+                          let mDate = true;
+                          if (requestFilterFromDate || requestFilterToDate) {
+                            const created = req.created_at.slice(0, 10);
+                            if (requestFilterFromDate && created < requestFilterFromDate) mDate = false;
+                            if (requestFilterToDate && created > requestFilterToDate) mDate = false;
+                          }
+                          return mT && mS && mSr && mDate;
+                        });
+                        const XLSX = await import('xlsx');
+                        const headers = ['#', 'Request Type', 'Status', 'Submitted Date', 'Form Data'];
+                        const rows = fr.map((r, i) => [
+                          i + 1,
+                          r.template?.name || '',
+                          r.status,
+                          new Date(r.created_at).toLocaleDateString('en-IN'),
+                          Object.entries(r.form_data || {}).map(([k, v]) => `${k}: ${v}`).join('; ')
+                        ]);
+                        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, 'My Requests');
+                        XLSX.writeFile(wb, 'my_requests.xlsx');
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg"
+                    >
+                      📊 Download as Excel
+                    </button>
+                    <button
+                      onClick={() => {
+                        const lq = requestSearchQuery.toLowerCase();
+                        const fr = myRequests.filter(req => {
+                          const mT = requestFilterType === 'all' || req.template?.name === requestFilterType;
+                          const mS = requestFilterStatus === 'all' || req.status === requestFilterStatus;
+                          let mSr = true;
+                          if (lq) {
+                            const t = (req.template?.name || '').toLowerCase();
+                            const fd = Object.values(req.form_data || {}).join(' ').toLowerCase();
+                            const d = new Date(req.created_at).toLocaleDateString('en-IN').toLowerCase();
+                            mSr = t.includes(lq) || fd.includes(lq) || d.includes(lq);
+                          }
+                          let mDate = true;
+                          if (requestFilterFromDate || requestFilterToDate) {
+                            const created = req.created_at.slice(0, 10);
+                            if (requestFilterFromDate && created < requestFilterFromDate) mDate = false;
+                            if (requestFilterToDate && created > requestFilterToDate) mDate = false;
+                          }
+                          return mT && mS && mSr && mDate;
+                        });
+                        const base = window.location.origin;
+                        const logoLeft = `${base}/logo left indent.png`;
+                        const logoRight = `${base}/logo.png`;
+                        const win = window.open('', '_blank')!;
+                        win.document.write(`<html><head><title>My Requests</title><style>body{font-family:sans-serif;padding:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:8px;text-align:left}th{background:#f3f4f6}.header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e5e7eb;padding-bottom:12px;margin-bottom:16px}.header img{height:60px;object-fit:contain}.report-title{text-align:center;flex:1}</style></head><body>`);
+                        win.document.write(`<div class="header"><img src="${logoLeft}" alt="Logo Left"/><div class="report-title"><h2 style="margin:0;font-size:18px">My Requests Report</h2><p style="margin:4px 0 0;color:#6b7280;font-size:13px">Generated: ${new Date().toLocaleString('en-IN')}</p></div><img src="${logoRight}" alt="Logo Right"/></div>`);
+                        win.document.write(`<table><thead><tr><th>#</th><th>Request Type</th><th>Status</th><th>Submitted Date</th><th>Form Data</th></tr></thead><tbody>`);
+                        fr.forEach((r, i) => {
+                          const fd = Object.entries(r.form_data || {}).map(([k, v]) => `${k}: ${v}`).join('<br/>');
+                          const statusColor = r.status === 'approved' ? '#16a34a' : r.status === 'rejected' ? '#dc2626' : '#d97706';
+                          win.document.write(`<tr><td>${i+1}</td><td>${r.template?.name||''}</td><td style="color:${statusColor};font-weight:600">${r.status}</td><td>${new Date(r.created_at).toLocaleDateString('en-IN')}</td><td>${fd}</td></tr>`);
+                        });
+                        win.document.write(`</tbody></table></body></html>`);
+                        win.document.close();
+                        win.print();
+                      }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg"
+                    >
+                      🖨️ Download as PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {myRequests.map(request => (
+
+            {/* Filter Row */}
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="relative w-full sm:w-56">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-4 w-4 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Search requests..."
+                  value={requestSearchQuery}
+                  onChange={(e) => { setRequestSearchQuery(e.target.value); setRequestCurrentPage(1); }}
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              <select
+                value={requestFilterType}
+                onChange={(e) => { setRequestFilterType(e.target.value); setRequestCurrentPage(1); }}
+                className="border border-gray-300 rounded-lg text-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Types</option>
+                {Array.from(new Set(myRequests.map(r => r.template?.name).filter(Boolean))).map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
+              
+              <select
+                value={requestFilterStatus}
+                onChange={(e) => { setRequestFilterStatus(e.target.value); setRequestCurrentPage(1); }}
+                className="border border-gray-300 rounded-lg text-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Statuses</option>
+                <option value="pending">Pending</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 whitespace-nowrap">From:</label>
+                <input
+                  type="date"
+                  value={requestFilterFromDate}
+                  onChange={(e) => { setRequestFilterFromDate(e.target.value); setRequestCurrentPage(1); }}
+                  className="border border-gray-300 rounded-lg text-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 whitespace-nowrap">To:</label>
+                <input
+                  type="date"
+                  value={requestFilterToDate}
+                  min={requestFilterFromDate || undefined}
+                  onChange={(e) => { setRequestFilterToDate(e.target.value); setRequestCurrentPage(1); }}
+                  className="border border-gray-300 rounded-lg text-sm py-2 px-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+
+              {(requestSearchQuery || requestFilterType !== 'all' || requestFilterStatus !== 'all' || requestFilterFromDate || requestFilterToDate) && (
+                <button
+                  onClick={() => {
+                    setRequestSearchQuery('');
+                    setRequestFilterType('all');
+                    setRequestFilterStatus('all');
+                    setRequestFilterFromDate('');
+                    setRequestFilterToDate('');
+                    setRequestCurrentPage(1);
+                  }}
+                  className="flex items-center gap-1 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          {(() => {
+            const lowerQuery = requestSearchQuery.toLowerCase();
+            const filteredRequests = myRequests.filter(req => {
+              const matchesType = requestFilterType === 'all' || req.template?.name === requestFilterType;
+              const matchesStatus = requestFilterStatus === 'all' || req.status === requestFilterStatus;
+              
+              let matchesSearch = true;
+              if (lowerQuery) {
+                const typeName = (req.template?.name || '').toLowerCase();
+                const formDataStr = Object.values(req.form_data || {}).join(' ').toLowerCase();
+                const dateStr = new Date(req.created_at).toLocaleDateString('en-IN').toLowerCase();
+                matchesSearch = typeName.includes(lowerQuery) || formDataStr.includes(lowerQuery) || dateStr.includes(lowerQuery);
+              }
+
+              let matchesDate = true;
+              if (requestFilterFromDate || requestFilterToDate) {
+                const created = req.created_at.slice(0, 10);
+                if (requestFilterFromDate && created < requestFilterFromDate) matchesDate = false;
+                if (requestFilterToDate && created > requestFilterToDate) matchesDate = false;
+              }
+              
+              return matchesType && matchesStatus && matchesSearch && matchesDate;
+            });
+            
+            const totalPages = Math.ceil(filteredRequests.length / REQUESTS_PER_PAGE) || 1;
+            const paginatedRequests = filteredRequests.slice((requestCurrentPage - 1) * REQUESTS_PER_PAGE, requestCurrentPage * REQUESTS_PER_PAGE);
+
+            if (filteredRequests.length === 0) {
+              return (
+                <div className="text-center py-8 text-gray-500">
+                  <AlertCircle className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                  <p>No requests found</p>
+                </div>
+              );
+            }
+
+            return (
+              <>
+                <div className="space-y-4">
+                  {paginatedRequests.map(request => (
                 <div key={request.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-2">
                     <div>
@@ -1298,7 +1510,36 @@ export default function MyCalendarPage() {
                 </div>
               ))}
             </div>
-          )}
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-6 bg-gray-50 px-4 py-3 border border-gray-200 rounded-lg">
+                <div className="text-sm text-gray-700">
+                  Showing <span className="font-medium">{(requestCurrentPage - 1) * REQUESTS_PER_PAGE + 1}</span> to <span className="font-medium">{Math.min(requestCurrentPage * REQUESTS_PER_PAGE, filteredRequests.length)}</span> of <span className="font-medium">{filteredRequests.length}</span> requests
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setRequestCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={requestCurrentPage === 1}
+                    className="p-1.5 rounded-md border text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    Page {requestCurrentPage} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setRequestCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={requestCurrentPage === totalPages}
+                    className="p-1.5 rounded-md border text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
         </div>
 
         {/* New Request Modal */}
@@ -1308,6 +1549,7 @@ export default function MyCalendarPage() {
             preselectedTemplateId={preselectedTemplateId}
             prefilledFormData={prefilledFormData}
             attendanceSnapshot={selectedDateAttendanceSnapshot}
+            existingRequests={myRequests}
             onClose={() => {
               setShowNewRequestModal(false);
               setPreselectedTemplateId(null);

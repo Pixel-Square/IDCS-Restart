@@ -5044,12 +5044,17 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
                         break
             
             # attach small request summary
+            applicant_department = ''
+            if staff_profile and staff_profile.department:
+                applicant_department = staff_profile.department.name or staff_profile.department.short_name or ''
+
             item['request_summary'] = {
                 'id': log.request.id,
                 'template_name': getattr(log.request.template, 'name', None),
                 'applicant_name': getattr(log.request.applicant, 'get_full_name', lambda: None)() or getattr(log.request.applicant, 'username', None),
                 'applicant_username': getattr(log.request.applicant, 'username', None),
                 'applicant_staff_id': applicant_staff_id,
+                'applicant_department': applicant_department,
                 'form_reason': form_reason or '—',
                 'status': log.request.status,
             }
