@@ -44,6 +44,8 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   academic_calendar: Calendar,
   pbas: ClipboardList,
   pbas_manager: Layout,
+  pbas_admin: ClipboardList,
+  pbas_submission: ClipboardList,
   settings: Settings,
   hr_request_templates: FileText,
   hr_manage_gate: Shield,
@@ -465,8 +467,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   }
 
 
-  // PBAS submission for staff
-  if (flags.is_staff) {
+  // PBAS submission for staff — show only for STAFF role
+  if (flags.is_staff && rolesUpper.includes('STAFF')) {
+    if (!items.some((item) => item.key === 'pbas_submission')) {
+      items.push({ key: 'pbas_submission', label: 'PBAS Submission', to: '/pbas/staff' });
+    }
   }
 
   // My Calendar for staff (combined attendance + requests)
@@ -566,6 +571,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     Boolean(applicationsNav?.show_applications) &&
     ((applicationsNav?.staff_roles?.length || 0) > 0 || (applicationsNav?.override_roles?.length || 0) > 0) &&
     !flags.is_student;
+  // PBAS Admin: visible only to PBAS_ADMIN role
+  if (rolesUpper.includes('PBAS_ADMIN') && !items.some((item) => item.key === 'pbas_admin')) {
+    items.push({ key: 'pbas_admin', label: 'PBAS Admin', to: '/pbas/admin' });
+  }
+
   if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
     items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
   }

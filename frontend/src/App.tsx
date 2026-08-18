@@ -68,6 +68,7 @@ import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import PBASAdminPage from './pages/pbas/admin/PBASAdminPage';
 import { StaffAttendanceUpload } from './pages/PS';
 import { MyAttendance } from './pages/staff';
 import HODStaffAttendancePage from './pages/hod/StaffAttendance';
@@ -1313,6 +1314,10 @@ export default function App() {
                 />
 
                 {/* ────────────────────────────────────────────────────────────── */}
+
+                {/* PBAS staff and admin routes */}
+                <Route path="/pbas/staff" element={<ProtectedRoute user={user} requiredRoles={["STAFF"]} element={<PBASSubmissionPage />} />} />
+                <Route path="/pbas/admin" element={<ProtectedRoute user={user} requiredRoles={["PBAS_ADMIN"]} element={<PBASAdminPage />} />} />
 
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}

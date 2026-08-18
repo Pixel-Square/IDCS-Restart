@@ -933,6 +933,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             <tr>
               <th className="px-4 py-3">Subject Code</th>
               <th className="px-4 py-3">Subject Name</th>
+              <th className="px-4 py-3">Credits (C)</th>
               <th className="px-4 py-3 min-w-[250px]">Assigned Faculty</th>
             </tr>
           </thead>
@@ -1038,6 +1039,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                 || '-';
               const fallbackClass = sub.class_type || sub.class || sub.cat || aggregatedRow?.class_type || aggregatedRow?.class || aggregatedRow?.cat || '-';
               const fallbackName = sub.course_name || sub.name || aggregatedRow?.course_name || '-';
+              const fallbackCredits = (sub.c !== undefined && sub.c !== null) ? sub.c : ((sub.credits !== undefined && sub.credits !== null) ? sub.credits : (aggregatedRow?.c ?? aggregatedRow?.credits ?? '-'));
               
               // Detect if this subject is offered in mixed sections
               const homeDeptCodes = sub.home_dept_codes || [];
@@ -1091,6 +1093,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                         )}
                       </div>
                     </td>
+                    <td className="px-4 py-3 font-bold text-emerald-800">{fallbackCredits}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-4 w-full">
                         <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
@@ -1172,6 +1175,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                           )}
                         </div>
                       </td>
+                      <td className="px-4 py-3 font-bold text-emerald-800">{fallbackCredits}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-start gap-4 w-full">
                           <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">

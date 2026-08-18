@@ -120,15 +120,11 @@ const getSubjectLabel = (row: any) => {
   return code || name || 'Unnamed Subject';
 };
 
-const buildCellText = (row: any, slotKind: 'theory' | 'lab', label: string) => {
+const buildCellText = (row: any, _slotKind: 'theory' | 'lab', _label: string) => {
   const subject = getSubjectLabel(row);
-  if (slotKind === 'lab') {
-    const tag = normalizeClassType(row?.class_type, row) === 'TCPL' || normalizeClassType(row?.class_type, row) === 'TCPR'
-      ? `${subject} ${label}`
-      : subject;
-    return label ? `${tag}` : tag;
-  }
-  return `${subject}${label ? ` (${label})` : ''}`;
+  const credits = Number(row?.c ?? row?.credits ?? 0);
+  const creditText = credits > 0 ? ` (${credits} ${credits === 1 ? 'Credit' : 'Credits'})` : '';
+  return `${subject}${creditText}`;
 };
 
 const buildFacultyText = (row: any) => getFacultyNames(row).join(' / ');
@@ -355,42 +351,41 @@ const shuffleWithRng = <T,>(items: T[], rng: () => number) => {
   return result;
 };
 
-const getRequiredSlotPlan = (row: any) => {
-  const classType = normalizeClassType(row?.class_type, row);
+import CreditBasedAllocationModal, { CreditAllocationMap } from './CreditBasedAllocationModal';
+
+const getRequiredSlotPlan = (row: any, creditAllocations?: Record<number, number>) => {
   const credits = Number(row?.c ?? row?.credits ?? 0) || 0;
   
-  // Weekly hours components
+  // 1. Check if credit-based period allocation override exists for this Credit rating (C)
+  if (credits > 0 && creditAllocations && creditAllocations[credits] !== undefined) {
+    const configuredSlots = Math.max(1, Number(creditAllocations[credits]));
+    return Array.from({ length: configuredSlots }, (_, index) => ({
+      kind: 'theory' as const,
+      label: `Period ${index + 1}`
+    }));
+  }
+
+  // 2. Default to credit count (C) if > 0
+  if (credits > 0) {
+    return Array.from({ length: credits }, (_, index) => ({
+      kind: 'theory' as const,
+      label: `Period ${index + 1}`
+    }));
+  }
+
+  // 3. Fallback for 0-credit subjects: use (L + T + P + S) or total hours or 1 period
   const l = Number(row?.l ?? 0);
   const t = Number(row?.t ?? 0);
   const p = Number(row?.p ?? 0);
   const s = Number(row?.s ?? 0);
-  
-  // Detect if effective_class_hours or total_hours is semester total (> 10) or weekly (<= 10)
   const rawHours = Number(row?.effective_class_hours ?? row?.total_hours ?? 0);
-  const weeklyHoursFallback = (rawHours > 0 && rawHours <= 10) ? rawHours : 0;
+  const weeklyHours = (l + t + p + s) || ((rawHours > 0 && rawHours <= 10) ? rawHours : 0) || 1;
+  const periodCount = Math.max(1, Math.ceil(weeklyHours));
 
-  if (classType === 'TCPL' || classType === 'TCPR') {
-    // For hybrid lab subjects, schedule only explicit lecture/tutorial hours separately.
-    const subjectLabel = getSubjectLabel(row).toUpperCase();
-    if (subjectLabel.includes('LAB')) {
-      return [];
-    }
-    const hybridTheoryHours = l + t;
-    if (hybridTheoryHours <= 0) {
-      return [];
-    }
-    const theorySlots = Math.max(1, Math.ceil(hybridTheoryHours));
-    return Array.from({ length: theorySlots }, (_, index) => ({ kind: 'theory' as const, label: `Theory ${index + 1}` }));
-  }
-
-  if (classType === 'LAB' || classType === 'PRACTICAL' || classType === 'PURE_LAB') {
-    // Pure lab subjects are paired and rendered in a single lab slot; do not reserve separate lab slots here.
-    return [];
-  }
-
-  const baseTheoryHours = (l + t) || weeklyHoursFallback || credits || 1;
-  const theorySlots = Math.max(1, Math.ceil(baseTheoryHours + 1));
-  return Array.from({ length: theorySlots }, (_, index) => ({ kind: 'theory' as const, label: `Theory ${index + 1}` }));
+  return Array.from({ length: periodCount }, (_, index) => ({
+    kind: 'theory' as const,
+    label: `Period ${index + 1}`
+  }));
 };
 
 const getTemplateSlots = (template: SemesterTemplate) => {
@@ -463,7 +458,8 @@ const buildGeneratedSection = (
   globalFacultyUsage: Record<string, Set<string>>,
   generationSeed: number,
   sectionIndex: number,
-  groupAllocations: GroupAllocation[] = []
+  groupAllocations: GroupAllocation[] = [],
+  creditAllocations: Record<number, number> = {}
 ): GeneratedSectionTimetable => {
   const cells: Record<string, GeneratedCell> = {};
   const warnings: string[] = [];
@@ -535,43 +531,28 @@ const buildGeneratedSection = (
     return !isExcepted;
   });
 
-  const allSubjects = filteredSubjects;
-  const pureLabSubjects = consolidatePureLabSubjects(allSubjects.filter(isPureLabSubject));
-  const hybridLabSubjects = allSubjects.filter(isHybridLabSubject);
-  const theoryOnlySubjects = allSubjects.filter((row) => !isPureLabSubject(row) && !isHybridLabSubject(row));
-
-  const typePriority = (row: any) => {
-    const type = normalizeClassType(row?.class_type, row);
-    if (row?.is_dept_core) return 0;
-    if (type === 'TCPL' || type === 'TCPR') return 1;
-    if (type === 'LAB' || type === 'PRACTICAL' || type === 'PURE_LAB') return 2;
-    return 3;
-  };
-
+  // Schedule ALL subjects based strictly on Credit-Based Allocation
   const randomTieBreaker = new Map<any, number>();
-  [...theoryOnlySubjects, ...hybridLabSubjects].forEach((row) => {
+  filteredSubjects.forEach((row) => {
     randomTieBreaker.set(row, rng());
   });
 
-  const theorySubjects = [...theoryOnlySubjects, ...hybridLabSubjects].sort((a, b) => {
-    const priorityDiff = typePriority(a) - typePriority(b);
-    if (priorityDiff !== 0) return priorityDiff;
+  const sortedSubjects = [...filteredSubjects].sort((a, b) => {
+    const aCore = a?.is_dept_core ? 0 : 1;
+    const bCore = b?.is_dept_core ? 0 : 1;
+    if (aCore !== bCore) return aCore - bCore;
     return (randomTieBreaker.get(a) || 0) - (randomTieBreaker.get(b) || 0);
   });
 
-  const labPairs = shuffleWithRng(buildLabPairs([...pureLabSubjects, ...hybridLabSubjects]), rng);
-
-  const subjectDayUsage: Record<string, { theory: Set<string>; lab: Set<string> }> = {};
-  const labSubjectDayUsage: Record<string, Set<string>> = {};
+  const subjectDayUsage: Record<string, Set<string>> = {};
   const getSubjectKey = (subject: any) => getSubjectCode(subject) || getSubjectName(subject) || getSubjectLabel(subject);
-  const labBlocks = getTemplateLabBlocks(template);
 
-  const reserveSlot = (facultyIds: string[], subjectKey: string, slotKind: 'theory' | 'lab') => {
+  const reserveSlot = (facultyIds: string[], subjectKey: string) => {
     const slotOrder = shuffleWithRng(slots, rng);
 
     const canUseSlot = (slot: { key: string; day: string }) => {
       if (occupied.has(slot.key)) return false;
-      if (subjectDayUsage[subjectKey]?.[slotKind]?.has(slot.day)) return false;
+      if (subjectDayUsage[subjectKey]?.has(slot.day)) return false;
       const facultyConflict = facultyIds.some((facultyId) => {
         if (!facultyId) return false;
         return globalFacultyUsage[facultyId]?.has(slot.key) || false;
@@ -590,18 +571,15 @@ const buildGeneratedSection = (
         globalFacultyUsage[facultyId].add(slot.key);
       });
       if (!subjectDayUsage[subjectKey]) {
-        subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+        subjectDayUsage[subjectKey] = new Set();
       }
-      subjectDayUsage[subjectKey][slotKind].add(slot.day);
+      subjectDayUsage[subjectKey].add(slot.day);
       return { slot, conflict: false };
     }
 
+    // Fallback if no slot on un-used day
     for (const slot of slotOrder) {
       if (occupied.has(slot.key)) continue;
-      const facultyConflict = facultyIds.some((facultyId) => {
-        if (!facultyId) return false;
-        return globalFacultyUsage[facultyId]?.has(slot.key) || false;
-      });
       occupied.add(slot.key);
       facultyIds.forEach((facultyId) => {
         if (!facultyId) return;
@@ -611,83 +589,16 @@ const buildGeneratedSection = (
         globalFacultyUsage[facultyId].add(slot.key);
       });
       if (!subjectDayUsage[subjectKey]) {
-        subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
+        subjectDayUsage[subjectKey] = new Set();
       }
-      subjectDayUsage[subjectKey][slotKind].add(slot.day);
+      subjectDayUsage[subjectKey].add(slot.day);
       return { slot, conflict: true };
     }
 
     return null;
   };
 
-  const reserveLabBlock = (facultyIds: string[], subjectKeys: string[]) => {
-    const blockOrder = shuffleWithRng(labBlocks, rng);
-
-    const canUseBlock = (block: typeof labBlocks[number]) => {
-      if (block.keys.some((key) => occupied.has(key))) return false;
-      if (subjectKeys.some((subjectKey) => labSubjectDayUsage[subjectKey]?.has(block.day))) return false;
-      if (subjectKeys.some((subjectKey) => subjectDayUsage[subjectKey]?.theory?.has(block.day))) return false;
-      const facultyConflict = facultyIds.some((facultyId) => {
-        if (!facultyId) return false;
-        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
-      });
-      return !facultyConflict;
-    };
-
-    for (const block of blockOrder) {
-      if (!canUseBlock(block)) continue;
-      block.keys.forEach((key) => occupied.add(key));
-      facultyIds.forEach((facultyId) => {
-        if (!facultyId) return;
-        if (!globalFacultyUsage[facultyId]) {
-          globalFacultyUsage[facultyId] = new Set();
-        }
-        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
-      });
-      subjectKeys.forEach((subjectKey) => {
-        if (!subjectDayUsage[subjectKey]) {
-          subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
-        }
-        if (!labSubjectDayUsage[subjectKey]) {
-          labSubjectDayUsage[subjectKey] = new Set();
-        }
-        subjectDayUsage[subjectKey].lab.add(block.day);
-        labSubjectDayUsage[subjectKey].add(block.day);
-      });
-      return { block, conflict: false };
-    }
-
-    for (const block of blockOrder) {
-      if (block.keys.some((key) => occupied.has(key))) continue;
-      const facultyConflict = facultyIds.some((facultyId) => {
-        if (!facultyId) return false;
-        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
-      });
-      block.keys.forEach((key) => occupied.add(key));
-      facultyIds.forEach((facultyId) => {
-        if (!facultyId) return;
-        if (!globalFacultyUsage[facultyId]) {
-          globalFacultyUsage[facultyId] = new Set();
-        }
-        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
-      });
-      subjectKeys.forEach((subjectKey) => {
-        if (!subjectDayUsage[subjectKey]) {
-          subjectDayUsage[subjectKey] = { theory: new Set(), lab: new Set() };
-        }
-        if (!labSubjectDayUsage[subjectKey]) {
-          labSubjectDayUsage[subjectKey] = new Set();
-        }
-        subjectDayUsage[subjectKey].lab.add(block.day);
-        labSubjectDayUsage[subjectKey].add(block.day);
-      });
-      return { block, conflict: facultyConflict };
-    }
-
-    return null;
-  };
-
-  for (const subject of theorySubjects) {
+  for (const subject of sortedSubjects) {
     const facultyNames = getFacultyNames(subject);
     const facultyIds = Array.isArray(subject?.assigned_staff)
       ? subject.assigned_staff.map((staff: any) => getFacultyKey(staff)).filter(Boolean)
@@ -698,10 +609,10 @@ const buildGeneratedSection = (
     }
 
     const subjectKey = getSubjectKey(subject);
-    const slotPlan = getRequiredSlotPlan(subject).filter((entry) => entry.kind === 'theory');
+    const slotPlan = getRequiredSlotPlan(subject, creditAllocations);
 
     for (const entry of slotPlan) {
-      const reserveResult = reserveSlot(facultyIds, subjectKey, entry.kind);
+      const reserveResult = reserveSlot(facultyIds, subjectKey);
       if (!reserveResult) {
         warnings.push(`No unoccupied slot available in the template for ${getSubjectLabel(subject)} (${entry.label}).`);
         continue;
@@ -712,49 +623,15 @@ const buildGeneratedSection = (
         warnings.push(`⚠️ Faculty conflict for ${getSubjectLabel(subject)} (${entry.label}) at ${slot.day} ${slot.period}. Faculty may be double-booked.`);
       }
 
+      const credits = Number(subject?.c ?? subject?.credits ?? 0);
+
       cells[slot.key] = {
         subject: buildCellText(subject, entry.kind, entry.label),
         faculty: buildFacultyText(subject),
-        kind: entry.kind,
-        note: (conflict ? '⚠️ Conflict! ' : '') + 
-          (normalizeClassType(subject?.class_type, subject) === 'TCPL' || normalizeClassType(subject?.class_type, subject) === 'TCPR'
-            ? 'Theory slot (hybrid lab subject)'
-            : 'Theory slot'),
+        kind: 'theory',
+        note: (conflict ? '⚠️ Conflict! ' : '') + `Credit (${credits}C) Allocation`,
       };
     }
-  }
-
-  for (const pair of labPairs) {
-    const pairFacultyIds = Array.from(new Set(pair.flatMap((subject) =>
-      Array.isArray(subject?.assigned_staff)
-        ? subject.assigned_staff.map((staff: any) => getFacultyKey(staff)).filter(Boolean)
-        : []
-    )));
-
-    if (pairFacultyIds.length === 0) {
-      continue;
-    }
-
-    const pairSubjectKeys = pair.map((subject) => getLabSubjectKey(subject));
-    const reserveResult = reserveLabBlock(pairFacultyIds, pairSubjectKeys);
-    if (!reserveResult) {
-      warnings.push(`No unoccupied consecutive lab block available for paired lab ${buildPairedLabText(pair)}.`);
-      continue;
-    }
-
-    const { block, conflict } = reserveResult;
-    if (conflict) {
-      warnings.push(`⚠️ Faculty conflict for paired lab ${buildPairedLabText(pair)} in block on ${block.day}. Faculty may be double-booked.`);
-    }
-
-    block.slots.forEach((slot) => {
-      cells[slot.key] = {
-        subject: buildPairedLabText(pair),
-        faculty: buildPairedLabFacultyText(pair),
-        kind: 'lab',
-        note: (conflict ? '⚠️ Conflict! ' : '') + 'Paired lab slot',
-      };
-    });
   }
 
   return {
@@ -832,6 +709,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
   const [facultyOptions, setFacultyOptions] = useState<{label: string, value: string}[]>([]);
   const [showTeachingAssign, setShowTeachingAssign] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
+  const [showCreditModal, setShowCreditModal] = useState(false);
   const [sectionSnapshots, setSectionSnapshots] = useState<Record<string, SectionSnapshot>>({});
   const [generatedSections, setGeneratedSections] = useState<GeneratedSectionTimetable[]>([]);
   
@@ -1126,7 +1004,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
         const globalFacultyUsage: Record<string, Set<string>> = {};
         const generationSeed = Date.now();
 
-        // Load saved Group Allocations
+        // Load saved Group Allocations and Credit Allocations
         let groupAllocations: GroupAllocation[] = [];
         try {
           const storedAllocations = localStorage.getItem('iqac_timetable_group_allocations');
@@ -1138,8 +1016,19 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           console.error('Failed to load group allocations during generation:', e);
         }
 
+        let creditAllocations: Record<number, number> = {};
+        try {
+          const storedCredits = localStorage.getItem('iqac_timetable_credit_allocations');
+          if (storedCredits) {
+            const parsed = JSON.parse(storedCredits);
+            if (typeof parsed === 'object' && parsed !== null) creditAllocations = parsed;
+          }
+        } catch (e) {
+          console.error('Failed to load credit allocations during generation:', e);
+        }
+
         const results = workingSnapshots.map((snapshot, index) =>
-          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed, index, groupAllocations)
+          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed, index, groupAllocations, creditAllocations)
         );
 
         setGeneratedSections(results);
@@ -1194,7 +1083,19 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
             Back to Templates
           </button>
           
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <button 
+              onClick={() => setShowGroupModal(true)}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
+            >
+              🏢 Group Allocation
+            </button>
+            <button 
+              onClick={() => setShowCreditModal(true)}
+              className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
+            >
+              🎯 Credit Allocations
+            </button>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(JSON.stringify(selectedTemplate, null, 2));
@@ -1211,7 +1112,7 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                 setShowTeachingAssign(false);
                 setIsGenerating(true);
               }}
-              className="flex items-center gap-2 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-bold text-sm shadow-sm"
+              className="flex items-center gap-2 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-bold text-sm shadow-xs"
             >
               🎯 Generate Timetable
             </button>
@@ -1275,6 +1176,13 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                 className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
               >
                 🏢 Group Allocation
+              </button>
+
+              <button 
+                onClick={() => setShowCreditModal(true)}
+                className="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
+              >
+                🎯 Credit Allocations
               </button>
 
               {showTeachingAssign && (
@@ -1545,43 +1453,64 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           isOpen={showGroupModal}
           onClose={() => setShowGroupModal(false)}
         />
+        <CreditBasedAllocationModal
+          isOpen={showCreditModal}
+          onClose={() => setShowCreditModal(false)}
+        />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-4">
-        <button
-          onClick={() => setFilterType('all')}
-          className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-            filterType === 'all'
-              ? 'bg-blue-600 text-white shadow-lg'
-              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          All Templates
-        </button>
-        <button
-          onClick={() => setFilterType('odd')}
-          className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-            filterType === 'odd'
-              ? 'bg-purple-600 text-white shadow-lg'
-              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          Odd Semester ({oddTemplates.length})
-        </button>
-        <button
-          onClick={() => setFilterType('even')}
-          className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
-            filterType === 'even'
-              ? 'bg-orange-600 text-white shadow-lg'
-              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          Even Semester ({evenTemplates.length})
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex gap-4 flex-wrap">
+          <button
+            onClick={() => setFilterType('all')}
+            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+              filterType === 'all'
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            All Templates
+          </button>
+          <button
+            onClick={() => setFilterType('odd')}
+            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+              filterType === 'odd'
+                ? 'bg-purple-600 text-white shadow-lg'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Odd Semester ({oddTemplates.length})
+          </button>
+          <button
+            onClick={() => setFilterType('even')}
+            className={`px-6 py-2 rounded-lg font-semibold transition-colors ${
+              filterType === 'even'
+                ? 'bg-orange-600 text-white shadow-lg'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Even Semester ({evenTemplates.length})
+          </button>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button 
+            onClick={() => setShowGroupModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+          >
+            🏢 Group Allocation
+          </button>
+          <button 
+            onClick={() => setShowCreditModal(true)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+          >
+            🎯 Credit Allocations
+          </button>
+        </div>
       </div>
 
       {filteredTemplates.length === 0 ? (
@@ -1660,6 +1589,16 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           ))}
         </div>
       )}
+
+      <GroupAllocationModal
+        isOpen={showGroupModal}
+        onClose={() => setShowGroupModal(false)}
+      />
+
+      <CreditBasedAllocationModal
+        isOpen={showCreditModal}
+        onClose={() => setShowCreditModal(false)}
+      />
     </div>
   );
 }
