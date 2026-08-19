@@ -10,11 +10,15 @@ from rest_framework.generics import CreateAPIView, ListAPIView
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 
+from django.contrib.auth import get_user_model
+from accounts.models import Role
 from academics.models import Department as AcademicDepartment
-from academics.models import StaffProfile, StudentMentorMap
+from academics.models import StaffProfile, StudentProfile, StudentMentorMap
 from college.models import College
 
-from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket
+User = get_user_model()
+
+from .models import PBASCustomDepartment, PBASNode, PBASSubmission, PBASVerificationTicket, PBASNodeApproverHistory
 from .permissions import IsIQACManager, IsAuthenticatedSubmitter
 from .serializers import (
     CollegeSerializer,
@@ -292,7 +296,7 @@ def _is_iqac_manager(user) -> bool:
         if getattr(user, 'is_superuser', False):
             return True
         # Be case-insensitive to match permissions.IsIQACManager behavior
-        for n in ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS']:
+        for n in ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS', 'PBAS_ADMIN', 'PBAS_MANAGER', 'PBASADMIN']:
             if user.roles.filter(name__iexact=n).exists():
                 return True
         return False
@@ -305,8 +309,8 @@ def _filter_departments_for_user(qs, user, viewer: str):
     if _is_iqac_manager(user):
         return qs
 
-    # Submission users should only see departments explicitly saved/configured.
-    return qs.filter(show_in_submission=True)
+    # Submission users should see departments explicitly saved/configured or having nodes.
+    return qs.filter(Q(show_in_submission=True) | Q(nodes__isnull=False)).distinct()
 
 
 def _dept_title_from_academics(dept: AcademicDepartment) -> str:
@@ -391,17 +395,24 @@ class PBASCustomDepartmentViewSet(viewsets.ModelViewSet):
         serializer.save(show_in_submission=True)
 
 
+def _get_or_create_master_dept() -> PBASCustomDepartment:
+    dept = PBASCustomDepartment.objects.filter(title='PBAS Master Tree').first()
+    if not dept:
+        dept = PBASCustomDepartment.objects.create(title='PBAS Master Tree', show_in_submission=True)
+    elif not dept.show_in_submission:
+        dept.show_in_submission = True
+        dept.save(update_fields=['show_in_submission'])
+    return dept
+
+
 class PBASCustomDepartmentTreeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, dept_id):
-        dept = PBASCustomDepartment.objects.filter(pk=dept_id).first()
-        if not dept:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        # Only IQAC managers can see full tree; others must use /nodes/
-        if not _is_iqac_manager(request.user):
-            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+        if str(dept_id).lower() in ('master', 'default'):
+            dept = _get_or_create_master_dept()
+        else:
+            dept = PBASCustomDepartment.objects.filter(pk=dept_id).first() or _get_or_create_master_dept()
 
         roots = PBASNode.objects.filter(department=dept, parent__isnull=True).order_by('position', 'created_at')
         data = {
@@ -415,9 +426,10 @@ class PBASCustomDepartmentTreeView(APIView):
         if not _is_iqac_manager(request.user):
             return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
 
-        dept = PBASCustomDepartment.objects.filter(pk=dept_id).first()
-        if not dept:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if str(dept_id).lower() in ('master', 'default'):
+            dept = _get_or_create_master_dept()
+        else:
+            dept = PBASCustomDepartment.objects.filter(pk=dept_id).first() or _get_or_create_master_dept()
 
         payload = request.data
         nodes_payload = payload.get('nodes') if isinstance(payload, dict) else payload
@@ -439,6 +451,7 @@ class PBASCustomDepartmentTreeView(APIView):
                     link=raw.get('link') or None,
                     uploaded_name=raw.get('uploaded_name') or None,
                     limit=raw.get('limit') if raw.get('limit') not in ('', None) else None,
+                    pbas_credit=raw.get('pbas_credit') if raw.get('pbas_credit') not in ('', None) else None,
                     college_required=bool(raw.get('college_required') or False),
                     position=int(raw.get('position') if raw.get('position') not in (None, '') else idx),
                 )
@@ -460,9 +473,10 @@ class PBASCustomDepartmentNodesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, dept_id):
-        dept = PBASCustomDepartment.objects.filter(pk=dept_id).first()
-        if not dept:
-            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if str(dept_id).lower() in ('master', 'default'):
+            dept = _get_or_create_master_dept()
+        else:
+            dept = PBASCustomDepartment.objects.filter(pk=dept_id).first() or _get_or_create_master_dept()
 
         try:
             viewer = _viewer_or_403(request, request.query_params.get('viewer'))
@@ -542,4 +556,288 @@ class PBASSubmissionMineView(ListAPIView):
 
     def get_queryset(self):
         return PBASSubmission.objects.filter(user=self.request.user).select_related('node', 'college').order_by('-created_at')
+
+
+class PBASStaffListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        search = (request.query_params.get('search') or '').strip()
+        dept_id = request.query_params.get('department')
+
+        qs = StaffProfile.objects.select_related('user', 'department')
+        if dept_id:
+            qs = qs.filter(department_id=dept_id)
+        if search:
+            qs = qs.filter(
+                Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(staff_id__icontains=search)
+            )
+
+        items = []
+        for sp in qs[:100]:
+            u = sp.user
+            full_name = u.get_full_name().strip() or u.username
+            dept_name = sp.department.name if sp.department else 'N/A'
+            img_url = sp.profile_image.url if sp.profile_image else None
+            items.append({
+                'user_id': u.id,
+                'name': full_name,
+                'username': u.username,
+                'staff_id': sp.staff_id,
+                'department_name': dept_name,
+                'profile_image': img_url,
+            })
+        return Response({'staff': items})
+
+
+class PBASNodeApproversView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, node_id):
+        node = PBASNode.objects.filter(pk=node_id).first()
+        if not node:
+            return Response({'detail': 'Node not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        approvers = [
+            {
+                'id': u.id,
+                'name': u.get_full_name() or u.username,
+                'username': u.username,
+            }
+            for u in node.approvers.all()
+        ]
+
+        # Return recent approver history as audit trail
+        history_qs = node.approver_history.select_related('user', 'changed_by').all()[:200]
+        history = []
+        for h in history_qs:
+            history.append(
+                {
+                    'id': h.id,
+                    'user_id': h.user.id,
+                    'user_name': h.user.get_full_name() or h.user.username,
+                    'user_username': h.user.username,
+                    'action': h.action,
+                    'changed_by_id': h.changed_by.id if h.changed_by else None,
+                    'changed_by_name': h.changed_by.get_full_name() if h.changed_by else None,
+                    'timestamp': h.timestamp.isoformat() if h.timestamp else None,
+                }
+            )
+
+        return Response({'approvers': approvers, 'history': history})
+
+    def post(self, request, node_id):
+        if not _is_iqac_manager(request.user):
+            return Response({'detail': 'Forbidden.'}, status=status.HTTP_403_FORBIDDEN)
+
+        node = PBASNode.objects.filter(pk=node_id).first()
+        if not node:
+            return Response({'detail': 'Node not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        approver_ids = request.data.get('approver_ids') or []
+        if not isinstance(approver_ids, list):
+            return Response({'detail': 'Expected approver_ids array.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Compute diffs so we can record history
+        prev_ids = set(node.approvers.values_list('id', flat=True))
+        new_ids = set([int(x) for x in approver_ids if x is not None])
+
+        users = User.objects.filter(pk__in=new_ids)
+        node.approvers.set(users)
+
+        # Auto-assign PBAS_APPROVER role to all assigned users
+        role, _ = Role.objects.get_or_create(name='PBAS_APPROVER', defaults={'description': 'PBAS Submissions Approver'})
+        for u in users:
+            u.roles.add(role)
+
+        # Record history entries for added and removed users
+        added = new_ids - prev_ids
+        removed = prev_ids - new_ids
+        history_objs = []
+        for uid in added:
+            try:
+                u = User.objects.get(pk=uid)
+                history_objs.append(
+                    PBASNodeApproverHistory(node=node, user=u, action=PBASNodeApproverHistory.Action.ASSIGNED, changed_by=request.user)
+                )
+            except User.DoesNotExist:
+                continue
+        for uid in removed:
+            try:
+                u = User.objects.get(pk=uid)
+                history_objs.append(
+                    PBASNodeApproverHistory(node=node, user=u, action=PBASNodeApproverHistory.Action.REMOVED, changed_by=request.user)
+                )
+            except User.DoesNotExist:
+                continue
+
+        if history_objs:
+            PBASNodeApproverHistory.objects.bulk_create(history_objs)
+
+        approvers = [
+            {
+                'id': u.id,
+                'name': u.get_full_name() or u.username,
+                'username': u.username,
+            }
+            for u in node.approvers.all()
+        ]
+        return Response({'status': 'ok', 'approvers': approvers})
+
+
+def _get_node_parent_path(node: PBASNode) -> str:
+    parts = []
+    curr = node.parent
+    while curr:
+        parts.append(curr.label)
+        curr = curr.parent
+    parts.reverse()
+    return ' > '.join(parts) if parts else 'Root Category'
+
+
+def _get_user_accessible_submissions(user, status_filter='pending'):
+    is_manager = _is_iqac_manager(user)
+
+    if is_manager:
+        qs = PBASSubmission.objects.all()
+    else:
+        # Find all nodes where user is assigned as approver directly or on parent/ancestors
+        nodes_with_user_approver = list(PBASNode.objects.filter(approvers=user))
+        if not nodes_with_user_approver:
+            return PBASSubmission.objects.none()
+
+        def get_all_descendants_ids(node):
+            ids = [node.id]
+            for child in node.children.all():
+                ids.extend(get_all_descendants_ids(child))
+            return ids
+
+        all_accessible_node_ids = set()
+        for n in nodes_with_user_approver:
+            all_accessible_node_ids.update(get_all_descendants_ids(n))
+
+        qs = PBASSubmission.objects.filter(node_id__in=all_accessible_node_ids)
+
+    if status_filter and status_filter != 'all':
+        qs = qs.filter(status=status_filter)
+
+    return qs.select_related('node', 'user', 'college', 'approved_by').order_by('-created_at')
+
+
+class PBASApprovalsListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        status_param = (request.query_params.get('status') or 'pending').lower()
+        submissions = _get_user_accessible_submissions(request.user, status_param)
+
+        items = []
+        for sub in submissions:
+            u = sub.user
+            full_name = u.get_full_name().strip() or u.username
+            reg_or_staff = user_student_reg_no(u) or user_staff_id(u) or u.username
+
+            # Get user avatar
+            profile_img = None
+            sp = getattr(u, 'staff_profile', None)
+            stp = getattr(u, 'student_profile', None)
+            if sp and sp.profile_image:
+                profile_img = request.build_absolute_uri(sp.profile_image.url)
+            elif stp and stp.profile_image:
+                profile_img = request.build_absolute_uri(stp.profile_image.url)
+
+            file_url = request.build_absolute_uri(sub.file.url) if sub.file else None
+
+            items.append({
+                'id': str(sub.id),
+                'user': {
+                    'id': u.id,
+                    'name': full_name,
+                    'reg_or_staff_id': reg_or_staff,
+                    'username': u.username,
+                    'profile_image': profile_img,
+                },
+                'leaf_title': sub.node.label,
+                'parent_path': _get_node_parent_path(sub.node),
+                'submission_type': sub.submission_type,
+                'link': sub.link,
+                'file_url': file_url,
+                'file_name': sub.file_name or (sub.file.name if sub.file else None),
+                'pbas_credit': sub.node.pbas_credit if sub.node.pbas_credit is not None else 0,
+                'status': sub.status,
+                'created_at': sub.created_at.isoformat() if sub.created_at else None,
+                'reviewed_at': sub.reviewed_at.isoformat() if sub.reviewed_at else None,
+                'approved_by_name': sub.approved_by.get_full_name() if sub.approved_by else None,
+                'rejection_reason': sub.rejection_reason,
+            })
+
+        return Response({'submissions': items})
+
+
+class PBASSubmissionActionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, submission_id):
+        sub = PBASSubmission.objects.filter(pk=submission_id).select_related('node', 'user').first()
+        if not sub:
+            return Response({'detail': 'Submission not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check authorization over this submission
+        is_manager = _is_iqac_manager(request.user)
+        if not is_manager:
+            accessible_ids = set()
+            approver_nodes = list(PBASNode.objects.filter(approvers=request.user))
+            def get_all_descendants(node):
+                ids = [node.id]
+                for child in node.children.all():
+                    ids.extend(get_all_descendants(child))
+                return ids
+            for n in approver_nodes:
+                accessible_ids.update(get_all_descendants(n))
+
+            if sub.node.id not in accessible_ids:
+                return Response({'detail': 'You are not an authorized approver for this submission.'}, status=status.HTTP_403_FORBIDDEN)
+
+        action = (request.data.get('action') or '').lower()
+        reason = (request.data.get('reason') or '').strip()
+
+        if action not in ('approve', 'reject'):
+            return Response({'detail': 'Action must be "approve" or "reject".'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if action == 'approve':
+                sub.status = PBASSubmission.Status.APPROVED
+                sub.approved_by = request.user
+                sub.reviewed_at = timezone.now()
+                sub.save()
+
+                # Accumulate PBAS Credit to StaffProfile or StudentProfile
+                credit_points = sub.node.pbas_credit or 0
+                if credit_points > 0:
+                    submitter = sub.user
+                    sp = getattr(submitter, 'staff_profile', None)
+                    stp = getattr(submitter, 'student_profile', None)
+
+                    if sp:
+                        sp.pbas_credit = (sp.pbas_credit or 0) + credit_points
+                        sp.save(update_fields=['pbas_credit'])
+                    elif stp:
+                        stp.pbas_credit = (stp.pbas_credit or 0) + credit_points
+                        stp.save(update_fields=['pbas_credit'])
+
+            elif action == 'reject':
+                sub.status = PBASSubmission.Status.REJECTED
+                sub.approved_by = request.user
+                sub.reviewed_at = timezone.now()
+                sub.rejection_reason = reason
+                sub.save()
+
+        return Response({
+            'status': sub.status,
+            'detail': f'Submission successfully {sub.status}.',
+        })
+
 

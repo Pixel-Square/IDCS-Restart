@@ -465,7 +465,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
       const key = `${sectionKey}-${subjectId}`;
       setAutoSavingSubjects(prev => ({
         ...prev,
-        [sectionKey]: new Set([...(prev[sectionKey] || []), subjectId])
+        [sectionKey]: new Set([...Array.from(prev[sectionKey] || []), subjectId])
       }));
 
       // Track the selected faculty temporarily
@@ -933,6 +933,7 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
             <tr>
               <th className="px-4 py-3">Subject Code</th>
               <th className="px-4 py-3">Subject Name</th>
+              <th className="px-4 py-3">Credits (C)</th>
               <th className="px-4 py-3 min-w-[250px]">Assigned Faculty</th>
             </tr>
           </thead>
@@ -1038,6 +1039,20 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                 || '-';
               const fallbackClass = sub.class_type || sub.class || sub.cat || aggregatedRow?.class_type || aggregatedRow?.class || aggregatedRow?.cat || '-';
               const fallbackName = sub.course_name || sub.name || aggregatedRow?.course_name || '-';
+              const fallbackCredits = (sub.c !== undefined && sub.c !== null) ? sub.c : ((sub.credits !== undefined && sub.credits !== null) ? sub.credits : (aggregatedRow?.c ?? aggregatedRow?.credits ?? '-'));
+              
+              // Detect if this subject is offered in mixed sections
+              const homeDeptCodes = sub.home_dept_codes || [];
+              const departments = sub.departments || [];
+              const isMixedSection = homeDeptCodes.length > 1 || departments.length > 1;
+              
+              // Get list of sections offering this subject
+              const sectionsList = isMixedSection 
+                ? (departments.length > 1 
+                    ? departments.map((d: any) => d.short_name || d.code || d.name).join(', ')
+                    : homeDeptCodes.join(', '))
+                : null;
+              
               const effectiveAssignments = matchingAssignments.length > 0
                 ? matchingAssignments
                 : aggregatedAssignedStaff.map((staff: any, staffIndex: number) => ({
@@ -1068,7 +1083,17 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                 rows.push(
                   <tr key={idx} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-blue-50'}`}>
                     <td className="px-4 py-3 font-medium text-gray-900">{fallbackCode}</td>
-                    <td className="px-4 py-3">{fallbackName}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-1">
+                        <span>{fallbackName}</span>
+                        {isMixedSection && (
+                          <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded whitespace-nowrap inline-block">
+                            Mixed Section: {sectionsList}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-bold text-emerald-800">{fallbackCredits}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-start gap-4 w-full">
                         <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">
@@ -1140,7 +1165,17 @@ export default function TeachingAssignSection({ facultyOptions, onSectionSnapsho
                   rows.push(
                     <tr key={`${idx}-${aIdx}-${assignment.__virtual_key || assignment.id || 'local'}`} className={`border-b hover:bg-gray-50 transition-colors ${autoSaveMsg?.type === 'error' ? 'bg-red-50' : 'bg-white'}`}>
                       <td className="px-4 py-3 font-medium text-gray-900">{displayCode} {isElective && <span className="text-xs text-blue-500 ml-1">(Elective)</span>}</td>
-                      <td className="px-4 py-3">{displayName}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <span>{displayName}</span>
+                          {!isElective && isMixedSection && (
+                            <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded whitespace-nowrap inline-block">
+                              Mixed Section: {sectionsList}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-emerald-800">{fallbackCredits}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-start gap-4 w-full">
                           <div className="flex flex-col gap-2 flex-grow max-w-[16rem]">

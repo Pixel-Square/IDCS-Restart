@@ -3,6 +3,8 @@ import fetchWithAuth from '../../../services/fetchAuth';
 import TimetableConfig from './OddEvenSemTimetable';
 import TimetableCreator from './TimetableCreator';
 import TimetableGenerator from './TimetableGenerator';
+import GroupAllocationModal from './GroupAllocationModal';
+import CreditBasedAllocationModal from './CreditBasedAllocationModal';
 
 interface TimetableTemplate {
   id: string;
@@ -67,6 +69,8 @@ export default function TimetableAdminPage() {
   const [activeTab, setActiveTab] = useState<'config' | 'timetable_generator' | 'creator'>('config');
   const [templates, setTemplates] = useState<TimetableTemplate[]>([]);
   const [semesterTemplates, setSemesterTemplates] = useState<SemesterTemplate[]>([]);
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [showCreditModal, setShowCreditModal] = useState(false);
 
   // Load templates from API on component mount
   useEffect(() => {
@@ -184,9 +188,25 @@ export default function TimetableAdminPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-900 mb-6">Timetable Administration - IQAC</h1>
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+      <div className="w-full">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
+          <h1 className="text-3xl font-bold text-gray-900">Timetable Administration - IQAC</h1>
+          <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
+            <button
+              onClick={() => setShowGroupModal(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+            >
+              🏢 Group Allocation
+            </button>
+            <button
+              onClick={() => setShowCreditModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+            >
+              🎯 Credit Allocations
+            </button>
+          </div>
+        </div>
 
         {/* Tab Buttons */}
         <div className="flex gap-4 mb-6 flex-wrap">
@@ -230,6 +250,18 @@ export default function TimetableAdminPage() {
           <TimetableGenerator templates={semesterTemplates} />
         )}
         {activeTab === 'creator' && <TimetableCreator templates={templates} />}
+
+        {/* Group Allocation Modal */}
+        <GroupAllocationModal
+          isOpen={showGroupModal}
+          onClose={() => setShowGroupModal(false)}
+        />
+
+        {/* Credit Based Allocation Modal */}
+        <CreditBasedAllocationModal
+          isOpen={showCreditModal}
+          onClose={() => setShowCreditModal(false)}
+        />
       </div>
     </div>
   );

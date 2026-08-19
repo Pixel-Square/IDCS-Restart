@@ -158,6 +158,7 @@ class MeSerializer(serializers.Serializer):
     profile_image_updated = serializers.SerializerMethodField()
     name_email_edited = serializers.SerializerMethodField()
     profileEdited = serializers.SerializerMethodField()
+    pbas_credit = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
 
     @staticmethod
@@ -273,6 +274,18 @@ class MeSerializer(serializers.Serializer):
             return 'EXT_STAFF'
         return None
 
+    def get_pbas_credit(self, obj):
+        try:
+            sp = self._safe_related_profile(obj, 'staff_profile')
+            if sp and getattr(sp, 'pbas_credit', None) is not None:
+                return sp.pbas_credit
+            stp = self._safe_related_profile(obj, 'student_profile')
+            if stp and getattr(stp, 'pbas_credit', None) is not None:
+                return stp.pbas_credit
+        except Exception:
+            pass
+        return 0
+
     def get_profile(self, obj):
         profile_image_url = self.get_profile_image(obj)
         # Minimal profile payload to avoid touching academic serializers
@@ -296,6 +309,7 @@ class MeSerializer(serializers.Serializer):
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(sp, 'rfid_uid', ''),
+                'pbas_credit': getattr(sp, 'pbas_credit', 0) or 0,
                 'mobile_number': getattr(sp, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(sp, 'mobile_number_verified_at', None)),
                 'section_id': getattr(sec_obj, 'id', None),
@@ -318,6 +332,7 @@ class MeSerializer(serializers.Serializer):
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(st, 'rfid_uid', ''),
+                'pbas_credit': getattr(st, 'pbas_credit', 0) or 0,
                 'mobile_number': getattr(st, 'mobile_number', '') or '',
                 'mobile_verified': bool(getattr(st, 'mobile_number_verified_at', None)),
                 'department': {

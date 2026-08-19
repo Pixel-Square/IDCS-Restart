@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCircle, GraduationCap } from 'lucide-react'
+import { Calendar, Clock, BookOpen, Users, Edit, Trash2, Plus, X, Save, AlertCircle, GraduationCap, Tag } from 'lucide-react'
 
 const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
@@ -231,6 +231,19 @@ function CellPopup(props: any) {
                         <Users className="h-3.5 w-3.5" />
                         {a.staff?.username || '—'}{a.subject_batch ? ` • Batch: ${a.subject_batch.name}` : ''}
                       </div>
+                      {(() => {
+                        const currentSection = sections.find(s => s.id === sectionId);
+                        const isMixed = currentSection?.is_mixed_section || !!currentSection?.mixed_section_id;
+                        if (isMixed) {
+                          return (
+                            <div className="text-xs text-blue-700 mt-2 flex items-center gap-1 px-2 py-1 bg-blue-100 rounded-full w-fit">
+                              <Tag className="h-3.5 w-3.5" />
+                              Mixed Section
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                       {a.is_special && (
                         <div className="text-xs text-amber-700 mt-2 flex items-center gap-1">
                           <Calendar className="h-3.5 w-3.5" />
@@ -1613,6 +1626,19 @@ export default function TimetableEditor(){
                     return asg.staff.name || fullName || asg.staff.username || '—';
                   })()}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
+                {(() => {
+                  const currentSection = sections.find(s => s.id === sectionId);
+                  const isMixed = currentSection?.is_mixed_section || !!currentSection?.mixed_section_id;
+                  if (isMixed) {
+                    return (
+                      <div className="text-xs text-blue-600 mt-1 px-1.5 py-0.5 bg-blue-50 rounded inline-flex items-center gap-1">
+                        <Tag className="h-2.5 w-2.5" />
+                        Mixed
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             ))}
           </div>

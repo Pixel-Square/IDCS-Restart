@@ -75,6 +75,8 @@ import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
+import PBASAdminPage from './pages/pbas/admin/PBASAdminPage';
+import PBASApprovalsPage from './pages/pbas/approvals/PBASApprovalsPage';
 import { StaffAttendanceUpload } from './pages/PS';
 import { MyAttendance } from './pages/staff';
 import HODStaffAttendancePage from './pages/hod/StaffAttendance';
@@ -143,6 +145,7 @@ const AcV2ApprovalInboxPage = safeLazy(() => import('./pages/Academic 2.1/admin/
 const AcV2InternalMarkAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'), 'InternalMarkAdminPage');
 const AcV2WeightagePage = safeLazy(() => import('./pages/Academic 2.1/admin/WeightagePage'), 'WeightagePage');
 const AcV2CoAttainmentConfigPage = safeLazy(() => import('./pages/Academic 2.1/admin/coattainment/CoAttainmentConfig'), 'CoAttainmentConfig');
+const AcV2ExportImportManagerPage = safeLazy(() => import('./pages/Academic 2.1/admin/export_import/ExportImportManagerPage'), 'ExportImportManagerPage');
 const AcV2CourseListPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'), 'CourseListPage');
 const AcV2MarkEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'), 'MarkEntryPage');
 const AcV2InternalMarkPage = safeLazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'), 'InternalMarkPage');
@@ -814,6 +817,23 @@ export default function App() {
                     />
                   }
                 />
+                <Route
+                  path="/academic-v2/admin/export-import-manager"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      requiredRoles={['IQAC']}
+                      requiredPermissions={['academic_v2.page.admin']}
+                      element={
+                        <LazyErrorBoundary>
+                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                            <AcV2ExportImportManagerPage />
+                          </React.Suspense>
+                        </LazyErrorBoundary>
+                      }
+                    />
+                  }
+                />
                 {/* Admin Routes (IQAC only) */}
                 <Route
                   path="/academic-v2/admin/publish-control"
@@ -1359,6 +1379,11 @@ export default function App() {
                 />
 
                 {/* ────────────────────────────────────────────────────────────── */}
+
+                {/* PBAS staff and admin routes */}
+                <Route path="/pbas/staff" element={<ProtectedRoute user={user} requiredRoles={["STAFF"]} element={<PBASSubmissionPage />} />} />
+                <Route path="/pbas/admin" element={<ProtectedRoute user={user} requiredRoles={["PBAS_ADMIN"]} element={<PBASAdminPage />} />} />
+                <Route path="/pbas/approvals" element={<ProtectedRoute user={user} requiredRoles={["PBAS_APPROVER", "PBAS_ADMIN", "PBAS_MANAGER", "PBASADMIN", "IQAC", "ADMIN", "PRINCIPAL", "PS"]} element={<PBASApprovalsPage user={user} />} />} />
 
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}

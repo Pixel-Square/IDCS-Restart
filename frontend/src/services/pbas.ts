@@ -12,6 +12,7 @@ export type PBASCustomDepartment = {
   department_code?: string
   department_short_name?: string
   department_name?: string
+  show_in_submission?: boolean
   created_at?: string
 }
 
@@ -20,12 +21,46 @@ export type PBASNode = {
   label: string
   audience: PBASAudience
   input_mode: PBASInputMode
+  pbas_credit?: number | null
   link?: string | null
   uploaded_name?: string | null
   limit?: number | null
   college_required?: boolean
   position?: number
+  approvers?: { id: number; username: string; name: string }[]
   children?: PBASNode[]
+}
+
+export type StaffMember = {
+  user_id: number
+  name: string
+  username: string
+  staff_id: string
+  department_name: string
+  profile_image?: string | null
+}
+
+export type PBASApprovalItem = {
+  id: string
+  user: {
+    id: number
+    name: string
+    reg_or_staff_id: string
+    username: string
+    profile_image?: string | null
+  }
+  leaf_title: string
+  parent_path: string
+  submission_type: 'upload' | 'link'
+  link?: string | null
+  file_url?: string | null
+  file_name?: string | null
+  pbas_credit: number
+  status: 'pending' | 'approved' | 'rejected'
+  created_at?: string | null
+  reviewed_at?: string | null
+  approved_by_name?: string | null
+  rejection_reason?: string
 }
 
 export type College = {
@@ -213,6 +248,94 @@ export async function forwardTicketToDepartment(ticketId: string): Promise<{ id:
   return await res.json()
 }
 
+export const PBAS_TREE_STORAGE_KEY = 'pbas_tree_data'
+
+export function getStoredPBASTree(): PBASNode[] {
+  try {
+    const raw = localStorage.getItem(PBAS_TREE_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch (e) {
+    console.error('Failed to load pbas_tree_data from localStorage:', e)
+  }
+  return []
+}
+
+export function saveStoredPBASTree(tree: PBASNode[]): void {
+  try {
+    localStorage.setItem(PBAS_TREE_STORAGE_KEY, JSON.stringify(tree))
+    window.dispatchEvent(new CustomEvent('idcs:pbas-tree-updated', { detail: tree }))
+  } catch (e) {
+    console.error('Failed to save pbas_tree_data to localStorage:', e)
+  }
+}
+
+export async function fetchStaffList(params?: { search?: string; department?: string }): Promise<StaffMember[]> {
+  const query = new URLSearchParams()
+  if (params?.search) query.append('search', params.search)
+  if (params?.department) query.append('department', params.department)
+
+  const res = await fetchWithAuth(`/api/pbas/staff-list/?${query.toString()}`)
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return data.staff || []
+}
+
+export type PBASApproverHistoryItem = {
+  id: string
+  user_id: number
+  user_name: string
+  user_username: string
+  action: 'assigned' | 'removed'
+  changed_by_id?: number | null
+  changed_by_name?: string | null
+  timestamp?: string | null
+}
+
+export async function getNodeApprovers(nodeId: string): Promise<{
+  approvers: { id: number; name: string; username: string }[]
+  history?: PBASApproverHistoryItem[]
+}> {
+  const res = await fetchWithAuth(`/api/pbas/nodes/${encodeURIComponent(nodeId)}/approvers/`)
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return { approvers: data.approvers || [], history: data.history || [] }
+}
+
+export async function updateNodeApprovers(nodeId: string, approverIds: number[]): Promise<{ id: number; name: string; username: string }[]> {
+  const res = await fetchWithAuth(`/api/pbas/nodes/${encodeURIComponent(nodeId)}/approvers/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approver_ids: approverIds }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return data.approvers || []
+}
+
+export async function fetchPBASApprovals(status: string = 'pending'): Promise<PBASApprovalItem[]> {
+  const res = await fetchWithAuth(`/api/pbas/submissions/approvals/?status=${encodeURIComponent(status)}`)
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = await res.json()
+  return data.submissions || []
+}
+
+export async function submitApprovalAction(
+  submissionId: string,
+  action: 'approve' | 'reject',
+  reason?: string
+): Promise<{ status: string; detail: string }> {
+  const res = await fetchWithAuth(`/api/pbas/submissions/${encodeURIComponent(submissionId)}/action/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, reason }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
+}
+
 export default {
   listCustomDepartments,
   createCustomDepartment,
@@ -228,4 +351,12 @@ export default {
   listMyVerifierTickets,
   forwardTicketToMentor,
   forwardTicketToDepartment,
+  fetchStaffList,
+  getNodeApprovers,
+  updateNodeApprovers,
+  fetchPBASApprovals,
+  submitApprovalAction,
+  getStoredPBASTree,
+  saveStoredPBASTree,
 }
+
