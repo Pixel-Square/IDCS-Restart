@@ -77,9 +77,36 @@ class PBASNode(models.Model):
     uploaded_name = models.CharField(max_length=255, null=True, blank=True)
 
     limit = models.IntegerField(null=True, blank=True)
+    pbas_credit = models.IntegerField(null=True, blank=True)
     college_required = models.BooleanField(default=False)
     position = models.IntegerField(default=0)
+    approvers = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='pbas_approver_nodes')
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PBASNodeApproverHistory(models.Model):
+    """Audit trail for approver assignments on PBAS nodes.
+
+    Records when a user was assigned or removed as an approver for a node,
+    who made the change, and when it happened.
+    """
+
+    class Action(models.TextChoices):
+        ASSIGNED = 'assigned', 'Assigned'
+        REMOVED = 'removed', 'Removed'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    node = models.ForeignKey(PBASNode, on_delete=models.CASCADE, related_name='approver_history')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='+')
+    action = models.CharField(max_length=16, choices=Action.choices)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-timestamp',)
+
+    def __str__(self) -> str:
+        return f"PBASNodeApproverHistory(node={self.node_id}, user={self.user_id}, action={self.action})"
 
     class Meta:
         indexes = [
@@ -105,6 +132,11 @@ class PBASSubmission(models.Model):
         UPLOAD = 'upload', 'Upload'
         LINK = 'link', 'Link'
 
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     node = models.ForeignKey(PBASNode, on_delete=models.CASCADE, related_name='submissions')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pbas_submissions')
@@ -114,6 +146,10 @@ class PBASSubmission(models.Model):
     file = models.FileField(null=True, blank=True, upload_to=upload_to_pbas_submission)
     file_name = models.CharField(max_length=255, null=True, blank=True)
     college = models.ForeignKey(College, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_submissions')
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='pbas_approved_submissions')
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
