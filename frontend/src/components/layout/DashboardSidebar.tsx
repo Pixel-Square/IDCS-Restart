@@ -45,6 +45,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   pbas: ClipboardList,
   pbas_manager: Layout,
   pbas_admin: ClipboardList,
+  pbas_approvals: UserCheck,
   pbas_submission: ClipboardList,
   settings: Settings,
   hr_request_templates: FileText,
@@ -574,6 +575,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // PBAS Admin: visible only to PBAS_ADMIN role
   if (rolesUpper.includes('PBAS_ADMIN') && !items.some((item) => item.key === 'pbas_admin')) {
     items.push({ key: 'pbas_admin', label: 'PBAS Admin', to: '/pbas/admin' });
+  }
+
+  // PBAS Approvals: visible only to the roles that are explicitly authorized to approve PBAS submissions.
+  const pbasApprovalRoles = ['PBAS_APPROVER', 'PBAS_ADMIN', 'PBAS_MANAGER', 'PBASADMIN', 'IQAC', 'ADMIN', 'PRINCIPAL', 'PS'];
+  const canAccessPbasApprovals = rolesUpper.some((role) => pbasApprovalRoles.includes(role));
+  if (canAccessPbasApprovals && !items.some((item) => item.key === 'pbas_approvals')) {
+    items.push({ key: 'pbas_approvals', label: 'PBAS Approvals', to: '/pbas/approvals' });
   }
 
   if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {

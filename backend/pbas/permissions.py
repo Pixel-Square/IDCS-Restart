@@ -3,7 +3,7 @@ from __future__ import annotations
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
-IQAC_MANAGER_ROLE_NAMES = {'IQAC', 'ADMIN', 'PRINCIPAL', 'PS'}
+IQAC_MANAGER_ROLE_NAMES = {'IQAC', 'ADMIN', 'PRINCIPAL', 'PS', 'PBAS_ADMIN', 'PBAS_MANAGER', 'PBASADMIN'}
 
 
 def _user_has_any_role(user, names: set[str]) -> bool:

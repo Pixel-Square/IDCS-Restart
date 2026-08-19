@@ -16,8 +16,10 @@ export interface GroupAllocation {
   selectedSectionKeys: string[];
   selectedMixedSectionKeys: string[];
   exceptionCourses: ExceptionCourse[];
-  blockPeriodEnabled: boolean;
-  blockPeriodCount: number;
+  individualPeriods: number; // No of Periods (Individual / Single)
+  pairedPeriods: number; // Pair Periods (2-consecutive period block pairs)
+  blockPeriodEnabled?: boolean;
+  blockPeriodCount?: number;
   createdAt: string;
 }
 
@@ -64,9 +66,9 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   const [selectedExceptionCourses, setSelectedExceptionCourses] = useState<ExceptionCourse[]>([]);
   const [isSearchingCourses, setIsSearchingCourses] = useState(false);
 
-  // Block Period
-  const [blockPeriodEnabled, setBlockPeriodEnabled] = useState(false);
-  const [blockPeriodCount, setBlockPeriodCount] = useState(2);
+  // Period Settings
+  const [individualPeriods, setIndividualPeriods] = useState(1);
+  const [pairedPeriods, setPairedPeriods] = useState(0);
 
   // Loaded DB data
   const [rawSections, setRawSections] = useState<any[]>([]);
@@ -86,8 +88,8 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setSelectedSectionKeys([]);
     setSelectedMixedSectionKeys([]);
     setSelectedExceptionCourses([]);
-    setBlockPeriodEnabled(false);
-    setBlockPeriodCount(2);
+    setIndividualPeriods(1);
+    setPairedPeriods(0);
   };
 
   // Fetch sections and mixed sections on mount/open
@@ -308,7 +310,6 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         return;
       }
 
-      let addedCount = 0;
       setSelectedExceptionCourses((prev) => {
         const existingIds = new Set(prev.map((c) => String(c.id)));
         const newItems = [...prev];
@@ -316,7 +317,6 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
           if (!existingIds.has(String(item.id))) {
             newItems.push(item);
             existingIds.add(String(item.id));
-            addedCount++;
           }
         });
         return newItems;
@@ -336,8 +336,8 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setSelectedSectionKeys(alloc.selectedSectionKeys || []);
     setSelectedMixedSectionKeys(alloc.selectedMixedSectionKeys || []);
     setSelectedExceptionCourses(alloc.exceptionCourses || []);
-    setBlockPeriodEnabled(Boolean(alloc.blockPeriodEnabled));
-    setBlockPeriodCount(alloc.blockPeriodCount || 2);
+    setIndividualPeriods(alloc.individualPeriods !== undefined ? alloc.individualPeriods : 1);
+    setPairedPeriods(alloc.pairedPeriods !== undefined ? alloc.pairedPeriods : (alloc.blockPeriodEnabled ? (alloc.blockPeriodCount || 1) : 0));
     setActiveTab('create');
   };
 
@@ -365,8 +365,10 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
               selectedSectionKeys,
               selectedMixedSectionKeys,
               exceptionCourses: selectedExceptionCourses,
-              blockPeriodEnabled,
-              blockPeriodCount: Math.max(1, blockPeriodCount || 2),
+              individualPeriods: Math.max(0, individualPeriods || 0),
+              pairedPeriods: Math.max(0, pairedPeriods || 0),
+              blockPeriodEnabled: pairedPeriods > 0,
+              blockPeriodCount: pairedPeriods,
             }
           : a
       );
@@ -379,8 +381,10 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         selectedSectionKeys,
         selectedMixedSectionKeys,
         exceptionCourses: selectedExceptionCourses,
-        blockPeriodEnabled,
-        blockPeriodCount: Math.max(1, blockPeriodCount || 2),
+        individualPeriods: Math.max(0, individualPeriods || 0),
+        pairedPeriods: Math.max(0, pairedPeriods || 0),
+        blockPeriodEnabled: pairedPeriods > 0,
+        blockPeriodCount: pairedPeriods,
         createdAt: new Date().toISOString(),
       };
       updated = [newAllocation, ...savedAllocations];
@@ -428,14 +432,14 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100">
         
         {/* Header */}
-        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between">
+        <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-between shadow-md">
           <div>
             <h2 className="text-xl font-bold flex items-center gap-2">
               <Layers size={22} />
               Group Allocation Configuration
             </h2>
             <p className="text-xs text-blue-100 mt-0.5">
-              Assign common group names, sections, exception courses, and block periods across timetables
+              Assign group names, section filters, exception courses, individual periods, and pair periods
             </p>
           </div>
           <button
@@ -450,185 +454,192 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         <div className="flex border-b border-gray-200 bg-gray-50 px-6 gap-4 pt-2">
           <button
             onClick={() => setActiveTab('create')}
-            className={`pb-2.5 px-4 font-semibold text-sm transition-colors border-b-2 flex items-center gap-1.5 ${
+            className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
               activeTab === 'create'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            {editingAllocationId ? <Pencil size={14} /> : null}
-            {editingAllocationId ? 'Edit Group' : 'Create New Group'}
+            {editingAllocationId ? '✏️ Edit Group Allocation' : '➕ Create New Group'}
           </button>
           <button
             onClick={() => setActiveTab('list')}
-            className={`pb-2.5 px-4 font-semibold text-sm transition-colors border-b-2 flex items-center gap-2 ${
+            className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
               activeTab === 'list'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            Saved Groups ({savedAllocations.length})
+            📋 Saved Groups ({savedAllocations.length})
           </button>
         </div>
 
-        {/* Content Area */}
+        {/* Modal Content */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
           {activeTab === 'create' && (
             <>
-              {/* Group Name Field */}
-              <div className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-bold text-gray-800">
-                    Group Name <span className="text-red-500">*</span>
-                  </label>
-                  {editingAllocationId && (
-                    <span className="text-xs font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">
-                      Editing Mode
-                    </span>
-                  )}
-                </div>
+              {/* Group Name Input */}
+              <div className="space-y-1.5">
+                <label className="block text-sm font-bold text-gray-800">
+                  Group Name <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
-                  placeholder="Enter Group Name (e.g., German Language / Elective Group A)"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-semibold text-gray-900 text-sm shadow-sm"
+                  placeholder="e.g., CORE, ELECTIVE, VALUE ADDED, SKILL LAB"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-xs"
                 />
               </div>
 
-              {/* Year Checkboxes */}
-              <div>
-                <label className="block text-sm font-bold text-gray-800 mb-2">
-                  Select Year(s)
+              {/* Year Selection Checkboxes */}
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-gray-800">
+                  Target Year(s) <span className="text-red-500">*</span>
                 </label>
                 <div className="flex flex-wrap gap-3">
-                  {YEARS.map((y) => {
-                    const isChecked = selectedYears.includes(y.value);
+                  {YEARS.map((yr) => {
+                    const isChecked = selectedYears.includes(yr.value);
                     return (
                       <button
-                        key={y.value}
+                        key={yr.value}
                         type="button"
-                        onClick={() => toggleYear(y.value)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all border ${
+                        onClick={() => toggleYear(yr.value)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border shadow-xs ${
                           isChecked
-                            ? 'bg-blue-600 text-white border-blue-600 shadow'
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-md'
                             : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                         }`}
                       >
-                        {isChecked ? <CheckSquare size={16} /> : <Square size={16} />}
-                        {y.label}
+                        {isChecked ? <CheckSquare size={14} /> : <Square size={14} />}
+                        {yr.label}
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Department Checkboxes & Inside Sections */}
-              <div>
-                <label className="block text-sm font-bold text-gray-800 mb-2">
-                  Select Department(s) & Sections / Mixed Sections
+              {/* Department Selection Checkboxes */}
+              <div className="space-y-2">
+                <label className="block text-sm font-bold text-gray-800">
+                  Target Department(s) <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex flex-wrap gap-2.5">
                   {DEPARTMENTS.map((dept) => {
-                    const isDeptChecked = selectedDepartments.includes(dept.code);
-                    const { regular, mixed } = getProcessedSections(dept.code);
-                    const totalCount = regular.length + mixed.length;
-
+                    const isChecked = selectedDepartments.includes(dept.code);
                     return (
-                      <div
+                      <button
                         key={dept.code}
-                        className={`border rounded-xl p-4 transition-all ${
-                          isDeptChecked
-                            ? 'border-blue-500 bg-blue-50/20 shadow-sm'
-                            : 'border-gray-200 bg-white hover:border-gray-300'
+                        type="button"
+                        onClick={() => toggleDepartment(dept.code)}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 border shadow-xs ${
+                          isChecked
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                            : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                         }`}
                       >
-                        <div className="flex items-center justify-between mb-2">
-                          <button
-                            type="button"
-                            onClick={() => toggleDepartment(dept.code)}
-                            className="flex items-center gap-2.5 font-bold text-gray-900 text-sm text-left"
-                          >
-                            <span className={isDeptChecked ? 'text-blue-600' : 'text-gray-400'}>
-                              {isDeptChecked ? <CheckSquare size={18} /> : <Square size={18} />}
-                            </span>
-                            {dept.label} ({dept.code})
-                          </button>
-                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium">
-                            {totalCount} total
-                          </span>
-                        </div>
-
-                        {/* Expand Sections if Department Checked */}
-                        {isDeptChecked && (
-                          <div className="mt-3 pl-6 border-l-2 border-blue-200 space-y-3 pt-1">
-                            {/* Regular Sections */}
-                            <div>
-                              <div className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-1.5">
-                                Regular Sections ({regular.length})
-                              </div>
-                              {regular.length === 0 ? (
-                                <div className="text-xs text-gray-400 italic">No regular sections found for selected year(s)</div>
-                              ) : (
-                                <div className="flex flex-wrap gap-2">
-                                  {regular.map((s) => {
-                                    const isSecChecked = selectedSectionKeys.includes(s.key);
-                                    return (
-                                      <button
-                                        key={s.key}
-                                        type="button"
-                                        onClick={() => toggleSection(s.key)}
-                                        className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
-                                          isSecChecked
-                                            ? 'bg-blue-100 text-blue-800 border-blue-300'
-                                            : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
-                                        }`}
-                                      >
-                                        {isSecChecked ? <CheckSquare size={12} /> : <Square size={12} />}
-                                        Sec {s.name}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Mixed Sections */}
-                            <div>
-                              <div className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-1.5">
-                                Mixed Sections ({mixed.length})
-                              </div>
-                              {mixed.length === 0 ? (
-                                <div className="text-xs text-gray-400 italic">No mixed sections found for selected year(s)</div>
-                              ) : (
-                                <div className="flex flex-wrap gap-2">
-                                  {mixed.map((m) => {
-                                    const isMixedChecked = selectedMixedSectionKeys.includes(m.key);
-                                    return (
-                                      <button
-                                        key={m.key}
-                                        type="button"
-                                        onClick={() => toggleMixedSection(m.key)}
-                                        className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
-                                          isMixedChecked
-                                            ? 'bg-purple-100 text-purple-800 border-purple-300'
-                                            : 'bg-purple-50/50 text-purple-900 border-purple-100 hover:bg-purple-100/50'
-                                        }`}
-                                      >
-                                        {isMixedChecked ? <CheckSquare size={12} /> : <Square size={12} />}
-                                        {m.name}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                        {isChecked ? <CheckSquare size={14} /> : <Square size={14} />}
+                        {dept.code}
+                      </button>
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Department Inside Sections & Mixed Sections */}
+              <div className="space-y-3 border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm font-bold text-gray-800">
+                    Department Inside Sections & Mixed Sections
+                  </label>
+                  <span className="text-xs text-gray-500 font-medium">
+                    (Optional: Check specific sections to restrict group allocation, or leave all unchecked for auto-apply to all sections in selected depts)
+                  </span>
+                </div>
+
+                {isLoadingSections ? (
+                  <div className="text-xs text-gray-400 p-4 bg-gray-50 rounded-lg text-center">
+                    Loading section structure...
+                  </div>
+                ) : selectedDepartments.length === 0 ? (
+                  <div className="text-xs text-gray-400 p-4 bg-gray-50 rounded-lg text-center italic">
+                    Select target department(s) above to view inside sections and mixed sections.
+                  </div>
+                ) : (
+                  <div className="space-y-4 max-h-60 overflow-y-auto pr-1">
+                    {selectedDepartments.map((deptCode) => {
+                      const { regular, mixed } = getProcessedSections(deptCode);
+                      return (
+                        <div key={deptCode} className="border border-gray-200 rounded-xl p-3 bg-gray-50/50 space-y-2">
+                          <h4 className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center justify-between">
+                            <span>{deptCode} Department Sections</span>
+                            <span className="text-[10px] text-gray-500 font-normal">
+                              ({regular.length} Regular, {mixed.length} Mixed)
+                            </span>
+                          </h4>
+
+                          {/* Regular Sections */}
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-semibold text-gray-600 block">Regular Sections:</span>
+                            {regular.length === 0 ? (
+                              <div className="text-xs text-gray-400 italic">No regular sections found for selected year(s)</div>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                {regular.map((sec) => {
+                                  const isChecked = selectedSectionKeys.includes(sec.key);
+                                  return (
+                                    <button
+                                      key={sec.key}
+                                      type="button"
+                                      onClick={() => toggleSection(sec.key)}
+                                      className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
+                                        isChecked
+                                          ? 'bg-blue-600 text-white border-blue-600'
+                                          : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+                                      }`}
+                                    >
+                                      {isChecked ? <CheckSquare size={12} /> : <Square size={12} />}
+                                      {sec.name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Mixed Sections */}
+                          <div className="space-y-1 pt-1 border-t border-gray-200/60">
+                            <span className="text-[11px] font-semibold text-purple-700 block">Mixed Sections:</span>
+                            {mixed.length === 0 ? (
+                              <div className="text-xs text-gray-400 italic">No mixed sections found for selected year(s)</div>
+                            ) : (
+                              <div className="flex flex-wrap gap-2">
+                                {mixed.map((m) => {
+                                  const isMixedChecked = selectedMixedSectionKeys.includes(m.key);
+                                  return (
+                                    <button
+                                      key={m.key}
+                                      type="button"
+                                      onClick={() => toggleMixedSection(m.key)}
+                                      className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
+                                        isMixedChecked
+                                          ? 'bg-purple-100 text-purple-800 border-purple-300'
+                                          : 'bg-purple-50/50 text-purple-900 border-purple-100 hover:bg-purple-100/50'
+                                      }`}
+                                    >
+                                      {isMixedChecked ? <CheckSquare size={12} /> : <Square size={12} />}
+                                      {m.name}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Exception Courses Section */}
@@ -748,42 +759,57 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                 </div>
               </div>
 
-              {/* Block Period Section */}
-              <div className="border border-indigo-200 bg-indigo-50/30 p-4 rounded-xl flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    id="blockPeriodToggle"
-                    checked={blockPeriodEnabled}
-                    onChange={(e) => setBlockPeriodEnabled(e.target.checked)}
-                    className="h-5 w-5 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded cursor-pointer"
-                  />
-                  <label htmlFor="blockPeriodToggle" className="cursor-pointer">
-                    <span className="block text-sm font-bold text-gray-800 flex items-center gap-1.5">
-                      <Clock size={16} className="text-indigo-600" />
-                      Block Period
-                    </span>
-                    <span className="block text-xs text-gray-600">
-                      Combine consecutive periods (e.g. periods 2,3 & 6,7) into block periods for this group
-                    </span>
-                  </label>
+              {/* Period Settings: Individual Periods & Pair Periods */}
+              <div className="border border-indigo-200 bg-indigo-50/40 p-4 rounded-xl space-y-3">
+                <div className="flex items-center gap-2 border-b border-indigo-200/60 pb-2">
+                  <Clock size={18} className="text-indigo-600" />
+                  <span className="text-sm font-bold text-gray-800">Group Period Settings</span>
+                  <span className="text-xs text-gray-500 font-normal">
+                    (Specify individual single periods and 2-consecutive period pairs for this group)
+                  </span>
                 </div>
 
-                {blockPeriodEnabled && (
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-bold text-gray-700 whitespace-nowrap">
-                      Block Size:
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={6}
-                      value={blockPeriodCount}
-                      onChange={(e) => setBlockPeriodCount(parseInt(e.target.value, 10) || 2)}
-                      className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500"
-                    />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  {/* Individual / Single Periods */}
+                  <div className="bg-white p-3.5 rounded-xl border border-indigo-200/80 shadow-xs flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-800">
+                        No of Periods (Individual)
+                      </label>
+                      <span className="text-[11px] text-gray-500">Single 1-period slots</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={individualPeriods}
+                        onChange={(e) => setIndividualPeriods(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                        className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      />
+                    </div>
                   </div>
-                )}
+
+                  {/* Pair Periods (Block) */}
+                  <div className="bg-white p-3.5 rounded-xl border border-indigo-200/80 shadow-xs flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-bold text-gray-800">
+                        Pair Periods (Block)
+                      </label>
+                      <span className="text-[11px] text-gray-500">2-consecutive period pairs (e.g. 2&3)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={pairedPeriods}
+                        onChange={(e) => setPairedPeriods(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                        className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
             </>
           )}
@@ -802,12 +828,17 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                     key={alloc.id}
                     className="border border-gray-200 rounded-xl p-4 bg-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
                   >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-bold text-gray-900">{alloc.groupName}</h3>
-                        {alloc.blockPeriodEnabled && (
+                        {(alloc.pairedPeriods !== undefined ? alloc.pairedPeriods : (alloc.blockPeriodEnabled ? (alloc.blockPeriodCount || 1) : 0)) > 0 && (
                           <span className="bg-indigo-100 text-indigo-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
-                            Block Period ({alloc.blockPeriodCount})
+                            Pair Periods ({alloc.pairedPeriods ?? alloc.blockPeriodCount})
+                          </span>
+                        )}
+                        {(alloc.individualPeriods !== undefined ? alloc.individualPeriods : 1) > 0 && (
+                          <span className="bg-blue-100 text-blue-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                            Individual Periods ({alloc.individualPeriods ?? 1})
                           </span>
                         )}
                       </div>
@@ -816,9 +847,9 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                         <span>Depts: <strong>{alloc.selectedDepartments.join(', ') || 'None'}</strong></span>
                         <span>Sections: <strong>{alloc.selectedSectionKeys.length + alloc.selectedMixedSectionKeys.length}</strong></span>
                       </div>
-                      {alloc.exceptionCourses.length > 0 && (
+                      {alloc.exceptionCourses && alloc.exceptionCourses.length > 0 && (
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-amber-700">
+                          <span className="text-xs text-amber-700 font-medium">
                             Exception Courses: {alloc.exceptionCourses.map((c) => c.course_code).join(', ')}
                           </span>
                           <button
@@ -893,4 +924,3 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     </div>
   );
 }
-

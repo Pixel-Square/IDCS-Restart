@@ -523,6 +523,7 @@ class StudentProfile(models.Model):
     # RFID UID assigned via IDCSScan hardware scanner
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
+    pbas_credit = models.IntegerField(default=0)
 
     def __str__(self):
         return f"Student {self.reg_no} ({self.user.username})"
@@ -815,6 +816,7 @@ class StaffProfile(models.Model):
     # RFID UID assigned via IDCSScan hardware scanner (for staff)
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
+    pbas_credit = models.IntegerField(default=0)
 
     def __str__(self):
         """Return staff name and ID for display in dropdowns and admin."""

@@ -351,7 +351,7 @@ const shuffleWithRng = <T,>(items: T[], rng: () => number) => {
   return result;
 };
 
-import CreditBasedAllocationModal, { CreditAllocationMap } from './CreditBasedAllocationModal';
+import CreditBasedAllocationModal, { CreditAllocationMap, ClassTypeExceptionRule } from './CreditBasedAllocationModal';
 
 const getRequiredSlotPlan = (row: any, creditAllocations?: Record<number, number>) => {
   const credits = Number(row?.c ?? row?.credits ?? 0) || 0;
@@ -391,13 +391,12 @@ const getRequiredSlotPlan = (row: any, creditAllocations?: Record<number, number
 const getTemplateSlots = (template: SemesterTemplate) => {
   return template.rows.flatMap((row) =>
     template.columns
-      .filter((column) => column.period !== 'Break' && column.period !== 'Lunch')
-      .map((column) => ({
-        key: `${row.id}-${column.id}`,
+      .filter((col) => col.period !== 'Break' && col.period !== 'Lunch')
+      .map((col) => ({
+        key: `${row.id}-${col.id}`,
         day: row.day,
-        rowId: row.id,
-        columnId: column.id,
-        period: column.period,
+        period: col.period,
+        timing: col.timing,
       }))
   );
 };
@@ -459,7 +458,8 @@ const buildGeneratedSection = (
   generationSeed: number,
   sectionIndex: number,
   groupAllocations: GroupAllocation[] = [],
-  creditAllocations: Record<number, number> = {}
+  creditAllocations: Record<number, number> = {},
+  classTypeExceptions: ClassTypeExceptionRule[] = []
 ): GeneratedSectionTimetable => {
   const cells: Record<string, GeneratedCell> = {};
   const warnings: string[] = [];
@@ -467,6 +467,7 @@ const buildGeneratedSection = (
   const occupied = new Set<string>();
   const runSeed = generationSeed + sectionIndex + 1;
   const rng = createSeededRng(runSeed);
+  const consecutiveTwoBlocks = getConsecutiveBlocksForTemplate(template, 2);
 
   // Find Group Allocations that match this section / mixed section
   const matchingGroups = groupAllocations.filter((g) => {
@@ -484,29 +485,51 @@ const buildGeneratedSection = (
   // Extract all Exception Courses from matching groups
   const allExceptionCourses = matchingGroups.flatMap((g) => g.exceptionCourses || []);
 
-  // Pre-assign Group Allocation Block Periods consistently across sections & randomized per generation
+  // Pre-assign Group Allocations (Pair Periods & Individual Periods) consistently across sections & randomized per generation
   matchingGroups.forEach((g, gIdx) => {
-    const blockSize = g.blockPeriodEnabled ? Math.max(1, g.blockPeriodCount || 2) : 1;
-    const availableBlocks = getConsecutiveBlocksForTemplate(template, blockSize);
+    const groupSeed = hashString(`${generationSeed}-${g.id || g.groupName}-${gIdx}`);
+    const groupRng = createSeededRng(groupSeed);
 
-    if (availableBlocks.length > 0) {
-      // Deterministic seed for group 'g' across sections in this generation run
-      const groupSeed = hashString(`${generationSeed}-${g.id || g.groupName}-${gIdx}`);
-      const groupRng = createSeededRng(groupSeed);
-      const shuffledBlocks = shuffleWithRng(availableBlocks, groupRng);
+    const pairedCount = g.pairedPeriods !== undefined ? g.pairedPeriods : (g.blockPeriodEnabled ? (g.blockPeriodCount || 1) : 0);
+    const individualCount = g.individualPeriods !== undefined ? g.individualPeriods : (pairedCount === 0 ? 1 : 0);
 
-      // Pick first non-overlapping block or fallback
-      const selectedBlock = shuffledBlocks.find((b) => b.keys.every((k) => !occupied.has(k))) || shuffledBlocks[0];
+    // 1. Schedule Paired Periods (2-consecutive period block pairs)
+    if (pairedCount > 0) {
+      const available2Blocks = getConsecutiveBlocksForTemplate(template, 2);
+      const shuffled2Blocks = shuffleWithRng(available2Blocks, groupRng);
 
-      selectedBlock.keys.forEach((key) => {
-        occupied.add(key);
-        cells[key] = {
-          subject: g.groupName,
-          faculty: 'Group Allocation',
-          kind: 'theory',
-          note: `Group: ${g.groupName}` + (g.blockPeriodEnabled ? ` (${g.blockPeriodCount} Block Periods)` : ''),
-        };
-      });
+      for (let p = 1; p <= pairedCount; p++) {
+        const selectedBlock = shuffled2Blocks.find((b) => b.keys.every((k) => !occupied.has(k))) || shuffled2Blocks[0];
+        if (selectedBlock) {
+          selectedBlock.keys.forEach((key) => {
+            occupied.add(key);
+            cells[key] = {
+              subject: g.groupName,
+              faculty: 'Group Allocation',
+              kind: 'theory',
+              note: `Group: ${g.groupName} (Pair Period ${p})`,
+            };
+          });
+        }
+      }
+    }
+
+    // 2. Schedule Individual Single Periods
+    if (individualCount > 0) {
+      const available1Slots = shuffleWithRng(slots, groupRng);
+
+      for (let i = 1; i <= individualCount; i++) {
+        const selectedSlot = available1Slots.find((s) => !occupied.has(s.key)) || available1Slots[0];
+        if (selectedSlot && !occupied.has(selectedSlot.key)) {
+          occupied.add(selectedSlot.key);
+          cells[selectedSlot.key] = {
+            subject: g.groupName,
+            faculty: 'Group Allocation',
+            kind: 'theory',
+            note: `Group: ${g.groupName} (Single Period ${i})`,
+          };
+        }
+      }
     }
   });
 
@@ -531,13 +554,22 @@ const buildGeneratedSection = (
     return !isExcepted;
   });
 
-  // Schedule ALL subjects based strictly on Credit-Based Allocation
+  // Schedule ALL subjects based on Class Type Exceptions or Credit-Based Allocation
   const randomTieBreaker = new Map<any, number>();
   filteredSubjects.forEach((row) => {
     randomTieBreaker.set(row, rng());
   });
 
+  const hasExceptionRule = (row: any) => {
+    const type = normalizeClassType(row?.class_type, row).toUpperCase();
+    return classTypeExceptions.some((rule) => (rule.classType || '').toUpperCase() === type);
+  };
+
   const sortedSubjects = [...filteredSubjects].sort((a, b) => {
+    const aExcept = hasExceptionRule(a) ? 0 : 1;
+    const bExcept = hasExceptionRule(b) ? 0 : 1;
+    if (aExcept !== bExcept) return aExcept - bExcept;
+
     const aCore = a?.is_dept_core ? 0 : 1;
     const bCore = b?.is_dept_core ? 0 : 1;
     if (aCore !== bCore) return aCore - bCore;
@@ -598,6 +630,60 @@ const buildGeneratedSection = (
     return null;
   };
 
+  const reserveBlockPair = (facultyIds: string[], subjectKey: string) => {
+    const blockOrder = shuffleWithRng(consecutiveTwoBlocks, rng);
+
+    const canUseBlock = (block: { keys: string[]; day: string }) => {
+      if (block.keys.some((k) => occupied.has(k))) return false;
+      if (subjectDayUsage[subjectKey]?.has(block.day)) return false;
+      const facultyConflict = facultyIds.some((facultyId) => {
+        if (!facultyId) return false;
+        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
+      });
+      return !facultyConflict;
+    };
+
+    for (const block of blockOrder) {
+      if (!canUseBlock(block)) continue;
+      block.keys.forEach((key) => occupied.add(key));
+      facultyIds.forEach((facultyId) => {
+        if (!facultyId) return;
+        if (!globalFacultyUsage[facultyId]) {
+          globalFacultyUsage[facultyId] = new Set();
+        }
+        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
+      });
+      if (!subjectDayUsage[subjectKey]) {
+        subjectDayUsage[subjectKey] = new Set();
+      }
+      subjectDayUsage[subjectKey].add(block.day);
+      return { block, conflict: false };
+    }
+
+    for (const block of blockOrder) {
+      if (block.keys.some((k) => occupied.has(k))) continue;
+      const facultyConflict = facultyIds.some((facultyId) => {
+        if (!facultyId) return false;
+        return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
+      });
+      block.keys.forEach((key) => occupied.add(key));
+      facultyIds.forEach((facultyId) => {
+        if (!facultyId) return;
+        if (!globalFacultyUsage[facultyId]) {
+          globalFacultyUsage[facultyId] = new Set();
+        }
+        block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
+      });
+      if (!subjectDayUsage[subjectKey]) {
+        subjectDayUsage[subjectKey] = new Set();
+      }
+      subjectDayUsage[subjectKey].add(block.day);
+      return { block, conflict: facultyConflict };
+    }
+
+    return null;
+  };
+
   for (const subject of sortedSubjects) {
     const facultyNames = getFacultyNames(subject);
     const facultyIds = Array.isArray(subject?.assigned_staff)
@@ -609,28 +695,85 @@ const buildGeneratedSection = (
     }
 
     const subjectKey = getSubjectKey(subject);
-    const slotPlan = getRequiredSlotPlan(subject, creditAllocations);
+    const sClassType = normalizeClassType(subject?.class_type, subject).toUpperCase();
 
-    for (const entry of slotPlan) {
-      const reserveResult = reserveSlot(facultyIds, subjectKey);
-      if (!reserveResult) {
-        warnings.push(`No unoccupied slot available in the template for ${getSubjectLabel(subject)} (${entry.label}).`);
-        continue;
+    // Check if a Class Type Exception rule exists for this subject's class_type
+    const exceptionRule = classTypeExceptions.find(
+      (rule) => (rule.classType || '').toUpperCase() === sClassType
+    );
+
+    if (exceptionRule) {
+      const individualCount = Math.max(0, Number(exceptionRule.individualPeriods || 0));
+      const pairedCount = Math.max(0, Number(exceptionRule.pairedPeriods || 0));
+
+      // 1. Schedule Paired Block Periods (2 consecutive slots per pair)
+      for (let p = 1; p <= pairedCount; p++) {
+        const blockResult = reserveBlockPair(facultyIds, subjectKey);
+        if (!blockResult) {
+          warnings.push(`No 2-period block available in the template for ${getSubjectLabel(subject)} (Paired Block ${p}).`);
+          continue;
+        }
+
+        const { block, conflict } = blockResult;
+        if (conflict) {
+          warnings.push(`⚠️ Faculty conflict for ${getSubjectLabel(subject)} (Paired Block ${p}) on ${block.day}.`);
+        }
+
+        block.keys.forEach((key) => {
+          cells[key] = {
+            subject: buildCellText(subject, 'theory', `Block Pair ${p}`),
+            faculty: buildFacultyText(subject),
+            kind: 'theory',
+            note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Block Pair`,
+          };
+        });
       }
 
-      const { slot, conflict } = reserveResult;
-      if (conflict) {
-        warnings.push(`⚠️ Faculty conflict for ${getSubjectLabel(subject)} (${entry.label}) at ${slot.day} ${slot.period}. Faculty may be double-booked.`);
+      // 2. Schedule Individual Single Periods
+      for (let i = 1; i <= individualCount; i++) {
+        const reserveResult = reserveSlot(facultyIds, subjectKey);
+        if (!reserveResult) {
+          warnings.push(`No single slot available in the template for ${getSubjectLabel(subject)} (Individual ${i}).`);
+          continue;
+        }
+
+        const { slot, conflict } = reserveResult;
+        if (conflict) {
+          warnings.push(`⚠️ Faculty conflict for ${getSubjectLabel(subject)} (Individual ${i}) at ${slot.day} ${slot.period}.`);
+        }
+
+        cells[slot.key] = {
+          subject: buildCellText(subject, 'theory', `Single ${i}`),
+          faculty: buildFacultyText(subject),
+          kind: 'theory',
+          note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Single Period`,
+        };
       }
+    } else {
+      // Standard Credit-Based Allocation path
+      const slotPlan = getRequiredSlotPlan(subject, creditAllocations);
 
-      const credits = Number(subject?.c ?? subject?.credits ?? 0);
+      for (const entry of slotPlan) {
+        const reserveResult = reserveSlot(facultyIds, subjectKey);
+        if (!reserveResult) {
+          warnings.push(`No unoccupied slot available in the template for ${getSubjectLabel(subject)} (${entry.label}).`);
+          continue;
+        }
 
-      cells[slot.key] = {
-        subject: buildCellText(subject, entry.kind, entry.label),
-        faculty: buildFacultyText(subject),
-        kind: 'theory',
-        note: (conflict ? '⚠️ Conflict! ' : '') + `Credit (${credits}C) Allocation`,
-      };
+        const { slot, conflict } = reserveResult;
+        if (conflict) {
+          warnings.push(`⚠️ Faculty conflict for ${getSubjectLabel(subject)} (${entry.label}) at ${slot.day} ${slot.period}. Faculty may be double-booked.`);
+        }
+
+        const credits = Number(subject?.c ?? subject?.credits ?? 0);
+
+        cells[slot.key] = {
+          subject: buildCellText(subject, entry.kind, entry.label),
+          faculty: buildFacultyText(subject),
+          kind: 'theory',
+          note: (conflict ? '⚠️ Conflict! ' : '') + `Credit (${credits}C) Allocation`,
+        };
+      }
     }
   }
 
@@ -1027,8 +1170,28 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           console.error('Failed to load credit allocations during generation:', e);
         }
 
+        let classTypeExceptions: ClassTypeExceptionRule[] = [];
+        try {
+          const storedExceptions = localStorage.getItem('iqac_timetable_classtype_exceptions');
+          if (storedExceptions) {
+            const parsed = JSON.parse(storedExceptions);
+            if (Array.isArray(parsed)) classTypeExceptions = parsed;
+          }
+        } catch (e) {
+          console.error('Failed to load class type exceptions during generation:', e);
+        }
+
         const results = workingSnapshots.map((snapshot, index) =>
-          buildGeneratedSection(snapshot, selectedTemplate, globalFacultyUsage, generationSeed, index, groupAllocations, creditAllocations)
+          buildGeneratedSection(
+            snapshot,
+            selectedTemplate,
+            globalFacultyUsage,
+            generationSeed,
+            index,
+            groupAllocations,
+            creditAllocations,
+            classTypeExceptions
+          )
         );
 
         setGeneratedSections(results);

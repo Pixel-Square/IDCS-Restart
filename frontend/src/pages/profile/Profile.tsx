@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
@@ -1029,6 +1029,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   </div>
                 </div>
               )}
+              <div className="bg-gradient-to-r from-amber-500 to-indigo-600 rounded-lg px-4 py-2 shadow-sm text-white flex flex-col justify-center shrink-0">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-200">PBAS Score</div>
+                <div className="font-black text-xl leading-tight">
+                  {(user as any)?.pbas_credit ?? (user as any)?.profile?.pbas_credit ?? 0} Points
+                </div>
+              </div>
               <div className="bg-white rounded-lg px-4 py-2 shadow-sm border border-gray-100">
                 <div className="text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Profile Type</div>
                 <div className="font-bold text-gray-900">{user.profile_type || '—'}</div>
@@ -1041,6 +1047,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         <div>
           <h3 className="text-xl font-bold text-gray-900 mb-4">Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* PBAS Score Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow border-l-4 border-amber-500">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Award className="w-5 h-5 text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">PBAS Score</div>
+                  <div className="text-2xl font-black text-amber-700">
+                    {(user as any)?.pbas_credit ?? (user as any)?.profile?.pbas_credit ?? 0}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Staff/Student ID Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
               <div className="flex items-start gap-3">

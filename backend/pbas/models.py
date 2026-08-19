@@ -83,6 +83,24 @@ class PBASNode(models.Model):
     approvers = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='pbas_approver_nodes')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['department', 'parent']),
+            models.Index(fields=['parent']),
+        ]
+        ordering = ('position', 'created_at')
+
+    def __str__(self) -> str:
+        return self.label or str(self.id)
+
+    @property
+    def is_leaf(self) -> bool:
+        # Uses reverse relation; may hit DB
+        try:
+            return not self.children.exists()
+        except Exception:
+            return False
+
 
 class PBASNodeApproverHistory(models.Model):
     """Audit trail for approver assignments on PBAS nodes.
@@ -108,23 +126,6 @@ class PBASNodeApproverHistory(models.Model):
     def __str__(self) -> str:
         return f"PBASNodeApproverHistory(node={self.node_id}, user={self.user_id}, action={self.action})"
 
-    class Meta:
-        indexes = [
-            models.Index(fields=['department', 'parent']),
-            models.Index(fields=['parent']),
-        ]
-        ordering = ('position', 'created_at')
-
-    def __str__(self) -> str:
-        return self.label or str(self.id)
-
-    @property
-    def is_leaf(self) -> bool:
-        # Uses reverse relation; may hit DB
-        try:
-            return not self.children.exists()
-        except Exception:
-            return False
 
 
 class PBASSubmission(models.Model):

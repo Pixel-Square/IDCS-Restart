@@ -178,6 +178,8 @@ def validate_roles_for_user(user, roles):
         'HAA',
         'PRINCIPAL',
         'PS',
+        'PBAS_APPROVER',
+        'PBAS_ADMIN',
         'VISUAL_ADMIN',
         'DB_READER',
         'CODE_ADMIN',

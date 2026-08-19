@@ -40,6 +40,7 @@ class PBASCustomDepartmentSerializer(serializers.ModelSerializer):
 
 class PBASNodeTreeSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
+    approvers = serializers.SerializerMethodField()
 
     class Meta:
         model = PBASNode
@@ -51,10 +52,22 @@ class PBASNodeTreeSerializer(serializers.ModelSerializer):
             'link',
             'uploaded_name',
             'limit',
+            'pbas_credit',
             'college_required',
             'position',
+            'approvers',
             'children',
         )
+
+    def get_approvers(self, obj: PBASNode):
+        return [
+            {
+                'id': u.id,
+                'username': u.username,
+                'name': u.get_full_name() or u.username,
+            }
+            for u in obj.approvers.all()
+        ]
 
     def get_children(self, obj: PBASNode):
         qs = obj.children.all().order_by('position', 'created_at')
@@ -71,19 +84,51 @@ class CollegeSerializer(serializers.ModelSerializer):
 
 
 class PBASSubmissionSerializer(serializers.ModelSerializer):
+    leaf_title = serializers.SerializerMethodField()
+    parent_path = serializers.SerializerMethodField()
+    pbas_credit = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = PBASSubmission
         fields = (
             'id',
             'node',
+            'leaf_title',
+            'parent_path',
+            'pbas_credit',
             'submission_type',
             'link',
             'file',
             'file_name',
             'college',
+            'status',
+            'approved_by_name',
+            'reviewed_at',
+            'rejection_reason',
             'created_at',
         )
-        read_only_fields = ('id', 'file_name', 'created_at')
+        read_only_fields = ('id', 'file_name', 'created_at', 'status', 'reviewed_at', 'rejection_reason')
+
+    def get_leaf_title(self, obj):
+        return obj.node.label if obj.node else ''
+
+    def get_parent_path(self, obj):
+        if not obj.node:
+            return ''
+        parts = []
+        curr = obj.node.parent
+        while curr:
+            parts.append(curr.label)
+            curr = curr.parent
+        parts.reverse()
+        return ' > '.join(parts) if parts else 'Root Category'
+
+    def get_pbas_credit(self, obj):
+        return obj.node.pbas_credit if (obj.node and obj.node.pbas_credit is not None) else 0
+
+    def get_approved_by_name(self, obj):
+        return obj.approved_by.get_full_name() if obj.approved_by else None
 
     def validate_file(self, f):
         if not f:
