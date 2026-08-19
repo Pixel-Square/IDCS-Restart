@@ -45,6 +45,9 @@ export default function DeptList() {
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
   const [propagatingSec, setPropagatingSec] = useState(false);
   const [qpTypes, setQpTypes] = useState<QPType[]>([]);
+  const [classTypes, setClassTypes] = useState<ClassTypeItem[]>([]);
+  const [adminClassTypes, setAdminClassTypes] = useState<ClassTypeItem[]>([]);
+  const [adminQpTypes, setAdminQpTypes] = useState<any[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<DeptRow | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);

@@ -48,7 +48,8 @@ ALLOWED_HOSTS = (
         '127.0.0.1',
         '0.0.0.0',
         '.db.krgi.co.in',      # Allow all subdomains for the new domain
-        '.idcs.krgi.co.in',    # Allow all subdomains for the new domain
+        '.idcs.krgi.co.in',
+        '.idcs5.krgi.co.in'    # Allow all subdomains for the new domain
     ]
 )
 
@@ -201,7 +202,9 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+# Allow deploys to override the STATIC_ROOT via env var so nginx/hosts
+# with different filesystem layouts can point to the same collected files.
+STATIC_ROOT = Path(os.getenv('STATIC_ROOT', str(BASE_DIR / 'staticfiles')))
 
 # Include the project-level `static/` folder so Django's staticfiles
 # finders can locate the logo, admin CSS and other project assets.
@@ -345,6 +348,8 @@ _PROD_WEB_ORIGINS = [
     'null',
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
+    'https://idcs5.krgi.co.in',
+    'https://db5.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
 ]
@@ -353,6 +358,8 @@ _PROD_WEB_ORIGINS = [
 _PROD_CSRF_ORIGINS = [
     'https://idcs.krgi.co.in',
     'https://db.krgi.co.in',
+    'https://idcs5.krgi.co.in',
+    'https://db5.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
 ]

@@ -3779,6 +3779,34 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('You do not have permission to delete academic years.')
         instance.delete()
 
+    @action(detail=False, methods=['get'], url_path='transition_logs')
+    def transition_logs(self, request):
+        """Return all SystemTransitionLog entries, newest first. IQAC/admin only."""
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'Admin access required.'}, status=403)
+        from .models import SystemTransitionLog
+        logs = SystemTransitionLog.objects.select_related(
+            'academic_year', 'performed_by'
+        ).order_by('-performed_at')[:200]
+        data = [
+            {
+                'id': lg.id,
+                'academic_year': {
+                    'id': lg.academic_year_id,
+                    'name': lg.academic_year.name if lg.academic_year else None,
+                },
+                'performed_by': (
+                    lg.performed_by.get_full_name() or lg.performed_by.username
+                ) if lg.performed_by else None,
+                'performed_at': lg.performed_at.isoformat(),
+                'updated_count': lg.updated_count,
+                'details': lg.details,
+            }
+            for lg in logs
+        ]
+        return Response(data)
+
+
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)

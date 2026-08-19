@@ -467,6 +467,22 @@ class AcV2QpPattern(models.Model):
         ct = self.class_type.name if self.class_type else 'Global'
         return f"{self.qp_type} - {ct}"
 
+    def save(self, *args, **kwargs):
+        if self.is_active is False and self.pk:
+            self.delete()
+            return
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from django.db import transaction
+        with transaction.atomic():
+            try:
+                AcV2QpAssignment = self._meta.apps.get_model('academic_v2', 'AcV2QpAssignment')
+                AcV2QpAssignment.objects.filter(exam_assignment=self).delete()
+            except Exception:
+                pass
+            super().delete(*args, **kwargs)
+
     def get_questions(self):
         """Get list of questions from pattern."""
         p = self.pattern or {}
@@ -752,6 +768,11 @@ class AcV2ExamAssignment(models.Model):
 
     def get_qp_pattern(self):
         """Get the QP pattern for this exam (from local or global)."""
+        draft = self.draft_data if isinstance(self.draft_data, dict) else {}
+        user_pattern = draft.get('user_pattern')
+        if user_pattern and isinstance(user_pattern, dict):
+            return user_pattern
+
         if self.qp_pattern:
             return self.qp_pattern
         
@@ -1330,6 +1351,25 @@ class AcV2QpType(models.Model):
     
     def __str__(self):
         return f"{self.name} ({self.code})"
+
+    def save(self, *args, **kwargs):
+        if self.is_active is False and self.pk:
+            self.delete()
+            return
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from django.db import transaction
+        with transaction.atomic():
+            try:
+                AcV2QpAssignment = self._meta.apps.get_model('academic_v2', 'AcV2QpAssignment')
+                AcV2QpPattern = self._meta.apps.get_model('academic_v2', 'AcV2QpPattern')
+                AcV2QpAssignment.objects.filter(qp_type=self).delete()
+                AcV2QpAssignment.objects.filter(qp_type_code__iexact=self.code).delete()
+                AcV2QpPattern.objects.filter(qp_type__iexact=self.code).delete()
+            except Exception:
+                pass
+            super().delete(*args, **kwargs)
 
 
 # ============================================================================

@@ -133,6 +133,7 @@ const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/Aca
 // Visual Admin
 const VisualAdminDashboard = safeLazy(() => import('./pages/visual_admin/VisualAdminDashboard'), 'VisualAdminDashboard');
 const VisualAdminURLsPage = safeLazy(() => import('./pages/visual_admin/VisualAdminURLsPage'), 'VisualAdminURLsPage');
+const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
 const AcademicVisualsPage = safeLazy(() => import('./pages/visual_admin/AcademicVisualsPage'), 'AcademicVisualsPage');
 
 const AcV2PublishControlPage = safeLazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'), 'PublishControlPage');
@@ -1302,11 +1303,24 @@ export default function App() {
                 />
                 {/* ── Visual Admin Routes ─────────────────────────────── */}
                 <Route
+                  path="/academic-performance"
+                  element={
+                    <ProtectedRoute
+                      user={user}
+                      element={
+                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
+                          <AcademicPerformancePage />
+                        </React.Suspense>
+                      }
+                    />
+                  }
+                />
+                <Route
                   path="/academic-visuals"
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredRoles={['VISUAL_ADMIN']}
+                      requiredRoles={['VISUAL_ADMIN', 'PRINCIPAL', 'IQAC', 'SUPER_ADMIN', 'ADMIN']}
                       element={
                         <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
                           <AcademicVisualsPage />

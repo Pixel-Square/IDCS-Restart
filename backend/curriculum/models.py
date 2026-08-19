@@ -97,6 +97,12 @@ class QuestionPaperType(models.Model):
     def __str__(self):
         return self.label or self.code
 
+    def save(self, *args, **kwargs):
+        if self.is_active is False and self.pk:
+            self.delete()
+            return
+        super().save(*args, **kwargs)
+
 
 class ClassType(models.Model):
     """DB-managed list of valid Class Types (e.g. THEORY, LAB, TCPL).

@@ -23,6 +23,12 @@ const normalizeId = (value: any): number | null => {
   return Number.isFinite(num) && num > 0 ? num : null
 }
 
+const isSharedSection = (sec: any) => {
+  if (!sec) return false;
+  const code = sec.department_short_name || sec.department_code || sec.department?.code;
+  return sec.department_id === null || code === 'S&H';
+};
+
 const normalizeText = (value: any): string => String(value || '').trim().toLowerCase()
 
 const extractCourseCodeFromSubject = (subjectText: any): string => {

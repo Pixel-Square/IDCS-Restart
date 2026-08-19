@@ -756,8 +756,8 @@ export default function QpPatternEditorPage() {
       const deletedLabel = pendingDelete.label;
       setPendingDelete(null);
 
-      // For qp_pattern: FIRST remove exam assignment from ClassType JSON,
-      // THEN reload — so the useEffect doesn't re-insert the stale entry.
+      // For qp_pattern or qp_type: FIRST remove matching exam assignments from ClassType JSON,
+      // THEN reload — so the useEffect doesn't re-insert stale entries.
       if (deletedType === 'qp_pattern' && selectedClassTypeId) {
         const patternKey = normalizeExamDisplayKey(deletedLabel);
         const nextAssignments = localExamAssignments.filter(e =>
@@ -767,6 +767,18 @@ export default function QpPatternEditorPage() {
           method: 'PATCH',
           body: JSON.stringify({ exam_assignments: nextAssignments }),
         });
+      }
+      if (deletedType === 'qp_type' && selectedClassTypeId) {
+        const typeKey = normalizeExamDisplayKey(deletedLabel);
+        const nextAssignments = localExamAssignments.filter(e =>
+          normalizeExamDisplayKey(e.qp_type || '') !== typeKey
+        );
+        if (nextAssignments.length !== localExamAssignments.length) {
+          await fetchWithAuth(`/api/academic-v2/class-types/${selectedClassTypeId}/`, {
+            method: 'PATCH',
+            body: JSON.stringify({ exam_assignments: nextAssignments }),
+          });
+        }
       }
 
       await loadData();
@@ -2355,18 +2367,16 @@ export default function QpPatternEditorPage() {
                     <div className="font-medium">{t.label}</div>
                     <div className="text-xs text-gray-500">{t.code}</div>
                   </div>
-                  {!!t.id && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openDeleteModal({ object_type: 'qp_type', id: t.id, label: t.label || t.code });
-                      }}
-                      className="p-1 text-red-600 hover:bg-red-50 rounded"
-                      title="Delete QP Type"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openDeleteModal({ object_type: 'qp_type', id: t.id || t.code, label: t.label || t.code });
+                    }}
+                    className="p-1 text-red-600 hover:bg-red-50 rounded"
+                    title="Delete QP Type"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               ))
             )}

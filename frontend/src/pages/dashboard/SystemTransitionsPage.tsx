@@ -203,9 +203,11 @@ export default function SystemTransitionsPage() {
                   {logs.map((log) => (
                     <div key={log.id} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between mb-2">
-                        <span className="text-sm font-bold text-slate-900">{log.academic_year}</span>
+                        <span className="text-sm font-bold text-slate-900">
+                          {typeof log.academic_year === 'object' ? log.academic_year?.name : log.academic_year}
+                        </span>
                         <span className="text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded uppercase">
-                          {log.parity}
+                          {(log as any).parity ?? '—'}
                         </span>
                       </div>
                       <div className="space-y-1.5">

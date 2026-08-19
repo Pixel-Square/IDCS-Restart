@@ -1968,23 +1968,42 @@ def admin_secure_delete(request):
         return Response({'detail': 'object_type and id are required'}, status=400)
 
     if object_type == 'qp_type':
-        obj = get_object_or_404(AcV2QpType, pk=object_id)
+        # Accept UUID primary key, code, or name
+        obj = None
+        try:
+            obj = AcV2QpType.objects.filter(pk=object_id).first()
+        except Exception:
+            pass
+        if not obj:
+            obj = AcV2QpType.objects.filter(models.Q(code__iexact=object_id) | models.Q(name__iexact=object_id)).first()
+
+        if not obj:
+            try:
+                from curriculum.models import QuestionPaperType
+                qpt = QuestionPaperType.objects.filter(models.Q(code__iexact=object_id) | models.Q(label__iexact=object_id)).first()
+                if qpt:
+                    qpt.delete()
+                    return Response({'success': True}, status=200)
+            except Exception:
+                pass
+            return Response({'detail': f'QP Type "{object_id}" not found'}, status=404)
+
         with transaction.atomic():
-            obj.is_active = False
-            obj.updated_by = request.user
-            obj.save(update_fields=['is_active', 'updated_by', 'updated_at'])
-            # Deactivate any assignments using this QP type.
-            AcV2QpAssignment.objects.filter(qp_type=obj, is_active=True).update(is_active=False, updated_by=request.user)
+            code = obj.code
+            AcV2QpAssignment.objects.filter(qp_type=obj).delete()
+            AcV2QpAssignment.objects.filter(qp_type_code__iexact=code).delete()
+            AcV2QpPattern.objects.filter(qp_type__iexact=code).delete()
+            obj.delete()
+            AcV2QpType.objects.filter(models.Q(code__iexact=code) | models.Q(is_active=False)).delete()
         return Response({'success': True}, status=200)
 
     if object_type == 'qp_pattern':
         obj = get_object_or_404(AcV2QpPattern, pk=object_id)
+        # Permanently delete any QP assignment rows that point at this pattern before deleting,
+        # then perform permanent delete of the pattern.
         with transaction.atomic():
-            obj.is_active = False
-            obj.updated_by = request.user
-            obj.save(update_fields=['is_active', 'updated_by', 'updated_at'])
-            # Deactivate any QP assignment rows that point at this pattern.
-            AcV2QpAssignment.objects.filter(exam_assignment=obj, is_active=True).update(is_active=False, updated_by=request.user)
+            AcV2QpAssignment.objects.filter(exam_assignment=obj).delete()
+            obj.delete()
         return Response({'success': True}, status=200)
 
     return Response({'detail': 'Unsupported object_type'}, status=400)
@@ -2389,7 +2408,7 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
                     defaults=defaults,
                 )
 
-            # Deactivate CQI exams that were removed or disabled in the JSON config
+            # Delete CQI exams that were removed or disabled in the JSON config
             existing = AcV2CqiExam.objects.filter(class_type=instance)
             for row in existing:
                 qp_key = str(getattr(row, 'qp_type_code', '') or '').strip().lower()
@@ -2397,23 +2416,17 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
                 allowed = active_codes_by_qp.get(qp_key)
                 if allowed is None:
                     # No CQI configured for this qp_type anymore
-                    if row.is_active:
-                        row.is_active = False
-                        row.updated_by = self.request.user
-                        row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+                    row.delete()
                     continue
-                if code and code not in allowed and row.is_active:
-                    row.is_active = False
-                    row.updated_by = self.request.user
-                    row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+                if code and code not in allowed:
+                    row.delete()
         except Exception:
             # Never block saving class types due to CQI sync problems.
             pass
     
     def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save()
+        # Permanent delete — remove from DB
+        instance.delete()
 
 
 # ============================================================================
@@ -2551,22 +2564,51 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        # Permanently purge any stale soft-deleted QP types from DB
+        AcV2QpType.objects.filter(is_active=False).delete()
         qs = super().get_queryset()
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
         return qs.order_by('name')
     
+    def create(self, request, *args, **kwargs):
+        name = str(request.data.get('name', '') or '').strip()
+        code = str(request.data.get('code', '') or '').strip()
+        class_type_id = request.data.get('class_type')
+
+        # Check if an existing record (active or inactive) with same name or code exists
+        existing = AcV2QpType.objects.filter(
+            models.Q(name__iexact=name) | models.Q(code__iexact=code)
+        ).first()
+
+        if existing:
+            existing.name = name
+            existing.code = code
+            if class_type_id:
+                existing.class_type_id = class_type_id
+            existing.description = request.data.get('description', '') or ''
+            existing.is_active = True
+            existing.updated_by = request.user
+            existing.save()
+            serializer = self.get_serializer(existing)
+            return Response(serializer.data, status=200)
+
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        serializer.save(updated_by=self.request.user, is_active=True)
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
     
     def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save()
+        # Permanent delete (remove from DB) along with related assignments and patterns
+        with transaction.atomic():
+            AcV2QpAssignment.objects.filter(qp_type=instance).delete()
+            AcV2QpAssignment.objects.filter(qp_type_code__iexact=instance.code).delete()
+            AcV2QpPattern.objects.filter(qp_type__iexact=instance.code).delete()
+            instance.delete()
 
 
 class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
@@ -2592,9 +2634,8 @@ class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
 
     def perform_destroy(self, instance):
-        # Soft delete
-        instance.is_active = False
-        instance.save(update_fields=['is_active', 'updated_at'])
+        # Permanent delete (remove from DB)
+        instance.delete()
 
 
 # ============================================================================
@@ -2611,6 +2652,8 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
+        # Permanently purge any stale soft-deleted QP patterns from DB
+        AcV2QpPattern.objects.filter(is_active=False).delete()
         qs = super().get_queryset()
         qp_type = self.request.query_params.get('qp_type')
         class_type_id = self.request.query_params.get('class_type')
@@ -2624,6 +2667,12 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
             qs = qs.filter(batch_id=batch_id)
         
         return qs.select_related('class_type', 'batch')
+
+    def perform_destroy(self, instance):
+        # Permanent delete (remove pattern & related assignments from DB)
+        with transaction.atomic():
+            AcV2QpAssignment.objects.filter(exam_assignment=instance).delete()
+            instance.delete()
     
     def perform_create(self, serializer):
         qp_pattern = serializer.save(updated_by=self.request.user)
