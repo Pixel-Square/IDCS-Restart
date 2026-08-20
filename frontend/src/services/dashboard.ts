@@ -1,6 +1,7 @@
 export type DashboardResponse = {
   username?: string;
   is_iqac_main?: boolean;
+  is_superuser?: boolean;
   profile_type: string | null;
   roles: string[];
   permissions: string[];

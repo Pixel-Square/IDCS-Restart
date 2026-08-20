@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     'announcements.apps.AnnouncementsConfig',
     'certificates.apps.CertificatesConfig',
     'lms.apps.LmsConfig',
+    'audits.apps.AuditsConfig',
 ]
 # Staff requests dynamic forms & workflow engine
 INSTALLED_APPS.append('staff_requests')

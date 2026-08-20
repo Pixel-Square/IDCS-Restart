@@ -105,6 +105,16 @@ def resolve_dashboard_capabilities(user) -> Dict:
         if r not in {str(x).upper() for x in role_names}:
             role_names.append(r)
 
+    # Academic audit access: staff assigned as auditors for any audit assignment.
+    is_audit_auditor = False
+    try:
+        st = getattr(user, 'staff_profile', None)
+        if st is not None:
+            from audits.models import AuditDepartmentAssignment
+            is_audit_auditor = AuditDepartmentAssignment.objects.filter(auditors=st).exists()
+    except Exception:
+        is_audit_auditor = False
+
     is_iqac_main = False
     try:
         is_iqac_main = ('IQAC' in {str(r or '').upper() for r in role_names}) and str(getattr(user, 'username', '') or '').strip() == '000000'
@@ -189,6 +199,8 @@ def resolve_dashboard_capabilities(user) -> Dict:
             or 'IQAC' in {str(r).upper() for r in role_names}
         ),
         'can_view_achievement_reports': 'IQAC' in {str(r).upper() for r in role_names},
+        'is_audit_auditor': is_audit_auditor,
+        'is_audit_hod': bool({'HOD', 'AHOD'} & dept_role_names),
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.
@@ -224,6 +236,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'username': str(getattr(user, 'username', '') or ''),
         'email': str(getattr(user, 'email', '') or ''),
         'is_iqac_main': bool(is_iqac_main),
+        'is_superuser': bool(getattr(user, 'is_superuser', False)),
         'profile_type': profile_type,
         'roles': role_names,
         'permissions': perm_codes,

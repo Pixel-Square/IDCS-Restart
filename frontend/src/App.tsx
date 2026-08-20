@@ -87,6 +87,9 @@ import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
 import EventAttendingPage from './pages/staff-requests/EventAttendingPage';
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
+import AuditManagementPage from './pages/audits/AuditManagementPage';
+import AuditEntryPage from './pages/audits/AuditEntryPage';
+import AuditATRPage from './pages/audits/AuditATRPage';
 import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
 import ApplicationsPage from './pages/applications/ApplicationsPage';
 import ApplicationFormPage from './pages/applications/ApplicationFormPage';
@@ -390,6 +393,19 @@ export default function App() {
                 <Route
                   path="/iqac/calendar/events"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<CalendarEvents />} />}
+                />
+                {/* Academic Audit (IQAC management / auditor entry / HOD ATR) */}
+                <Route
+                  path="/iqac/audits"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AuditManagementPage />} />}
+                />
+                <Route
+                  path="/audits"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<AuditEntryPage />} />}
+                />
+                <Route
+                  path="/audits/atr"
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'IQAC']} element={<AuditATRPage />} />}
                 />
                 <Route
                   path="/hod/calendar"
