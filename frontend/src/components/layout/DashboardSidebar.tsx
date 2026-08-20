@@ -570,6 +570,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (isIqac && !items.some((item) => item.key === 'system_transitions')) {
     items.push({ key: 'system_transitions', label: 'System Transitions', to: '/iqac/system-transitions' });
   }
+  if (isIqac && !items.some((item) => item.key === 'batch_archival')) {
+    items.push({ key: 'batch_archival', label: 'Batch Archival', to: '/iqac/batch-archival' });
+  }
   // PBAS Manager intentionally hidden from sidebar for all users
   
   if (isIqac && !items.some((item) => item.key === 'applications_admin')) {
@@ -659,7 +662,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Staff Requests system
   // Note: 'My Requests' moved into My Calendar; keep direct link removed to avoid duplication
   // Align with backend: approver roles can access pending approvals even without explicit permission.
-  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN'];
+  const approverRoles = ['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN', 'CFFA'];
   const hasApproverRole = rolesUpper.some((r) => approverRoles.includes(r));
   const hasApprovePermission = permsLower.includes('staff_requests.approve_requests');
   const canAccessPendingApprovals = hasApprovePermission || hasApproverRole;
@@ -670,7 +673,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
 
   // Event Attending: visible to all staff, HR, and other approvers
-  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PS', 'HOD', 'AHOD'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
+  if ((flags.is_staff || rolesUpper.some((r) => ['HR', 'IQAC', 'HAA', 'PS', 'HOD', 'AHOD', 'CFFA'].includes(r))) && !items.some(item => item.key === 'event_attending')) {
     items.push({ key: 'event_attending', label: 'Event Attending', to: '/staff-requests/event-attending' });
   }
 

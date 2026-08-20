@@ -1,7 +1,8 @@
-import React from 'react';
-import { X, CheckCircle, XCircle, Clock, User } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, CheckCircle, XCircle, Clock, User, Download } from 'lucide-react';
 import type { StaffRequest } from '../../types/staffRequests';
 import { formatFieldLabel, renderFormValue } from './formValueUtils';
+import { generateODPdf } from './event-attending/generateODPdf';
 
 interface Props {
   request: StaffRequest;
@@ -9,6 +10,20 @@ interface Props {
 }
 
 export default function RequestDetailsModal({ request, onClose }: Props) {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    try {
+      setDownloading(true);
+      await generateODPdf(request);
+    } catch (err) {
+      console.error('Failed to download PDF', err);
+      alert('Failed to generate PDF');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString('en-IN', {
       year: 'numeric',
@@ -59,9 +74,23 @@ export default function RequestDetailsModal({ request, onClose }: Props) {
                 Submitted on {formatDate(request.created_at)}
               </p>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
-              <X size={24} />
-            </button>
+            <div className="flex items-center gap-4">
+              {request.template.name.toLowerCase().startsWith('on duty') && (
+                request.template.name.toLowerCase() === 'on duty - spl' || request.status === 'approved'
+              ) && (
+                <button
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  <Download size={16} />
+                  {downloading ? 'Generating...' : 'Download PDF'}
+                </button>
+              )}
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+                <X size={24} />
+              </button>
+            </div>
           </div>
           
           {/* Status Badge */}

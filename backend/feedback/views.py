@@ -21,6 +21,25 @@ from accounts.utils import get_user_permissions
 from academics.models import StaffProfile
 
 
+def get_staff_display_name(staff):
+    """
+    CENTRALIZED STAFF NAME HELPER
+    Returns the best display name for a staff member (full name, username, or staff_id).
+    """
+    if not staff:
+        return ""
+    if getattr(staff, 'user', None):
+        name = (staff.user.get_full_name() or "").strip()
+        if name:
+            return name
+        username = (staff.user.username or "").strip()
+        if username:
+            return username
+    if getattr(staff, 'name', None) and str(staff.name).strip():
+        return str(staff.name).strip()
+    return str(staff).strip()
+
+
 def get_student_display_data(response_or_user, feedback_form, student_profile=None, staff_profile=None):
     """
     CENTRALIZED MASKING HELPER
@@ -1693,11 +1712,36 @@ class GetResponseStatisticsView(APIView):
         # Get the feedback form
         feedback_form = get_object_or_404(FeedbackForm, id=form_id)
         
-        # Ensure the form was created by the current user
-        if feedback_form.created_by != request.user:
-            return Response({
-                'detail': 'You can only view statistics for forms you created.'
-            }, status=status.HTTP_403_FORBIDDEN)
+        # Check permissions: Creator, IQAC/Admin, or HOD for their department (if allow_hod_view=True)
+        user_is_form_creator = feedback_form.created_by == request.user
+        if not user_is_form_creator:
+            user_roles = set(str(role).upper() for role in request.user.roles.values_list('name', flat=True))
+            if 'IQAC' in user_roles or 'ADMIN' in user_roles:
+                pass
+            elif 'HOD' in user_roles and feedback_form.allow_hod_view:
+                try:
+                    from academics.models import AcademicYear, DepartmentRole
+                    staff_profile = request.user.staff_profile
+                    active_ay = AcademicYear.objects.filter(is_active=True).first()
+                    hod_department_ids = []
+                    if active_ay:
+                        hod_department_ids = list(DepartmentRole.objects.filter(
+                            staff=staff_profile, role='HOD', is_active=True, academic_year=active_ay
+                        ).values_list('department_id', flat=True))
+                    if not hod_department_ids and staff_profile.department_id:
+                        hod_department_ids = [staff_profile.department_id]
+                    if feedback_form.department_id not in hod_department_ids:
+                        return Response({
+                            'detail': 'You can only view statistics from your managed departments.'
+                        }, status=status.HTTP_403_FORBIDDEN)
+                except Exception:
+                    return Response({
+                        'detail': 'You can only view statistics for forms you created.'
+                    }, status=status.HTTP_403_FORBIDDEN)
+            else:
+                return Response({
+                    'detail': 'You can only view statistics for forms you created.'
+                }, status=status.HTTP_403_FORBIDDEN)
         
         # Get unique users who responded
         responded_users = FeedbackResponse.objects.filter(
@@ -2036,6 +2080,10 @@ class GetResponseListView(APIView):
                     hod_department_ids = list(department_roles)
                 else:
                     hod_department_ids = []
+                
+                # If no HOD roles found via DepartmentRole, fall back to staff_profile.department (backward compatibility)
+                if not hod_department_ids and staff_profile.department_id:
+                    hod_department_ids = [staff_profile.department_id]
                 
                 # Verify HOD manages at least the form's department (or has access to it)
                 if feedback_form.department.id not in hod_department_ids:
@@ -2423,7 +2471,30 @@ class GetStudentSubjectsView(APIView):
                     'detail': 'Section information not found.'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
-            batch = section.batch
+            # Get student's department (prefer home_department, then secondary dept-core mapping)
+            student_department = None
+            if student_profile.home_department:
+                student_department = student_profile.home_department
+            else:
+                student_department_id = resolve_student_department_id(student_profile, section)
+                if student_department_id:
+                    from academics.models import Department
+                    student_department = Department.objects.filter(id=student_department_id).first()
+            
+            # Resolve student's effective department section (e.g. 2nd year department section A, B, or C)
+            from academics.models import StudentSectionAssignment
+            effective_section = section
+            dept_assignment = StudentSectionAssignment.objects.filter(
+                student=student_profile,
+                end_date__isnull=True,
+                section__batch__course__department=student_department
+            ).select_related('section', 'section__batch', 'section__batch__regulation').first()
+            
+            if dept_assignment and dept_assignment.section:
+                effective_section = dept_assignment.section
+                print(f"[GetStudentSubjectsView] Resolved effective department section: {effective_section.name} (ID: {effective_section.id})")
+            
+            batch = effective_section.batch or section.batch
             student_year = None
             
             # Calculate year from batch
@@ -2442,17 +2513,7 @@ class GetStudentSubjectsView(APIView):
             if not student_year:
                 print(f"[GetStudentSubjectsView] WARNING: Could not determine student year")
             
-            # Get student's department (prefer home_department, then secondary dept-core mapping)
-            student_department = None
-            if student_profile.home_department:
-                student_department = student_profile.home_department
-            else:
-                student_department_id = resolve_student_department_id(student_profile, section)
-                if student_department_id:
-                    from academics.models import Department
-                    student_department = Department.objects.filter(id=student_department_id).first()
-            
-            print(f"[GetStudentSubjectsView] Student info - Year: {student_year}, Section: {section.name} (ID: {section.id}), Department: {student_department.code if student_department else 'None'}")
+            print(f"[GetStudentSubjectsView] Student info - Year: {student_year}, Section: {effective_section.name} (ID: {effective_section.id}, Primary: {section.name}), Department: {student_department.code if student_department else 'None'}")
             print(f"[GetStudentSubjectsView] Feedback targets - Years: {feedback_form.years}, Sections: {feedback_form.sections}, Department: {feedback_form.department.code}")
             
             # Validate if student's year and section match feedback form's targets
@@ -2469,9 +2530,14 @@ class GetStudentSubjectsView(APIView):
             
             # Check if feedback targets specific sections
             if feedback_form.sections and len(feedback_form.sections) > 0:
-                if section.id not in feedback_form.sections:
+                section_matches = False
+                if section and section.id in feedback_form.sections:
+                    section_matches = True
+                if effective_section and effective_section.id in feedback_form.sections:
+                    section_matches = True
+                if not section_matches:
                     return Response({
-                        'detail': f'This feedback is not for your section ({section.name}).',
+                        'detail': f'This feedback is not for your section ({effective_section.name if effective_section else section.name}).',
                         'subjects': [],
                         'total_subjects': 0,
                         'completed_subjects': 0,
@@ -2531,11 +2597,12 @@ class GetStudentSubjectsView(APIView):
             
             # Get student's regulation from their batch (CRITICAL for 4th year filtering)
             student_regulation = None
-            if section and section.batch and section.batch.regulation:
-                student_regulation = section.batch.regulation.code  # e.g., 'R2020' or 'R2023' (use .code not .name)
+            target_batch = (effective_section.batch if effective_section and effective_section.batch else None) or (section.batch if section and section.batch else None)
+            if target_batch and target_batch.regulation:
+                student_regulation = target_batch.regulation.code  # e.g., 'R2020' or 'R2023' (use .code not .name)
                 print(f"[GetStudentSubjectsView] Student regulation: {student_regulation}")
             else:
-                print(f"[GetStudentSubjectsView] ⚠️ WARNING: Could not determine student regulation (section={section}, batch={section.batch if section else None})")
+                print(f"[GetStudentSubjectsView] ⚠️ WARNING: Could not determine student regulation (effective_section={effective_section}, section={section})")
                 print(f"[GetStudentSubjectsView] ⚠️ Will show subjects from ALL regulations if no filter applied")
             
             # Fetch core curriculum subjects
@@ -2545,7 +2612,6 @@ class GetStudentSubjectsView(APIView):
             }
             
             # ADD REGULATION FILTER (CRITICAL for 4th year - must match R2020 vs R2023)
-            # NOTE: Only filter if we have a valid regulation code
             if student_regulation:
                 curriculum_filter['regulation'] = student_regulation
                 print(f"[GetStudentSubjectsView] Filtering curriculum by regulation: {student_regulation}")
@@ -2570,37 +2636,71 @@ class GetStudentSubjectsView(APIView):
             
             for curr_subj in curriculum_subjects:
                 # Try to find TeachingAssignment for this subject
-                # CRITICAL: Filter by regulation through curriculum_row to ensure regulation correctness
-                # First try: Match by section (preferred)
+                # Priority 1: Match by effective_section (the student's department section, e.g. A, B, or C)
                 ta_query = TeachingAssignment.objects.filter(
-                    curriculum_row=curr_subj,  # curriculum_row has regulation field
-                    section=section,
+                    curriculum_row=curr_subj,
+                    section=effective_section,
                     academic_year=current_ay,
                     is_active=True
                 ).select_related('staff', 'staff__user', 'curriculum_row')
                 
-                # Ensure curriculum_row matches student's regulation
                 if student_regulation:
                     ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
                 
                 ta = ta_query.first()
                 
-                # Second try: Match by department (if section-specific TA not found)
-                if not ta:
+                # Priority 2: Match by student_profile.section (if different from effective_section)
+                if not ta and section != effective_section:
                     ta_query = TeachingAssignment.objects.filter(
-                        curriculum_row=curr_subj,  # curriculum_row has regulation field
+                        curriculum_row=curr_subj,
+                        section=section,
                         academic_year=current_ay,
                         is_active=True
                     ).select_related('staff', 'staff__user', 'curriculum_row')
-                    
-                    # Ensure curriculum_row matches student's regulation
                     if student_regulation:
                         ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
                     ta = ta_query.first()
                 
+                # Priority 3: Match by section name in student's batch & department
+                if not ta and effective_section:
+                    ta_query = TeachingAssignment.objects.filter(
+                        curriculum_row=curr_subj,
+                        section__name=effective_section.name,
+                        section__batch__course__department=student_department,
+                        academic_year=current_ay,
+                        is_active=True
+                    ).select_related('staff', 'staff__user', 'curriculum_row')
+                    if student_regulation:
+                        ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
+                    ta = ta_query.first()
+
+                # Priority 4: Match section-independent TA (section is NULL)
+                if not ta:
+                    ta_query = TeachingAssignment.objects.filter(
+                        curriculum_row=curr_subj,
+                        section__isnull=True,
+                        academic_year=current_ay,
+                        is_active=True
+                    ).select_related('staff', 'staff__user', 'curriculum_row')
+                    if student_regulation:
+                        ta_query = ta_query.filter(curriculum_row__regulation=student_regulation)
+                    ta = ta_query.first()
+
+                # Priority 5: Fallback to any department TA ONLY IF exactly 1 TA exists for the subject (single section / shared course)
+                if not ta:
+                    ta_candidates = TeachingAssignment.objects.filter(
+                        curriculum_row=curr_subj,
+                        academic_year=current_ay,
+                        is_active=True
+                    ).select_related('staff', 'staff__user', 'curriculum_row')
+                    if student_regulation:
+                        ta_candidates = ta_candidates.filter(curriculum_row__regulation=student_regulation)
+                    if ta_candidates.count() == 1:
+                        ta = ta_candidates.first()
+                
                 if ta:
                     core_teaching_assignments.append(ta)
-                    staff_name = ta.staff.user.get_full_name() if ta.staff and ta.staff.user else "No staff"
+                    staff_name = get_staff_display_name(ta.staff) or "No staff"
                     print(f"[GetStudentSubjectsView]   ✓ {curr_subj.course_code}: {curr_subj.course_name} (Staff: {staff_name})")
                 else:
                     # No TA found - will create pseudo-assignment
@@ -2664,6 +2764,7 @@ class GetStudentSubjectsView(APIView):
             # CRITICAL: Map course_code -> department_id to filter staff by chosen department
             chosen_elective_codes = []
             elective_dept_map = {}  # Map course_code -> department_id from student's choice
+            elective_ay_map = {}    # Map course_code -> academic_year from student's choice
             seen_codes_for_building = set()  # Track to avoid duplicates in chosen_elective_codes
             
             for choice in elective_choices:
@@ -2675,6 +2776,7 @@ class GetStudentSubjectsView(APIView):
                     if code not in seen_codes_for_building:
                         chosen_elective_codes.append(code)
                         elective_dept_map[code] = dept.id if dept else None
+                        elective_ay_map[code] = choice.academic_year
                         seen_codes_for_building.add(code)
                         
                         dept_name = dept.code if dept else "No Dept"
@@ -2697,267 +2799,96 @@ class GetStudentSubjectsView(APIView):
             elective_teaching_assignments = []
             staff_map = {}  # Map course_code -> list of staff names
             
-            # Prepare semester filter for elective queries (OPTIONAL - use only for strict validation)
-            # IMPORTANT: Removed strict semester filtering that was breaking queries
-            # ElectiveChoice already represents student's legitimate choices for their year/semester
-            # So we trust the student's chosen electives are already correct semester-wise
-            semester_filter = {}  # Keep empty - don't filter to avoid breaking queries
-            
-            if target_semesters:
-                print(f"[GetStudentSubjectsView] STEP 3: Note - Skipping semester filter on electives (use ElectiveChoice trust)")
-            else:
-                print(f"[GetStudentSubjectsView] STEP 3: No semester restriction on electives")
-            
             if chosen_elective_codes:
-                # Query each elective individually to apply correct department preference + STRICT semester filter
-                # IMPORTANT: Filter by student's batch to ensure year-correct assignments
-                # FIX: Use Q objects to match EITHER section__batch=X OR section=NULL (for PE/EE/OE)
-                if section.batch:
-                    batch_filter = Q(section__batch=section.batch) | Q(section__isnull=True)
-                else:
-                    batch_filter = Q()  # No filtering if no batch
-                
                 for code in chosen_elective_codes:
                     dept_id = elective_dept_map.get(code)
-                    print(f"[GetStudentSubjectsView]   Processing {code} (preferred department: {dept_id}, semester filter: {semester_filter})")
+                    choice_ay = elective_ay_map.get(code)
+                    print(f"[GetStudentSubjectsView]   Processing elective {code} (preferred dept: {dept_id}, choice AY: {choice_ay}, current AY: {current_ay})")
                     
-                    found_staff = False
+                    q_match = (
+                        Q(elective_subject__course_code=code) |
+                        Q(curriculum_row__course_code=code, curriculum_row__is_elective=True) |
+                        Q(subject__code=code)
+                    )
                     
-                    # ATTEMPT 1: Try with department filter (preferred) + STRICT semester + BATCH FILTER
-                    if dept_id:
-                        ta_filter_dict = {
-                            'elective_subject__course_code': code,
-                            'elective_subject__department_id': dept_id,
-                            'academic_year': current_ay,
-                            'is_active': True,
-                        }
-                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
-                        if student_regulation:
-                            ta_filter_dict['elective_subject__regulation'] = student_regulation
-                        
-                        ta_query = TeachingAssignment.objects.filter(
-                            **ta_filter_dict,
-                            **semester_filter,  # STRICT semester filter
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                        ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department')
-                        
-                        for ta in ta_query:
-                            if ta.staff and ta.staff.user:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or "Unknown"
-                            else:
-                                staff_name = "Unknown"
-                            
-                            if code not in staff_map:
-                                staff_map[code] = []
-                            if staff_name and staff_name.strip() and staff_name not in staff_map[code]:
-                                staff_map[code].append(staff_name)
-                                dept_code = ta.elective_subject.department.code if ta.elective_subject.department else "N/A"
-                                print(f"[GetStudentSubjectsView]     ✓ Found TA (preferred dept): {code} - {staff_name} (dept: {dept_code})")
-                                found_staff = True
+                    # Fetch candidate teaching assignments for this elective
+                    candidate_tas = TeachingAssignment.objects.filter(
+                        q_match,
+                        is_active=True
+                    ).select_related(
+                        'staff', 'staff__user', 'elective_subject', 'elective_subject__department',
+                        'curriculum_row', 'curriculum_row__department', 'subject', 'academic_year', 'section'
+                    )
                     
-                    # ATTEMPT 2: Try WITHOUT department filter (fallback) + STRICT semester + BATCH FILTER
-                    if not found_staff:
-                        ta_filter_dict = {
-                            'elective_subject__course_code': code,
-                            'academic_year': current_ay,
-                            'is_active': True,
-                        }
-                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
-                        if student_regulation:
-                            ta_filter_dict['elective_subject__regulation'] = student_regulation
-                        
-                        ta_query = TeachingAssignment.objects.filter(
-                            **ta_filter_dict,
-                            **semester_filter,  # STRICT semester filter
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                        ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department')
-                        
-                        for ta in ta_query:
-                            if ta.staff and ta.staff.user:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or "Unknown"
-                            else:
-                                staff_name = "Unknown"
-                            
-                            if code not in staff_map:
-                                staff_map[code] = []
-                            if staff_name and staff_name.strip() and staff_name not in staff_map[code]:
-                                staff_map[code].append(staff_name)
-                                dept_code = ta.elective_subject.department.code if ta.elective_subject.department else "N/A"
-                                print(f"[GetStudentSubjectsView]     ✓ Found TA (any dept): {code} - {staff_name} (dept: {dept_code})")
-                                found_staff = True
-                    
-                    # ATTEMPT 3: Try curriculum_row method (for elective placeholders) + STRICT semester + BATCH FILTER
-                    if not found_staff:
-                        ta_query_filter = {
-                            'curriculum_row__course_code': code,
-                            'curriculum_row__is_elective': True,
-                            'academic_year': current_ay,
-                            'is_active': True,
-                        }
-                        # Only add regulation filter if it exists (defensive against NULL regulation in batch)
-                        if student_regulation:
-                            ta_query_filter['curriculum_row__regulation'] = student_regulation
-                        
-                        ta_query_base = TeachingAssignment.objects.filter(
-                            **ta_query_filter,
-                            **semester_filter,  # STRICT semester filter
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
+                    if not candidate_tas.exists():
+                        # Fallback: check without is_active filter
+                        candidate_tas = TeachingAssignment.objects.filter(
+                            q_match
+                        ).select_related(
+                            'staff', 'staff__user', 'elective_subject', 'elective_subject__department',
+                            'curriculum_row', 'curriculum_row__department', 'subject', 'academic_year', 'section'
                         )
-                        
-                        # First try with dept filter if available
-                        if dept_id:
-                            ta_query = ta_query_base.filter(curriculum_row__department_id=dept_id)
-                            tas = ta_query.select_related('staff', 'staff__user', 'curriculum_row', 'curriculum_row__department')
-                        else:
-                            tas = ta_query_base.select_related('staff', 'staff__user', 'curriculum_row', 'curriculum_row__department')
-                        
-                        # If nothing found with dept filter, try without
-                        if not tas.exists() and dept_id:
-                            tas = ta_query_base.select_related('staff', 'staff__user', 'curriculum_row', 'curriculum_row__department')
-                        
-                        for ta in tas:
-                            if ta.staff and ta.staff.user:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or "Unknown"
-                            else:
-                                staff_name = "Unknown"
-                            if code not in staff_map:
-                                staff_map[code] = []
-                            if staff_name and staff_name.strip() and staff_name not in staff_map[code]:
-                                staff_map[code].append(staff_name)
-                                dept_code = ta.curriculum_row.department.code if ta.curriculum_row.department else "N/A"
-                                print(f"[GetStudentSubjectsView]     ✓ Found TA (curriculum_row): {code} - {staff_name} (dept: {dept_code})")
-                                found_staff = True
                     
-                    # ATTEMPT 4: Try legacy subject table (last resort) + BATCH FILTER
-                    if not found_staff:
-                        from academics.models import Subject
-                        tas_by_subject = TeachingAssignment.objects.filter(
-                            subject__code=code,
-                            academic_year=current_ay,
-                            is_active=True,
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                        ).select_related('staff', 'staff__user', 'subject')
-                        
-                        for ta in tas_by_subject:
-                            if ta.staff and ta.staff.user:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or "Unknown"
-                            else:
-                                staff_name = "Unknown"
-                            if code not in staff_map:
-                                staff_map[code] = []
-                            if staff_name and staff_name.strip() and staff_name not in staff_map[code]:
-                                staff_map[code].append(staff_name)
-                                print(f"[GetStudentSubjectsView]     ✓ Found TA (subject): {code} - {staff_name}")
-                                found_staff = True
+                    # Filter preferred department candidates if available
+                    dept_candidates = [
+                        ta for ta in candidate_tas
+                        if (ta.elective_subject and ta.elective_subject.department_id == dept_id)
+                        or (ta.curriculum_row and ta.curriculum_row.department_id == dept_id)
+                    ]
                     
-                    # If still no staff found, mark for later pseudo-assignment creation
-                    if not found_staff:
-                        print(f"[GetStudentSubjectsView]     ⚠ No TA found for {code}, will create pseudo-assignment")
-                
-                # Collect unique TAs for electives (store first TA for each course_code for feedback submission)
-                # Query again to get actual TA objects for each code
-                # IMPORTANT: Filter by batch to ensure year-correct assignments + REGULATION FILTER
-                seen_codes = set()
-                for code in chosen_elective_codes:
-                    if code in seen_codes:
-                        continue
+                    target_pool = dept_candidates if dept_candidates else list(candidate_tas)
                     
-                    dept_id = elective_dept_map.get(code)
-                    ta = None
+                    # Collect staff names from target pool first, then broader pool
+                    staff_names = []
+                    for ta in target_pool:
+                        s_name = get_staff_display_name(ta.staff)
+                        if s_name and s_name not in staff_names:
+                            staff_names.append(s_name)
                     
-                    # Try to find a TA for this code (prefer department filter, fallback to any) + STRICT semester + BATCH
-                    if dept_id:
-                        ta_filter_dict = {
-                            'elective_subject__course_code': code,
-                            'elective_subject__department_id': dept_id,
-                            'academic_year': current_ay,
-                            'is_active': True,
-                        }
-                        # Only add regulation filter if it exists
-                        if student_regulation:
-                            ta_filter_dict['elective_subject__regulation'] = student_regulation
-                        
-                        ta = TeachingAssignment.objects.filter(
-                            **ta_filter_dict,
-                            **semester_filter,  # STRICT semester filter
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                        ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department').first()
+                    if not staff_names and dept_candidates:
+                        for ta in candidate_tas:
+                            s_name = get_staff_display_name(ta.staff)
+                            if s_name and s_name not in staff_names:
+                                staff_names.append(s_name)
                     
-                    # Fallback: try without department filter + STRICT semester + BATCH
-                    if not ta:
-                        ta_filter_dict = {
-                            'elective_subject__course_code': code,
-                            'academic_year': current_ay,
-                            'is_active': True,
-                        }
-                        # Only add regulation filter if it exists
-                        if student_regulation:
-                            ta_filter_dict['elective_subject__regulation'] = student_regulation
-                        
-                        ta = TeachingAssignment.objects.filter(
-                            **ta_filter_dict,
-                            **semester_filter,  # STRICT semester filter
-                        ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                        ).select_related('staff', 'staff__user', 'elective_subject', 'elective_subject__department').first()
+                    staff_map[code] = staff_names if staff_names else ["Staff Not Assigned"]
+                    print(f"[GetStudentSubjectsView]     Staff for {code}: {staff_map[code]}")
                     
-                    if ta:
-                        elective_teaching_assignments.append(ta)
-                        seen_codes.add(code)
+                    # Select best TA object for feedback response linking
+                    best_ta = None
+                    if target_pool:
+                        # 1. Check section / batch match with current_ay
+                        for ta in target_pool:
+                            if ta.academic_year == current_ay:
+                                if section and ta.section == section:
+                                    best_ta = ta
+                                    break
+                                elif section and section.batch and ta.section and getattr(ta.section, 'batch_id', None) == section.batch_id:
+                                    best_ta = ta
+                                    break
+                        # 2. current_ay match
+                        if not best_ta:
+                            for ta in target_pool:
+                                if ta.academic_year == current_ay:
+                                    best_ta = ta
+                                    break
+                        # 3. choice_ay match
+                        if not best_ta and choice_ay:
+                            for ta in target_pool:
+                                if ta.academic_year == choice_ay:
+                                    best_ta = ta
+                                    break
+                        # 4. Any in target_pool
+                        if not best_ta:
+                            best_ta = target_pool[0]
+                    elif candidate_tas.exists():
+                        best_ta = candidate_tas.first()
+                    
+                    if best_ta:
+                        elective_teaching_assignments.append(best_ta)
+                        print(f"[GetStudentSubjectsView]     ✓ Selected TA ID {best_ta.id} for {code}")
                     else:
-                        # Try curriculum_row method (prefer dept, fallback to any) + STRICT semester + BATCH
-                        ta = None
-                        if dept_id:
-                            ta_filter_dict = {
-                                'curriculum_row__course_code': code,
-                                'curriculum_row__is_elective': True,
-                                'curriculum_row__department_id': dept_id,
-                                'academic_year': current_ay,
-                                'is_active': True,
-                            }
-                            # Only add regulation filter if it exists
-                            if student_regulation:
-                                ta_filter_dict['curriculum_row__regulation'] = student_regulation
-                            
-                            ta = TeachingAssignment.objects.filter(
-                                **ta_filter_dict,
-                                **semester_filter,  # STRICT semester filter
-                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                            ).select_related('staff', 'staff__user', 'curriculum_row').first()
-                        
-                        # Fallback: try without department filter + STRICT semester + BATCH
-                        if not ta:
-                            ta_filter_dict = {
-                                'curriculum_row__course_code': code,
-                                'curriculum_row__is_elective': True,
-                                'academic_year': current_ay,
-                                'is_active': True,
-                            }
-                            # Only add regulation filter if it exists
-                            if student_regulation:
-                                ta_filter_dict['curriculum_row__regulation'] = student_regulation
-                            
-                            ta = TeachingAssignment.objects.filter(
-                                **ta_filter_dict,
-                                **semester_filter,  # STRICT semester filter
-                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                            ).select_related('staff', 'staff__user', 'curriculum_row').first()
-                        
-                        if ta:
-                            elective_teaching_assignments.append(ta)
-                            seen_codes.add(code)
-                        else:
-                            # Try subject method as last resort + BATCH
-                            from academics.models import Subject
-                            ta = TeachingAssignment.objects.filter(
-                                subject__code=code,
-                                academic_year=current_ay,
-                                is_active=True,
-                            ).filter(batch_filter  # FILTER BY BATCH YEAR - Q object
-                            ).select_related('staff', 'staff__user', 'subject').first()
-                            
-                            if ta:
-                                elective_teaching_assignments.append(ta)
-                                seen_codes.add(code)
+                        print(f"[GetStudentSubjectsView]     ⚠ No TA object found for {code} (will create pseudo)")
             
             print(f"[GetStudentSubjectsView] Found {len(elective_teaching_assignments)} elective teaching assignments")
             print(f"[GetStudentSubjectsView] Expected {len(chosen_elective_codes)} electives, got {len(elective_teaching_assignments)} TAs")
@@ -3000,8 +2931,8 @@ class GetStudentSubjectsView(APIView):
                             'course_code': code,
                             'department_id': dept_id,
                         }
-                        if student_regulation:
-                            elec_filter['regulation'] = student_regulation  # CRITICAL: Filter by student's regulation
+                        # if student_regulation:
+                        #     elec_filter['regulation'] = student_regulation  # Relaxed for open electives
                         elec_subj = ElectiveSubject.objects.filter(
                             **elec_filter
                         ).select_related('parent', 'department', 'semester').first()
@@ -3009,8 +2940,8 @@ class GetStudentSubjectsView(APIView):
                     # Fallback: try without department filter + REGULATION FILTER (still critical)
                     if not elec_subj:
                         elec_filter = {'course_code': code}
-                        if student_regulation:
-                            elec_filter['regulation'] = student_regulation  # CRITICAL: Filter by student's regulation
+                        # if student_regulation:
+                        #     elec_filter['regulation'] = student_regulation  # Relaxed for open electives
                         elec_subj = ElectiveSubject.objects.filter(
                             **elec_filter
                         ).select_related('parent', 'department', 'semester').first()
@@ -3090,7 +3021,8 @@ class GetStudentSubjectsView(APIView):
                     # No teaching assignment found - create pseudo for elective
                     pseudo = PseudoAssignment(elec_subj, subject_type='elective')
                     elective_teaching_assignments.append(pseudo)
-                    staff_map[code] = ["Staff Not Assigned"]
+                    if code not in staff_map or not staff_map[code]:
+                        staff_map[code] = ["Staff Not Assigned"]
                     print(f"[GetStudentSubjectsView]   ⚠ No TA for elective {code}, created pseudo-assignment")
                 elif code in staff_map and not staff_map[code]:
                     # TA exists but no valid staff names found - set fallback
@@ -3167,16 +3099,18 @@ class GetStudentSubjectsView(APIView):
                 
                 if is_elective and subject_code and subject_code in staff_map and staff_map[subject_code]:
                     # For ELECTIVES: Use staff_map which may have multiple staff members
-                    staff_list = [s for s in staff_map[subject_code] if s and s.strip()]  # Filter empty names
+                    staff_list = [s for s in staff_map[subject_code] if s and s.strip() and s != 'Staff Not Assigned']
                     if staff_list:
                         staff_name = ", ".join(staff_list)
                         print(f"[GetStudentSubjectsView] Elective {subject_code}: {len(staff_list)} staff - {staff_name}")
                     else:
                         staff_name = "Staff Not Assigned"
                         print(f"[GetStudentSubjectsView] Elective {subject_code}: Empty staff list, showing 'Staff Not Assigned'")
+                    if assignment.staff:
+                        staff_id = assignment.staff.id
                 elif assignment.staff:
                     # For CORE subjects: Use the staff from teaching assignment
-                    staff_name = assignment.staff.user.get_full_name() or assignment.staff.user.username
+                    staff_name = get_staff_display_name(assignment.staff) or "Staff Not Assigned"
                     staff_id = assignment.staff.id
                     print(f"[GetStudentSubjectsView] Core subject {subject_code}: {staff_name}")
                 else:
@@ -3794,7 +3728,7 @@ class GetSubjectsByYearView(APIView):
                     continue
                 
                 # Get staff name
-                staff_name = assignment.staff.user.get_full_name() or assignment.staff.user.username
+                staff_name = get_staff_display_name(assignment.staff)
                 section_name = assignment.section.name if assignment.section else 'N/A'
                 
                 # Get year for this assignment
@@ -3818,7 +3752,8 @@ class GetSubjectsByYearView(APIView):
                 if subject_key not in subjects_dict:
                     subjects_dict[subject_key] = subject_data
                 
-                subjects_dict[subject_key]['staff'].add(staff_name)
+                if staff_name:
+                    subjects_dict[subject_key]['staff'].add(staff_name)
                 subjects_dict[subject_key]['sections'].add(section_name)
                 if year_for_display:
                     subjects_dict[subject_key]['years'].add(year_for_display)
@@ -3860,13 +3795,6 @@ class GetSubjectsByYearView(APIView):
                 print(f"[GetSubjectsByYearView] Found {dept_electives.count()} department elective subjects")
                 
                 # Fetch ALL Open Elective subjects across departments for the semesters
-                # OE subjects are cross-department - HOD should see ALL options regardless of department
-                # DO NOT filter by department_id for Open Electives
-                # Match various category patterns: "Open Elective", "OE", "Open Elective I", etc.
-                # 
-                # Use TWO approaches to maximize OE subject discovery:
-                # 1. Filter by calculated semester IDs (primary method)
-                # 2. Also include subjects where semester number matches year range (fallback)
                 oe_query = Q(parent__category__icontains='Open Elective') | Q(parent__category__istartswith='OE')
                 oe_query = oe_query & Q(approval_status='APPROVED')
                 
@@ -3878,7 +3806,6 @@ class GetSubjectsByYearView(APIView):
                     ).select_related('parent', 'semester', 'department').distinct()
                 else:
                     # Fallback: If no semester IDs, try to match by semester number range
-                    # Year 2 = Sem 3-4, Year 3 = Sem 5-6, Year 4 = Sem 7-8
                     semester_numbers = []
                     for year in years:
                         semester_numbers.extend([(year - 1) * 2 + 1, (year - 1) * 2 + 2])
@@ -3900,14 +3827,6 @@ class GetSubjectsByYearView(APIView):
                 print(f"[GetSubjectsByYearView] Breakdown: {dept_electives.count()} dept electives + {len([oe for oe in oe_electives if oe not in dept_electives])} unique OE subjects")
                 
                 # Build a mapping of elective_subject_id to teaching assignments with staff
-                # This ensures ALL electives (OE, PE, EE) show correct staff names
-                # 
-                # THREE MAPPING METHODS (try all to maximize staff resolution):
-                # 1. By elective_subject_id: Direct link in TeachingAssignment.elective_subject
-                # 2. By course_code via curriculum_row: TeachingAssignment.curriculum_row.course_code
-                #    (needed for OE subjects with placeholder slots like XXC13XX)
-                # 3. By subject code: TeachingAssignment.subject.code
-                #    (legacy subjects table)
                 all_elective_ids = [e.id for e in curriculum_electives]
                 all_elective_codes = [e.course_code for e in curriculum_electives if e.course_code]
                 
@@ -3915,12 +3834,18 @@ class GetSubjectsByYearView(APIView):
                 elective_teaching_by_code = {}  # Fallback mapping by course code
                 
                 if all_elective_ids:
-                    # Fetch by elective_subject_id
+                    # Fetch by elective_subject_id (prefer current_ay, fallback to any active)
                     elective_tas = TeachingAssignment.objects.filter(
                         elective_subject_id__in=all_elective_ids,
                         academic_year=current_ay,
                         is_active=True
                     ).select_related('staff', 'staff__user', 'elective_subject')
+                    
+                    if not elective_tas.exists():
+                        elective_tas = TeachingAssignment.objects.filter(
+                            elective_subject_id__in=all_elective_ids,
+                            is_active=True
+                        ).select_related('staff', 'staff__user', 'elective_subject')
                     
                     for ta in elective_tas:
                         if ta.elective_subject_id not in elective_teaching_assignments:
@@ -3938,6 +3863,13 @@ class GetSubjectsByYearView(APIView):
                         is_active=True
                     ).select_related('staff', 'staff__user', 'curriculum_row')
                     
+                    if not code_tas.exists():
+                        code_tas = TeachingAssignment.objects.filter(
+                            curriculum_row__course_code__in=all_elective_codes,
+                            curriculum_row__is_elective=True,
+                            is_active=True
+                        ).select_related('staff', 'staff__user', 'curriculum_row')
+                    
                     for ta in code_tas:
                         if ta.curriculum_row and ta.curriculum_row.course_code:
                             code = ta.curriculum_row.course_code
@@ -3953,6 +3885,12 @@ class GetSubjectsByYearView(APIView):
                         academic_year=current_ay,
                         is_active=True
                     ).select_related('staff', 'staff__user', 'subject')
+                    
+                    if not subject_tas.exists():
+                        subject_tas = TeachingAssignment.objects.filter(
+                            subject__code__in=all_elective_codes,
+                            is_active=True
+                        ).select_related('staff', 'staff__user', 'subject')
                     
                     for ta in subject_tas:
                         if ta.subject and ta.subject.code:
@@ -3990,7 +3928,6 @@ class GetSubjectsByYearView(APIView):
                             print(f"[GetSubjectsByYearView] Processing elective: {elective.course_name} (Category: {elective_category}, Year {elective_year})")
                     
                     # Check if this is an Open Elective
-                    # Match various OE category patterns: "Open Elective", "OE", "OE I", "OE II", etc.
                     is_open_elective = (
                         'Open Elective' in elective_category or 
                         'OE' in elective_category or 
@@ -3998,23 +3935,22 @@ class GetSubjectsByYearView(APIView):
                     )
                     
                     # Get actual staff names from teaching assignments (for ALL electives)
-                    # Try three methods: by ID, by course code (curriculum_row), by subject code
                     staff_names = set()
                     
                     # Method 1: Fetch by elective_subject_id
                     if elective.id in elective_teaching_assignments:
                         for ta in elective_teaching_assignments[elective.id]:
-                            if ta.staff:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
-                                staff_names.add(staff_name)
+                            s_name = get_staff_display_name(ta.staff)
+                            if s_name:
+                                staff_names.add(s_name)
                         print(f"[GetSubjectsByYearView] Elective {elective.course_name} has staff (by ID): {staff_names}")
                     
                     # Methods 2 & 3: Fetch by course_code (curriculum_row or subject)
                     if not staff_names and elective.course_code and elective.course_code in elective_teaching_by_code:
                         for ta in elective_teaching_by_code[elective.course_code]:
-                            if ta.staff:
-                                staff_name = ta.staff.user.get_full_name() or ta.staff.user.username
-                                staff_names.add(staff_name)
+                            s_name = get_staff_display_name(ta.staff)
+                            if s_name:
+                                staff_names.add(s_name)
                         print(f"[GetSubjectsByYearView] Elective {elective.course_name} has staff (by code): {staff_names}")
                     
                     # If no staff found, use placeholder
@@ -4136,10 +4072,13 @@ class GetSubjectsByYearView(APIView):
             elective_categories_only = []
             
             for subject_key, data in subjects_dict.items():
+                valid_staff = [s for s in sorted(data['staff']) if s and s != 'To be assigned']
+                staff_display = ', '.join(valid_staff) if valid_staff else ('To be assigned' if 'To be assigned' in data['staff'] else 'Staff Not Assigned')
+                
                 subject_info = {
                     'subject_name': data['subject_name'],
                     'subject_code': data['subject_code'],
-                    'staff_names': ', '.join(sorted(data['staff'])),
+                    'staff_names': staff_display,
                     'sections': ', '.join(sorted(data['sections'])),
                     'years': sorted(list(data['years'])),  # List of years this subject appears in
                     'teaching_assignment_ids': data['teaching_assignment_ids'],
@@ -4188,10 +4127,12 @@ class GetSubjectsByYearView(APIView):
                     subject_key = subj_key_info['key']
                     if subject_key in subjects_dict:
                         data = subjects_dict[subject_key]
+                        valid_staff = [s for s in sorted(data['staff']) if s and s != 'To be assigned']
+                        staff_display = ', '.join(valid_staff) if valid_staff else ('To be assigned' if 'To be assigned' in data['staff'] else 'Staff Not Assigned')
                         category_subjects.append({
                             'subject_name': data['subject_name'],
                             'subject_code': data['subject_code'],
-                            'staff_names': ', '.join(sorted(data['staff'])),
+                            'staff_names': staff_display,
                             'sections': ', '.join(sorted(data['sections'])),
                             'years': sorted(list(data['years'])),
                             'teaching_assignment_ids': data['teaching_assignment_ids'],
@@ -4258,7 +4199,7 @@ class IQACExportOptionsView(APIView):
 
             from academics.models import Department
 
-            departments_qs = Department.objects.all().order_by('name')
+            departments_qs = Department.objects.filter(is_teaching=True).order_by('name')
             if not scope.get('all_departments'):
                 department_ids = scope.get('department_ids') or []
                 departments_qs = departments_qs.filter(id__in=department_ids)
@@ -4511,6 +4452,8 @@ class IQACCommonExportView(APIView):
                 staff_name = ""
                 comment_value = ""
                 overall_comment_value = ""
+                student_dept_id = None       # Student's home department ID (for cross-dept elective check)
+                is_cross_dept_elective = False  # True if elective is from another department
                 
                 # Get student info
                 student_profile = None
@@ -4518,11 +4461,13 @@ class IQACCommonExportView(APIView):
                     try:
                         student_profile = response.user.student_profile
                         
-                        # Get department with fallback chain
+                        # Get department with fallback chain; also capture student_dept_id
                         if student_profile.home_department:
                             department_name = student_profile.home_department.name or ""
+                            student_dept_id = student_profile.home_department.id
                         elif student_profile.section and student_profile.section.batch and student_profile.section.batch.course and student_profile.section.batch.course.department:
                             department_name = student_profile.section.batch.course.department.name or ""
+                            student_dept_id = student_profile.section.batch.course.department.id
                         
                         # Calculate year and get section
                         if student_profile.section and current_acad_year:
@@ -4577,6 +4522,15 @@ class IQACCommonExportView(APIView):
                     # Extract staff name
                     if ta.staff and ta.staff.user:
                         staff_name = ta.staff.user.get_full_name() or ta.staff.user.username or ""
+
+                    # Detect cross-department elective:
+                    # If the subject is an elective AND its owning department differs from the
+                    # student's home department, mark as cross-dept. These responses are excluded
+                    # from per-department rating sheets but remain in raw data & subject-wise report.
+                    if ta.elective_subject:
+                        elective_dept = getattr(ta.elective_subject, 'department', None)
+                        if elective_dept and student_dept_id and elective_dept.id != student_dept_id:
+                            is_cross_dept_elective = True
 
                     # Fallback year/section from teaching assignment section.
                     if not year_section and ta.section:
@@ -4647,6 +4601,7 @@ class IQACCommonExportView(APIView):
                     'comment': comment_value,
                     'overall_comment': overall_comment_value,
                     'selected_option': selected_option_value,
+                    'is_cross_dept_elective': is_cross_dept_elective,
                 })
             
             # Generate Excel file
@@ -4705,6 +4660,118 @@ class IQACCommonExportView(APIView):
                 if has_selected_option:
                     row.append(row_data['selected_option'])
                 ws.append(row)
+            
+            # --- Department-Year Wise Rating Data (excluding cross-dept elective responses) ---
+            from collections import defaultdict
+            from openpyxl.styles import Font, Alignment
+            header_font = Font(bold=True)
+            center_align = Alignment(horizontal='center')
+
+            dept_year_ratings = defaultdict(lambda: defaultdict(list))
+
+            for row_data in responses_data:
+                dept = row_data['department']
+                year_sec = row_data['year_section']
+                rating = row_data['rating_value']
+
+                # Exclude cross-department elective ratings from dept-wise sheets.
+                # These students belong to a different department than the elective's owner.
+                if row_data.get('is_cross_dept_elective'):
+                    continue
+
+                if not dept or str(dept).strip() == "N/A" or rating == "":
+                    continue
+
+                try:
+                    r_val = float(rating)
+                    year_str = str(year_sec).split('/')[0].strip()
+                    if year_str.isdigit():
+                        year = int(year_str)
+                        dept_year_ratings[dept][year].append(r_val)
+                except ValueError:
+                    pass
+
+            # --- Department Summary Sheet (inserted as FIRST sheet in workbook) ---
+            # Layout: Department | I | II | III | IV | Overall
+            # Rating scale: out of 4. Overall skips years with no data.
+            summary_ws = wb.create_sheet(title='Department Summary', index=0)
+
+            sum_headers = ['Department', 'I', 'II', 'III', 'IV', 'Overall']
+            summary_ws.append(sum_headers)
+            for col_idx in range(1, len(sum_headers) + 1):
+                hdr_cell = summary_ws.cell(row=1, column=col_idx)
+                hdr_cell.font = header_font
+                hdr_cell.alignment = center_align
+
+            for dept in sorted(dept_year_ratings.keys()):
+                year_data = dept_year_ratings[dept]
+                row_vals = [dept]
+                year_avgs = []  # collect non-zero year averages for Overall calc
+
+                for yr in [1, 2, 3, 4]:
+                    ratings = year_data.get(yr, [])
+                    if ratings:
+                        avg = round(sum(ratings) / len(ratings), 2)
+                        row_vals.append(avg)
+                        year_avgs.append(avg)
+                    else:
+                        row_vals.append('')   # No data for this year
+
+                # Overall: average of non-null/non-zero years only
+                overall = round(sum(year_avgs) / len(year_avgs), 2) if year_avgs else ''
+                row_vals.append(overall)
+
+                summary_ws.append(row_vals)
+                data_row = summary_ws.max_row
+                # Center-align numeric columns (I, II, III, IV, Overall)
+                for col_idx in range(2, len(sum_headers) + 1):
+                    summary_ws.cell(row=data_row, column=col_idx).alignment = center_align
+
+            # Column widths for Department Summary sheet
+            summary_ws.column_dimensions['A'].width = 22
+            summary_ws.column_dimensions['B'].width = 10
+            summary_ws.column_dimensions['C'].width = 10
+            summary_ws.column_dimensions['D'].width = 10
+            summary_ws.column_dimensions['E'].width = 10
+            summary_ws.column_dimensions['F'].width = 12
+            # ---------------------------------------------------------------
+
+            # --- Per-Department Detail Sheets (one sheet per department) ---
+            for dept, year_data in dept_year_ratings.items():
+                if not year_data:
+                    continue
+
+                safe_title = "".join([c if c.isalnum() or c in [' ', '&', '-', '_'] else "_" for c in dept])[:31]
+
+                sheet_title = safe_title
+                counter = 1
+                while sheet_title in wb.sheetnames:
+                    suffix = f"_{counter}"
+                    sheet_title = safe_title[:31-len(suffix)] + suffix
+                    counter += 1
+
+                dept_ws = wb.create_sheet(title=sheet_title)
+
+                dept_headers = ["Year", "Average Rating", "Total Responses"]
+                dept_ws.append(dept_headers)
+
+                for col in range(1, len(dept_headers) + 1):
+                    dept_ws.cell(row=1, column=col).font = header_font
+
+                for year in sorted(year_data.keys()):
+                    ratings = year_data[year]
+                    avg = sum(ratings) / len(ratings) if ratings else 0
+                    dept_ws.append([f"Year {year}", round(avg, 2), len(ratings)])
+
+                    # Center align the average and count
+                    dept_ws.cell(row=dept_ws.max_row, column=2).alignment = center_align
+                    dept_ws.cell(row=dept_ws.max_row, column=3).alignment = center_align
+
+                # Adjust column widths
+                dept_ws.column_dimensions['A'].width = 15
+                dept_ws.column_dimensions['B'].width = 18
+                dept_ws.column_dimensions['C'].width = 18
+            # ---------------------------------------------------------------
             
             # Save to bytes
             output = BytesIO()

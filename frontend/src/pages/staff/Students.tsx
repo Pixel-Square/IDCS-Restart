@@ -814,6 +814,7 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         email: editFormData.email || '',
         status: (editFormData.status || 'active').toUpperCase(),
         section_id: editFormData.section_id ?? null,
+        reg_no: editFormData.reg_no,
       }
 
       const res = await fetchWithAuth(`/api/academics/students/${editFormData.id}/`, {

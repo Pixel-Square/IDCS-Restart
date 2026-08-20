@@ -219,6 +219,10 @@ class CurriculumDepartmentViewSet(viewsets.ModelViewSet):
             except (ValueError, TypeError):
                 pass
 
+        course_code = self.request.query_params.get('course_code')
+        if course_code:
+            qs = qs.filter(course_code__iexact=str(course_code).strip())
+
         if not user or not user.is_authenticated:
             return qs.none()
 

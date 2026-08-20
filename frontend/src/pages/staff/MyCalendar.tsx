@@ -7,6 +7,7 @@ import NewRequestModal from '../staff-requests/NewRequestModal';
 import LeaveBalanceBadges from '../../components/LeaveBalanceBadges';
 import { renderFormValue } from '../staff-requests/formValueUtils';
 import type { StaffRequest } from '../../types/staffRequests';
+import { generateODPdf } from '../staff-requests/event-attending/generateODPdf';
 
 interface AttendanceRecord {
   id: number;
@@ -75,6 +76,7 @@ export default function MyCalendarPage() {
   const [requestFilterToDate, setRequestFilterToDate] = useState('');
   const [requestCurrentPage, setRequestCurrentPage] = useState(1);
   const REQUESTS_PER_PAGE = 5;
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [vacationDashboard, setVacationDashboard] = useState<any | null>(null);
   const [vacationLoading, setVacationLoading] = useState(false);
   const [selectedVacationSlotIds, setSelectedVacationSlotIds] = useState<number[]>([]);
@@ -106,6 +108,19 @@ export default function MyCalendarPage() {
     fetchAttendanceSettings();
     fetchVacationDashboard();
   }, [selectedYear, selectedMonth]);
+
+  const handleDownloadRow = async (req: StaffRequest, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      setDownloadingId(req.id);
+      await generateODPdf(req);
+    } catch (err) {
+      console.error('Failed to download PDF', err);
+      alert('Failed to generate PDF');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const fetchVacationDashboard = async () => {
     try {
@@ -1438,6 +1453,20 @@ export default function MyCalendarPage() {
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete
+                        </button>
+                      )}
+                      {request.template.name.toLowerCase().startsWith('on duty') && (
+                        request.template.name.toLowerCase() === 'on duty - spl' || request.status === 'approved'
+                      ) && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDownloadRow(request, e)}
+                          disabled={downloadingId === request.id}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
+                          title="Download PDF"
+                        >
+                          <Download className="w-3 h-3" />
+                          {downloadingId === request.id ? 'Downloading...' : 'Download'}
                         </button>
                       )}
                       {request.status === 'approved' && isVacationRequest(request) && !isVacationCancelled(request) && !isConfirmedVacationRange(request) && vacationDashboard?.cancellation_template_id && (

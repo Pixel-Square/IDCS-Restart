@@ -4,6 +4,7 @@ export interface ApprovedODForm {
   id: number;
   template_name: string;
   form_data: Record<string, any>;
+  form_schema: Array<{ name: string; label: string; type: string; [key: string]: any }>;
   has_event_form: boolean;
   created_at: string;
 }
@@ -41,6 +42,7 @@ export interface EventAttendingFile {
   file: string;
   file_url: string | null;
   original_filename: string;
+  orientation?: 'portrait' | 'landscape';
   uploaded_at: string;
 }
 
@@ -75,6 +77,7 @@ export interface EventAttendingFormDetail {
   };
   on_duty_request_id?: number | null;
   on_duty_form_data: Record<string, any>;
+  on_duty_form_schema?: Array<{ name: string; label: string; type: string; can_change_form_fields?: boolean; conditional_fields?: Record<string, any[]>; [k: string]: any }>;
   on_duty_template_name?: string;
   custom_event_details?: Record<string, any> | null;
   travel_expenses: TravelExpenseRow[];

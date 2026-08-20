@@ -18,14 +18,60 @@ const EMPTY_TRAVEL: TravelExpenseRow = { date: '', bill_no: '', mode_of_travel: 
 const EMPTY_FOOD: FoodExpenseRow = { date: '', bill_no: '', breakfast: '', lunch: '', dinner: '', amount: 0 };
 const EMPTY_OTHER: OtherExpenseRow = { s_no: 1, date: '', bill_no: '', expense_details: '', amount: 0 };
 
-const EVENT_FIELD_LABELS: Record<string, string> = {
-  event_title: 'Event Title', host_institution_name: 'Host Institution',
-  mode_of_event: 'Mode of Event', nature_of_event: 'Nature of Event',
-  platform_if_online: 'Platform (if Online)', expected_outcome: 'Expected Outcome',
-  purpose: 'Purpose', type: 'Type', reason: 'Reason',
-  from_date: 'From Date', to_date: 'To Date', from_noon: 'From (Session)', to_noon: 'To (Session)',
-  kss_link: 'KSS Link'
-};
+// Build a label map from form_schema: { fieldName -> label }
+function buildLabelMap(schema: Array<{ name: string; label: string; [k: string]: any }>): Record<string, string> {
+  const map: Record<string, string> = {
+    kss_link: 'KSS Link'
+  };
+  schema.forEach(f => {
+    map[f.name] = f.label || f.name.replace(/_/g, ' ');
+    // Also map any conditional child fields
+    if (f.conditional_fields) {
+      Object.values(f.conditional_fields).forEach((children: any[]) => {
+        children.forEach(cf => { map[cf.name] = cf.label || cf.name.replace(/_/g, ' '); });
+      });
+    }
+  });
+  return map;
+}
+
+// Flatten all values from form_data using the schema for ordering and labels.
+// Skips file/proof fields and object values.
+function getOrderedFormDataRows(
+  formData: Record<string, any>,
+  schema: Array<{ name: string; label: string; type: string; [k: string]: any }>
+): Array<{ label: string; value: string }> {
+  const labelMap = buildLabelMap(schema);
+  const result: Array<{ label: string; value: string }> = [];
+  const seen = new Set<string>();
+
+  // Walk schema order first
+  const walkSchema = (fields: Array<{ name: string; label: string; type: string; [k: string]: any }>) => {
+    fields.forEach(field => {
+      if (field.type === 'file') return;
+      const val = formData[field.name];
+      if (val != null && val !== '' && typeof val !== 'object') {
+        result.push({ label: field.label || field.name.replace(/_/g, ' '), value: String(val) });
+        seen.add(field.name);
+      }
+      // Check conditional children if the current value matches
+      if (field.can_change_form_fields && field.conditional_fields && val) {
+        const children = field.conditional_fields[String(val)] || [];
+        walkSchema(children);
+      }
+    });
+  };
+  walkSchema(schema);
+
+  // Append any extra keys in form_data not in schema
+  Object.entries(formData).forEach(([k, v]) => {
+    if (seen.has(k) || v == null || v === '' || typeof v === 'object') return;
+    if (k === 'proof') return;
+    result.push({ label: labelMap[k] || k.replace(/_/g, ' '), value: String(v) });
+  });
+
+  return result;
+}
 
 export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) {
   const [formMode, setFormMode] = useState<'od' | 'manual'>('od');
@@ -53,6 +99,39 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     };
     fetchTemplates();
   }, []);
+
+  useEffect(() => {
+    if (formMode === 'od' && selectedOD) {
+      const fd = selectedOD.form_data || {};
+      let isFin = false;
+      let isAdv = false;
+      let amount = 0;
+      let totalFeesAmount = 0;
+      Object.entries(fd).forEach(([k, v]) => {
+        const kl = String(k).toLowerCase();
+        if (kl.includes('financial') && String(v).trim().toUpperCase() === 'YES') isFin = true;
+        if (kl.includes('advance') && String(v).trim().toUpperCase() === 'YES') isAdv = true;
+        if (kl.includes('proposed')) {
+          const val = Number(v);
+          if (!isNaN(val)) amount = val;
+        }
+        if (kl.includes('total_fees')) {
+          const val = Number(v);
+          if (!isNaN(val)) totalFeesAmount = val;
+        }
+      });
+      if (isFin) {
+        setFeesSpend(totalFeesAmount);
+      } else {
+        setFeesSpend(0);
+      }
+      if (isFin && isAdv) {
+        setAdvanceAmount(amount);
+      } else {
+        setAdvanceAmount(0);
+      }
+    }
+  }, [formMode, selectedOD]);
 
   const [travel, setTravel] = useState<TravelExpenseRow[]>([{ ...EMPTY_TRAVEL }]);
   const [food, setFood] = useState<FoodExpenseRow[]>([{ ...EMPTY_FOOD }]);
@@ -104,6 +183,14 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
     if (formMode === 'od' && !selectedOD) { 
       setError('Please select an approved On Duty form'); return; 
     }
+
+    if (formMode === 'od' && selectedOD) {
+      const needsKss = String(selectedOD.form_data?.['kss_submission'] || '').trim().toUpperCase() === 'YES';
+      if (needsKss && !eventDetails.kss_link) {
+        setError('Please provide the required KSS Link for the selected On Duty form in the Event Details section.');
+        return;
+      }
+    }
     
     if (formMode === 'manual') {
       const requiresOdFields = odClaim === 'yes';
@@ -136,6 +223,10 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
       const fd = new FormData();
       if (formMode === 'od') {
         fd.append('on_duty_request_id', String(selectedOD!.id));
+        const needsKss = String(selectedOD!.form_data?.['kss_submission'] || '').trim().toUpperCase() === 'YES';
+        if (needsKss && eventDetails.kss_link) {
+          fd.append('event_details', JSON.stringify({ kss_link: eventDetails.kss_link }));
+        }
       } else {
         const detailsToSend = odClaim === 'no' 
           ? { ...eventDetails, type: '', reason: '' } 
@@ -231,21 +322,64 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
                     <div className="flex items-center gap-3">
                       <input type="radio" checked={selectedOD?.id === od.id} readOnly className="w-4 h-4 text-blue-600" />
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{od.form_data.event_title || od.template_name}</p>
-                        <p className="text-xs text-gray-500">{od.form_data.from_date} — {od.form_data.host_institution_name || 'N/A'}</p>
+                        {(() => {
+                          const schema = od.form_schema || [];
+                          const titleField = schema.find(f => f.name === 'event_title') || schema.find(f => f.type === 'text' && !f.name.includes('date'));
+                          const dateField = schema.find(f => f.type === 'date' && (f.name.includes('from') || f.name.includes('start') || f.name === 'date'));
+                          const secondaryField = schema.find(f => f.name.includes('institution') || f.name.includes('place') || f.name.includes('host'));
+                          const title = (titleField && od.form_data[titleField.name]) || od.template_name;
+                          const dateVal = (dateField && od.form_data[dateField.name]) || '';
+                          const secondary = (secondaryField && od.form_data[secondaryField.name]) || '';
+                          return (
+                            <>
+                              <p className="text-sm font-medium text-gray-900">{title}</p>
+                              <p className="text-xs text-gray-500">{dateVal}{secondary ? ` — ${secondary}` : ''}</p>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                     {expandedOD === od.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </div>
-                  {expandedOD === od.id && (
-                    <div className="border-t px-4 py-3 bg-gray-50/50 grid grid-cols-2 gap-2 text-sm">
-                      {Object.entries(od.form_data).filter(([, v]) => v).map(([k, v]) => (
-                        <div key={k}><span className="text-gray-500">{EVENT_FIELD_LABELS[k] || k}:</span> <span className="font-medium text-gray-800">{String(v)}</span></div>
-                      ))}
+                   {expandedOD === od.id && (
+                    <div className="border-t px-4 py-3 bg-gray-50/50">
+                      {(() => {
+                        const rows = getOrderedFormDataRows(od.form_data, od.form_schema || []);
+                        return (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                            {rows.map(({ label, value }) => (
+                              <div key={label} className="flex gap-1">
+                                <span className="text-gray-500 shrink-0 font-medium">{label}:</span>
+                                <span className="font-semibold text-gray-800 break-words">{value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {selectedOD && String(selectedOD.form_data?.['kss_submission'] || '').trim().toUpperCase() === 'YES' && (
+            <div className="mt-6 border-t pt-4">
+              <h3 className="text-base font-semibold text-gray-800 mb-3">Event Details</h3>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  KSS Link <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={eventDetails.kss_link || ''}
+                  onChange={e => setEventDetails(prev => ({ ...prev, kss_link: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="https://..."
+                />
+                <p className="text-xs text-gray-500 mt-1">This On Duty form requires a KSS Submission. Please provide the link.</p>
+              </div>
             </div>
           )}
         </div>
@@ -287,7 +421,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
               if (odClaim === 'no' && (field.name === 'type' || field.name === 'reason')) return false;
               return true;
             });
-            return <DynamicFormRenderer fields={schemaToRender} values={eventDetails} onChange={setEventDetails} className="grid grid-cols-1 md:grid-cols-2 gap-x-4" />;
+            return <DynamicFormRenderer fields={schemaToRender} values={eventDetails} onChange={setEventDetails} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" isExpenseForm={true} />;
           })()}
 
           <div className="pt-2 border-t mt-4">

@@ -25,17 +25,27 @@ def get_subject_feedback_completion(feedback_form, user):
         if not section:
             return {'total_subjects': 0, 'responded_subjects': 0, 'all_completed': False}
 
-        batch = section.batch
+        # Resolve effective section in department if secondary section assignment exists
+        effective_section = section
+        if student_profile.home_department:
+            dept_assignment = student_profile.section_assignments.filter(
+                end_date__isnull=True,
+                section__batch__course__department=student_profile.home_department
+            ).select_related('section', 'section__batch', 'section__batch__regulation').first()
+            if dept_assignment and dept_assignment.section:
+                effective_section = dept_assignment.section
+
+        batch = effective_section.batch or section.batch
         batch_regulation = batch.regulation if batch else None
         regulation_code = getattr(batch_regulation, 'code', None)
         regulation_active_semester_id = getattr(batch_regulation, 'current_active_semester_id', None) if batch_regulation else None
-        effective_semester_id = regulation_active_semester_id or section.semester_id
+        effective_semester_id = regulation_active_semester_id or effective_section.semester_id or section.semester_id
 
         all_section_tas = TeachingAssignment.objects.filter(
-            section=section,
+            Q(section=effective_section) | Q(section=section) | Q(section__name=effective_section.name, section__batch=batch),
             academic_year__is_active=True,
             is_active=True,
-        )
+        ).distinct()
 
         if regulation_code:
             all_section_tas = all_section_tas.filter(
@@ -56,7 +66,6 @@ def get_subject_feedback_completion(feedback_form, user):
         student_elective_ids = set(
             ElectiveChoice.objects.filter(
                 student=student_profile,
-                academic_year__is_active=True,
                 is_active=True,
             ).filter(
                 Q(elective_subject__regulation=regulation_code) if regulation_code else Q()
@@ -97,30 +106,72 @@ def get_subject_feedback_completion(feedback_form, user):
                         if current_ay:
                             acad_start = int(str(current_ay.name).split('-')[0])
                             student_year_delta = acad_start - int(batch.start_year)
-                            # Filter fallback assignments to only sections from student's batch
-                            fallback_tas = fallback_tas.filter(section__batch=batch)
+                            # Filter fallback assignments to sections from student's batch or unassigned sections (PE/EE/OE)
+                            fallback_tas = fallback_tas.filter(Q(section__batch=batch) | Q(section__isnull=True))
                     except Exception:
                         pass  # If year calculation fails, don't filter (keep existing behavior)
                 
                 eligible_assignment_ids.update(fallback_tas.values_list('id', flat=True))
 
-        total_subjects = len(eligible_assignment_ids)
-        responded_subjects = 0
-        if total_subjects > 0:
-            responded_subjects = FeedbackResponse.objects.filter(
-                feedback_form=feedback_form,
-                user=user,
-                teaching_assignment_id__in=eligible_assignment_ids,
-            ).values('teaching_assignment_id').distinct().count()
+        # Count how many distinct subject responses the student has submitted for this form
+        responded_subjects = FeedbackResponse.objects.filter(
+            feedback_form=feedback_form,
+            user=user,
+            teaching_assignment__isnull=False
+        ).values('teaching_assignment_id').distinct().count()
+
+        # Calculate true total subjects based on curriculum core subjects + active electives
+        from curriculum.models import CurriculumDepartment
+        
+        target_semesters = getattr(feedback_form, 'semesters', [])
+        if not target_semesters:
+            if batch and batch.start_year:
+                try:
+                    from academics.models import AcademicYear
+                    current_ay = AcademicYear.objects.filter(is_active=True).first()
+                    if current_ay:
+                        acad_start = int(str(current_ay.name).split('-')[0])
+                        calculated_year = (acad_start - int(batch.start_year)) + 1
+                        if calculated_year == 1: target_semesters = [1, 2]
+                        elif calculated_year == 2: target_semesters = [3, 4]
+                        elif calculated_year == 3: target_semesters = [5, 6]
+                        elif calculated_year == 4: target_semesters = [7, 8]
+                except Exception:
+                    pass
+            if not target_semesters and section.semester:
+                target_semesters = [section.semester.number]
+        
+        student_department = student_profile.home_department
+        if not student_department and batch and getattr(batch, 'course', None):
+            student_department = batch.course.department
+            
+        curriculum_filter = {
+            'department': student_department,
+            'is_elective': False,
+        }
+        if regulation_code:
+            curriculum_filter['regulation'] = regulation_code
+        if target_semesters:
+            curriculum_filter['semester__number__in'] = target_semesters
+            
+        core_subject_count = CurriculumDepartment.objects.filter(**curriculum_filter).count()
+        elective_subject_count = len(student_elective_ids)
+        
+        true_total_subjects = core_subject_count + elective_subject_count
+        
+        if true_total_subjects == 0:
+            true_total_subjects = len(eligible_assignment_ids)
 
         return {
-            'total_subjects': total_subjects,
+            'total_subjects': true_total_subjects,
             'responded_subjects': responded_subjects,
-            'all_completed': total_subjects > 0 and responded_subjects >= total_subjects,
+            'all_completed': true_total_subjects > 0 and responded_subjects >= true_total_subjects,
         }
     except StudentProfile.DoesNotExist:
         return {'total_subjects': 0, 'responded_subjects': 0, 'all_completed': False}
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error calculating completion: {e}")
         return {'total_subjects': 0, 'responded_subjects': 0, 'all_completed': False}
 
 
@@ -1024,7 +1075,7 @@ class FeedbackResponseSerializer(serializers.Serializer):
     """Serializer for individual feedback responses (for submission)."""
     
     question = serializers.IntegerField(required=True)
-    answer_star = serializers.IntegerField(required=False, min_value=1, max_value=5)
+    answer_star = serializers.FloatField(required=False, min_value=1, max_value=4)
     answer_text = serializers.CharField(required=False, allow_blank=True)
     selected_option = serializers.IntegerField(required=False, allow_null=True)
 
@@ -1127,10 +1178,10 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
             if question_info.get('question_type') == 'rating_radio_comment':
                 # Rating + radio are mandatory. Comment is required only when question-wise comments are enabled.
                 if answer_star is None:
-                    errors.append(f'Question {question_id} requires a star rating (1-5)')
+                    errors.append(f'Question {question_id} requires a star rating (1-4)')
                     continue
-                if not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
-                    errors.append(f'Question {question_id}: Star rating must be between 1 and 5')
+                if not isinstance(answer_star, (int, float)) or answer_star < 1 or answer_star > 4:
+                    errors.append(f'Question {question_id}: Star rating must be between 1 and 4')
                     continue
                 if selected_option is None:
                     errors.append(f'Question {question_id} requires selecting one option')
@@ -1163,8 +1214,8 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 # Only rating allowed
                 if answer_star is None:
                     errors.append(f'Question {question_id} requires a star rating (1-5)')
-                elif not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
-                    errors.append(f'Question {question_id}: Star rating must be between 1 and 5')
+                elif not isinstance(answer_star, (int, float)) or answer_star < 1 or answer_star > 4:
+                    errors.append(f'Question {question_id}: Star rating must be between 1 and 4')
             elif allow_comment and not allow_rating:
                 # Only comment allowed
                 pass
@@ -1172,8 +1223,8 @@ class FeedbackSubmissionSerializer(serializers.Serializer):
                 # Both allowed - rating is required; comment is required only when question-wise comments are enabled.
                 if answer_star is None:
                     errors.append(f'Question {question_id} requires a star rating (1-5)')
-                elif not isinstance(answer_star, int) or answer_star < 1 or answer_star > 5:
-                    errors.append(f'Question {question_id}: Star rating must be between 1 and 5')
+                elif not isinstance(answer_star, (int, float)) or answer_star < 1 or answer_star > 4:
+                    errors.append(f'Question {question_id}: Star rating must be between 1 and 4')
         
         if errors:
             raise serializers.ValidationError({

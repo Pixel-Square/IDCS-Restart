@@ -169,8 +169,10 @@ class ApplicantSerializer(serializers.ModelSerializer):
     def get_department(self, obj):
         try:
             profile = getattr(obj, 'staff_profile', None)
-            if profile and profile.department:
-                return profile.department.name or profile.department.short_name or ''
+            if profile:
+                dept = getattr(profile, 'current_department', None) or profile.department
+                if dept:
+                    return dept.name or dept.short_name or ''
         except Exception:
             pass
         return ''
@@ -273,6 +275,7 @@ class StaffRequestDetailSerializer(serializers.ModelSerializer):
     completed_steps = serializers.SerializerMethodField()
     is_final_step = serializers.SerializerMethodField()
     workflow_progress = serializers.SerializerMethodField()
+    budget_details = serializers.SerializerMethodField()
     
     class Meta:
         model = StaffRequest
@@ -281,13 +284,59 @@ class StaffRequestDetailSerializer(serializers.ModelSerializer):
             'form_data', 'status', 'current_step',
             'current_approver_role', 'total_steps', 'completed_steps',
             'is_final_step', 'workflow_progress',
-            'approval_logs',
+            'approval_logs', 'budget_details',
             'created_at', 'updated_at'
         ]
         read_only_fields = [
             'id', 'applicant', 'status', 'current_step',
             'created_at', 'updated_at'
         ]
+        
+    def get_budget_details(self, obj):
+        if obj.template.name not in ['ON duty', 'ON duty - SPL']:
+            return None
+            
+        nature = str((obj.form_data or {}).get('nature_of_event', '')).strip().lower()
+        is_conf = nature == 'conference'
+        
+        from .models import StaffEventDeclaration, EventAttendingForm
+        try:
+            decl = StaffEventDeclaration.objects.get(staff=obj.applicant)
+        except StaffEventDeclaration.DoesNotExist:
+            return None
+            
+        def _is_conference(form_data):
+            if not form_data: return False
+            for v in form_data.values():
+                if isinstance(v, str) and 'conference' in str(v).strip().lower():
+                    return True
+            return False
+
+        # Calculate permanently used (approved claims) to reconstruct allocated amount
+        approved_claims = EventAttendingForm.objects.filter(staff=obj.applicant, status='approved').select_related('on_duty_request')
+        permanent_used_conf = 0
+        permanent_used_normal = 0
+        for claim in approved_claims:
+            fd = {}
+            if claim.on_duty_request: fd.update(claim.on_duty_request.form_data or {})
+            if claim.custom_event_details: fd.update(claim.custom_event_details or {})
+            if _is_conference(fd):
+                permanent_used_conf += float(claim.grand_total or 0)
+            else:
+                permanent_used_normal += float(claim.grand_total or 0)
+                
+        allocated_conf = float(decl.conference_budget) + permanent_used_conf
+        allocated_normal = float(decl.normal_events_budget) + permanent_used_normal
+        allocated = allocated_conf if is_conf else allocated_normal
+        
+        return {
+            'is_conference': is_conf,
+            'allocated': allocated,
+            'used': decl.get_used_budget(is_conf),
+            'available': decl.get_available_budget(is_conf),
+            'allocated_conference': allocated_conf,
+            'allocated_normal': allocated_normal,
+        }
     
     def get_current_approver_role(self, obj):
         """Get the role required for current approval step"""
@@ -457,6 +506,7 @@ class EventAttendingFormListSerializer(serializers.ModelSerializer):
 class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
     applicant = ApplicantSerializer(source='staff', read_only=True)
     on_duty_form_data = serializers.SerializerMethodField()
+    on_duty_form_schema = serializers.SerializerMethodField()
     on_duty_template_name = serializers.CharField(source='on_duty_request.template.name', read_only=True)
     files = EventAttendingFileSerializer(many=True, read_only=True)
     approval_logs = EventAttendingApprovalLogSerializer(many=True, read_only=True)
@@ -473,7 +523,7 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventAttendingForm
         fields = [
-            'id', 'applicant', 'on_duty_request_id', 'on_duty_form_data', 'on_duty_template_name',
+            'id', 'applicant', 'on_duty_request_id', 'on_duty_form_data', 'on_duty_form_schema', 'on_duty_template_name',
             'custom_event_details', 'event_proof',
             'travel_expenses', 'food_expenses', 'other_expenses',
             'total_fees_spend', 'advance_amount_received', 'advance_date',
@@ -484,6 +534,15 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
+    def _is_conference_form(self, form_data):
+        """Check if any field value indicates this is a conference event."""
+        if not form_data:
+            return False
+        for v in form_data.values():
+            if isinstance(v, str) and 'conference' in v.strip().lower():
+                return True
+        return False
+
     def get_budget_details(self, obj):
         from .models import StaffEventDeclaration, EventAttendingForm
         try:
@@ -491,38 +550,42 @@ class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
         except StaffEventDeclaration.DoesNotExist:
             return None
             
-        nature = ''
+        combined = {}
         if obj.on_duty_request:
-            nature = (obj.on_duty_request.form_data or {}).get('nature_of_event', '')
-        else:
-            nature = (obj.custom_event_details or {}).get('nature_of_event', '')
-        is_conf = str(nature).strip().lower() == 'conference'
+            combined.update(obj.on_duty_request.form_data or {})
+        if obj.custom_event_details:
+            combined.update(obj.custom_event_details)
+        is_conf = self._is_conference_form(combined)
         
-        forms = EventAttendingForm.objects.filter(staff=obj.staff, status='approved').select_related('on_duty_request')
-        used = 0
-        for f in forms:
-            f_nature = ''
-            if f.on_duty_request:
-                f_nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
-            else:
-                f_nature = (f.custom_event_details or {}).get('nature_of_event', '')
-            f_is_conf = str(f_nature).strip().lower() == 'conference'
-            if f_is_conf == is_conf:
-                used += float(f.grand_total)
-                
+        used_conf = decl.get_used_budget(True)
+        used_normal = decl.get_used_budget(False)
+        
+        allocated_conf = decl.get_available_budget(True) + used_conf
+        allocated_normal = decl.get_available_budget(False) + used_normal
+        
         if is_conf:
-            available = float(decl.conference_budget)
-            allocated = available + used
+            available = decl.get_available_budget(True)
+            allocated = allocated_conf
+            used = used_conf
         else:
-            available = float(decl.normal_events_budget)
-            allocated = available + used
+            available = decl.get_available_budget(False)
+            allocated = allocated_normal
+            used = used_normal
             
         return {
             'is_conference': is_conf,
             'allocated': allocated,
             'used': used,
             'available': available,
+            'allocated_conference': allocated_conf,
+            'allocated_normal': allocated_normal,
         }
+
+    def get_on_duty_form_schema(self, obj):
+        """Return the form schema from the OD template, for dynamic label resolution in frontend/PDF."""
+        if obj.on_duty_request and obj.on_duty_request.template:
+            return obj.on_duty_request.template.form_schema or []
+        return []
 
     def get_on_duty_form_data(self, obj):
         data = {}

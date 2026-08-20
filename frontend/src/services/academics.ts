@@ -69,7 +69,7 @@ export async function fetchAcademicYears(): Promise<AcademicYearRow[]> {
   return [];
 }
 
-export async function shiftSemester(academicYearId: number): Promise<{ message: string; updated_count: number }> {
+export async function shiftSemester(academicYearId: number): Promise<{ message: string; updated_count: number; skipped_graduated_count?: number }> {
   const res = await fetchWithAuth(`${API_BASE}/api/academics/academic-years/${academicYearId}/shift_semester/`, {
     method: 'POST',
   });
@@ -94,4 +94,61 @@ export async function fetchTransitionLogs(): Promise<TransitionLog[]> {
   const res = await fetchWithAuth(`${API_BASE}/api/academics/academic-years/transition_logs/`);
   if (!res.ok) throw new Error('Failed to fetch transition logs');
   return res.json();
+}
+
+// ── Batch Archival / Graduation ──────────────────────────────────────────────
+
+export type BatchYearFull = {
+  id: number;
+  name: string;
+  start_year?: number | null;
+  end_year?: number | null;
+  is_graduated: boolean;
+  graduated_at?: string | null;
+  graduated_by?: number | null;
+  graduated_by_name?: string | null;
+};
+
+export type GraduateResult = {
+  message: string;
+  batch_year_id: number;
+  batches_deactivated: number;
+  advisors_deactivated: number;
+  students_set_alumni: number;
+};
+
+export type UngraduateResult = {
+  message: string;
+  batch_year_id: number;
+  batches_reactivated: number;
+};
+
+export async function fetchBatchYearsWithGraduation(): Promise<BatchYearFull[]> {
+  const res = await fetchWithAuth(`${API_BASE}/api/academics/batch-years/`);
+  if (!res.ok) throw new Error('Failed to fetch batch years');
+  const data = await res.json();
+  const results = (data as any)?.results;
+  if (Array.isArray(results)) return results as BatchYearFull[];
+  if (Array.isArray(data)) return data as BatchYearFull[];
+  return [];
+}
+
+export async function graduateBatch(batchYearId: number): Promise<GraduateResult> {
+  const res = await fetchWithAuth(
+    `${API_BASE}/api/academics/batch-years/${batchYearId}/graduate_batch/`,
+    { method: 'POST' },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.detail || 'Failed to graduate batch');
+  return data as GraduateResult;
+}
+
+export async function ungraduateBatch(batchYearId: number): Promise<UngraduateResult> {
+  const res = await fetchWithAuth(
+    `${API_BASE}/api/academics/batch-years/${batchYearId}/ungraduate_batch/`,
+    { method: 'POST' },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as any)?.detail || 'Failed to un-graduate batch');
+  return data as UngraduateResult;
 }

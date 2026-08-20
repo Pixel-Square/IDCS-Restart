@@ -325,10 +325,10 @@ class FeedbackResponse(models.Model):
         help_text='Elective subject being rated (for PE/OE/EE subjects)'
     )
     
-    answer_star = models.PositiveSmallIntegerField(
+    answer_star = models.FloatField(
         null=True,
         blank=True,
-        help_text='Star rating (1-5), used when answer_type is STAR'
+        help_text='Rating (1-4, supports 0.5 increments), used when answer_type is STAR'
     )
     answer_text = models.TextField(
         blank=True,

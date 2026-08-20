@@ -11518,15 +11518,120 @@ class BatchYearViewSet(viewsets.ModelViewSet):
         from .models import BatchYear
 
         class BatchYearSerializer(serializers.ModelSerializer):
+            graduated_by_name = serializers.SerializerMethodField()
+
             class Meta:
                 model = BatchYear
-                fields = ('id', 'name', 'start_year', 'end_year')
+                fields = (
+                    'id', 'name', 'start_year', 'end_year',
+                    'is_graduated', 'graduated_at', 'graduated_by', 'graduated_by_name'
+                )
+
+            def get_graduated_by_name(self, obj):
+                if obj.graduated_by:
+                    return f"{getattr(obj.graduated_by, 'first_name', '')} {getattr(obj.graduated_by, 'last_name', '')}".strip() or obj.graduated_by.username
+                return None
 
         return BatchYearSerializer
 
     def get_queryset(self):
         from .models import BatchYear
         return BatchYear.objects.all().order_by('-name')
+
+    @action(detail=True, methods=['post'])
+    def graduate_batch(self, request, pk=None):
+        """
+        Archive a batch:
+        - Freeze all sections in this batch (semesters will never auto-update again).
+        - Deactivate all class advisor assignments for these sections.
+        - Set all active students in these sections to ALUMNI status.
+        """
+        user = request.user
+        perms = get_user_permissions(user)
+        has_ps_role = user.roles.filter(name__iexact='PS').exists()
+        
+        # Checking if user is PS or has academics.edit_batch permission
+        if not (user.is_superuser or has_ps_role or 'academics.edit_batch' in perms):
+            return Response({'detail': 'You do not have permission to archive batches.'}, status=403)
+            
+        from .models import Batch, Section, StudentProfile
+        from advisors.models import ClassAdvisorAssignment
+        from django.utils import timezone
+        from django.db import transaction
+        
+        batch_year = self.get_object()
+        
+        if batch_year.is_graduated:
+            return Response({'detail': 'This batch is already graduated/archived.'}, status=400)
+            
+        with transaction.atomic():
+            batches = Batch.objects.filter(batch_year=batch_year)
+            batch_ids = batches.values_list('id', flat=True)
+            
+            # Deactivate all batches related to this batch_year
+            batches_deactivated = batches.update(is_active=False)
+            
+            sections = Section.objects.filter(batch__in=batch_ids)
+            section_ids = sections.values_list('id', flat=True)
+            
+            # Deactivate all active class advisor assignments for these sections
+            advisors_qs = ClassAdvisorAssignment.objects.filter(section_id__in=section_ids, is_active=True)
+            advisors_deactivated = advisors_qs.update(is_active=False)
+            
+            # Change active students to ALUMNI
+            students_qs = StudentProfile.objects.filter(section_id__in=section_ids, status='ACTIVE')
+            students_set_alumni = students_qs.update(status='ALUMNI')
+            
+            # Mark batch year as graduated
+            batch_year.is_graduated = True
+            batch_year.graduated_at = timezone.now()
+            batch_year.graduated_by = request.user
+            batch_year.save(update_fields=['is_graduated', 'graduated_at', 'graduated_by'])
+            
+        return Response({
+            'message': 'Batch graduated and archived successfully.',
+            'batch_year_id': batch_year.id,
+            'batches_deactivated': batches_deactivated,
+            'advisors_deactivated': advisors_deactivated,
+            'students_set_alumni': students_set_alumni
+        })
+        
+    @action(detail=True, methods=['post'])
+    def ungraduate_batch(self, request, pk=None):
+        """
+        Restore a graduated batch:
+        - Reactivates the batch year and its associated batches.
+        - NOTE: Does not automatically restore class advisors or student status.
+        """
+        user = request.user
+        perms = get_user_permissions(user)
+        has_ps_role = user.roles.filter(name__iexact='PS').exists()
+        
+        if not (user.is_superuser or has_ps_role or 'academics.edit_batch' in perms):
+            return Response({'detail': 'You do not have permission to restore batches.'}, status=403)
+            
+        from .models import Batch
+        from django.db import transaction
+        
+        batch_year = self.get_object()
+        
+        if not batch_year.is_graduated:
+            return Response({'detail': 'This batch is not graduated/archived.'}, status=400)
+            
+        with transaction.atomic():
+            batches = Batch.objects.filter(batch_year=batch_year)
+            batches_reactivated = batches.update(is_active=True)
+            
+            batch_year.is_graduated = False
+            batch_year.graduated_at = None
+            batch_year.graduated_by = None
+            batch_year.save(update_fields=['is_graduated', 'graduated_at', 'graduated_by'])
+            
+        return Response({
+            'message': 'Batch restored successfully.',
+            'batch_year_id': batch_year.id,
+            'batches_reactivated': batches_reactivated,
+        })
 
 
 class BatchListView(APIView):

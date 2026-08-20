@@ -40,10 +40,13 @@ export default function MasterList() {
   const loc = useLocation();
   const navigate = useNavigate();
   const uniqueRegs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
-  const uniqueSems = data && data.length ? Array.from(new Set(data.map(d => d.semester))).sort((a,b)=>a-b) : [];
-  const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
-  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
-  const filteredData = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch)));
+  const uniqueSems = data && data.length ? Array.from(new Set(data.map(d => Number(d.semester)))).sort((a,b)=>a-b) : [];
+  const [selectedReg, setSelectedReg] = useState<string | null>(() => localStorage.getItem('masterCurriculumReg') || (uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null)));
+  const [selectedSem, setSelectedSem] = useState<number | null>(() => {
+    const saved = localStorage.getItem('masterCurriculumSem');
+    return saved ? Number(saved) : (uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
+  });
+  const filteredData = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || Number(m.semester) === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch)));
   const totals = filteredData.reduce(
     (acc, row) => {
       acc.l += Number(row.l || 0);
@@ -57,12 +60,24 @@ export default function MasterList() {
   );
 
   useEffect(() => {
-    const regs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
-    if (regs.length === 1) setSelectedReg(regs[0]);
-    else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
-    const sems = data && data.length ? Array.from(new Set(data.map(d => d.semester))).sort((a:any,b:any)=>a-b) : [];
-    if (sems.length === 1) setSelectedSem(sems[0]);
-    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
+    if (selectedReg) localStorage.setItem('masterCurriculumReg', selectedReg);
+    else localStorage.removeItem('masterCurriculumReg');
+  }, [selectedReg]);
+
+  useEffect(() => {
+    if (selectedSem !== null) localStorage.setItem('masterCurriculumSem', String(selectedSem));
+    else localStorage.removeItem('masterCurriculumSem');
+  }, [selectedSem]);
+
+  useEffect(() => {
+    if (!data || data.length === 0) return;
+    const regs = Array.from(new Set(data.map(d => d.regulation)));
+    if (regs.length === 1 && !selectedReg) setSelectedReg(regs[0]);
+    else if (selectedReg && !regs.includes(selectedReg)) setSelectedReg(regs[0] ?? null);
+    
+    const sems = Array.from(new Set(data.map(d => Number(d.semester)))).sort((a,b)=>a-b);
+    if (sems.length === 1 && !selectedSem) setSelectedSem(sems[0]);
+    else if (selectedSem && !sems.includes(selectedSem)) setSelectedSem(sems[0] ?? null);
   }, [data]);
 
   useEffect(() => {
@@ -619,14 +634,25 @@ export default function MasterList() {
             </p>
             <p className="text-sm font-medium text-gray-700 mb-2">Select target batch(es):</p>
             <div className="space-y-2 mb-5">
-              {batchYears
-                .filter(b => !selectedBatch || b.id !== selectedBatch)
-                .map(b => {
+              {(() => {
+                const eligibleBatches = batchYears.filter(b => {
+                  if (b.is_graduated) return false;
+                  if (selectedBatch && b.id === selectedBatch) return false;
+                  
                   const existingIds = batchDeptExisting[b.id] || [];
                   const isBlocked = totalDeptCount > 0 && existingIds.length >= totalDeptCount;
+                  return !isBlocked;
+                });
+
+                if (eligibleBatches.length === 0) {
+                  return <p className="text-sm text-gray-500 italic">No eligible target batches found. All other active batches already have subjects for this selection.</p>;
+                }
+
+                return eligibleBatches.map(b => {
+                  const existingIds = batchDeptExisting[b.id] || [];
                   const existingNames = existingIds.map(id => deptNameMap.get(id)).filter(Boolean).join(', ');
                   return (
-                  <label key={b.id} className={`flex items-center gap-3 p-2 rounded-lg ${isBlocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                  <label key={b.id} className="flex items-center gap-3 p-2 rounded-lg cursor-pointer hover:bg-gray-50">
                     <input
                       type="checkbox"
                       className="w-4 h-4 rounded border-gray-300 accent-purple-600"
@@ -636,18 +662,15 @@ export default function MasterList() {
                           e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
                         )
                       }
-                      disabled={isBlocked}
                     />
                     <span className="text-sm font-medium text-gray-700">{b.name}</span>
                     {existingNames && (
                       <span className="ml-auto text-xs text-amber-700">Existing: {existingNames}</span>
                     )}
-                    {isBlocked && (
-                      <span className="ml-auto text-xs text-rose-600">All depts filled</span>
-                    )}
                   </label>
                   );
-                })}
+                });
+              })()}
             </div>
             <div className="flex gap-3 justify-end">
               <button

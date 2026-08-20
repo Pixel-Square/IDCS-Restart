@@ -3,6 +3,7 @@ export type BatchYear = {
   name: string;
   start_year?: number | null;
   end_year?: number | null;
+  is_graduated?: boolean;
 };
 
 export type Master = {
@@ -143,6 +144,16 @@ export async function deleteCurriculumDepartment(id: number) {
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || 'Failed to delete department curriculum');
+  }
+}
+
+export async function deleteElective(id: number) {
+  const res = await fetchWithAuth(`/api/curriculum/elective/${id}/`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || 'Failed to delete elective subject');
   }
 }
 

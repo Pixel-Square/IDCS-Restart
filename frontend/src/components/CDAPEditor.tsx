@@ -477,6 +477,46 @@ export default function CDAPEditor({
     });
   }, [rows]);
 
+  const btLevelSummary = useMemo(() => {
+    // Group by unit number (Unit 1 = CO1, Unit 2 = CO2, ...).
+    // Carry-forward unit: only the first row of each unit group fills the unit field.
+    const summary = new Map<string, { label: string; min: number; max: number; prefix: string }>();
+    let carryUnit = '';
+
+    for (const row of rows) {
+      const rawUnit = String(row.unit || '').trim();
+      if (rawUnit) carryUnit = rawUnit;
+      if (!carryUnit) continue;
+
+      const coLabel = `CO${carryUnit}`;
+
+      const btStr = String(row.bt_level || '').trim();
+      if (!btStr) continue;
+
+      const match = btStr.match(/\d/g);
+      if (match && match.length > 0) {
+        const lastDigitStr = match[match.length - 1];
+        const lastDigit = parseInt(lastDigitStr, 10);
+        const lastIndex = btStr.lastIndexOf(lastDigitStr);
+        const prefix = btStr.substring(0, lastIndex);
+
+        if (!summary.has(carryUnit)) {
+          summary.set(carryUnit, { label: coLabel, min: lastDigit, max: lastDigit, prefix });
+        } else {
+          const current = summary.get(carryUnit)!;
+          summary.set(carryUnit, {
+            label: coLabel,
+            min: Math.min(current.min, lastDigit),
+            max: Math.max(current.max, lastDigit),
+            prefix: current.prefix,
+          });
+        }
+      }
+    }
+
+    return Array.from(summary.values()).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  }, [rows]);
+
   const updateCell = (rowIdx: number, key: string, value: any) => {
     if (key === 'content_type' && isNAContentType(value)) {
       setRows((prev) => prev.filter((_, idx) => idx !== rowIdx));
@@ -1219,6 +1259,35 @@ export default function CDAPEditor({
           </table>
         </div>
       </section>
+
+      {btLevelSummary.length > 0 && (
+        <section style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff' }}>
+          <div style={{ marginBottom: 10 }}>
+            <h4 style={{ margin: 0 }}>BT Level Summary by CO</h4>
+            <div style={{ fontSize: 14, color: '#64748b' }}>Minimum and maximum BT Levels extracted from CDAP rows</div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', minWidth: 400 }}>
+              <thead>
+                <tr>
+                  <th style={{ border: '1px solid #e2e8f0', padding: 8, background: '#f8fafc', textAlign: 'left' }}>CO</th>
+                  <th style={{ border: '1px solid #e2e8f0', padding: 8, background: '#f8fafc', textAlign: 'center' }}>Minimum BT Level</th>
+                  <th style={{ border: '1px solid #e2e8f0', padding: 8, background: '#f8fafc', textAlign: 'center' }}>Maximum BT Level</th>
+                </tr>
+              </thead>
+              <tbody>
+                {btLevelSummary.map(({ label, min, max, prefix }) => (
+                  <tr key={label} style={{ background: '#fff' }}>
+                    <td style={{ border: '1px solid #e2e8f0', padding: 8, fontWeight: 700 }}>{label}</td>
+                    <td style={{ border: '1px solid #e2e8f0', padding: 8, textAlign: 'center' }}>{prefix}{min}</td>
+                    <td style={{ border: '1px solid #e2e8f0', padding: 8, textAlign: 'center' }}>{prefix}{max}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

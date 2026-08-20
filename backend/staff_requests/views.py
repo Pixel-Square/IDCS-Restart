@@ -1643,6 +1643,34 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
         allocation_error = self._validate_template_allocation(request.user, template, form_data=form_data)
         if allocation_error:
             return Response({'error': allocation_error}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Budget validation for OD Form
+        if template.name in ['ON duty', 'ON duty - SPL']:
+            is_fin = False
+            amount_proposed = 0
+            for k, v in form_data.items():
+                kl = str(k).lower()
+                if 'financial' in kl and str(v).strip().upper() == 'YES':
+                    is_fin = True
+                if 'proposed' in kl:
+                    try: amount_proposed = float(v)
+                    except ValueError: pass
+                    
+            if is_fin and amount_proposed > 0:
+                nature = str(form_data.get('nature_of_event', '')).strip().lower()
+                is_conf = nature == 'conference'
+                from .models import StaffEventDeclaration
+                try:
+                    decl = StaffEventDeclaration.objects.get(staff=request.user)
+                    available_budget = decl.get_available_budget(is_conf)
+                    if amount_proposed > available_budget:
+                        return Response({
+                            'error': f'The proposed amount ({amount_proposed}) exceeds your available budget ({available_budget}) for this event type. The form cannot be submitted.'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                except StaffEventDeclaration.DoesNotExist:
+                    return Response({
+                        'error': 'No budget has been allocated for you. Please contact IQAC.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
         
         # Check if template has approval steps configured
         if not template.approval_steps.exists():
@@ -5045,8 +5073,10 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             
             # attach small request summary
             applicant_department = ''
-            if staff_profile and staff_profile.department:
-                applicant_department = staff_profile.department.name or staff_profile.department.short_name or ''
+            if staff_profile:
+                dept = getattr(staff_profile, 'current_department', None) or staff_profile.department
+                if dept:
+                    applicant_department = dept.name or dept.short_name or ''
 
             item['request_summary'] = {
                 'id': log.request.id,
@@ -7160,30 +7190,12 @@ class EventAttendingViewSet(viewsets.ViewSet):
 
     def _get_available_budget(self, user, is_conference):
         """Return available budget after subtracting already-approved event forms."""
-        from .models import StaffEventDeclaration, EventAttendingForm
+        from .models import StaffEventDeclaration
         try:
             decl = StaffEventDeclaration.objects.get(staff=user)
         except StaffEventDeclaration.DoesNotExist:
             return 0
-
-        allocated = float(decl.conference_budget if is_conference else decl.normal_events_budget)
-
-        # Subtract approved forms grand total
-        approved_forms = EventAttendingForm.objects.filter(staff=user, status='approved')
-        used = 0
-        for f in approved_forms:
-            f_is_conf = self._is_conference(f)
-            if f_is_conf == is_conference:
-                used += f.grand_total
-
-        # Also subtract pending forms that are not this form
-        pending_forms = EventAttendingForm.objects.filter(staff=user, status='pending')
-        for f in pending_forms:
-            f_is_conf = self._is_conference(f)
-            if f_is_conf == is_conference:
-                used += f.grand_total
-
-        return round(allocated - used, 2)
+        return decl.get_available_budget(is_conference)
 
     # ── Staff-facing endpoints ────────────────────────────────────────
 
@@ -7213,6 +7225,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
                 'id': req.id,
                 'template_name': req.template.name,
                 'form_data': fd,
+                'form_schema': req.template.form_schema or [],
                 'has_event_form': has_form,
                 'created_at': req.created_at,
             })
@@ -7233,6 +7246,12 @@ class EventAttendingViewSet(viewsets.ViewSet):
         od_request = None
         custom_event_details = None
 
+        if event_details_str:
+            try:
+                custom_event_details = json.loads(event_details_str)
+            except Exception:
+                return Response({'error': 'Invalid event_details JSON'}, status=status.HTTP_400_BAD_REQUEST)
+
         if on_duty_request_id:
             try:
                 od_request = StaffRequest.objects.get(id=on_duty_request_id, applicant=request.user, status='approved')
@@ -7243,12 +7262,8 @@ class EventAttendingViewSet(viewsets.ViewSet):
             if EventAttendingForm.objects.filter(on_duty_request=od_request).exists():
                 return Response({'error': 'Event Attending form already submitted for this On Duty request'}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            if not event_details_str:
+            if not custom_event_details:
                 return Response({'error': 'Either on_duty_request_id or event_details is required'}, status=status.HTTP_400_BAD_REQUEST)
-            try:
-                custom_event_details = json.loads(event_details_str)
-            except Exception:
-                return Response({'error': 'Invalid event_details JSON'}, status=status.HTTP_400_BAD_REQUEST)
 
             # If od_claim=yes, auto-create a StaffRequest (OD) in the calendar workflow
             od_claim = str(data.get('od_claim', 'no')).strip().lower()
@@ -7318,13 +7333,30 @@ class EventAttendingViewSet(viewsets.ViewSet):
 
         try:
             decl = StaffEventDeclaration.objects.get(staff=request.user)
-            available = float(decl.conference_budget if is_conf else decl.normal_events_budget)
+            available_currently = decl.get_available_budget(is_conf)
+            
+            advance_locked = 0
+            if od_request:
+                fd = od_request.form_data or {}
+                is_fin = False
+                is_adv = False
+                for k, v in fd.items():
+                    kl = k.lower()
+                    if 'financial' in kl and str(v).strip().upper() == 'YES': is_fin = True
+                    if 'advance' in kl and str(v).strip().upper() == 'YES': is_adv = True
+                if is_fin and is_adv:
+                    for k, v in fd.items():
+                        if 'proposed' in k.lower():
+                            try: advance_locked = float(v)
+                            except ValueError: pass
+                            
+            effective_available = available_currently + advance_locked
 
-            if temp_form.grand_total > available:
+            if temp_form.grand_total > effective_available:
                 return Response({
                     'error': 'The amount is exceeding the allocated budget, so please Reevaluate the Budget',
                     'grand_total': temp_form.grand_total,
-                    'available_budget': available,
+                    'available_budget': effective_available,
                 }, status=status.HTTP_400_BAD_REQUEST)
         except StaffEventDeclaration.DoesNotExist:
             # No declaration = no budget allocated, block submission
@@ -7361,6 +7393,16 @@ class EventAttendingViewSet(viewsets.ViewSet):
                         decl.conference_budget = max(0, float(decl.conference_budget) - event_form.grand_total)
                     else:
                         decl.normal_events_budget = max(0, float(decl.normal_events_budget) - event_form.grand_total)
+
+                    # Refund credit-back
+                    advance = float(event_form.advance_amount_received or 0)
+                    if advance > event_form.grand_total:
+                        refund = advance - event_form.grand_total
+                        if is_conf:
+                            decl.conference_budget = float(decl.conference_budget) + refund
+                        else:
+                            decl.normal_events_budget = float(decl.normal_events_budget) + refund
+
                     decl.save(update_fields=['normal_events_budget', 'conference_budget', 'updated_at'])
                 except StaffEventDeclaration.DoesNotExist:
                     pass
@@ -7554,6 +7596,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
                             decl.conference_budget = max(0, float(decl.conference_budget) - form.grand_total)
                         else:
                             decl.normal_events_budget = max(0, float(decl.normal_events_budget) - form.grand_total)
+
                         decl.save(update_fields=['normal_events_budget', 'conference_budget', 'updated_at'])
                     except StaffEventDeclaration.DoesNotExist:
                         pass
@@ -7891,8 +7934,8 @@ class EventAttendingViewSet(viewsets.ViewSet):
             'conference_budget': round(orig_conf, 2),
             'normal_used': round(normal_used, 2),
             'conference_used': round(conf_used, 2),
-            'normal_available': round(float(decl.normal_events_budget), 2),
-            'conference_available': round(float(decl.conference_budget), 2),
+            'normal_available': round(decl.get_available_budget(False), 2),
+            'conference_available': round(decl.get_available_budget(True), 2),
         })
 
     # ── IQAC Budget Conditions ────────────────────────────────────────

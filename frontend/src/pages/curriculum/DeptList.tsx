@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import CLASS_TYPES, { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
-import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
+import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, deleteElective, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { Edit, Check, X, Save, RefreshCw, Copy, Trash2 } from 'lucide-react';
 import { showAlert, showConfirm } from '../../utils/dialog';
@@ -49,19 +49,33 @@ export default function DeptList() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteLinkedCount, setDeleteLinkedCount] = useState<number | null>(null);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
-  const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
-  const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
-  const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
+  const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => Number(r.semester)))).sort((a,b)=>a-b) : [];
+  const [selectedReg, setSelectedReg] = useState<string | null>(() => localStorage.getItem('deptCurriculumReg') || (uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null)));
+  const [selectedSem, setSelectedSem] = useState<number | null>(() => {
+    const saved = localStorage.getItem('deptCurriculumSem');
+    return saved ? Number(saved) : (uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
+  });
   const uniqueDepts = rows && rows.length ? Array.from(new Set(rows.map(r => r.department.id))) : [];
 
   useEffect(() => {
-    // update selectedReg when rows change
-    const regs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
-    if (regs.length === 1) setSelectedReg(regs[0]);
-    else if (!regs.includes(selectedReg || '')) setSelectedReg(regs[0] ?? null);
-    const sems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a:any,b:any)=>a-b) : [];
-    if (sems.length === 1) setSelectedSem(sems[0]);
-    else if (!sems.includes(selectedSem || -1)) setSelectedSem(sems[0] ?? null);
+    if (selectedReg) localStorage.setItem('deptCurriculumReg', selectedReg);
+    else localStorage.removeItem('deptCurriculumReg');
+  }, [selectedReg]);
+
+  useEffect(() => {
+    if (selectedSem !== null) localStorage.setItem('deptCurriculumSem', String(selectedSem));
+    else localStorage.removeItem('deptCurriculumSem');
+  }, [selectedSem]);
+
+  useEffect(() => {
+    if (!rows || rows.length === 0) return;
+    const regs = Array.from(new Set(rows.map(r => r.regulation)));
+    if (regs.length === 1 && !selectedReg) setSelectedReg(regs[0]);
+    else if (selectedReg && !regs.includes(selectedReg)) setSelectedReg(regs[0] ?? null);
+    
+    const sems = Array.from(new Set(rows.map(r => Number(r.semester)))).sort((a,b)=>a-b);
+    if (sems.length === 1 && !selectedSem) setSelectedSem(sems[0]);
+    else if (selectedSem && !sems.includes(selectedSem)) setSelectedSem(sems[0] ?? null);
   }, [rows]);
   useEffect(() => {
     fetchDeptRows()
@@ -299,9 +313,10 @@ export default function DeptList() {
     setAddForm((f: any) => ({
       ...f,
       parent: parent.id,
-      department_id: currentDept || f.department_id,
-      regulation: selectedReg || f.regulation,
-      semester_id: selectedSem || f.semester_id,
+      department_id: parent.department?.id || parent.department_id || currentDept || f.department_id,
+      regulation: parent.regulation || selectedReg || f.regulation,
+      semester_id: parent.semester || selectedSem || f.semester_id,
+      batch_id: parent.batch_id || parent.batch?.id || f.batch_id,
       course_name: '',
       course_code: '',
     }));
@@ -341,18 +356,30 @@ export default function DeptList() {
   async function saveEditElective() {
     if (!editElectiveForm || !editElectiveForm.id) return;
     try {
-      const res = await fetchWithAuth(`/api/curriculum/elective/${editElectiveForm.id}/`, {
-        method: 'PATCH',
-        body: JSON.stringify(editElectiveForm),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      // refresh data
+      const payload: any = { ...editElectiveForm };
+      if (!payload.course_code) delete payload.course_code;
+      if (!payload.course_name) delete payload.course_name;
+      await updateDeptRow(payload.id, payload);
       const fresh = await fetchDeptRows();
       setRows(fresh);
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
       setEditElectiveOpen(false);
-      await showAlert('Elective updated');
+      await showAlert('Elective subject updated');
+    } catch (e: any) {
+      await showAlert(String(e), 'error');
+    }
+  }
+
+  async function handleDeleteElective(o: any) {
+    if (!(await showConfirm(`Are you sure you want to delete elective subject "${o.course_name || o.course_code}"?`))) return;
+    try {
+      await deleteElective(o.id);
+      const fresh = await fetchDeptRows();
+      setRows(fresh);
+      const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
+      setElectiveSubjects(es);
+      await showAlert('Elective subject deleted');
     } catch (e: any) {
       await showAlert(String(e), 'error');
     }
@@ -963,13 +990,22 @@ export default function DeptList() {
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm">{o.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</span>
                                   {!o.is_cross_department && (
-                                    <button
-                                      onClick={() => openEditElective(o)}
-                                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                      title="Edit"
-                                    >
-                                      <Edit className="w-4 h-4" />
-                                    </button>
+                                    <>
+                                      <button
+                                        onClick={() => openEditElective(o)}
+                                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                        title="Edit"
+                                      >
+                                        <Edit className="w-4 h-4" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteElective(o)}
+                                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                        title="Delete"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               </td>
@@ -1493,12 +1529,19 @@ export default function DeptList() {
             </p>
             <p className="text-sm font-medium text-gray-700 mb-2">Select target batch(es):</p>
             <div className="space-y-2 mb-5">
-              {batchYears
-                .filter(b => !selectedBatch || b.id !== selectedBatch)
-                .map(b => {
-                  const hasExisting = hasExistingDeptForBatch(b.id, currentDept, selectedReg, selectedSem);
-                  return (
-                  <label key={b.id} className={`flex items-center gap-3 p-2 rounded-lg ${hasExisting ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+              {(() => {
+                const eligibleBatches = batchYears.filter(b => {
+                  if (b.is_graduated) return false;
+                  if (selectedBatch && b.id === selectedBatch) return false;
+                  return !hasExistingDeptForBatch(b.id, currentDept, selectedReg, selectedSem);
+                });
+
+                if (eligibleBatches.length === 0) {
+                  return <p className="text-sm text-gray-500 italic">No eligible target batches found. All other batches already have subjects for this selection.</p>;
+                }
+
+                return eligibleBatches.map(b => (
+                  <label key={b.id} className="flex items-center gap-3 p-2 rounded-lg cursor-pointer hover:bg-gray-50">
                     <input
                       type="checkbox"
                       className="w-4 h-4 rounded border-gray-300 accent-purple-600"
@@ -1508,15 +1551,11 @@ export default function DeptList() {
                           e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
                         )
                       }
-                      disabled={hasExisting}
                     />
                     <span className="text-sm font-medium text-gray-700">{b.name}</span>
-                    {hasExisting && (
-                      <span className="ml-auto text-xs text-rose-600">Has existing subjects</span>
-                    )}
                   </label>
-                  );
-                })}
+                ));
+              })()}
             </div>
             <div className="flex gap-3 justify-end">
               <button

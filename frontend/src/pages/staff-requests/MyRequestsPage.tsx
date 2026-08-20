@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Eye, Clock, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { Plus, Eye, Clock, CheckCircle, XCircle, RefreshCw, Download } from 'lucide-react';
 import { getMyRequests } from '../../services/staffRequests';
 import type { StaffRequest } from '../../types/staffRequests';
 import RequestDetailsModal from './RequestDetailsModal';
 import NewRequestModal from './NewRequestModal';
 import { formatShortFormValue } from './formValueUtils';
+import { generateODPdf } from './event-attending/generateODPdf';
 
 type StatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
 
@@ -17,6 +18,20 @@ export default function MyRequestsPage() {
   const [selectedRequest, setSelectedRequest] = useState<StaffRequest | null>(null);
   const [showNewRequest, setShowNewRequest] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  const handleDownloadRow = async (req: StaffRequest, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      setDownloadingId(req.id);
+      await generateODPdf(req);
+    } catch (err) {
+      console.error('Failed to download PDF', err);
+      alert('Failed to generate PDF');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const loadRequests = async () => {
     setLoading(true);
@@ -174,7 +189,7 @@ export default function MyRequestsPage() {
                   <th className="px-4 py-3 text-left font-semibold text-gray-700">Reason</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Submitted</th>
                   <th className="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-                  <th className="px-4 py-3 text-center font-semibold text-gray-700">View</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -195,14 +210,29 @@ export default function MyRequestsPage() {
                     <td className="px-4 py-3">{statusBadge(req.status)}</td>
                     <td
                       className="px-4 py-3 text-center"
-                      onClick={e => { e.stopPropagation(); setSelectedRequest(req); }}
+                      onClick={e => e.stopPropagation()}
                     >
-                      <button
-                        className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                        title="View details"
-                      >
-                        <Eye size={18} />
-                      </button>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          title="View details"
+                          onClick={() => setSelectedRequest(req)}
+                        >
+                          <Eye size={18} />
+                        </button>
+                        {req.template.name.toLowerCase().startsWith('on duty') && (
+                          req.template.name.toLowerCase() === 'on duty - spl' || req.status === 'approved'
+                        ) && (
+                          <button
+                            className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-50"
+                            title="Download PDF"
+                            onClick={(e) => handleDownloadRow(req, e)}
+                            disabled={downloadingId === req.id}
+                          >
+                            <Download size={18} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

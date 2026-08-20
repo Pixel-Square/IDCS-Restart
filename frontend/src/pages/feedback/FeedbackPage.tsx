@@ -538,6 +538,15 @@ export default function FeedbackPage() {
 
   const subjectWiseReportDeptDropdownRef = useRef<HTMLDivElement>(null);
   const subjectWiseReportYearDropdownRef = useRef<HTMLDivElement>(null);
+  const responseModalScrollRef = useRef<HTMLDivElement>(null);
+
+  // Automatically reset modal scroll to top (Question 1) when subject or form changes
+  useEffect(() => {
+    if (responseModalScrollRef.current) {
+      responseModalScrollRef.current.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      responseModalScrollRef.current.scrollTop = 0;
+    }
+  }, [selectedSubject, selectedForm?.id]);
 
   // Subjects by year state (for HOD form creation)
   const [subjectsByYear, setSubjectsByYear] = useState<{
@@ -2899,42 +2908,48 @@ export default function FeedbackPage() {
     // Determine which responses to use based on mode
     const currentResponses = selectedSubject ? currentSubjectResponses : responses;
 
+    const missingCommentIds = getMissingCommentQuestionIds();
+    const missingRatingIds = getMissingRatingQuestionIds();
+    const missingOptionIds = getMissingOptionQuestionIds();
+    const firstMissingId = missingCommentIds[0] || missingRatingIds[0] || missingOptionIds[0];
+
+    if (missingCommentIds.length > 0 || missingRatingIds.length > 0 || missingOptionIds.length > 0) {
+      if (missingCommentIds.length > 0) {
+        const nextErrors: Record<number, boolean> = {};
+        for (const questionId of missingCommentIds) nextErrors[questionId] = true;
+        setCommentValidationErrors(nextErrors);
+      }
+      if (missingRatingIds.length > 0) {
+        const nextErrors: Record<number, boolean> = {};
+        for (const questionId of missingRatingIds) nextErrors[questionId] = true;
+        setRatingValidationErrors(nextErrors);
+      }
+      if (missingOptionIds.length > 0) {
+        const nextErrors: Record<number, boolean> = {};
+        for (const questionId of missingOptionIds) nextErrors[questionId] = true;
+        setOptionValidationErrors(nextErrors);
+      }
+      setResponseError('Please complete all required fields before submitting');
+      if (firstMissingId) {
+        setTimeout(() => {
+          const el = document.getElementById(`question-card-${firstMissingId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 50);
+      }
+      return;
+    }
+
     if (requiresCommonComment && !currentSubjectCommonComment.trim()) {
       setCurrentSubjectCommonCommentError(true);
       setResponseError('Please complete all required fields before submitting');
-      return;
-    }
-
-    const missingCommentIds = getMissingCommentQuestionIds();
-    if (missingCommentIds.length > 0) {
-      const nextErrors: Record<number, boolean> = {};
-      for (const questionId of missingCommentIds) {
-        nextErrors[questionId] = true;
-      }
-      setCommentValidationErrors(nextErrors);
-      setResponseError('Please complete all required fields before submitting');
-      return;
-    }
-
-    const missingRatingIds = getMissingRatingQuestionIds();
-    if (missingRatingIds.length > 0) {
-      const nextErrors: Record<number, boolean> = {};
-      for (const questionId of missingRatingIds) {
-        nextErrors[questionId] = true;
-      }
-      setRatingValidationErrors(nextErrors);
-      setResponseError('Please complete all required fields before submitting');
-      return;
-    }
-
-    const missingOptionIds = getMissingOptionQuestionIds();
-    if (missingOptionIds.length > 0) {
-      const nextErrors: Record<number, boolean> = {};
-      for (const questionId of missingOptionIds) {
-        nextErrors[questionId] = true;
-      }
-      setOptionValidationErrors(nextErrors);
-      setResponseError('Please complete all required fields before submitting');
+      setTimeout(() => {
+        const el = document.getElementById('common-comment-card');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 50);
       return;
     }
 
@@ -3006,6 +3021,11 @@ export default function FeedbackPage() {
         setRatingValidationErrors({});
         setOptionValidationErrors({});
         setResponseError(null);
+
+        if (responseModalScrollRef.current) {
+          responseModalScrollRef.current.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+          responseModalScrollRef.current.scrollTop = 0;
+        }
 
         if (submissionStatus === 'SUBMITTED') {
           setResponseSuccess(true);
@@ -4542,7 +4562,7 @@ export default function FeedbackPage() {
                             />
                             <span className="text-sm text-slate-700 flex items-center gap-1.5">
                               <Star className="w-4 h-4 text-current" aria-hidden="true" />
-                              Star Rating (1-5)
+                              Rating (1-4)
                             </span>
                           </label>
                           <label className="flex items-center gap-2 cursor-pointer">
@@ -5862,20 +5882,19 @@ export default function FeedbackPage() {
                                             return (
                                               <>
                                           
-                                          {/* Star rating */}
+                                          {/* Rating display */}
                                           {answer.answer_star !== null && answer.answer_star !== undefined && (
-                                            <div className="flex items-center gap-0.5 mb-0.5">
-                                              {[1, 2, 3, 4, 5].map((star) => (
-                                                <Star
-                                                  key={star}
-                                                  className={`w-2.5 h-2.5 ${
-                                                    star <= (answer.answer_star || 0)
-                                                      ? 'fill-yellow-400 text-yellow-400'
-                                                      : 'text-slate-300'
-                                                  }`}
-                                                />
-                                              ))}
-                                              <span className="ml-0.5 text-[10px] text-slate-600 font-medium">({answer.answer_star}/5)</span>
+                                            <div className="flex items-center gap-2 mb-1 w-full max-w-[150px]">
+                                              <input
+                                                type="range"
+                                                min="1"
+                                                max="4"
+                                                step="0.5"
+                                                value={answer.answer_star}
+                                                disabled
+                                                className="flex-1 h-1 bg-slate-200 rounded-lg appearance-none accent-slate-400"
+                                              />
+                                              <span className="text-[10px] text-slate-600 font-medium whitespace-nowrap">({answer.answer_star}/4)</span>
                                             </div>
                                           )}
                                           
@@ -5966,20 +5985,19 @@ export default function FeedbackPage() {
                                       return (
                                         <>
                                     
-                                    {/* Display star rating if provided */}
+                                    {/* Display rating if provided */}
                                     {answer.answer_star !== null && answer.answer_star !== undefined && (
-                                      <div className="flex items-center gap-1 mb-0.5">
-                                        {[1, 2, 3, 4, 5].map((star) => (
-                                          <Star
-                                            key={star}
-                                            className={`w-3.5 h-3.5 ${
-                                              star <= (answer.answer_star || 0)
-                                                ? 'fill-yellow-400 text-yellow-400'
-                                                : 'text-slate-300'
-                                            }`}
-                                          />
-                                        ))}
-                                        <span className="ml-1 text-xs text-slate-600 font-medium">({answer.answer_star}/5)</span>
+                                      <div className="flex items-center gap-2 mb-1 w-full max-w-[200px]">
+                                        <input
+                                          type="range"
+                                          min="1"
+                                          max="4"
+                                          step="0.5"
+                                          value={answer.answer_star}
+                                          disabled
+                                          className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none accent-slate-400"
+                                        />
+                                        <span className="text-xs text-slate-600 font-medium whitespace-nowrap">({answer.answer_star}/4)</span>
                                       </div>
                                     )}
                                     
@@ -6275,8 +6293,8 @@ export default function FeedbackPage() {
         {/* Response Form Modal */}
         {selectedForm && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="sticky top-0 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
+            <div ref={responseModalScrollRef} className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 z-20 bg-white border-b border-slate-200 p-6 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   {/* Back button when viewing subject questions */}
                   {selectedSubject && (
@@ -6286,6 +6304,10 @@ export default function FeedbackPage() {
                         setCommentValidationErrors({});
                         setRatingValidationErrors({});
                         setOptionValidationErrors({});
+                        if (responseModalScrollRef.current) {
+                          responseModalScrollRef.current.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+                          responseModalScrollRef.current.scrollTop = 0;
+                        }
                       }}
                       className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
                       title="Back to subjects"
@@ -6374,6 +6396,10 @@ export default function FeedbackPage() {
                                 setCommentValidationErrors({});
                                 setRatingValidationErrors({});
                                 setOptionValidationErrors({});
+                                if (responseModalScrollRef.current) {
+                                  responseModalScrollRef.current.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+                                  responseModalScrollRef.current.scrollTop = 0;
+                                }
                               }}
                               className={`p-4 rounded-lg border-2 transition-all text-left ${
                                 subject.is_completed
@@ -6421,146 +6447,221 @@ export default function FeedbackPage() {
                 {/* Questions View (for OPEN_FEEDBACK or when subject selected) */}
                 {(selectedForm.type === 'OPEN_FEEDBACK' || selectedSubject) && (
                   <>
-                    {selectedForm.questions.map((question, index) => (
-                      <div key={question.id} className="p-5 bg-slate-50 rounded-lg border border-slate-200">
-                        <div className="flex items-start gap-3 mb-4">
-                          <span className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-semibold">
-                            {index + 1}
-                          </span>
-                          <div className="flex-1">
-                            <p className="text-slate-800 font-medium mb-2">{question.question}</p>
+                    {/* Questions Progress & Pending Status Header */}
+                    {selectedForm.questions && selectedForm.questions.length > 0 && (() => {
+                      const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+                      const isQuestionAnswered = (q: Question) => {
+                        const resp = currentResponses[q.id!];
+                        if (!resp) return false;
+                        if (q.allow_rating && (resp.answer_star === undefined || resp.answer_star === null || resp.answer_star === 0)) return false;
+                        if (!selectedForm.common_comment_enabled && q.allow_comment && (!resp.answer_text || !resp.answer_text.trim())) return false;
+                        if ((q.question_type === 'rating_radio_comment' || q.question_type === 'radio') && (resp.selected_option === undefined || resp.selected_option === null)) return false;
+                        return true;
+                      };
+
+                      const answeredCount = selectedForm.questions.filter(isQuestionAnswered).length;
+                      const totalCount = selectedForm.questions.length;
+                      const pendingQuestions = selectedForm.questions
+                        .map((q, idx) => ({ q, num: idx + 1, answered: isQuestionAnswered(q) }))
+                        .filter(item => !item.answered);
+
+                      return (
+                        <div className="p-4 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-2.5 shadow-sm">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
                             <div className="flex items-center gap-2">
-                              {question.allow_rating && (
-                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded-full">
-                                  <Star className="w-3 h-3" />
-                                  Rating
-                                </span>
-                              )}
-                              {!selectedForm.common_comment_enabled && question.allow_comment && (
-                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                                  <FileText className="w-3 h-3" />
-                                  Comment
-                                </span>
-                              )}
+                              <span className="text-sm font-semibold text-slate-800">
+                                Question Progress:
+                              </span>
+                              <span className="text-sm font-bold text-indigo-700 bg-white px-2.5 py-0.5 rounded-full border border-indigo-200 shadow-sm">
+                                {answeredCount} / {totalCount} Answered
+                              </span>
                             </div>
+                            {pendingQuestions.length > 0 ? (
+                              <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1 rounded-full">
+                                <AlertCircle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                                <span>Pending: Question {pendingQuestions.map(p => p.num).join(', ')}</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-full">
+                                <CheckCircle className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                                <span>All Questions Answered</span>
+                              </div>
+                            )}
+                          </div>
+                          {/* Progress bar */}
+                          <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                            <div
+                              className="bg-indigo-600 h-full transition-all duration-300 rounded-full"
+                              style={{ width: `${totalCount > 0 ? (answeredCount / totalCount) * 100 : 0}%` }}
+                            />
                           </div>
                         </div>
+                      );
+                    })()}
 
-                        {/* Answer Input */}
-                        <div className="ml-11 space-y-4">
-                          {/* Star Rating Input */}
-                          {question.allow_rating && (
-                            <div>
-                              <p className="text-sm font-medium text-slate-700 mb-2">
-                                Rate (1-5 stars) {!selectedForm.common_comment_enabled && question.allow_comment && <span className="text-red-500">*</span>}
-                              </p>
-                              <div className="flex gap-2">
-                                {[1, 2, 3, 4, 5].map((star) => {
-                                  const currentResponses = selectedSubject ? currentSubjectResponses : responses;
-                                  const currentRating = currentResponses[question.id!]?.answer_star || 0;
-                                  const isActive = star <= currentRating;
-                                  const isSelected = star === currentRating;
-                                  
-                                  return (
-                                    <button
-                                      key={star}
-                                      type="button"
-                                      onClick={() => handleResponseChange(question.id!, 'STAR', star)}
-                                      className={`p-3 rounded-lg border-2 transition-all ${
-                                        isSelected
-                                          ? 'border-yellow-500 bg-yellow-50'
-                                          : 'border-slate-200 hover:border-slate-300'
-                                      }`}
-                                    >
-                                      <Star
-                                        className={`w-6 h-6 transition-all ${
-                                          isActive
-                                            ? 'text-yellow-500 fill-yellow-500'
-                                            : 'text-slate-400'
+                    {selectedForm.questions.map((question, index) => {
+                      const currentResponses = selectedSubject ? currentSubjectResponses : responses;
+                      const resp = currentResponses[question.id!];
+                      const isAnswered = Boolean(
+                        resp &&
+                        (!question.allow_rating || (resp.answer_star !== undefined && resp.answer_star !== null && resp.answer_star > 0)) &&
+                        (selectedForm.common_comment_enabled || !question.allow_comment || (resp.answer_text && resp.answer_text.trim())) &&
+                        (question.question_type !== 'rating_radio_comment' && question.question_type !== 'radio' || (resp.selected_option !== undefined && resp.selected_option !== null))
+                      );
+
+                      return (
+                        <div
+                          key={question.id}
+                          id={`question-card-${question.id}`}
+                          className={`p-5 rounded-lg border transition-all ${
+                            commentValidationErrors[question.id!] || ratingValidationErrors[question.id!] || optionValidationErrors[question.id!]
+                              ? 'bg-red-50/60 border-red-300 ring-1 ring-red-300'
+                              : isAnswered
+                              ? 'bg-slate-50 border-slate-200'
+                              : 'bg-white border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3 mb-4">
+                            <span className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm ${
+                              isAnswered
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-indigo-600 text-white'
+                            }`}>
+                              {index + 1}
+                            </span>
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between gap-2 flex-wrap mb-1.5">
+                                <p className="text-slate-800 font-medium">{question.question}</p>
+                                {isAnswered ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold rounded-full flex-shrink-0">
+                                    <CheckCircle className="w-3 h-3" />
+                                    Answered
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold rounded-full flex-shrink-0">
+                                    <AlertCircle className="w-3 h-3" />
+                                    Pending
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {question.allow_rating && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full">
+                                    <Star className="w-3 h-3" />
+                                    Rating
+                                  </span>
+                                )}
+                                {!selectedForm.common_comment_enabled && question.allow_comment && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                    <FileText className="w-3 h-3" />
+                                    Comment
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Answer Input */}
+                          <div className="ml-11 space-y-4">
+                            {/* Rating Slider Input */}
+                            {question.allow_rating && (
+                              <div>
+                                <p className="text-sm font-medium text-slate-700 mb-2">
+                                  Rating (1-4) {!selectedForm.common_comment_enabled && question.allow_comment && <span className="text-red-500">*</span>}
+                                </p>
+                                <div className="flex items-center gap-4 max-w-md">
+                                  <span className="text-sm font-medium text-slate-500">1</span>
+                                  <input
+                                    type="range"
+                                    min="1"
+                                    max="4"
+                                    step="0.5"
+                                    value={(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_star || 1}
+                                    onChange={(e) => handleResponseChange(question.id!, 'STAR', parseFloat(e.target.value))}
+                                    className="flex-1 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                  />
+                                  <span className="text-sm font-medium text-slate-500">4</span>
+                                  <div className="ml-2 px-3 py-1 bg-blue-100 text-blue-800 rounded-md font-bold min-w-[3rem] text-center">
+                                    {(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_star || 1}
+                                  </div>
+                                </div>
+                                {ratingValidationErrors[question.id!] && (
+                                  <p className="text-xs text-red-600 mt-2">Rating is required</p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Text Comment Input (question-wise) */}
+                            {!selectedForm.common_comment_enabled && question.allow_comment && (
+                              <div>
+                                <p className="text-sm font-medium text-slate-700 mb-2">
+                                  Comment <span className="text-red-500">*</span>
+                                </p>
+                                <textarea
+                                  value={(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_text || ''}
+                                  onChange={(e) => handleResponseChange(question.id!, 'TEXT', e.target.value)}
+                                  onInput={handleTextareaInput}
+                                  placeholder="Add your comments here..."
+                                  required
+                                  className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 resize-none overflow-hidden ${
+                                    commentValidationErrors[question.id!] ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-indigo-500'
+                                  }`}
+                                  rows={4}
+                                />
+                                {commentValidationErrors[question.id!] && (
+                                  <p className="text-xs text-red-600 mt-2">Comment is required</p>
+                                )}
+                              </div>
+                            )}
+
+                            {(question.question_type === 'rating_radio_comment' || question.question_type === 'radio') && (
+                              <div>
+                                <p className="text-sm font-medium text-slate-700 mb-2">
+                                  Choose one option <span className="text-red-500">*</span>
+                                </p>
+                                <div className="flex flex-wrap gap-3">
+                                  {(question.options || []).map((opt) => {
+                                    const selected = currentResponses[question.id!]?.selected_option;
+                                    const checked = opt?.id !== undefined && selected === opt.id;
+                                    const radioId = `q-${question.id}-opt-${opt.id}`;
+
+                                    return (
+                                      <label
+                                        key={opt.ui_id || opt.id}
+                                        htmlFor={radioId}
+                                        className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors w-auto min-w-[90px] ${
+                                          checked ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
                                         }`}
-                                      />
-                                      <span className="block text-xs text-slate-600 mt-1">{star}</span>
-                                    </button>
-                                  );
-                                })}
+                                      >
+                                        <input
+                                          id={radioId}
+                                          type="radio"
+                                          name={`q-${question.id}-opt`}
+                                          checked={checked}
+                                          onChange={() => {
+                                            if (opt?.id !== undefined) {
+                                              handleResponseChange(question.id!, 'OPTION', opt.id);
+                                            }
+                                          }}
+                                          className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-2 focus:ring-indigo-500"
+                                        />
+                                        <span className="text-sm text-slate-800">{opt.option_text}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                {optionValidationErrors[question.id!] && (
+                                  <p className="text-xs text-red-600 mt-2">Please select an option</p>
+                                )}
                               </div>
-                              {ratingValidationErrors[question.id!] && (
-                                <p className="text-xs text-red-600 mt-2">Rating is required</p>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Text Comment Input (question-wise) */}
-                          {!selectedForm.common_comment_enabled && question.allow_comment && (
-                            <div>
-                              <p className="text-sm font-medium text-slate-700 mb-2">
-                                Comment <span className="text-red-500">*</span>
-                              </p>
-                              <textarea
-                                value={(selectedSubject ? currentSubjectResponses : responses)[question.id!]?.answer_text || ''}
-                                onChange={(e) => handleResponseChange(question.id!, 'TEXT', e.target.value)}
-                                onInput={handleTextareaInput}
-                                placeholder="Add your comments here..."
-                                required
-                                className={`w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 resize-none overflow-hidden ${
-                                  commentValidationErrors[question.id!] ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-indigo-500'
-                                }`}
-                                rows={4}
-                              />
-                              {commentValidationErrors[question.id!] && (
-                                <p className="text-xs text-red-600 mt-2">Comment is required</p>
-                              )}
-                            </div>
-                          )}
-
-                          {(question.question_type === 'rating_radio_comment' || question.question_type === 'radio') && (
-                            <div>
-                              <p className="text-sm font-medium text-slate-700 mb-2">
-                                Choose one option <span className="text-red-500">*</span>
-                              </p>
-                              <div className="flex flex-wrap gap-3">
-                                {(question.options || []).map((opt) => {
-                                  const currentResponses = selectedSubject ? currentSubjectResponses : responses;
-                                  const selected = currentResponses[question.id!]?.selected_option;
-                                  const checked = opt?.id !== undefined && selected === opt.id;
-                                  const radioId = `q-${question.id}-opt-${opt.id}`;
-
-                                  return (
-                                    <label
-                                      key={opt.ui_id || opt.id}
-                                      htmlFor={radioId}
-                                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors w-auto min-w-[90px] ${
-                                        checked ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'
-                                      }`}
-                                    >
-                                      <input
-                                        id={radioId}
-                                        type="radio"
-                                        name={`q-${question.id}-opt`}
-                                        checked={checked}
-                                        onChange={() => {
-                                          if (opt?.id !== undefined) {
-                                            handleResponseChange(question.id!, 'OPTION', opt.id);
-                                          }
-                                        }}
-                                        className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-2 focus:ring-indigo-500"
-                                      />
-                                      <span className="text-sm text-slate-800">{opt.option_text}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                              {optionValidationErrors[question.id!] && (
-                                <p className="text-xs text-red-600 mt-2">Please select an option</p>
-                              )}
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     {requiresCommonComment && (
-                      <div className="p-5 bg-slate-50 rounded-lg border border-slate-200">
+                      <div id="common-comment-card" className="p-5 bg-slate-50 rounded-lg border border-slate-200">
                         <p className="text-slate-800 font-medium mb-3">Overall Comment <span className="text-red-500">*</span></p>
                         <textarea
                           value={currentSubjectCommonComment}

@@ -174,41 +174,54 @@ function buildMainContent(
   ];
 
   // ── On Duty / Event Details (compact: 2 fields per row) ─────────
-  const EVENT_LABELS: Record<string, string> = {
-    event_title: 'Event Title',
-    host_institution_name: 'Host Institution',
-    mode_of_event: 'Mode of Event',
-    nature_of_event: 'Nature of Event',
-    platform_if_online: 'Platform (if Online)',
-    purpose: 'Purpose',
-    expected_outcome: 'Expected Outcome',
-    type: 'Type',
-    reason: 'Reason',
-    from_date: 'From Date',
-    to_date: 'To Date',
-    from_noon: 'From Session',
-    to_noon: 'To Session',
-    kss_link: 'KSS Link',
-  };
+  // Labels are now resolved dynamically from form.on_duty_form_schema
 
   const rawData = form.on_duty_form_data || {};
+  const schema: Array<{ name: string; label: string; type: string; can_change_form_fields?: boolean; conditional_fields?: Record<string, any[]> }> = form.on_duty_form_schema || [];
   const flatRows: [string, string][] = [];
 
-  const ordered = [
-    ...Object.keys(EVENT_LABELS).filter(k => rawData[k] != null && rawData[k] !== ''),
-    ...Object.keys(rawData).filter(
-      k =>
-        !EVENT_LABELS[k] &&
-        rawData[k] != null &&
-        rawData[k] !== '' &&
-        !String(rawData[k]).startsWith('{'),
-    ),
-  ];
+  // Build dynamic label map from schema (including conditional child fields)
+  const labelMap: Record<string, string> = {
+    kss_link: 'KSS Link'
+  };
+  const walkSchemaForLabels = (fields: typeof schema) => {
+    fields.forEach(f => {
+      labelMap[f.name] = f.label || f.name.replace(/_/g, ' ');
+      if (f.conditional_fields) {
+        Object.values(f.conditional_fields).forEach((children: any[]) => {
+          children.forEach(cf => { labelMap[cf.name] = cf.label || cf.name.replace(/_/g, ' '); });
+        });
+      }
+    });
+  };
+  walkSchemaForLabels(schema);
 
-  ordered.forEach(k => {
-    const val = rawData[k];
-    if (typeof val === 'object') return;
-    flatRows.push([EVENT_LABELS[k] || k.replace(/_/g, ' '), String(val)]);
+  // Walk schema in order, respecting conditional_fields
+  const seen = new Set<string>();
+  const walkAndCollect = (fields: typeof schema) => {
+    fields.forEach(f => {
+      if (f.type === 'file') return;
+      const val = rawData[f.name];
+      if (val != null && val !== '' && typeof val !== 'object') {
+        flatRows.push([labelMap[f.name] || f.name.replace(/_/g, ' '), String(val)]);
+        seen.add(f.name);
+      }
+      if (f.can_change_form_fields && f.conditional_fields && val) {
+        const children = (f.conditional_fields[String(val)] || []) as typeof schema;
+        walkAndCollect(children);
+      }
+    });
+  };
+
+  if (schema.length > 0) {
+    walkAndCollect(schema);
+  }
+
+  // Fallback: any remaining keys not covered by schema
+  Object.entries(rawData).forEach(([k, v]) => {
+    if (seen.has(k) || v == null || v === '' || typeof v === 'object') return;
+    if (k === 'proof') return;
+    flatRows.push([labelMap[k] || k.replace(/_/g, ' '), String(v)]);
   });
 
   // Pair into 4-column rows: [label1, value1, label2, value2]
@@ -449,8 +462,13 @@ function buildMainContent(
       
       doc.line(cx - lineHalfW, y, cx + lineHalfW, y);
       
+      let displayRole = role;
+      if (role === 'Faculty') displayRole = 'Applied By Faculty';
+      else if (role === 'HOD') displayRole = 'Approved By HOD';
+      else if (role === 'HAA') displayRole = 'Approved By HAA';
+
       doc.setFont('helvetica', 'bold');
-      doc.text(role, cx, y + 4, { align: 'center', maxWidth: colW - 4 });
+      doc.text(displayRole, cx, y + 4, { align: 'center', maxWidth: colW - 4 });
       doc.setFont('helvetica', 'normal');
       
       if (sigData && sigData.date) {

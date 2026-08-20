@@ -6,9 +6,10 @@ interface Props {
   values: Record<string, any>;
   onChange: (values: Record<string, any>) => void;
   className?: string;
+  isExpenseForm?: boolean;
 }
 
-export default function DynamicFormRenderer({ fields, values, onChange, className }: Props) {
+export default function DynamicFormRenderer({ fields, values, onChange, className, isExpenseForm }: Props) {
   const handleChange = (fieldName: string, value: any) => {
     onChange({ ...values, [fieldName]: value });
   };
@@ -120,26 +121,35 @@ export default function DynamicFormRenderer({ fields, values, onChange, classNam
 
       case 'select':
         return (
-          <div key={field.name} className="mb-4">
-            <label htmlFor={field.name} className={labelClasses}>
-              {field.label}
-              {field.required && <span className="text-red-600 ml-1">*</span>}
-            </label>
-            <select
-              id={field.name}
-              value={value}
-              onChange={(e) => handleChange(field.name, e.target.value)}
-              required={field.required}
-              className={commonClasses}
-            >
-              <option value="">Select {field.label}...</option>
-              {field.options?.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
+          <React.Fragment key={field.name}>
+            <div className="mb-4">
+              <label htmlFor={field.name} className={labelClasses}>
+                {field.label}
+                {field.required && <span className="text-red-600 ml-1">*</span>}
+              </label>
+              <select
+                id={field.name}
+                value={value}
+                onChange={(e) => handleChange(field.name, e.target.value)}
+                required={field.required}
+                className={commonClasses}
+              >
+                <option value="">Select {field.label}...</option>
+                {field.options?.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {field.can_change_form_fields && field.conditional_fields && value && field.conditional_fields[value] && (
+              <div className="col-span-full mt-2 mb-6 pl-4 border-l-2 border-blue-300 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {field.conditional_fields[value]
+                  .filter(f => isExpenseForm ? true : !f.show_only_in_direct_expense)
+                  .map(f => renderField(f))}
+              </div>
+            )}
+          </React.Fragment>
         );
 
       case 'file': {
@@ -236,7 +246,9 @@ export default function DynamicFormRenderer({ fields, values, onChange, classNam
 
   return (
     <div className={className}>
-      {fields.map((field) => renderField(field))}
+      {fields
+        .filter(field => isExpenseForm ? true : !field.show_only_in_direct_expense)
+        .map((field) => renderField(field))}
     </div>
   );
 }

@@ -204,6 +204,44 @@ export default function LCAInstructionsPage({
                       ]}
                     />
                   </div>
+
+                  <div style={{ marginTop: 24 }}>
+                    <div style={styles.sectionTitle}>MATRIX</div>
+                    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 300px' }}>
+                        <SmallTable
+                          columns={['50% CGP', '50% PRP', 'Avg', 'Learner']}
+                          rows={[
+                            ['1', '1', '1', 'LL'],
+                            ['1', '2', '2', 'ML'],
+                            ['1', '3', '2', 'ML'],
+                            ['2', '1', '2', 'ML'],
+                            ['2', '2', '2', 'ML'],
+                            ['2', '3', '3', 'HL'],
+                            ['3', '1', '2', 'ML'],
+                            ['3', '2', '3', 'HL'],
+                            ['3', '3', '3', 'HL'],
+                          ]}
+                        />
+                      </div>
+                      <div style={{ flex: '1 1 300px' }}>
+                        <SmallTable
+                          columns={['LM', 'CM', 'LEARNER PROFILE (LP)']}
+                          rows={[
+                            ['LL', 'HC', 'L1'],
+                            ['LL', 'MC', 'L2'],
+                            ['LL', 'EC', 'L2'],
+                            ['ML', 'HC', 'L1'],
+                            ['ML', 'MC', 'L2'],
+                            ['ML', 'EC', 'L3'],
+                            ['HL', 'HC', 'L2'],
+                            ['HL', 'MC', 'L2'],
+                            ['HL', 'EC', 'L3'],
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
 

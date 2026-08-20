@@ -82,8 +82,10 @@ export default function COTargetPage({
   const [articulation, setArticulation] = useState<any | null>(null);
   const [threeScaleRows, setThreeScaleRows] = useState<number[][] | null>(null);
 
-  // BTL selection state for table 2 (1..6 or null)
+  // BTL selection state for table 2 (1..6 or null) — auto-derived from CDAP
   const [btlSelection, setBtlSelection] = useState<(number | null)[]>(() => Array(5).fill(null));
+  const [btlFromCdap, setBtlFromCdap] = useState<(number | null)[]>(() => Array(5).fill(null));
+  const isBtlFromCdap = btlFromCdap.some((v) => v !== null);
 
   // weights for ICO, BCO, ACO, API, IIC (entered in the weight row of big table)
   const [weights, setWeights] = useState<{ ico: number; bco: number; aco: number; api: number; iic: number }>(
@@ -113,6 +115,7 @@ export default function COTargetPage({
         setRevStatus(String((res as any)?.status || 'draft'));
         const d = (res as any)?.data || {};
         if (!mounted) return;
+        // Only restore saved btlSelection if CDAP hasn't overridden it yet
         if (Array.isArray(d.btlSelection) && d.btlSelection.length === 5) {
           setBtlSelection(d.btlSelection);
         }
@@ -145,6 +148,54 @@ export default function COTargetPage({
       mounted = false;
     };
   }, [courseCode]);
+
+  // Fetch CDAP rows and auto-derive max BTL per CO (CO1..CO5 from unit 1..5)
+  useEffect(() => {
+    let mounted = true;
+    const subjectId = String(courseCode || '').trim();
+    if (!subjectId) return;
+    (async () => {
+      try {
+        const rev = await fetchCdapRevision(subjectId, typeof teachingAssignmentId === 'number' ? teachingAssignmentId : undefined);
+        if (!mounted || !rev) return;
+        const cdapRows: Array<Record<string, any>> = Array.isArray((rev as any).rows) ? (rev as any).rows : [];
+        if (!cdapRows.length) return;
+
+        // Compute max BTL digit per unit (CO), carrying unit forward like CDAPEditor
+        const maxByUnit = new Map<string, number>();
+        let carryUnit = '';
+        for (const row of cdapRows) {
+          const rawUnit = String(row.unit || '').trim();
+          if (rawUnit) carryUnit = rawUnit;
+          if (!carryUnit) continue;
+          const btStr = String(row.bt_level || '').trim();
+          if (!btStr) continue;
+          const match = btStr.match(/\d/g);
+          if (match && match.length > 0) {
+            const lastDigit = parseInt(match[match.length - 1], 10);
+            const existing = maxByUnit.get(carryUnit);
+            maxByUnit.set(carryUnit, existing !== undefined ? Math.max(existing, lastDigit) : lastDigit);
+          }
+        }
+
+        // Map unit 1..5 -> CO index 0..4
+        const derived: (number | null)[] = Array(5).fill(null);
+        for (let i = 1; i <= 5; i++) {
+          const val = maxByUnit.get(String(i));
+          if (val !== undefined && val >= 1 && val <= 6) derived[i - 1] = val;
+        }
+
+        if (!mounted) return;
+        if (derived.some((v) => v !== null)) {
+          setBtlFromCdap(derived);
+          setBtlSelection(derived);
+        }
+      } catch {
+        // ignore cdap fetch errors — BTL stays manual
+      }
+    })();
+    return () => { mounted = false; };
+  }, [courseCode, teachingAssignmentId]);
 
   const readOnly = String(revStatus || '').toLowerCase() === 'published';
 
@@ -662,7 +713,14 @@ export default function COTargetPage({
 
             {/* 2. BCO / BTL table */}
             <div style={{ ...styles.card, padding: 16, minHeight: 140 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>2. BTL Level (BCO)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <div style={{ fontWeight: 700 }}>2. BTL Level (BCO)</div>
+                {isBtlFromCdap && (
+                  <span style={{ background: '#ecfdf5', border: '1px solid #6ee7b7', borderRadius: 6, padding: '2px 10px', fontSize: 12, color: '#065f46', fontWeight: 700 }}>
+                    ✓ Auto-filled from CDAP (Max BT Level) — Read only
+                  </span>
+                )}
+              </div>
               <table style={styles.table}>
                 <thead>
                   <tr>
@@ -683,24 +741,27 @@ export default function COTargetPage({
                       {Array.from({ length: 6 }, (_, levelIdx) => {
                         const level = levelIdx + 1;
                         const selected = btlSelection[idx] === level;
+                        // If fetched from CDAP, this row is locked and non-editable
+                        const lockedByCdap = isBtlFromCdap;
                         return (
                           <td key={level} style={styles.td}>
                             <input
                               type="checkbox"
                               aria-label={`BTL-${level} for ${co}`}
-                              style={styles.checkbox}
+                              style={{ ...styles.checkbox, cursor: lockedByCdap ? 'not-allowed' : 'pointer', opacity: lockedByCdap && !selected ? 0.35 : 1 }}
                               checked={!!selected}
                               onChange={() => {
+                                if (lockedByCdap) return; // locked from CDAP
                                 setBtlSelection((prev) => {
                                   const copy = [...prev];
-                                  if (copy[idx] === level) copy[idx] = null; // untick -> enable all
-                                  else copy[idx] = level; // select this, others auto-disabled via checked logic
+                                  if (copy[idx] === level) copy[idx] = null;
+                                  else copy[idx] = level;
                                   return copy;
                                 });
                                 if (validationErrors.size > 0) setValidationErrors(new Set());
                               }}
-                              disabled={btlSelection[idx] != null && btlSelection[idx] !== level}
-                              title={btlSelection[idx] != null && btlSelection[idx] !== level ? 'Disabled while another BTL is selected' : `Select BTL-${level}`}
+                              disabled={lockedByCdap || (btlSelection[idx] != null && btlSelection[idx] !== level)}
+                              title={lockedByCdap ? `Auto-filled from CDAP (Max BTL = ${btlSelection[idx]})` : (btlSelection[idx] != null && btlSelection[idx] !== level ? 'Disabled while another BTL is selected' : `Select BTL-${level}`)}
                             />
                           </td>
                         );

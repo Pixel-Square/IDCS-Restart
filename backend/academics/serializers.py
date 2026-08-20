@@ -36,6 +36,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
     subject_code = serializers.SerializerMethodField(read_only=True)
     subject_name = serializers.SerializerMethodField(read_only=True)
+    subject_credit = serializers.SerializerMethodField(read_only=True)
     class_type = serializers.SerializerMethodField(read_only=True)
     question_paper_type = serializers.SerializerMethodField(read_only=True)
     section_name = serializers.SerializerMethodField(read_only=True)
@@ -54,6 +55,7 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             'id',
             'subject_code',
             'subject_name',
+            'subject_credit',
             'class_type',
             'question_paper_type',
             'section_name',
@@ -72,6 +74,23 @@ class TeachingAssignmentInfoSerializer(serializers.ModelSerializer):
             return getattr(getattr(obj, 'academic_year', None), 'name', None)
         except Exception:
             return None
+
+    def get_subject_credit(self, obj):
+        """Return the credit (c) value from curriculum_row, elective_subject, or master."""
+        try:
+            if getattr(obj, 'curriculum_row', None):
+                row = obj.curriculum_row
+                c = getattr(row, 'c', None)
+                if c is not None:
+                    return c
+                master = getattr(row, 'master', None)
+                if master:
+                    return getattr(master, 'c', None)
+            if getattr(obj, 'elective_subject', None):
+                return getattr(obj.elective_subject, 'c', None)
+        except Exception:
+            pass
+        return None
 
     def get_section_name(self, obj):
         try:

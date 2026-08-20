@@ -380,6 +380,13 @@ class BatchYear(models.Model):
     name = models.CharField(max_length=32, unique=True)
     start_year = models.PositiveSmallIntegerField(null=True, blank=True)
     end_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    is_graduated = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='True when all students in this batch have completed their programme. Graduated batches are excluded from semester shifts and advisor assignment.'
+    )
+    graduated_at = models.DateTimeField(null=True, blank=True, help_text='Timestamp when this batch was marked as graduated.')
+    graduated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='graduated_batches', help_text='User who marked this batch as graduated.')
 
     class Meta:
         ordering = ('-name',)

@@ -789,6 +789,118 @@ class StaffEventDeclaration(models.Model):
     def __str__(self):
         return f"{self.staff.get_full_name() or self.staff.username} — Normal: {self.normal_events_budget}, Conf: {self.conference_budget}"
 
+    def get_used_budget(self, is_conference):
+        used = 0
+        
+        def _is_conference(form_data):
+            if not form_data: return False
+            for v in form_data.values():
+                if isinstance(v, str) and 'conference' in str(v).strip().lower():
+                    return True
+            return False
+
+        from .models import EventAttendingForm, StaffRequest
+
+        # 1. Approved claims (permanently used)
+        approved_claims = EventAttendingForm.objects.filter(
+            staff=self.staff, 
+            status='approved'
+        ).select_related('on_duty_request')
+        
+        for claim in approved_claims:
+            fd = {}
+            if claim.on_duty_request: fd.update(claim.on_duty_request.form_data or {})
+            if claim.custom_event_details: fd.update(claim.custom_event_details or {})
+            if _is_conference(fd) == is_conference:
+                used += float(claim.grand_total or 0)
+                
+        # 2. Pending claims (temporarily used)
+        pending_claims = EventAttendingForm.objects.filter(
+            staff=self.staff, 
+            status='pending'
+        ).select_related('on_duty_request')
+        
+        for claim in pending_claims:
+            fd = {}
+            if claim.on_duty_request: fd.update(claim.on_duty_request.form_data or {})
+            if claim.custom_event_details: fd.update(claim.custom_event_details or {})
+            if _is_conference(fd) == is_conference:
+                used += float(claim.grand_total or 0)
+
+        # 3. Approved OD forms with advance (without claims yet)
+        ods = StaffRequest.objects.filter(
+            applicant=self.staff,
+            template__name__in=['ON duty', 'ON duty - SPL'],
+            status='approved'
+        )
+        for od in ods:
+            has_claim = EventAttendingForm.objects.filter(on_duty_request=od).exclude(status='rejected').exists()
+            if not has_claim:
+                fd = od.form_data or {}
+                if _is_conference(fd) == is_conference:
+                    is_fin = False
+                    is_adv = False
+                    amount = 0
+                    for k, v in fd.items():
+                        kl = str(k).lower()
+                        if 'financial' in kl and str(v).strip().upper() == 'YES':
+                            is_fin = True
+                        if 'advance' in kl and str(v).strip().upper() == 'YES':
+                            is_adv = True
+                        if 'proposed' in kl:
+                            try: amount = float(v)
+                            except ValueError: pass
+                    
+                    if is_fin and is_adv:
+                        used += amount
+
+        return round(used, 2)
+
+    def get_available_budget(self, is_conference):
+        def _is_conference(form_data):
+            if not form_data: return False
+            for v in form_data.values():
+                if isinstance(v, str) and 'conference' in str(v).strip().lower():
+                    return True
+            return False
+
+        from .models import EventAttendingForm, StaffRequest
+
+        # The DB fields store the remaining budget AFTER approved claims.
+        # So our baseline is the DB field.
+        remaining = float(self.conference_budget if is_conference else self.normal_events_budget)
+
+        # We must dynamically deduct pending claims
+        pending_claims = EventAttendingForm.objects.filter(staff=self.staff, status='pending').select_related('on_duty_request')
+        for claim in pending_claims:
+            fd = {}
+            if claim.on_duty_request: fd.update(claim.on_duty_request.form_data or {})
+            if claim.custom_event_details: fd.update(claim.custom_event_details or {})
+            if _is_conference(fd) == is_conference:
+                remaining -= float(claim.grand_total or 0)
+                
+        # We must dynamically deduct approved OD forms with advance that haven't been claimed yet
+        ods = StaffRequest.objects.filter(applicant=self.staff, template__name__in=['ON duty', 'ON duty - SPL'], status='approved')
+        for od in ods:
+            has_claim = EventAttendingForm.objects.filter(on_duty_request=od).exclude(status='rejected').exists()
+            if not has_claim:
+                fd = od.form_data or {}
+                if _is_conference(fd) == is_conference:
+                    is_fin = False
+                    is_adv = False
+                    amount = 0
+                    for k, v in fd.items():
+                        kl = str(k).lower()
+                        if 'financial' in kl and str(v).strip().upper() == 'YES': is_fin = True
+                        if 'advance' in kl and str(v).strip().upper() == 'YES': is_adv = True
+                        if 'proposed' in kl:
+                            try: amount = float(v)
+                            except ValueError: pass
+                    if is_fin and is_adv:
+                        remaining -= amount
+                        
+        return round(max(0, remaining), 2)
+
 
 class EventBudgetCondition(models.Model):
     """

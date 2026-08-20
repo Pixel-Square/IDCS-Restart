@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { fetchLcaRevision, saveLcaRevision } from '../../services/lcaDb';
 import { createEditRequest, fetchMarkTableLockStatus, formatEditRequestSentMessage, MarkTableLockStatusResponse } from '../../services/obe';
+import { fetchDeptRows } from '../../services/curriculum';
 
 type NumberInputProps = {
   value: number | '';
@@ -181,6 +182,7 @@ type PbrSummary = {
   studentsCount: number;
   meanGpa: number;
   courseLevel: Exclude<CourseLevelCode, '-'>;
+  gpaBreakdown: { hc: number; mc: number; ec: number }; // counts by GPA band
 };
 
 function normalizeHeaderKey(s: string): string {
@@ -221,13 +223,10 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
 // (helps show a clear error if the dependency is missing).
  
  async function parsePbrExcel(file: File): Promise<PbrSummary> {
-  // Dynamic import so Vite doesn't fail the build when 'xlsx' is not installed.
-  // Use a variable module name with @vite-ignore to bypass Vite's static import analysis.
+  // Dynamic import for 'xlsx'. Vite will include it in the bundle.
   let XLSX: any;
   try {
-    const moduleName = 'xlsx';
-    // @vite-ignore
-    XLSX = await import(/* @vite-ignore */ moduleName);
+    XLSX = await import('xlsx');
   } catch (e) {
     throw new Error(
       'Missing dependency "xlsx". Install it with: npm install xlsx  (or yarn add xlsx / pnpm add xlsx)'
@@ -277,11 +276,20 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
    const mean = gpas.reduce((a, b) => a + b, 0) / gpas.length;
    const meanRounded = Number(mean.toFixed(2));
  
+   // GPA band counts: 0–6 = HC, 6–8 = MC, >8 = EC
+   const gpaBreakdown = { hc: 0, mc: 0, ec: 0 };
+   for (const g of gpas) {
+     if (g <= 6) gpaBreakdown.hc++;
+     else if (g <= 8) gpaBreakdown.mc++;
+     else gpaBreakdown.ec++;
+   }
+ 
    return {
      fileName: file.name,
      studentsCount: gpas.length,
      meanGpa: meanRounded,
      courseLevel: courseLevelFromMeanGpa(meanRounded),
+     gpaBreakdown,
    };
 }
 
@@ -307,6 +315,7 @@ export default function LCAPage({
   const [markLock, setMarkLock] = useState<MarkTableLockStatusResponse | null>(null);
   const [revStatus, setRevStatus] = useState<string>('draft');
   const [validationErrors, setValidationErrors] = useState<Set<string>>(new Set());
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
   const [courseMeta, setCourseMeta] = useState({
     courseCode: courseCodeProp ?? courseId ?? '',
@@ -322,6 +331,35 @@ export default function LCAPage({
       courseName: courseNameProp ?? prev.courseName,
     }));
   }, [courseId, courseCodeProp, courseNameProp]);
+
+  // Auto-fetch course name and credit from curriculum department rows
+  useEffect(() => {
+    let mounted = true;
+    const subjectCode = String(courseCodeProp ?? courseId ?? '').trim();
+    if (!subjectCode) return;
+    (async () => {
+      try {
+        // Strategy 1: direct curriculum dept API filtered by course_code
+        const rows = await fetchDeptRows();
+        if (!mounted) return;
+        const match = (rows || []).find(
+          (r) => String(r.course_code || '').trim().toUpperCase() === subjectCode.toUpperCase()
+        );
+        if (match) {
+          const fetchedName = String(match.course_name || '').trim();
+          const fetchedCredit = match.c;
+          setCourseMeta((prev) => ({
+            ...prev,
+            courseName: fetchedName || prev.courseName,
+            credit: fetchedCredit != null ? String(fetchedCredit) : prev.credit,
+          }));
+        }
+      } catch {
+        // silently ignore — fields remain as-is
+      }
+    })();
+    return () => { mounted = false; };
+  }, [courseCodeProp, courseId]);
 
   const subjectIdForRequests = useMemo(() => {
     return String(courseCodeProp ?? courseId ?? courseMeta.courseCode ?? '').trim();
@@ -377,9 +415,19 @@ export default function LCAPage({
         if (typeof d.pbrManualCourseLevel === 'string') {
           setPbrManualCourseLevel(d.pbrManualCourseLevel as any);
         }
+        if (typeof d.hasPbr === 'boolean') setHasPbr(d.hasPbr);
+        if (typeof d.excelCount === 'number') setExcelCount(d.excelCount as 1 | 2);
+        if (d.pbrCay1 && typeof d.pbrCay1 === 'object') {
+          setPbrCay1({ gpaBreakdown: { hc: 0, mc: 0, ec: 0 }, ...d.pbrCay1 });
+        }
+        if (d.pbrCay2 && typeof d.pbrCay2 === 'object') {
+          setPbrCay2({ gpaBreakdown: { hc: 0, mc: 0, ec: 0 }, ...d.pbrCay2 });
+        }
         setActionNote('Loaded');
       } catch {
         // Ignore load failures (page still usable)
+      } finally {
+        if (mounted) setInitialLoadDone(true);
       }
     })();
     return () => {
@@ -387,6 +435,7 @@ export default function LCAPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, courseCodeProp]);
+
 
   // Fetch publish/lock state for read-only behavior
   useEffect(() => {
@@ -506,10 +555,11 @@ export default function LCAPage({
   }, [prereqLevels]);
 
   const standardizedLearnerLevel = useMemo(() => {
-    if (prereqAverage === '') return '' as const;
-    // As requested: neglect digits after decimal point
-    return Math.floor(prereqAverage) as 1 | 2 | 3 | 0;
-  }, [prereqAverage]);
+    if (prereqAverage === '' || cgpLevel === '-') return '' as const;
+    const avg = (cgpLevel + prereqAverage) / 2;
+    // As requested: round off to the minimum number (floor)
+    return Math.floor(avg) as 1 | 2 | 3 | 0;
+  }, [prereqAverage, cgpLevel]);
 
   const standardizedLearnerLevelSafe: 1 | 2 | 3 | '-' = useMemo(() => {
     if (standardizedLearnerLevel === '' || standardizedLearnerLevel === 0) return '-';
@@ -530,13 +580,62 @@ export default function LCAPage({
   // Manual course level to use when Excel files are not provided
   const [pbrManualCourseLevel, setPbrManualCourseLevel] = useState<CourseLevelCode>('-');
 
+  const [hasPbr, setHasPbr] = useState<boolean | null>(null);
+  const [excelCount, setExcelCount] = useState<1 | 2 | null>(null);
+
+  // Auto-save effect
+  useEffect(() => {
+    if (!initialLoadDone || readOnly || !subjectIdForRequests) return;
+    
+    const handler = setTimeout(() => {
+      saveLcaRevision(
+        subjectIdForRequests,
+        {
+          courseMeta: { credit: courseMeta.credit, courseModule: courseMeta.courseModule },
+          currentGpaCounts,
+          prerequisites,
+          pbrManualCourseLevel,
+          hasPbr,
+          excelCount,
+          pbrCay1,
+          pbrCay2,
+        },
+        revStatus,
+      ).catch(() => {});
+    }, 1500);
+
+    return () => clearTimeout(handler);
+  }, [
+    subjectIdForRequests,
+    courseMeta,
+    currentGpaCounts,
+    prerequisites,
+    pbrManualCourseLevel,
+    hasPbr,
+    excelCount,
+    pbrCay1,
+    pbrCay2,
+    readOnly,
+    initialLoadDone,
+    revStatus,
+  ]);
+
   const pbrCourseLevel: CourseLevelCode = useMemo(() => {
-    // Preference: CAY-2 > CAY-1 > manual selection (used when excels are not available)
+    if (hasPbr === true) {
+      if (excelCount === 2 && pbrCay2) return pbrCay2.courseLevel;
+      if (pbrCay1) return pbrCay1.courseLevel;
+      return '-';
+    }
+    if (hasPbr === false) {
+      if (pbrManualCourseLevel && pbrManualCourseLevel !== '-') return pbrManualCourseLevel;
+      return '-';
+    }
+    // Fallback if not selected yet
     if (pbrCay2) return pbrCay2.courseLevel;
     if (pbrCay1) return pbrCay1.courseLevel;
     if (pbrManualCourseLevel && pbrManualCourseLevel !== '-') return pbrManualCourseLevel;
     return '-';
-  }, [pbrCay1, pbrCay2, pbrManualCourseLevel]);
+  }, [pbrCay1, pbrCay2, pbrManualCourseLevel, hasPbr, excelCount]);
 
   const pbrLearnerCentricLevelCode: LearnerCentricCode = useMemo(
     () => learnerCentricFromCourseLevel(pbrCourseLevel),
@@ -595,72 +694,85 @@ export default function LCAPage({
 
           <div style={{ height: 14 }} />
 
-          {/* Manual course level selection - used when Excel files are not provided */}
-          <div style={{ marginBottom: 8, display: 'flex', gap: 12, alignItems: 'center' }}>
-            <div style={{ color: '#0b4a6f', fontWeight: 700 }}>Fallback course level (if no Excel):</div>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                name="pbrManual"
-                value="HC"
-                checked={pbrManualCourseLevel === 'HC'}
-                onChange={() => setPbrManualCourseLevel('HC')}
-              />
-              HARD COURSE (HC)
+          {/* Question 1 */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: '#0b4a6f', fontWeight: 700, marginBottom: 8 }}>Previous batch result available?</div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 16 }}>
+              <input type="radio" name="hasPbr" checked={hasPbr === true} onChange={() => setHasPbr(true)} /> Yes
             </label>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                name="pbrManual"
-                value="MC"
-                checked={pbrManualCourseLevel === 'MC'}
-                onChange={() => setPbrManualCourseLevel('MC')}
-              />
-              MEDIUM COURSE (MC)
+              <input type="radio" name="hasPbr" checked={hasPbr === false} onChange={() => setHasPbr(false)} /> No
             </label>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input
-                type="radio"
-                name="pbrManual"
-                value="EC"
-                checked={pbrManualCourseLevel === 'EC'}
-                onChange={() => setPbrManualCourseLevel('EC')}
-              />
-              EASY COURSE (EC)
-            </label>
-            <button
-              type="button"
-              onClick={() => setPbrManualCourseLevel('-')}
-              style={{ marginLeft: 8, ...styles.btn, padding: '6px 8px' }}
-            >
-              Clear
-            </button>
           </div>
 
-          <table style={styles.table}>
-            <tbody>
-              <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 800, width: 220 }}>CAY-1 Excel</td>
-                <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={(e) => handleExcelUpload('cay1', e.target.files?.[0] || null)}
-                  />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 800 }}>CAY-2 Excel</td>
-                <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={(e) => handleExcelUpload('cay2', e.target.files?.[0] || null)}
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          {hasPbr === true && (
+            <div style={{ marginBottom: 12, paddingLeft: 16, borderLeft: '2px solid #e6eef8' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ color: '#0b4a6f', fontWeight: 700 }}>SELECT NO. OF YEARS</div>
+                <button
+                  type="button"
+                  style={{ ...styles.btn, padding: '4px 10px', fontSize: 13 }}
+                  onClick={() => {
+                    const csv = "Grade,GPA conversion\nO,10\nA+,9\nA,8\nB+,7\nB,6\nC,5\nU,0";
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'PBR_Template.csv';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  Download Template
+                </button>
+              </div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 16 }}>
+                <input type="radio" name="excelCount" checked={excelCount === 1} onChange={() => setExcelCount(1)} /> CAY - 1
+              </label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <input type="radio" name="excelCount" checked={excelCount === 2} onChange={() => setExcelCount(2)} /> CAY - 1 & CAY - 2
+              </label>
+            </div>
+          )}
+
+          {hasPbr === false && (
+            <div style={{ marginBottom: 8, display: 'flex', gap: 12, alignItems: 'center', paddingLeft: 16, borderLeft: '2px solid #e6eef8' }}>
+              <div style={{ color: '#0b4a6f', fontWeight: 700 }}>Fallback course level (if no Excel):</div>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <input type="radio" name="pbrManual" value="HC" checked={pbrManualCourseLevel === 'HC'} onChange={() => setPbrManualCourseLevel('HC')} /> HARD COURSE (HC)
+              </label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <input type="radio" name="pbrManual" value="MC" checked={pbrManualCourseLevel === 'MC'} onChange={() => setPbrManualCourseLevel('MC')} /> MEDIUM COURSE (MC)
+              </label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <input type="radio" name="pbrManual" value="EC" checked={pbrManualCourseLevel === 'EC'} onChange={() => setPbrManualCourseLevel('EC')} /> EASY COURSE (EC)
+              </label>
+              <button type="button" onClick={() => setPbrManualCourseLevel('-')} style={{ marginLeft: 8, ...styles.btn, padding: '6px 8px' }}>
+                Clear
+              </button>
+            </div>
+          )}
+
+          {hasPbr === true && excelCount && (
+            <table style={styles.table}>
+              <tbody>
+                <tr>
+                  <td style={{ ...styles.tdLeft, fontWeight: 800, width: 220 }}>CAY-1 Excel</td>
+                  <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                    <input type="file" accept=".xlsx,.xls" onChange={(e) => handleExcelUpload('cay1', e.target.files?.[0] || null)} />
+                  </td>
+                </tr>
+                {excelCount === 2 && (
+                  <tr>
+                    <td style={{ ...styles.tdLeft, fontWeight: 800 }}>CAY-2 Excel</td>
+                    <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
+                      <input type="file" accept=".xlsx,.xls" onChange={(e) => handleExcelUpload('cay2', e.target.files?.[0] || null)} />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
 
           {pbrBusy && (
             <div style={{ marginTop: 10, fontSize: 15, color: '#3d5566' }}>
@@ -720,6 +832,54 @@ export default function LCAPage({
               </tr>
             </tbody>
           </table>
+
+          {/* GPA Range Analysis */}
+          {(pbrCay1 || pbrCay2) && (
+            <>
+              <div style={{ height: 14 }} />
+              <div style={{ fontWeight: 700, color: '#0b4a6f', marginBottom: 8, fontSize: 15 }}>GPA Range Analysis</div>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.thLeft}>DATASET</th>
+                    <th style={styles.th}>GPA 0–6 (Hard Course — HC)</th>
+                    <th style={styles.th}>GPA 6–8 (Medium Course — MC)</th>
+                    <th style={styles.th}>GPA &gt;8 (Easy Course — EC)</th>
+                    <th style={styles.th}>TOTAL STUDENTS</th>
+                    <th style={styles.th}>MEAN GPA</th>
+                    <th style={styles.th}>COURSE LEVEL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[{ label: 'CAY-1', data: pbrCay1 }, { label: 'CAY-2', data: pbrCay2 }].map(({ label, data }) =>
+                    data ? (
+                      <tr key={label}>
+                        <td style={{ ...styles.tdLeft, fontWeight: 900 }}>{label}</td>
+                        <td style={{ ...styles.td, background: '#fef2f2', fontWeight: 700 }}>
+                          {data.gpaBreakdown?.hc ?? 0}
+                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                        </td>
+                        <td style={{ ...styles.td, background: '#fef9c3', fontWeight: 700 }}>
+                          {data.gpaBreakdown?.mc ?? 0}
+                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                        </td>
+                        <td style={{ ...styles.td, background: '#ecfdf5', fontWeight: 700 }}>
+                          {data.gpaBreakdown?.ec ?? 0}
+                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                        </td>
+                        <td style={styles.td}>{data.studentsCount}</td>
+                        <td style={{ ...styles.td, fontWeight: 700 }}>{data.meanGpa}</td>
+                        <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{data.courseLevel}</td>
+                      </tr>
+                    ) : null
+                  )}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 8, color: '#557085', fontSize: 13 }}>
+                ℹ️  GPA 0–6 → Hard Course (HC) &nbsp;|&nbsp; GPA 6–8 → Medium Course (MC) &nbsp;|&nbsp; GPA &gt;8 → Easy Course (EC)
+              </div>
+            </>
+          )}
       </>
     );
   }
@@ -824,14 +984,14 @@ export default function LCAPage({
             </tr>
             <tr>
               <td style={{ ...styles.tdLeft, fontWeight: 700 }}>CREDIT OF THE COURSE</td>
-              <td style={{ ...styles.tdLeft, ...styles.cellGreen, ...(validationErrors.has('credit') ? { border: '2px solid #ef4444' } : {}) }}>
+              <td style={{ ...styles.tdLeft, ...styles.cellGreen }}>
                 <input
                   value={courseMeta.credit}
-                  onChange={(e) => {
-                    setCourseMeta((p) => ({ ...p, credit: e.target.value }));
-                    if (validationErrors.has('credit')) setValidationErrors((p) => { const s = new Set(p); s.delete('credit'); return s; });
-                  }}
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none' }}
+                  readOnly
+                  disabled
+                  aria-disabled="true"
+                  title="Credit is auto-fetched from curriculum"
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none', cursor: 'not-allowed', color: '#234451' }}
                 />
               </td>
             </tr>
@@ -941,8 +1101,29 @@ export default function LCAPage({
           </thead>
           <tbody>
             {prerequisites.map((p, idx) => (
-              <tr key={p.name}>
-                <td style={{ ...styles.tdLeft, fontWeight: 700 }}>{p.name}</td>
+              <tr key={idx}>
+                <td style={{ ...styles.tdLeft, fontWeight: 700 }}>
+                  <input
+                    type="text"
+                    value={p.name}
+                    onChange={(e) => {
+                      setPrerequisites((prev) => {
+                        const next = [...prev];
+                        next[idx] = { ...next[idx], name: e.target.value };
+                        return next;
+                      });
+                    }}
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      background: 'transparent',
+                      fontSize: 15,
+                      outline: 'none',
+                      fontWeight: 700,
+                      color: '#234451',
+                    }}
+                  />
+                </td>
                 <td style={{ ...styles.td, ...styles.cellYellow }}>
                   <NumberInput
                     value={p.band1}

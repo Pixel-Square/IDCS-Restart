@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, GripVertical, RefreshCw } from 'lucide-react';
+import { X, Plus, Trash2, GripVertical, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
 import { createTemplate, updateTemplate, resetTemplateAllotment } from '../../services/staffRequests';
 import type {
   RequestTemplate,
@@ -29,6 +29,264 @@ const FIELD_TYPES = [
 
 // fallback roles while dashboard is loading
 const FALLBACK_ROLES = ['FACULTY', 'STAFF', 'HOD', 'AHOD'];
+
+function FormFieldList({ fields, onChange, level = 0 }: { fields: FormField[], onChange: (fields: FormField[]) => void, level?: number }) {
+  const handleAddField = () => {
+    onChange([...fields, { name: '', type: 'text', label: '', required: false }]);
+  };
+
+  const handleUpdateField = (index: number, updates: Partial<FormField>) => {
+    const updated = [...fields];
+    updated[index] = { ...updated[index], ...updates };
+    onChange(updated);
+  };
+
+  const handleRemoveField = (index: number) => {
+    onChange(fields.filter((_, i) => i !== index));
+  };
+
+  const handleMoveField = (index: number, direction: 'up' | 'down') => {
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= fields.length) return;
+    const updated = [...fields];
+    const temp = updated[index];
+    updated[index] = updated[newIndex];
+    updated[newIndex] = temp;
+    onChange(updated);
+  };
+
+  return (
+    <div className="space-y-4">
+      {level === 0 && (
+        <div className="flex justify-between items-center mb-4">
+          <p className="text-sm text-gray-600">
+            Define the input fields that staff will fill when submitting this request
+          </p>
+          <button
+            onClick={handleAddField}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+          >
+            <Plus size={16} />
+            Add Field
+          </button>
+        </div>
+      )}
+
+      {fields.length === 0 ? (
+        <div className="text-center py-4 text-gray-500">
+          No fields added yet. Click "Add Field" to start building your form.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {fields.map((field, index) => (
+            <div key={index} className={`border border-gray-200 rounded-lg p-4 ${level > 0 ? 'bg-gray-50' : ''}`}>
+              <div className="grid grid-cols-2 gap-4 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Field Name (internal) *
+                  </label>
+                  <input
+                    type="text"
+                    value={field.name}
+                    onChange={(e) => handleUpdateField(index, { name: e.target.value })}
+                    placeholder="e.g., from_date"
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Field Type *
+                  </label>
+                  <select
+                    value={field.type}
+                    onChange={(e) => handleUpdateField(index, { 
+                      type: e.target.value as FormField['type'],
+                      options: e.target.value === 'select' ? [''] : undefined
+                    })}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                  >
+                    {FIELD_TYPES.map(ft => (
+                      <option key={ft.value} value={ft.value}>{ft.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Label (shown to users) *
+                </label>
+                <input
+                  type="text"
+                  value={field.label}
+                  onChange={(e) => handleUpdateField(index, { label: e.target.value })}
+                  placeholder="e.g., From Date"
+                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              {field.type === 'select' && (
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">
+                    Options (one per line)
+                  </label>
+                  <textarea
+                    value={(field.options || []).join('\n')}
+                    onChange={(e) => handleUpdateField(index, { 
+                      options: e.target.value.split('\n').filter(o => o.trim())
+                    })}
+                    placeholder="Casual Leave&#10;Sick Leave&#10;Earned Leave"
+                    rows={3}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                  />
+
+                  <div className="mt-3">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={field.can_change_form_fields || false}
+                        onChange={(e) => handleUpdateField(index, { can_change_form_fields: e.target.checked })}
+                        className="w-4 h-4 text-blue-600 rounded"
+                      />
+                      <span className="text-xs font-medium text-gray-700">Can Change form fields</span>
+                    </label>
+                  </div>
+                  
+                  {field.can_change_form_fields && field.options && field.options.length > 0 && (
+                    <div className="mt-4 pl-4 border-l-2 border-blue-300 space-y-4">
+                      {field.options.map(opt => (
+                        <div key={opt} className="bg-white border border-gray-200 rounded p-3 shadow-sm">
+                          <div className="flex justify-between items-center mb-2">
+                            <h4 className="text-sm font-semibold text-gray-800">Fields when "{opt}" is selected</h4>
+                            <button
+                              onClick={() => {
+                                const currentConds = field.conditional_fields || {};
+                                const currentFields = currentConds[opt] || [];
+                                const newFields: FormField[] = [...currentFields, { name: '', type: 'text', label: '', required: false }];
+                                handleUpdateField(index, {
+                                  conditional_fields: { ...currentConds, [opt]: newFields }
+                                });
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded hover:bg-gray-200"
+                            >
+                              <Plus size={12} /> Add Field
+                            </button>
+                          </div>
+                          
+                          <FormFieldList 
+                            fields={field.conditional_fields?.[opt] || []} 
+                            onChange={(updatedFields) => {
+                              const currentConds = field.conditional_fields || {};
+                              handleUpdateField(index, {
+                                conditional_fields: { ...currentConds, [opt]: updatedFields }
+                              });
+                            }}
+                            level={level + 1}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {field.type === 'file' && (
+                <div className="mb-3 space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Max File Size (MB)
+                    </label>
+                    <input
+                      type="number"
+                      value={field.max_size_mb || 10}
+                      onChange={(e) => handleUpdateField(index, { 
+                        max_size_mb: parseFloat(e.target.value) || 10
+                      })}
+                      min="1"
+                      max="100"
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Allowed File Extensions (comma-separated)
+                    </label>
+                    <input
+                      type="text"
+                      value={(field.allowed_extensions || []).join(', ')}
+                      onChange={(e) => handleUpdateField(index, { 
+                        allowed_extensions: e.target.value.split(',').map(ext => ext.trim()).filter(ext => ext)
+                      })}
+                      placeholder=".pdf, .docx, .jpg, .png"
+                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Leave empty to allow all file types
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-200">
+                <div className="flex gap-6">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={field.required}
+                      onChange={(e) => handleUpdateField(index, { required: e.target.checked })}
+                      className="w-4 h-4 text-blue-600 rounded"
+                    />
+                    <span className="text-xs text-gray-700 font-medium">Required field</span>
+                  </label>
+
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={field.show_only_in_direct_expense || false}
+                      onChange={(e) => handleUpdateField(index, { show_only_in_direct_expense: e.target.checked })}
+                      className="w-4 h-4 text-purple-600 rounded"
+                    />
+                    <span className="text-xs text-gray-700 font-medium">Show only in Apply New Expense Form (Direct)</span>
+                  </label>
+                </div>
+                
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => handleMoveField(index, 'up')}
+                    disabled={index === 0}
+                    className="text-gray-500 hover:text-gray-700 disabled:opacity-30 p-1"
+                    title="Move Up"
+                  >
+                    <ArrowUp size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleMoveField(index, 'down')}
+                    disabled={index === fields.length - 1}
+                    className="text-gray-500 hover:text-gray-700 disabled:opacity-30 p-1"
+                    title="Move Down"
+                  >
+                    <ArrowDown size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveField(index)}
+                    className="text-red-600 hover:text-red-700 p-1 ml-2"
+                    title="Remove Field"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default function TemplateEditorModal({ template, onClose, onSaved }: Props) {
   const [name, setName] = useState('');
@@ -97,19 +355,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     return () => { mounted = false };
   }, []);
 
-
-  const handleAddField = () => {
-    setFormFields([
-      ...formFields,
-      { name: '', type: 'text', label: '', required: false }
-    ]);
-  };
-
-  const handleUpdateField = (index: number, field: Partial<FormField>) => {
-    const updated = [...formFields];
-    updated[index] = { ...updated[index], ...field };
-    setFormFields(updated);
-  };
 
   const handleRemoveField = (index: number) => {
     setFormFields(formFields.filter((_, i) => i !== index));
@@ -814,149 +1059,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
           )}
 
           {activeTab === 'fields' && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-sm text-gray-600">
-                  Define the input fields that staff will fill when submitting this request
-                </p>
-                <button
-                  onClick={handleAddField}
-                  className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-                >
-                  <Plus size={16} />
-                  Add Field
-                </button>
-              </div>
-
-              {formFields.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  No fields added yet. Click "Add Field" to start building your form.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {formFields.map((field, index) => (
-                    <div key={index} className="border border-gray-200 rounded-lg p-4">
-                      <div className="grid grid-cols-2 gap-4 mb-3">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Field Name (internal) *
-                          </label>
-                          <input
-                            type="text"
-                            value={field.name}
-                            onChange={(e) => handleUpdateField(index, { name: e.target.value })}
-                            placeholder="e.g., from_date"
-                            className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Field Type *
-                          </label>
-                          <select
-                            value={field.type}
-                            onChange={(e) => handleUpdateField(index, { 
-                              type: e.target.value as FormField['type'],
-                              options: e.target.value === 'select' ? [''] : undefined
-                            })}
-                            className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                          >
-                            {FIELD_TYPES.map(ft => (
-                              <option key={ft.value} value={ft.value}>{ft.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="mb-3">
-                        <label className="block text-xs font-medium text-gray-700 mb-1">
-                          Label (shown to users) *
-                        </label>
-                        <input
-                          type="text"
-                          value={field.label}
-                          onChange={(e) => handleUpdateField(index, { label: e.target.value })}
-                          placeholder="e.g., From Date"
-                          className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                        />
-                      </div>
-
-                      {field.type === 'select' && (
-                        <div className="mb-3">
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            Options (one per line)
-                          </label>
-                          <textarea
-                            value={(field.options || []).join('\n')}
-                            onChange={(e) => handleUpdateField(index, { 
-                              options: e.target.value.split('\n').filter(o => o.trim())
-                            })}
-                            placeholder="Casual Leave&#10;Sick Leave&#10;Earned Leave"
-                            rows={3}
-                            className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                          />
-                        </div>
-                      )}
-
-                      {field.type === 'file' && (
-                        <div className="mb-3 space-y-3">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">
-                              Max File Size (MB)
-                            </label>
-                            <input
-                              type="number"
-                              value={field.max_size_mb || 10}
-                              onChange={(e) => handleUpdateField(index, { 
-                                max_size_mb: parseFloat(e.target.value) || 10
-                              })}
-                              min="1"
-                              max="100"
-                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1">
-                              Allowed File Extensions (comma-separated)
-                            </label>
-                            <input
-                              type="text"
-                              value={(field.allowed_extensions || []).join(', ')}
-                              onChange={(e) => handleUpdateField(index, { 
-                                allowed_extensions: e.target.value.split(',').map(ext => ext.trim()).filter(ext => ext)
-                              })}
-                              placeholder=".pdf, .docx, .jpg, .png"
-                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">
-                              Leave empty to allow all file types
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex justify-between items-center">
-                        <label className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={field.required}
-                            onChange={(e) => handleUpdateField(index, { required: e.target.checked })}
-                            className="w-4 h-4 text-blue-600 rounded"
-                          />
-                          <span className="text-xs text-gray-700">Required field</span>
-                        </label>
-                        <button
-                          onClick={() => handleRemoveField(index)}
-                          className="text-red-600 hover:text-red-700 p-1"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <FormFieldList fields={formFields} onChange={setFormFields} />
           )}
 
           {activeTab === 'workflow' && (

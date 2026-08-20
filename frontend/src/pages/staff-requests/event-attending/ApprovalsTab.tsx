@@ -119,8 +119,26 @@ export default function ApprovalsTab({ pendingForms, processedForms, onProcessed
                       }
                       
                       const displayVal = typeof parsedV === 'object' ? JSON.stringify(parsedV) : String(v);
+                      const isUrl = k.toLowerCase() === 'kss_link' || displayVal.startsWith('http://') || displayVal.startsWith('https://');
                       return (
-                        <div key={k}><span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}:</span> <span className="font-medium truncate max-w-full inline-block align-bottom" title={displayVal}>{displayVal}</span></div>
+                        <div key={k}>
+                          <span className="text-gray-500 capitalize">{k.replace(/_/g, ' ')}:</span>{' '}
+                          {isUrl ? (
+                            <a 
+                              href={displayVal} 
+                              target="_blank" 
+                              rel="noopener noreferrer" 
+                              className="font-medium text-blue-600 hover:underline truncate max-w-full inline-block align-bottom" 
+                              title={displayVal}
+                            >
+                              {displayVal}
+                            </a>
+                          ) : (
+                            <span className="font-medium truncate max-w-full inline-block align-bottom" title={displayVal}>
+                              {displayVal}
+                            </span>
+                          )}
+                        </div>
                       );
                     })}
                     

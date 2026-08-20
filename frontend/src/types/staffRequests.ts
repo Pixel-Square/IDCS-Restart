@@ -11,6 +11,9 @@ export interface FormField {
   max?: string | number;
   max_size_mb?: number; // For file uploads
   allowed_extensions?: string[]; // For file uploads, e.g., ['.pdf', '.docx', '.jpg']
+  can_change_form_fields?: boolean; // For dropdowns: whether changing value alters form fields
+  conditional_fields?: Record<string, FormField[]>; // Mapping of dropdown value -> child fields
+  show_only_in_direct_expense?: boolean; // For fields like KSS link in direct forms
 }
 
 export interface ApprovalStep {

@@ -24,6 +24,7 @@ import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
 import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
+import BatchArchivalPage from './pages/dashboard/BatchArchivalPage';
 import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
 import ConditionsPage from './pages/settings/ConditionsPage';
 import UCGate from './components/UCGate';
@@ -521,6 +522,10 @@ export default function App() {
                   path="/iqac/system-transitions"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<SystemTransitionsPage />} />}
                 />
+                <Route
+                  path="/batch-archival"
+                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<BatchArchivalPage />} />}
+                />
                 {/* PBAS IQAC route removed */}
                 <Route
                   path="/faculty/attendance"
@@ -693,14 +698,14 @@ export default function App() {
                 />
                 <Route
                   path="/staff-requests/pending-approvals"
-                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN', 'CFFA']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
                 <Route
                   path="/staff-requests/event-attending"
                   element={
                     <ProtectedRoute
                       user={user}
-                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS']}
+                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'CFFA']}
                       element={<EventAttendingPage />}
                     />
                   }
