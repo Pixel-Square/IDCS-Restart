@@ -67,7 +67,13 @@ export type AuditAssignment = {
   department_code: string
   department_name: string
   department_short_name?: string
-  auditors: { id: number; staff_id: string; name: string; designation?: string }[]
+  auditors: {
+    id: number
+    staff_id: string
+    name: string
+    designation?: string
+    department?: { id: number; code: string; name: string; short_name?: string } | null
+  }[]
   assigned_by?: number | null
   status: 'NOT_STARTED' | 'IN_PROGRESS' | 'SUBMITTED'
   remarks?: string
@@ -216,8 +222,11 @@ export async function updateAuditQuestion(id: number, payload: Partial<AuditQues
   return data
 }
 
-export async function deleteAuditQuestion(id: number): Promise<void> {
-  const res = await fetchWithAuth(`/api/audits/questions/${id}/`, { method: 'DELETE' })
+export async function deleteAuditQuestion(id: number, password?: string): Promise<void> {
+  const res = await fetchWithAuth(`/api/audits/questions/${id}/`, {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail || 'Failed to delete question')
@@ -258,8 +267,11 @@ export async function updateAuditQuestionSet(id: number, payload: {
   return data
 }
 
-export async function deleteAuditQuestionSet(id: number): Promise<void> {
-  const res = await fetchWithAuth(`/api/audits/question-sets/${id}/`, { method: 'DELETE' })
+export async function deleteAuditQuestionSet(id: number, password?: string): Promise<void> {
+  const res = await fetchWithAuth(`/api/audits/question-sets/${id}/`, {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail || 'Failed to delete question set')
@@ -289,8 +301,11 @@ export async function uploadAuditRubric(name: string, file: File): Promise<Audit
   return data
 }
 
-export async function deleteAuditRubric(id: number): Promise<void> {
-  const res = await fetchWithAuth(`/api/audits/rubrics/${id}/`, { method: 'DELETE' })
+export async function deleteAuditRubric(id: number, password?: string): Promise<void> {
+  const res = await fetchWithAuth(`/api/audits/rubrics/${id}/`, {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail || 'Failed to delete rubric')
@@ -363,8 +378,11 @@ export async function createAuditAssignment(payload: {
   return res.json()
 }
 
-export async function deleteAuditAssignment(id: number): Promise<void> {
-  const res = await fetchWithAuth(`/api/audits/assignments/${id}/`, { method: 'DELETE' })
+export async function deleteAuditAssignment(id: number, password?: string): Promise<void> {
+  const res = await fetchWithAuth(`/api/audits/assignments/${id}/`, {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.detail || 'Failed to delete assignment')

@@ -44,7 +44,6 @@ import { fetchAllQueries } from '../../services/queries';
   academic_controller: Layout,
   academic_audit: ClipboardList,
   academic_audit_auditor: ClipboardList,
-  audit_atr: FileText,
   audit_admin: Shield,
   notifications: Bell,
   academic_calendar: Calendar,
@@ -372,7 +371,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
   const isAuditAuditor = Boolean((data.flags || {}).is_audit_auditor);
-  const isAuditHod = Boolean((data.flags || {}).is_audit_hod);
+  const isAuditAtr = Boolean((data.flags || {}).is_audit_atr);
   const isAdmin = rolesUpper.includes('ADMIN') || Boolean((data as any)?.is_superuser);
 
   
@@ -584,7 +583,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (isAuditAuditor && !items.some((item) => item.key === 'academic_audit_auditor')) {
     items.push({ key: 'academic_audit_auditor', label: 'Audit Assigned', to: '/audits' });
   }
-  if ((isIqac || isAuditHod) && !items.some((item) => item.key === 'audit_atr')) {
+  if (isAuditAtr && !items.some((item) => item.key === 'audit_atr')) {
     items.push({ key: 'audit_atr', label: 'Audit ATR', to: '/audits/atr' });
   }
   if (isAdmin && !items.some((item) => item.key === 'audit_admin')) {

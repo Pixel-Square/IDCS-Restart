@@ -1,20 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import {
   CheckCircle2, ClipboardList, Loader2, PenLine, Save, Send,
-  AlertCircle, FileText, Lock, ShieldCheck, BookOpen, AlertTriangle, X, ExternalLink,
+  AlertCircle, FileText, Lock, ShieldCheck, AlertTriangle,
 } from 'lucide-react'
 import {
   AuditAssignment, AuditAssignmentDetail, AuditRubric,
   fetchAuditAssignmentDetail, fetchAuditAssignments,
   fetchAuditRubrics, getAuditRubricDownloadUrl, saveAuditScores,
 } from '../../services/audits'
+import fetchWithAuth from '../../services/fetchAuth'
 import ErrorToast from '../../components/ErrorToast'
 
 type Draft = { marks: string; comments: string }
 
 export default function AuditEntryPage() {
-  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [assignments, setAssignments] = useState<AuditAssignment[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -25,10 +25,8 @@ export default function AuditEntryPage() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [msg, setMsg] = useState('')
   const [errorPopup, setErrorPopup] = useState('')
-  // Rubrics panel
+  // Rubrics (latest PDF reference button)
   const [rubrics, setRubrics] = useState<AuditRubric[]>([])
-  const [rubricPanelOpen, setRubricPanelOpen] = useState(false)
-  const [rubricLoading, setRubricLoading] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const draftsRef = useRef(drafts)
   draftsRef.current = drafts
@@ -74,25 +72,38 @@ export default function AuditEntryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId])
 
-  /** Toggle the rubrics panel; lazy-load rubrics on first open. */
-  const toggleRubricPanel = async () => {
-    if (!rubricPanelOpen) {
-      setRubricLoading(true)
-      try {
-        const list = await fetchAuditRubrics()
+  /** Open the most recent reference PDF (rubric uploaded by IQAC) in a new tab. */
+  const openReferencePdf = async () => {
+    // Open the tab synchronously (inside the user gesture) so popup blockers allow it.
+    const win = window.open('', '_blank')
+    try {
+      let list = rubrics
+      if (list.length === 0) {
+        list = await fetchAuditRubrics()
         setRubrics(list)
-        if (list.length === 0) {
-          setErrorPopup('No audit rubrics have been uploaded yet. Please contact IQAC.')
-          return
-        }
-      } catch (e: any) {
-        setErrorPopup(e?.message || 'Could not fetch audit rubrics.')
-        return
-      } finally {
-        setRubricLoading(false)
       }
+      if (list.length === 0) {
+        win?.close()
+        setErrorPopup('No reference PDF has been uploaded yet. Please contact IQAC.')
+        return
+      }
+      // Rubrics are ordered newest-first (uploaded_at desc).
+      const latest = list[0]
+      const res = await fetchWithAuth(getAuditRubricDownloadUrl(latest.id))
+      if (!res.ok) throw new Error('Could not open the reference PDF.')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      if (win) {
+        win.location.href = url
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+      // Keep the object URL alive long enough for the new tab to load it.
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } catch (e: any) {
+      win?.close()
+      setErrorPopup(e?.message || 'Could not open the reference PDF.')
     }
-    setRubricPanelOpen((v) => !v)
   }
 
   const persist = async (submit: boolean) => {
@@ -208,53 +219,12 @@ export default function AuditEntryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <button
-              onClick={toggleRubricPanel}
-              disabled={rubricLoading}
-              className={`inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50 transition-colors ${rubricPanelOpen ? 'bg-blue-50 border-blue-300 text-blue-700' : ''}`}
-              title="View audit rubrics uploaded by IQAC"
-            >
-              {rubricLoading ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />}
-              Audit Rubrics
-              {rubrics.length > 0 && (
-                <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-600 text-white text-[10px] font-bold">
-                  {rubrics.length}
-                </span>
-              )}
-            </button>
-            {/* Rubrics dropdown panel */}
-            {rubricPanelOpen && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-xl shadow-xl w-80 overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
-                  <span className="text-xs font-semibold text-gray-600">Audit Rubrics ({rubrics.length})</span>
-                  <button onClick={() => setRubricPanelOpen(false)} className="p-0.5 text-gray-400 hover:text-gray-600 rounded">
-                    <X size={14} />
-                  </button>
-                </div>
-                <div className="max-h-60 overflow-y-auto divide-y">
-                  {rubrics.map((r) => (
-                    <div key={r.id} className="flex items-center justify-between px-3 py-2.5 hover:bg-gray-50 group">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-gray-800 truncate">{r.name}</div>
-                        <div className="text-xs text-gray-400">{new Date(r.uploaded_at).toLocaleDateString()}</div>
-                      </div>
-                      <a
-                        href={getAuditRubricDownloadUrl(r.id)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="ml-2 shrink-0 inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                      >
-                        <ExternalLink size={12} /> Open
-                      </a>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-          <button onClick={() => navigate('/audits/atr')} className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">
-            <FileText size={16} /> Go to ATR
+          <button
+            onClick={openReferencePdf}
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
+            title="Open the latest reference PDF uploaded by IQAC"
+          >
+            <FileText size={16} /> Reference PDF
           </button>
         </div>
       </div>

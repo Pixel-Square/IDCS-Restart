@@ -27,6 +27,7 @@ from .services import (
     build_question_rows,
     can_manage_assignments,
     can_view_assignment,
+    get_assignment_questions,
     get_assignment_totals,
     get_atr_required_scores,
     get_user_department_ids,
@@ -34,6 +35,7 @@ from .services import (
     user_is_auditor_for_assignment,
     user_is_hod_for_assignment,
     user_is_iqac,
+    validate_password,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,9 @@ class AuditQuestionDetailView(APIView):
     def delete(self, request, pk):
         """Soft-delete: hide the question from all active lists (scores/ATRs kept)."""
         question = self._get_question(request, pk)
+        err = validate_password(request.user, request.data.get('password'))
+        if err:
+            return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
         question.is_active = False
         question.save(update_fields=['is_active'])
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -294,6 +299,9 @@ class AuditQuestionSetDetailView(APIView):
 
     def delete(self, request, pk):
         question_set = self._get_qs(request, pk)
+        err = validate_password(request.user, request.data.get('password'))
+        if err:
+            return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
         question_set.is_active = False
         question_set.save(update_fields=['is_active'])
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -374,6 +382,9 @@ class AuditRubricDetailView(APIView):
         if not can_manage_assignments(request.user):
             return Response({'detail': 'Only IQAC can delete audit rubrics.'},
                             status=status.HTTP_403_FORBIDDEN)
+        err = validate_password(request.user, request.data.get('password'))
+        if err:
+            return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
         rubric = get_object_or_404(AuditRubric, pk=pk)
         rubric.is_active = False
         rubric.save(update_fields=['is_active'])
@@ -551,6 +562,18 @@ class AuditAssignmentDetailView(APIView):
         serialized['can_edit'] = can_edit
         return Response(serialized)
 
+    def delete(self, request, pk):
+        """Delete an audit assignment (IQAC/superuser only). Requires login password; cascades scores & ATRs."""
+        if not can_manage_assignments(request.user):
+            return Response({'detail': 'Only IQAC can delete audit assignments.'},
+                            status=status.HTTP_403_FORBIDDEN)
+        err = validate_password(request.user, request.data.get('password'))
+        if err:
+            return Response({'detail': err}, status=status.HTTP_400_BAD_REQUEST)
+        assignment = get_object_or_404(AuditDepartmentAssignment, pk=pk)
+        assignment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class AuditAssignmentAuditorRemoveView(APIView):
     """Remove an assigned auditor from an assignment (IQAC only)."""
@@ -596,7 +619,8 @@ class AuditScoreSaveView(APIView):
         if not isinstance(entries, list):
             return Response({'detail': 'scores must be a list.'}, status=400)
 
-        question_ids = {q.id for q in AuditQuestion.objects.filter(is_active=True)}
+        # Only questions within the assignment's scope (assigned set, or all active) are valid.
+        question_ids = set(get_assignment_questions(assignment).values_list('id', flat=True))
         saved = 0
         errors = []
         with transaction.atomic():
@@ -636,8 +660,8 @@ class AuditScoreSaveView(APIView):
             elif submit:
                 assignment.status = 'SUBMITTED'
                 assignment.save(update_fields=['status', 'updated_at'])
-                # Materialize ATR rows for below-60% questions.
-                for q in AuditQuestion.objects.filter(is_active=True):
+                # Materialize ATR rows for below-60% questions (set-scoped).
+                for q in get_assignment_questions(assignment):
                     score = AuditScore.objects.filter(assignment=assignment, question=q).first()
                     if score and score.marks is not None and float(score.marks) < float(q.max_marks) * 0.6:
                         AuditATR.objects.get_or_create(assignment=assignment, question=q)
@@ -646,7 +670,7 @@ class AuditScoreSaveView(APIView):
                 assignment.save(update_fields=['status', 'updated_at'])
             elif assignment.status == 'SUBMITTED' and is_iqac:
                 # IQAC edited a submitted audit - ensure ATR rows stay synced
-                for q in AuditQuestion.objects.filter(is_active=True):
+                for q in get_assignment_questions(assignment):
                     score = AuditScore.objects.filter(assignment=assignment, question=q).first()
                     if score and score.marks is not None and float(score.marks) < float(q.max_marks) * 0.6:
                         AuditATR.objects.get_or_create(assignment=assignment, question=q)

@@ -76,12 +76,24 @@ class AuditorBriefSerializer(serializers.Serializer):
     staff_id = serializers.CharField()
     name = serializers.SerializerMethodField()
     designation = serializers.CharField(allow_blank=True)
+    department = serializers.SerializerMethodField()
 
     def get_name(self, obj):
         user = getattr(obj, 'user', None)
         if user:
             return f'{user.first_name} {user.last_name}'.strip() or user.username
         return obj.staff_id or ''
+
+    def get_department(self, obj):
+        dept = getattr(obj, 'current_department', None) or getattr(obj, 'department', None)
+        if not dept:
+            return None
+        return {
+            'id': dept.id,
+            'code': dept.code,
+            'name': dept.name,
+            'short_name': dept.short_name,
+        }
 
 
 class AuditAssignmentSerializer(serializers.ModelSerializer):

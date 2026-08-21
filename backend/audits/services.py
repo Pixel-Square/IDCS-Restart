@@ -95,9 +95,34 @@ def can_manage_assignments(user) -> bool:
     return user_is_iqac(user)
 
 
+def validate_password(user, password):
+    """Return an error message if the password is missing/incorrect, else None.
+
+    Used as a safeguard before destructive operations (deleting audits,
+    questions, question sets, rubrics).
+    """
+    pw = str(password or '').strip()
+    if not pw:
+        return 'Password is required to delete data.'
+    try:
+        if user.check_password(pw):
+            return None
+    except Exception:
+        pass
+    return 'Incorrect password.'
+
+
+def get_assignment_questions(assignment):
+    """Active questions scoped to the assignment's question set (or all active if none assigned)."""
+    if assignment.question_set_id:
+        return assignment.question_set.questions.filter(is_active=True).order_by('sl_no')
+    return AuditQuestion.objects.filter(is_active=True).order_by('sl_no')
+
+
 def get_assignment_totals(assignment):
     """Return (total_marks, max_marks, percentage, below_threshold_count)."""
-    scores = assignment.scores.select_related('question').all()
+    q_ids = set(get_assignment_questions(assignment).values_list('id', flat=True))
+    scores = assignment.scores.select_related('question').filter(question_id__in=q_ids)
     total = 0.0
     maximum = 0.0
     below = 0
@@ -122,8 +147,9 @@ def get_assignment_totals(assignment):
 
 def get_atr_required_scores(assignment):
     """Return scores whose marks are below 60% of the question's max marks."""
+    q_ids = set(get_assignment_questions(assignment).values_list('id', flat=True))
     required = []
-    for s in assignment.scores.select_related('question').all():
+    for s in assignment.scores.select_related('question').filter(question_id__in=q_ids).all():
         if s.marks is None:
             continue
         try:
@@ -149,8 +175,10 @@ def ensure_atr_rows(assignment):
 
 def build_question_rows(assignment, include_atr=False):
     """Build a question-by-question view of an assignment with scores and ATRs."""
-    # Ensure we have a score row for every active question (auto-created lazily).
-    all_questions = list(AuditQuestion.objects.filter(is_active=True).order_by('sl_no'))
+    # Ensure we have a score row for every question in scope (auto-created lazily).
+    # When a question set is assigned to the assignment, only that set's questions
+    # are shown — auditors must not see questions outside their assigned set.
+    all_questions = list(get_assignment_questions(assignment))
     for q in all_questions:
         AuditScore.objects.get_or_create(assignment=assignment, question=q)
 

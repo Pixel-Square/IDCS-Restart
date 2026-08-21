@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  BarChart as RBarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
+  LineChart, Line, ReferenceLine, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts'
 import {
   ClipboardList, Download, FileSpreadsheet, Loader2, PlusCircle,
   RefreshCw, BarChart3, AlertCircle, CheckCircle2, Building2,
   Pencil, Trash2, X, Plus, Save, Lock, ShieldCheck, BookOpen,
-  Upload, Layers, AlertTriangle, FileText,
+  Upload, Layers, AlertTriangle, FileText, ChevronDown,
 } from 'lucide-react'
 import {
   AuditAssignment, AuditAssignmentDetail, AuditConsolidated, AuditCycle, AuditDepartment,
@@ -23,8 +23,10 @@ import {
 } from '../../services/audits'
 import { downloadAuditReportPdf, downloadConsolidatedAuditPdf } from '../../utils/auditReportPdf'
 import ErrorToast from '../../components/ErrorToast'
+import { usePasswordConfirm } from '../../components/PasswordConfirm'
+import AuditATRPage from './AuditATRPage'
 
-type TabKey = 'assignments' | 'consolidated' | 'questions' | 'cycles'
+type TabKey = 'assignments' | 'consolidated' | 'questions' | 'cycles' | 'atr'
 type QSubTab = 'questions' | 'sets' | 'rubrics'
 
 const formatPct = (n?: number) => (n === undefined || n === null ? '—' : `${n}%`)
@@ -35,6 +37,7 @@ export default function AuditManagementPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [errorPopup, setErrorPopup] = useState('')
+  const passwordConfirm = usePasswordConfirm()
 
   const [cycles, setCycles] = useState<AuditCycle[]>([])
   const [departments, setDepartments] = useState<AuditDepartment[]>([])
@@ -44,6 +47,11 @@ export default function AuditManagementPage() {
   const [rubrics, setRubrics] = useState<AuditRubric[]>([])
   const [assignments, setAssignments] = useState<AuditAssignment[]>([])
   const [consolidated, setConsolidated] = useState<AuditConsolidated[]>([])
+
+  // Cycles tab: expandable per-department marks sheet
+  const [expandedDept, setExpandedDept] = useState<number | null>(null)
+  const [deptDetails, setDeptDetails] = useState<Record<number, AuditAssignmentDetail>>({})
+  const [deptLoadingId, setDeptLoadingId] = useState<number | null>(null)
 
   // Assignment creation form
   const [formOpen, setFormOpen] = useState(false)
@@ -77,6 +85,14 @@ export default function AuditManagementPage() {
   const [setSaving2, setSetSaving2] = useState(false)
   const [setMsg, setSetMsg] = useState('')
 
+  // Inline "add new question" inside the set editor
+  const [setNewQOpen, setSetNewQOpen] = useState(false)
+  const [setNewQForm, setSetNewQForm] = useState({
+    sl_no: '', details: '', documents_checklist: '', detailed_description: '', max_marks: '',
+  })
+  const [setNewQSaving, setSetNewQSaving] = useState(false)
+  const [setNewQMsg, setSetNewQMsg] = useState('')
+
   // Rubric upload
   const rubricInputRef = useRef<HTMLInputElement>(null)
   const [rubricUploading, setRubricUploading] = useState(false)
@@ -85,9 +101,6 @@ export default function AuditManagementPage() {
 
   // Auditor removal (consolidated)
   const [removingAuditor, setRemovingAuditor] = useState<{ assignmentId: number; staffId: number } | null>(null)
-
-  // Delete assignment
-  const [deletingAssignmentId, setDeletingAssignmentId] = useState<number | null>(null)
 
   // IQAC Audit Edit Modal
   const [editingAssignmentId, setEditingAssignmentId] = useState<number | null>(null)
@@ -253,14 +266,16 @@ export default function AuditManagementPage() {
     }
   }
 
-  const removeQuestion = async (q: AuditQuestion) => {
-    if (!window.confirm(`Delete question "${q.sl_no}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from new audits (existing scores are kept).`)) return
-    try {
-      await deleteAuditQuestion(q.id)
-      await loadAll()
-    } catch (e: any) {
-      setErrorPopup(e?.message || 'Failed to delete question')
-    }
+  const removeQuestion = (q: AuditQuestion) => {
+    passwordConfirm.ask({
+      title: 'Delete Question',
+      message: `Delete question "Q${q.sl_no}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from new audits (existing scores are kept).`,
+      actionLabel: 'Delete Question',
+      onConfirm: async (password) => {
+        await deleteAuditQuestion(q.id, password)
+        await loadAll()
+      },
+    })
   }
 
   // ── Question Set handlers ────────────────────────────────────────────────
@@ -283,6 +298,8 @@ export default function AuditManagementPage() {
     setAddingSet(false)
     setEditingSetId(null)
     setSetMsg('')
+    setSetNewQOpen(false)
+    setSetNewQMsg('')
   }
 
   const toggleSetQuestion = (id: number) => {
@@ -292,6 +309,59 @@ export default function AuditManagementPage() {
         ? f.question_ids.filter((x) => x !== id)
         : [...f.question_ids, id],
     }))
+  }
+
+  /** Open the inline "add new question" form inside the set editor (prefills next S.No). */
+  const openSetNewQ = () => {
+    const nextSl = questions.length ? Math.max(...questions.map((q) => q.sl_no)) + 1 : 1
+    setSetNewQForm({ sl_no: String(nextSl), details: '', documents_checklist: '', detailed_description: '', max_marks: '10' })
+    setSetNewQMsg('')
+    setSetNewQOpen(true)
+  }
+
+  /** Create a brand-new question and add it to the set currently being edited. */
+  const saveSetNewQ = async () => {
+    const sl_no = Number(setNewQForm.sl_no)
+    if (!setNewQForm.details.trim() || !sl_no) {
+      setSetNewQMsg('Please fill S.No and Details.')
+      return
+    }
+    setSetNewQSaving(true)
+    setSetNewQMsg('')
+    try {
+      const q = await createAuditQuestion({
+        sl_no,
+        details: setNewQForm.details.trim(),
+        documents_checklist: setNewQForm.documents_checklist,
+        detailed_description: setNewQForm.detailed_description,
+        max_marks: Number(setNewQForm.max_marks) || 10,
+      })
+      setQuestions((prev) => [...prev, q].sort((a, b) => a.sl_no - b.sl_no))
+      setSetForm((f) => ({
+        ...f,
+        question_ids: f.question_ids.includes(q.id) ? f.question_ids : [...f.question_ids, q.id],
+      }))
+      setSetNewQOpen(false)
+      setSetNewQMsg('')
+    } catch (e: any) {
+      setSetNewQMsg(e?.message || 'Failed to add question')
+    } finally {
+      setSetNewQSaving(false)
+    }
+  }
+
+  /** Delete a question (password-gated) from within the set editor and drop it from the set. */
+  const removeSetQuestion = (q: AuditQuestion) => {
+    passwordConfirm.ask({
+      title: 'Delete Question',
+      message: `Delete question "Q${q.sl_no}. ${q.details.slice(0, 60)}"?\n\nIt will be hidden from all question sets and new audits.`,
+      actionLabel: 'Delete Question',
+      onConfirm: async (password) => {
+        await deleteAuditQuestion(q.id, password)
+        setQuestions((prev) => prev.filter((x) => x.id !== q.id))
+        setSetForm((f) => ({ ...f, question_ids: f.question_ids.filter((x) => x !== q.id) }))
+      },
+    })
   }
 
   const saveSet = async () => {
@@ -326,14 +396,16 @@ export default function AuditManagementPage() {
     }
   }
 
-  const removeSet = async (qs: AuditQuestionSet) => {
-    if (!window.confirm(`Delete question set "${qs.name}"?`)) return
-    try {
-      await deleteAuditQuestionSet(qs.id)
-      await loadAll()
-    } catch (e: any) {
-      setErrorPopup(e?.message || 'Failed to delete question set')
-    }
+  const removeSet = (qs: AuditQuestionSet) => {
+    passwordConfirm.ask({
+      title: 'Delete Question Set',
+      message: `Delete question set "${qs.name}"?\n\nIt will be hidden from new assignments.`,
+      actionLabel: 'Delete Set',
+      onConfirm: async (password) => {
+        await deleteAuditQuestionSet(qs.id, password)
+        await loadAll()
+      },
+    })
   }
 
   // ── Rubric handlers ───────────────────────────────────────────────────────
@@ -359,14 +431,16 @@ export default function AuditManagementPage() {
     }
   }
 
-  const removeRubric = async (r: AuditRubric) => {
-    if (!window.confirm(`Remove rubric "${r.name}"?`)) return
-    try {
-      await deleteAuditRubric(r.id)
-      await loadAll()
-    } catch (e: any) {
-      setErrorPopup(e?.message || 'Failed to remove rubric')
-    }
+  const removeRubric = (r: AuditRubric) => {
+    passwordConfirm.ask({
+      title: 'Remove Rubric PDF',
+      message: `Remove rubric "${r.name}"?\n\nIt will no longer be available to auditors.`,
+      actionLabel: 'Remove',
+      onConfirm: async (password) => {
+        await deleteAuditRubric(r.id, password)
+        await loadAll()
+      },
+    })
   }
 
   // ── Auditor removal ────────────────────────────────────────────────────────
@@ -385,17 +459,16 @@ export default function AuditManagementPage() {
     }
   }
 
-  const removeAssignment = async (assignmentId: number) => {
-    if (!window.confirm('Delete this audit assignment?\n\nThis will permanently remove it. Audits with any marks entered cannot be deleted.')) return
-    setDeletingAssignmentId(assignmentId)
-    try {
-      await deleteAuditAssignment(assignmentId)
-      await loadAll()
-    } catch (e: any) {
-      setErrorPopup(e?.message || 'Could not delete assignment')
-    } finally {
-      setDeletingAssignmentId(null)
-    }
+  const removeAssignment = (a: AuditAssignment) => {
+    passwordConfirm.ask({
+      title: 'Delete Audit Assignment',
+      message: `Delete the audit for ${a.department_code} (${a.department_name}) · ${a.cycle_label || `Cycle ${a.cycle_number}`}?\n\nThis will permanently remove the audit, including all scores and ATR data. This action cannot be undone.`,
+      actionLabel: 'Delete Audit',
+      onConfirm: async (password) => {
+        await deleteAuditAssignment(a.id, password)
+        await loadAll()
+      },
+    })
   }
 
   const downloadReport = async (assignmentId: number) => {
@@ -405,6 +478,25 @@ export default function AuditManagementPage() {
       downloadAuditReportPdf(report)
     } catch (e: any) {
       setErrorPopup(e?.message || 'Failed to download report')
+    }
+  }
+
+  const toggleDeptMarks = async (assignmentId: number) => {
+    if (expandedDept === assignmentId) {
+      setExpandedDept(null)
+      return
+    }
+    setExpandedDept(assignmentId)
+    if (!deptDetails[assignmentId]) {
+      setDeptLoadingId(assignmentId)
+      try {
+        const d = await fetchAuditAssignmentDetail(assignmentId)
+        if (d) setDeptDetails((prev) => ({ ...prev, [assignmentId]: d }))
+      } catch (e: any) {
+        setErrorPopup(e?.message || 'Could not load marks')
+      } finally {
+        setDeptLoadingId(null)
+      }
     }
   }
 
@@ -516,6 +608,9 @@ export default function AuditManagementPage() {
       {/* Error Popup */}
       {errorPopup && <ErrorToast message={errorPopup} onClose={() => setErrorPopup('')} />}
 
+      {/* Password confirmation modal */}
+      {passwordConfirm.modal}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Academic Audit Management</h1>
@@ -535,6 +630,7 @@ export default function AuditManagementPage() {
           ['consolidated', 'Consolidated Review', BarChart3],
           ['questions', 'Questions', FileSpreadsheet],
           ['cycles', 'Cycles', RefreshCw],
+          ['atr', 'ATR', FileText],
         ] as [TabKey, string, any][]).map(([key, label, Icon]) => (
           <button
             key={key}
@@ -696,13 +792,11 @@ export default function AuditManagementPage() {
                           <Download size={13} /> PDF
                         </button>
                         <button
-                          onClick={() => removeAssignment(a.id)}
-                          disabled={deletingAssignmentId === a.id || (a.total_marks ?? 0) > 0}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                          title={(a.total_marks ?? 0) > 0 ? 'Cannot delete — audit has score data' : 'Delete empty audit'}
+                          onClick={() => removeAssignment(a)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                          title="Delete this audit assignment (requires password; removes scores and ATR data)"
                         >
-                          {deletingAssignmentId === a.id ? <Loader2 className="animate-spin" size={13} /> : <Trash2 size={13} />}
-                          {deletingAssignmentId === a.id ? '' : 'Del'}
+                          <Trash2 size={13} /> Del
                         </button>
                       </div>
                     </td>
@@ -739,7 +833,6 @@ export default function AuditManagementPage() {
               max: d.max_marks,
               below: d.below_60_count,
             }))
-            const barFill = (pct: number) => (pct >= 60 ? '#10b981' : '#ef4444')
             return (
             <div key={c.cycle_id} className="border rounded-xl overflow-hidden">
               <div className="bg-gray-50 px-4 py-2 font-semibold text-gray-700 flex items-center gap-2">
@@ -750,7 +843,7 @@ export default function AuditManagementPage() {
                 <div className="px-4 py-4 border-b">
                   <h3 className="text-sm font-semibold text-gray-600 mb-2">Department-wise Score Comparison (%)</h3>
                   <ResponsiveContainer width="100%" height={280}>
-                    <RBarChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 30 }}>
+                    <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 30 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#475569' }} angle={-20} textAnchor="end" height={44} interval={0} />
                       <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} unit="%" />
@@ -760,10 +853,36 @@ export default function AuditManagementPage() {
                         labelFormatter={(label: any, payload: any) => (payload?.[0]?.payload?.fullName || label)}
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar dataKey="percentage" name="Score %" radius={[4, 4, 0, 0]}>
-                        {chartData.map((d, idx) => <Cell key={idx} fill={barFill(d.percentage)} />)}
-                      </Bar>
-                    </RBarChart>
+                      <ReferenceLine
+                        y={60}
+                        stroke="#ef4444"
+                        strokeDasharray="4 4"
+                        label={{ value: '60%', position: 'insideTopRight', fontSize: 11, fill: '#ef4444' }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="percentage"
+                        name="Score %"
+                        stroke="#3b82f6"
+                        strokeWidth={2.5}
+                        dot={(props: any) => {
+                          const { cx, cy, payload } = props
+                          const color = Number(payload?.percentage) >= 60 ? '#10b981' : '#ef4444'
+                          return (
+                            <circle
+                              key={payload?.department_code || `${cx}-${cy}`}
+                              cx={cx}
+                              cy={cy}
+                              r={4.5}
+                              fill={color}
+                              stroke="#ffffff"
+                              strokeWidth={1.5}
+                            />
+                          )
+                        }}
+                        activeDot={{ r: 6 }}
+                      />
+                    </LineChart>
                   </ResponsiveContainer>
                 </div>
               )}
@@ -1003,7 +1122,9 @@ export default function AuditManagementPage() {
           {qSubTab === 'sets' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-2">
-                <p className="text-sm text-gray-500">{questionSets.length} question set(s). Sets can be selected when creating a new assignment.</p>
+                <p className="text-sm text-gray-500">
+                  {questionSets.length} question set(s). Each set's questions are saved independently — editing "Set 1" never affects "Set 2". Sets can be selected when creating a new assignment.
+                </p>
                 <div className="flex items-center gap-2">
                   {questions.length > 0 && (
                     <button
@@ -1044,24 +1165,79 @@ export default function AuditManagementPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Select Questions ({setForm.question_ids.length} selected)</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs text-gray-500">Select Questions ({setForm.question_ids.length} selected)</label>
+                      <button
+                        onClick={setNewQOpen ? () => { setSetNewQOpen(false); setSetNewQMsg('') } : openSetNewQ}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium border border-indigo-300 text-indigo-700 bg-white rounded-lg hover:bg-indigo-50 transition-colors"
+                      >
+                        {setNewQOpen ? <X size={13} /> : <Plus size={13} />}
+                        {setNewQOpen ? 'Cancel New Question' : 'Add New Question'}
+                      </button>
+                    </div>
+
+                    {/* Inline new-question form */}
+                    {setNewQOpen && (
+                      <div className="border rounded-lg bg-white p-3 mb-2 space-y-2">
+                        <div className="text-xs font-semibold text-gray-600">Add a new question to this set</div>
+                        <div className="grid md:grid-cols-[90px_1fr_90px] gap-2">
+                          <div>
+                            <label className="text-[11px] text-gray-500">S.No</label>
+                            <input type="number" min={1} value={setNewQForm.sl_no} onChange={(e) => setSetNewQForm((f) => ({ ...f, sl_no: e.target.value }))} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-gray-500">Details</label>
+                            <input value={setNewQForm.details} onChange={(e) => setSetNewQForm((f) => ({ ...f, details: e.target.value }))} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" placeholder="Question / parameter details…" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] text-gray-500">Max Marks</label>
+                            <input type="number" min={1} step={0.5} value={setNewQForm.max_marks} onChange={(e) => setSetNewQForm((f) => ({ ...f, max_marks: e.target.value }))} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-500">Documents Checklist <span className="text-gray-400">(optional)</span></label>
+                          <textarea value={setNewQForm.documents_checklist} onChange={(e) => setSetNewQForm((f) => ({ ...f, documents_checklist: e.target.value }))} rows={1} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-500">Detailed Description <span className="text-gray-400">(optional)</span></label>
+                          <textarea value={setNewQForm.detailed_description} onChange={(e) => setSetNewQForm((f) => ({ ...f, detailed_description: e.target.value }))} rows={1} className="w-full border rounded-lg px-2 py-1.5 text-sm mt-0.5" />
+                        </div>
+                        {setNewQMsg && <div className="text-sm text-red-600">{setNewQMsg}</div>}
+                        <div className="flex gap-2">
+                          <button onClick={saveSetNewQ} disabled={setNewQSaving} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+                            {setNewQSaving ? <Loader2 className="animate-spin" size={13} /> : <Plus size={13} />} Add to Set
+                          </button>
+                          <button onClick={() => { setSetNewQOpen(false); setSetNewQMsg('') }} className="px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="max-h-64 overflow-y-auto border rounded-lg bg-white divide-y">
                       {questions.map((q) => (
-                        <label key={q.id} className="flex items-start gap-3 px-3 py-2 hover:bg-indigo-50 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={setForm.question_ids.includes(q.id)}
-                            onChange={() => toggleSetQuestion(q.id)}
-                            className="mt-0.5 rounded"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <span className="text-xs font-semibold text-gray-600 mr-1">Q{q.sl_no}.</span>
-                            <span className="text-sm text-gray-800">{q.details}</span>
-                            <span className="ml-2 text-xs text-gray-400">Max: {q.max_marks}</span>
-                          </div>
-                        </label>
+                        <div key={q.id} className="flex items-start gap-3 px-3 py-2 hover:bg-indigo-50 group">
+                          <label className="flex items-start gap-3 flex-1 min-w-0 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={setForm.question_ids.includes(q.id)}
+                              onChange={() => toggleSetQuestion(q.id)}
+                              className="mt-0.5 rounded"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs font-semibold text-gray-600 mr-1">Q{q.sl_no}.</span>
+                              <span className="text-sm text-gray-800">{q.details}</span>
+                              <span className="ml-2 text-xs text-gray-400">Max: {q.max_marks}</span>
+                            </div>
+                          </label>
+                          <button
+                            onClick={() => removeSetQuestion(q)}
+                            className="shrink-0 p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            title="Delete this question (removes it from all sets)"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       ))}
-                      {questions.length === 0 && <p className="text-sm text-gray-400 p-3">No active questions found. Add questions first.</p>}
+                      {questions.length === 0 && <p className="text-sm text-gray-400 p-3">No active questions found. Add a new question above.</p>}
                     </div>
                   </div>
                   {setMsg && <div className="text-sm text-red-600">{setMsg}</div>}
@@ -1191,18 +1367,158 @@ export default function AuditManagementPage() {
 
       {/* ─── Cycles tab ─── */}
       {tab === 'cycles' && (
-        <div className="grid md:grid-cols-2 gap-4">
-          {cycles.map((c) => (
-            <div key={c.id} className="border rounded-xl p-4 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold">{c.cycle}</div>
-              <div>
-                <div className="font-semibold">{c.label || c.name}</div>
-                <div className="text-xs text-gray-500">{c.assignment_count ?? 0} assignment(s)</div>
+        <div className="space-y-6">
+          {cycles.map((c) => {
+            const cycleAssignments = assignments.filter((a) => a.cycle_number === c.cycle)
+            return (
+              <div key={c.id} className="border rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 flex items-center gap-3 border-b">
+                  <div className="w-8 h-8 shrink-0 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">{c.cycle}</div>
+                  <div>
+                    <div className="font-semibold text-gray-800">{c.label || c.name || `Cycle ${c.cycle}`}</div>
+                    <div className="text-xs text-gray-500">{cycleAssignments.length} assignment(s)</div>
+                  </div>
+                </div>
+
+                {cycleAssignments.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-gray-400 text-sm">No assignments in this cycle.</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-gray-600">
+                        <tr>
+                          <th className="text-left px-4 py-2">Department</th>
+                          <th className="text-left px-4 py-2">Auditors</th>
+                          <th className="text-left px-4 py-2">Status</th>
+                          <th className="text-left px-4 py-2">Marks</th>
+                          <th className="text-left px-4 py-2">%</th>
+                          <th className="text-left px-4 py-2">Below 60%</th>
+                          <th className="text-right px-4 py-2">Marks Sheet</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {cycleAssignments.map((a) => (
+                          <Fragment key={a.id}>
+                            <tr className="hover:bg-gray-50">
+                              <td className="px-4 py-2">
+                                <div className="font-medium text-gray-800">{a.department_code}</div>
+                                <div className="text-xs text-gray-400">{a.department_name}</div>
+                              </td>
+                              <td className="px-4 py-2 text-xs text-gray-700">
+                                {a.auditors?.length ? (
+                                  a.auditors.map((au) => (
+                                    <div key={au.id ?? au.staff_id} className="flex flex-wrap items-center gap-1.5 py-0.5">
+                                      <span>{au.name}</span>
+                                      {au.department && (
+                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-medium">
+                                          {au.department.short_name || au.department.code || au.department.name}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))
+                                ) : '—'}
+                              </td>
+                              <td className="px-4 py-2">
+                                <span className={`px-2 py-0.5 rounded-full text-xs ${
+                                  a.status === 'SUBMITTED' ? 'bg-green-100 text-green-700'
+                                    : a.status === 'IN_PROGRESS' ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-gray-100 text-gray-600'
+                                }`}>{a.status.replace('_', ' ')}</span>
+                              </td>
+                              <td className="px-4 py-2">{a.total_marks ?? 0} / {a.max_marks ?? 0}</td>
+                              <td className="px-4 py-2 font-medium">{formatPct(a.percentage)}</td>
+                              <td className="px-4 py-2">
+                                {(a.below_60_count ?? 0) > 0
+                                  ? <span className="text-red-600 font-medium">{a.below_60_count}</span>
+                                  : <span className="text-gray-400">0</span>}
+                              </td>
+                              <td className="px-4 py-2 text-right">
+                                <button
+                                  onClick={() => toggleDeptMarks(a.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium border rounded-lg text-blue-700 hover:bg-blue-50 transition-colors"
+                                  title={expandedDept === a.id ? 'Hide question-wise marks' : 'Show question-wise marks'}
+                                >
+                                  <ChevronDown size={14} className={`transition-transform ${expandedDept === a.id ? 'rotate-180' : ''}`} />
+                                  {expandedDept === a.id ? 'Hide Marks' : 'View Marks'}
+                                </button>
+                              </td>
+                            </tr>
+                            {expandedDept === a.id && (
+                              <tr>
+                                <td colSpan={7} className="px-4 py-3 bg-blue-50/30">
+                                  {deptDetails[a.id] ? (
+                                    <div className="overflow-x-auto border rounded-lg bg-white">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-gray-50 text-gray-600">
+                                          <tr>
+                                            <th className="text-left px-3 py-2 w-14">S.No</th>
+                                            <th className="text-left px-3 py-2">Details</th>
+                                            <th className="text-left px-3 py-2 w-14">Max</th>
+                                            <th className="text-left px-3 py-2 w-24">Score</th>
+                                            <th className="text-left px-3 py-2 w-16">%</th>
+                                            <th className="text-left px-3 py-2 w-[38%]">Auditor's Comment</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y">
+                                          {deptDetails[a.id].questions.map((q) => {
+                                            const max = Number(q.max_marks) || 0
+                                            const rawMarks = q.marks === null || q.marks === undefined || q.marks === '' ? null : Number(q.marks)
+                                            const pct = max && rawMarks !== null ? Math.round((rawMarks / max) * 100) : 0
+                                            const below = q.below_60
+                                            return (
+                                              <tr key={q.question_id} className={`align-top ${below ? 'bg-red-50/50' : 'hover:bg-gray-50'}`}>
+                                                <td className="px-3 py-2">
+                                                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${below ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-600'}`}>
+                                                    {q.sl_no}
+                                                  </div>
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                  <div className="font-medium text-gray-800">{q.details}</div>
+                                                  {q.documents_checklist && (
+                                                    <div className="text-xs text-gray-500 mt-0.5"><span className="font-medium">Checklist:</span> {q.documents_checklist}</div>
+                                                  )}
+                                                </td>
+                                                <td className="px-3 py-2 text-center text-gray-600">{max}</td>
+                                                <td className="px-3 py-2">
+                                                  <span className={`font-semibold ${rawMarks === null ? 'text-gray-400' : below ? 'text-red-600' : 'text-gray-800'}`}>
+                                                    {rawMarks === null ? '—' : rawMarks} / {max}
+                                                  </span>
+                                                </td>
+                                                <td className="px-3 py-2">
+                                                  <span className={`font-medium ${rawMarks === null ? 'text-gray-400' : below ? 'text-red-600' : 'text-green-600'}`}>
+                                                    {rawMarks === null ? '—' : `${pct}%`}
+                                                  </span>
+                                                  {rawMarks !== null && below && <div className="text-[10px] text-red-500 font-medium">ATR</div>}
+                                                </td>
+                                                <td className="px-3 py-2 text-xs text-gray-600">{q.comments || '—'}</td>
+                                              </tr>
+                                            )
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center justify-center py-4 text-gray-400 text-sm">
+                                      <Loader2 className="animate-spin mr-2" size={16} /> Loading marks…
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
+
+      {/* ─── ATR tab (embedded) ─── */}
+      {tab === 'atr' && <AuditATRPage embedded />}
 
       {/* ─── IQAC Audit Edit Modal ─── */}
       {editingAssignmentId !== null && (

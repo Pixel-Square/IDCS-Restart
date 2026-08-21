@@ -136,6 +136,114 @@ function todayStr(): string {
   return `${dd}-${mm}-${d.getFullYear()}`
 }
 
+type ChartPoint = { label: string; pct: number }
+
+/** Interpolate a smooth (Catmull-Rom) curve through the given points. */
+function smoothCurvePoints(points: { x: number; y: number }[], samplesPerSegment = 16): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+    for (let s = 0; s <= samplesPerSegment; s++) {
+      const t = s / samplesPerSegment
+      const t2 = t * t
+      const t3 = t2 * t
+      const x = 0.5 * (
+        2 * p1.x +
+        (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      )
+      const y = 0.5 * (
+        2 * p1.y +
+        (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      )
+      if (i === 0 || s > 0) out.push({ x, y })
+    }
+  }
+  return out
+}
+
+/**
+ * Draw a department-wise score comparison line chart (mirrors the on-screen
+ * consolidated review graph) into the PDF using jsPDF primitives.
+ */
+function drawConsolidatedChart(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  points: ChartPoint[],
+) {
+  if (points.length < 2) return
+  const padL = 16
+  const padR = 6
+  const padT = 4
+  const padB = 14
+  const chartW = w - padL - padR
+  const chartH = h - padT - padB
+  const minPct = 0
+  const maxPct = 100
+
+  const px = (i: number) => x + padL + (i / (points.length - 1)) * chartW
+  const py = (pct: number) => y + padT + ((maxPct - pct) / (maxPct - minPct)) * chartH
+
+  // Horizontal gridlines + y-axis labels (0, 20, …, 100)
+  doc.setFontSize(6.5)
+  doc.setFont('helvetica', 'normal')
+  for (let g = 0; g <= 100; g += 20) {
+    const gy = py(g)
+    doc.setDrawColor(226, 232, 240)
+    doc.setLineWidth(0.2)
+    doc.line(x + padL, gy, x + padL + chartW, gy)
+    doc.setTextColor(148, 163, 184)
+    doc.text(`${g}%`, x + padL - 1.5, gy + 1.5, { align: 'right' })
+  }
+
+  // 60% threshold reference line
+  const y60 = py(60)
+  doc.setDrawColor(239, 68, 68)
+  doc.setLineWidth(0.3)
+  doc.setLineDashPattern([1.5, 1.5], 0)
+  doc.line(x + padL, y60, x + padL + chartW, y60)
+  doc.setLineDashPattern([], 0)
+  doc.setTextColor(239, 68, 68)
+  doc.text('60%', x + padL + chartW - 1, y60 - 1.5, { align: 'right' })
+
+  // X-axis department labels
+  doc.setFontSize(6.5)
+  doc.setTextColor(71, 85, 105)
+  for (let i = 0; i < points.length; i++) {
+    doc.text(points[i].label, px(i), y + padT + chartH + 4, { align: 'center' })
+  }
+
+  // Smooth curved line
+  const pts = points.map((p, i) => ({ x: px(i), y: py(p.pct) }))
+  const curve = smoothCurvePoints(pts, 16)
+  doc.setDrawColor(59, 130, 246)
+  doc.setLineWidth(0.55)
+  for (let i = 0; i < curve.length - 1; i++) {
+    doc.line(curve[i].x, curve[i].y, curve[i + 1].x, curve[i + 1].y)
+  }
+
+  // Data-point dots (green ≥60%, red <60%)
+  for (let i = 0; i < pts.length; i++) {
+    const color = pts[i].y <= y60 ? [16, 185, 129] : [239, 68, 68]
+    doc.setFillColor(color[0], color[1], color[2])
+    doc.circle(pts[i].x, pts[i].y, 1.2, 'F')
+  }
+
+  // Reset drawing defaults
+  doc.setTextColor(0, 0, 0)
+  doc.setDrawColor(0, 0, 0)
+  doc.setLineWidth(0.2)
+}
+
 /** Download a consolidated table of all departments' audit scores (per cycle) as a portrait A4 PDF. */
 export function downloadConsolidatedAuditPdf(consolidated: AuditConsolidated[]) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
@@ -160,7 +268,21 @@ export function downloadConsolidatedAuditPdf(consolidated: AuditConsolidated[]) 
     doc.setFontSize(11)
     doc.setFont('helvetica', 'bold')
     doc.text(cycle.label, MARGIN, startY)
-    startY += 4
+    startY += 6
+
+    // Graph: department-wise score comparison (mirrors the consolidated review chart)
+    const chartPoints = cycle.departments.map((d) => ({ label: d.department_code, pct: d.percentage }))
+    if (chartPoints.length > 1) {
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(51, 65, 85)
+      doc.text('Department-wise Score Comparison (%)', MARGIN, startY)
+      doc.setTextColor(0, 0, 0)
+      startY += 2
+      const chartH = 64
+      drawConsolidatedChart(doc, MARGIN, startY, CONTENT_W, chartH, chartPoints)
+      startY += chartH + 6
+    }
 
     autoTable(doc, {
       startY,

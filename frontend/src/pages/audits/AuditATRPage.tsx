@@ -8,7 +8,7 @@ import {
 } from '../../services/audits'
 import { downloadAuditReportPdf } from '../../utils/auditReportPdf'
 
-export default function AuditATRPage() {
+export default function AuditATRPage({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate()
   const [assignments, setAssignments] = useState<AuditAssignment[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -118,7 +118,7 @@ export default function AuditATRPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-4 md:p-6 space-y-6">
+    <div className={`${embedded ? 'max-w-none' : 'max-w-5xl'} mx-auto p-4 md:p-6 space-y-6`}>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Action Taken Report (ATR)</h1>
@@ -129,12 +129,15 @@ export default function AuditATRPage() {
             onClick={downloadPdf}
             disabled={!selectedId}
             className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            title="Download the full audit report including the ATR"
           >
-            <Download size={16} /> Download PDF
+            <Download size={16} /> Download Full Report
           </button>
-          <button onClick={() => navigate('/audits')} className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">
-            <ChevronLeft size={16} /> Audit Entry
-          </button>
+          {!embedded && (
+            <button onClick={() => navigate('/audits')} className="inline-flex items-center gap-2 px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">
+              <ChevronLeft size={16} /> Audit Entry
+            </button>
+          )}
         </div>
       </div>
 
@@ -152,6 +155,39 @@ export default function AuditATRPage() {
         ))}
         {assignments.length === 0 && <p className="text-gray-400 text-sm">No department assignments available for ATR.</p>}
       </div>
+
+      {/* Audit info header */}
+      {assignment && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="border rounded-xl p-4">
+            <div className="text-xs text-gray-500">Department</div>
+            <div className="font-semibold text-gray-800">{assignment.department_code} - {assignment.department_name}</div>
+          </div>
+          <div className="border rounded-xl p-4">
+            <div className="text-xs text-gray-500">Cycle</div>
+            <div className="font-semibold text-gray-800">{assignment.cycle_label || `Cycle ${assignment.cycle_number}`}</div>
+          </div>
+          <div className="border rounded-xl p-4">
+            <div className="text-xs text-gray-500">Auditor(s)</div>
+            <div className="space-y-1">
+              {assignment.auditors?.length ? (
+                assignment.auditors.map((au) => (
+                  <div key={au.id ?? au.staff_id} className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-gray-800">{au.name}</span>
+                    {au.department && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-xs font-medium">
+                        {au.department.short_name || au.department.code || au.department.name}
+                      </span>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <span className="text-gray-400 text-sm">—</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {assignment && atrRows.length === 0 && (
         <div className="border rounded-xl p-10 text-center text-gray-500">
@@ -180,6 +216,21 @@ export default function AuditATRPage() {
               </button>
             </div>
           </div>
+
+          {allSubmitted && (
+            <div className="border rounded-xl p-4 bg-green-50 border-green-200 flex flex-wrap items-center gap-3">
+              <CheckCircle2 className="text-green-600 shrink-0" size={20} />
+              <div className="flex-1 text-sm text-green-800 min-w-[200px]">
+                <span className="font-semibold">ATR submitted.</span> The full audit report (marks + ATR) is ready to download.
+              </div>
+              <button
+                onClick={downloadPdf}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors"
+              >
+                <Download size={16} /> Download Full Report
+              </button>
+            </div>
+          )}
 
           <div className="space-y-4">
             {atrRows.map((r) => {
