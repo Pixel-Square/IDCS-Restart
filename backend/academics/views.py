@@ -2945,9 +2945,10 @@ class StaffsPageView(APIView):
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
+        has_coe_role = user.roles.filter(name__iexact='COE').exists()
 
         # require page-view permission unless superuser
-        if not (user.is_superuser or has_ps_role or 'academics.view_staffs_page' in perms):
+        if not (user.is_superuser or has_ps_role or has_coe_role or 'academics.view_staffs_page' in perms):
             return Response({'detail': 'You do not have permission to view staffs page.'}, status=403)
 
         from .models import Department, StaffProfile
@@ -2958,6 +2959,7 @@ class StaffsPageView(APIView):
         # Debug: Log user permissions
         logger.info(f"StaffsPage - User: {user.username}, Superuser: {user.is_superuser}")
         logger.info(f"StaffsPage - Has PS role: {has_ps_role}")
+        logger.info(f"StaffsPage - Has COE role: {has_coe_role}")
         logger.info(f"StaffsPage - Permissions: {perms}")
         logger.info(f"StaffsPage - Has view_all_staff: {'academics.view_all_staff' in perms}")
         logger.info(f"StaffsPage - Has edit_staff: {'academics.edit_staff' in perms}")
@@ -2966,7 +2968,7 @@ class StaffsPageView(APIView):
         can_edit = user.is_superuser or has_ps_role or 'academics.edit_staff' in perms
         
         # Check if user can view all staff (determines if role filter should be shown)
-        can_view_all = user.is_superuser or has_ps_role or 'academics.view_all_staff' in perms
+        can_view_all = user.is_superuser or has_ps_role or has_coe_role or 'academics.view_all_staff' in perms
 
         include_non_teaching = str(request.query_params.get('include_non_teaching', 'false')).strip().lower() in {'1', 'true', 'yes'}
         can_include_non_teaching = bool(user.is_superuser or has_ps_role or can_edit or can_view_all)
@@ -8104,7 +8106,7 @@ class AllStaffListView(APIView):
     """Return all staff members from the database (not department-filtered).
     
     Used for listing all available staff to add to a department.
-    Requires academics.view_staffs_page permission.
+    Requires academics.view_staffs_page permission or COE/PS roles.
     """
     permission_classes = (IsAuthenticated,)
 
@@ -8112,9 +8114,10 @@ class AllStaffListView(APIView):
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
+        has_coe_role = user.roles.filter(name__iexact='COE').exists()
 
-        # Require page-view permission unless superuser
-        if not (user.is_superuser or has_ps_role or 'academics.view_staffs_page' in perms):
+        # Require page-view permission unless superuser, PS, or COE
+        if not (user.is_superuser or has_ps_role or has_coe_role or 'academics.view_staffs_page' in perms):
             return Response({'detail': 'You do not have permission to view staff list.'}, status=403)
 
         from .models import StaffProfile, DepartmentRole, AcademicYear

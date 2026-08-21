@@ -610,23 +610,43 @@ class CoeStudentsCourseMapView(APIView):
                     elective_students_by_year[key].append(student)
 
         mandatory_courses_by_dept_sem: dict[tuple[int, int], list] = defaultdict(list)
+        
+        # Build curriculum courses for all depts/sems matching the filter
+        # instead of just dept/sem pairs from sections with students
+        curriculum_filter_qs = CurriculumDepartment.objects.filter(
+            is_elective=False,
+        ).select_related('department', 'semester')
+        
+        if sem_number is not None:
+            curriculum_filter_qs = curriculum_filter_qs.filter(semester__number=sem_number)
+        
+        # If filtering by department, include courses for that department
+        if department_filter != 'ALL':
+            from academics.models import Department as AcademicsDepartment
+            matching_depts = list(
+                AcademicsDepartment.objects.filter(
+                    Q(short_name__iexact=department_filter)
+                    | Q(code__iexact=department_filter)
+                    | Q(name__iexact=department_filter)
+                )
+            )
+            if matching_depts:
+                curriculum_filter_qs = curriculum_filter_qs.filter(
+                    department_id__in=[d.id for d in matching_depts]
+                )
+        
+        # Populate mandatory_courses_by_dept_sem with ALL curriculum courses
+        for row in curriculum_filter_qs:
+            key = (getattr(row, 'department_id', None), getattr(row, 'semester_id', None))
+            mandatory_courses_by_dept_sem[key].append(row)
+        
+        # Also keep the section-based dept_sem_pairs for backward compatibility
+        # when sections have students
         dept_sem_pairs = {
             (getattr(getattr(getattr(sec, 'batch', None), 'course', None), 'department_id', None), getattr(sec, 'semester_id', None))
             for sec in section_rows
             if getattr(getattr(getattr(sec, 'batch', None), 'course', None), 'department_id', None) and getattr(sec, 'semester_id', None)
         }
-        if dept_sem_pairs:
-            dept_ids = {dept_id for dept_id, _ in dept_sem_pairs}
-            sem_ids = {sem_id for _, sem_id in dept_sem_pairs}
-            mandatory_qs = CurriculumDepartment.objects.filter(
-                is_elective=False,
-                department_id__in=dept_ids,
-                semester_id__in=sem_ids,
-            )
-            for row in mandatory_qs:
-                key = (getattr(row, 'department_id', None), getattr(row, 'semester_id', None))
-                if key in dept_sem_pairs:
-                    mandatory_courses_by_dept_sem[key].append(row)
 
         department_label_cache: dict[object, str | None] = {}
 
@@ -707,8 +727,49 @@ class CoeStudentsCourseMapView(APIView):
                     'is_arrear': False,
                 }
 
+        # Pre-populate dept_course_map with ALL curriculum courses from mandatory_courses_by_dept_sem
+        # This ensures courses are displayed even if they have no students assigned yet
+        for (dept_id, sem_id), courses in mandatory_courses_by_dept_sem.items():
+            # Find the department label for this dept_id
+            dept_obj = None
+            try:
+                from academics.models import Department as AcademicsDepartment
+                dept_obj = AcademicsDepartment.objects.get(id=dept_id)
+            except Exception:
+                pass
+            
+            if not dept_obj:
+                continue
+            
+            dept_name = _department_label_from_obj(dept_obj)
+            if not dept_name:
+                continue
+            
+            if department_filter != 'ALL' and dept_name != department_filter:
+                continue
+            
+            for mc in courses:
+                course_code = str(getattr(mc, 'course_code', '') or '').strip()
+                course_name = str(getattr(mc, 'course_name', '') or '').strip()
+                if not course_code and not course_name:
+                    continue
+                
+                # Skip dummy elective group placeholders
+                if not course_code and 'elective' in course_name.lower():
+                    continue
+                
+                course_key = f"{course_code}::{course_name}".strip(':')
+                # Only add if not already present (TA courses take precedence)
+                if course_key not in dept_course_map[dept_name]:
+                    dept_course_map[dept_name][course_key] = {
+                        'course_code': course_code,
+                        'course_name': course_name,
+                        'students_map': {},
+                    }
+
         # Include students from sections that lack a TeachingAssignment but have mandatory Curriculum courses
         for sec in section_rows:
+
             if not getattr(sec, 'batch_id', None) or not getattr(sec, 'semester_id', None):
                 continue
                 
