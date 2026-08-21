@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Edit2, Trash2, ToggleLeft, ToggleRight, Search, Save, RefreshCw, BarChart2, Calendar, Filter, Download } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
 import {
@@ -17,6 +17,9 @@ import {
   deleteLateEntryRecord,
 } from '../../services/staffRequests';
 import type { RequestTemplate, VacationConfirmSlot, VacationEntitlementRule, VacationSemester, VacationSlot } from '../../types/staffRequests';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import TemplateEditorModal from './TemplateEditorModal';
 
 interface DepartmentOption {
@@ -51,7 +54,7 @@ export default function TemplateManagementPage() {
   const [lateEntryStats, setLateEntryStats] = useState<any | null>(null);
   const [loadingLateEntry, setLoadingLateEntry] = useState(false);
   const [deletingLateRequestId, setDeletingLateRequestId] = useState<number | null>(null);
-  const [activeConfigTab, setActiveConfigTab] = useState<'templates' | 'vacation'>('templates');
+  const [activeConfigTab, setActiveConfigTab] = useState<'templates' | 'vacation' | 'vacation_analytics'>('templates');
   const [vacationRules, setVacationRules] = useState<VacationEntitlementRule[]>([]);
   const [vacationSemesters, setVacationSemesters] = useState<VacationSemester[]>([]);
   const [vacationSlots, setVacationSlots] = useState<VacationSlot[]>([]);
@@ -67,6 +70,16 @@ export default function TemplateManagementPage() {
   const [newSemesterName, setNewSemesterName] = useState('');
   const [newSemesterFrom, setNewSemesterFrom] = useState('');
   const [newSemesterTo, setNewSemesterTo] = useState('');
+
+  // Vacation Analytics state
+  const [vaMonth, setVaMonth] = useState(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`; });
+  const [vaDeptFilters, setVaDeptFilters] = useState<string[]>([]);
+  const [vaStatusFilter, setVaStatusFilter] = useState('');
+  const [vaRows, setVaRows] = useState<any[]>([]);
+  const [vaLoading, setVaLoading] = useState(false);
+  const [vaError, setVaError] = useState<string | null>(null);
+  const [vaSearch, setVaSearch] = useState('');
+  const [vaDeptStaffCounts, setVaDeptStaffCounts] = useState<Record<string, number>>({});
 
   const loadTemplates = async () => {
     setLoading(true);
@@ -86,7 +99,7 @@ export default function TemplateManagementPage() {
   }, []);
 
   useEffect(() => {
-    if (activeConfigTab === 'vacation') {
+    if (activeConfigTab === 'vacation' || activeConfigTab === 'vacation_analytics') {
       loadVacationSettings();
       loadVacationDepartments();
     }
@@ -488,6 +501,123 @@ export default function TemplateManagementPage() {
     run();
   }, [lateEntryMonth, selectedStaff?.id]);
 
+  // ── Vacation Analytics ──────────────────────────────────────────────────────
+  const loadVacationAnalytics = async (overrideMonth?: string) => {
+    const m = overrideMonth || vaMonth;
+    if (!m) { setVaError('Please select a month'); return; }
+    setVaLoading(true);
+    setVaError(null);
+    try {
+      const targetForms = [
+        'Vacation Cancellation Form - SPL',
+        'Vacation Application - SPL',
+        'Vacation Application',
+        'Vacation Cancellation Form'
+      ];
+      const [year, month] = m.split('-').map(Number);
+      
+      // Fetch requests and settings concurrently
+      const [res, settingsData] = await Promise.all([
+        apiClient.get(`${getApiBase()}/api/staff-requests/requests/vacation_analytics/`, {
+          params: { year, month },
+        }),
+        getVacationSettings().catch(() => ({ slots: [], confirm_slots: [], semesters: [] }))
+      ]);
+
+      const allRows = res.data?.results || res.data?.rows || res.data || [];
+      const filteredRows = allRows.filter((r: any) => {
+        const tName = r.template?.name || r.template_name;
+        return targetForms.includes(tName);
+      });
+      
+      const semesters = settingsData.semesters || [];
+      const slots = settingsData.slots || [];
+      const confirmSlots = settingsData.confirm_slots || [];
+
+      // Build quick lookups
+      const semMap = new Map(semesters.map((s: any) => [s.id, s.name]));
+      const slotMap = new Map();
+      slots.forEach((s: any) => {
+        slotMap.set(s.id, {
+          name: s.slot_name,
+          from: s.from_date,
+          to: s.to_date,
+          semester: semMap.get(s.semester_id) || '-'
+        });
+      });
+      confirmSlots.forEach((s: any) => {
+        slotMap.set(s.id, {
+          name: s.slot_name || 'Compulsory Slot',
+          from: s.from_date,
+          to: s.to_date,
+          semester: 'Compulsory'
+        });
+      });
+
+      const rows = filteredRows.map((r: any) => {
+        // applicant can be a nested object
+        const app = typeof r.applicant === 'object' && r.applicant !== null ? r.applicant : {};
+        const dept = typeof app.department === 'object' && app.department !== null ? app.department.name : (app.department || r.applicant_department || '-');
+        
+        let fd = r.form_data || {};
+        if (typeof fd === 'string') {
+          try { fd = JSON.parse(fd); } catch (e) { fd = {}; }
+        }
+        r.form_data = fd; // Keep parsed version for the modal view
+        
+        // Try to map slot_id or slot_ids
+        let mappedSlotName = '-';
+        let mappedDateRange = '-';
+        let mappedSemester = '-';
+
+        // It could be an array of slot_ids or a single slot_id, or comma-separated string
+        let sIds: any[] = [];
+        if (fd.slot_ids && Array.isArray(fd.slot_ids)) sIds = fd.slot_ids;
+        else if (fd.slot_ids) sIds = String(fd.slot_ids).split(',');
+        else if (fd.slot_id) sIds = [fd.slot_id];
+        
+        if (sIds.length > 0) {
+          const slotInfos = sIds.map((id: any) => slotMap.get(Number(id))).filter(Boolean);
+          if (slotInfos.length > 0) {
+            mappedSlotName = slotInfos.map(s => s.name).join(', ');
+            mappedDateRange = slotInfos.map(s => `${s.from} → ${s.to}`).join(' | ');
+            mappedSemester = Array.from(new Set(slotInfos.map(s => s.semester))).join(', ');
+          }
+        }
+
+        // Fallbacks to raw form data if slot map fails
+        const fromD = fd.from_date || fd.start_date || fd.date;
+        const toD = fd.to_date || fd.end_date || fd.date;
+
+        if (mappedSlotName === '-') mappedSlotName = fd.slot_name || fd.slot || '-';
+        if (mappedDateRange === '-') {
+          mappedDateRange = fromD && toD && fromD !== toD
+            ? `${fromD} → ${toD}`
+            : (fromD || toD || '-');
+        }
+        if (mappedSemester === '-') mappedSemester = fd.semester || '-';
+
+        return {
+          ...r,
+          staff_name: app.name || app.full_name || app.username || r.applicant_name || (typeof r.applicant === 'string' ? r.applicant : '-'),
+          staff_id: app.staff_id || r.applicant_staff_id || (typeof r.applicant_id === 'string' || typeof r.applicant_id === 'number' ? r.applicant_id : '-'),
+          department: dept,
+          slot_name: mappedSlotName,
+          slot_date_range: mappedDateRange,
+          status: r.status || '-',
+          applied_on: r.created_at ? r.created_at.slice(0, 10) : '-',
+          semester: mappedSemester,
+        };
+      });
+      setVaRows(rows);
+      setVaDeptStaffCounts(res.data?.dept_staff_counts || {});
+    } catch (err: any) {
+      setVaError(err?.response?.data?.detail || err?.message || 'Failed to load vacation analytics');
+    } finally {
+      setVaLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -503,12 +633,16 @@ export default function TemplateManagementPage() {
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">
-                {activeConfigTab === 'templates' ? 'Request Templates' : 'Vacation Settings'}
+                {activeConfigTab === 'templates' ? 'Request Templates'
+                  : activeConfigTab === 'vacation' ? 'Vacation Settings'
+                  : 'Vacation Analytics'}
               </h2>
               <p className="text-sm text-gray-600 mt-1">
                 {activeConfigTab === 'templates'
                   ? 'Create and manage dynamic forms for staff requests (Leaves, ODs, Permissions)'
-                  : 'Configure common vacation eligibility and slot windows for all staff'}
+                  : activeConfigTab === 'vacation'
+                  ? 'Configure common vacation eligibility and slot windows for all staff'
+                  : 'Monthly overview: which staff applied to which vacation slot and their request status'}
               </p>
             </div>
             {activeConfigTab === 'templates' ? (
@@ -519,14 +653,12 @@ export default function TemplateManagementPage() {
                 <Plus size={20} />
                 Create Template
               </button>
-            ) : (
-              <></>
-            )}
+            ) : null}
           </div>
         </div>
 
         <div className="border-b border-gray-200 px-6">
-          <div className="flex gap-4">
+          <div className="flex gap-1">
             <button
               onClick={() => setActiveConfigTab('templates')}
               className={`py-3 px-4 font-medium border-b-2 transition-colors ${
@@ -538,7 +670,7 @@ export default function TemplateManagementPage() {
               Request Templates
             </button>
             <button
-              onClick={() => setActiveConfigTab('vacation')}
+              onClick={() => { setActiveConfigTab('vacation'); }}
               className={`py-3 px-4 font-medium border-b-2 transition-colors ${
                 activeConfigTab === 'vacation'
                   ? 'border-blue-600 text-blue-600'
@@ -546,6 +678,17 @@ export default function TemplateManagementPage() {
               }`}
             >
               Vacation Settings
+            </button>
+            <button
+              onClick={() => { setActiveConfigTab('vacation_analytics'); loadVacationAnalytics(); }}
+              className={`py-3 px-4 font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+                activeConfigTab === 'vacation_analytics'
+                  ? 'border-purple-600 text-purple-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <BarChart2 size={16} />
+              Vacation Analytics
             </button>
           </div>
         </div>
@@ -641,6 +784,26 @@ export default function TemplateManagementPage() {
                 ))}
               </div>
             )
+          ) : activeConfigTab === 'vacation_analytics' ? (
+            <VacationAnalyticsPanel
+              vaMonth={vaMonth}
+              setVaMonth={setVaMonth}
+              vaDeptFilters={vaDeptFilters}
+              setVaDeptFilters={setVaDeptFilters}
+              vaStatusFilter={vaStatusFilter}
+              setVaStatusFilter={setVaStatusFilter}
+              vaSearch={vaSearch}
+              setVaSearch={setVaSearch}
+              vaRows={vaRows}
+              vaLoading={vaLoading}
+              vaError={vaError}
+              onLoad={loadVacationAnalytics}
+              vacationSemesters={vacationSemesters}
+              vacationSlots={vacationSlots}
+              vacationConfirmSlots={vacationConfirmSlots}
+              vacationDepartments={vacationDepartments}
+              vaDeptStaffCounts={vaDeptStaffCounts}
+            />
           ) : vacationLoading ? (
             <div className="text-sm text-gray-600">Loading vacation settings...</div>
           ) : (
@@ -1351,6 +1514,608 @@ export default function TemplateManagementPage() {
           }}
           onSaved={handleSaved}
         />
+      )}
+    </div>
+  );
+}
+
+// ── Vacation Analytics Panel ──────────────────────────────────────────────────
+interface VacationAnalyticsPanelProps {
+  vaMonth: string;
+  setVaMonth: (m: string) => void;
+  vaDeptFilters: string[];
+  setVaDeptFilters: (d: string[]) => void;
+  vaStatusFilter: string;
+  setVaStatusFilter: (s: string) => void;
+  vaSearch: string;
+  setVaSearch: (s: string) => void;
+  vaRows: any[];
+  vaLoading: boolean;
+  vaError: string | null;
+  onLoad: (month?: string) => void;
+  vacationSemesters: VacationSemester[];
+  vacationSlots: VacationSlot[];
+  vacationConfirmSlots: VacationConfirmSlot[];
+  vacationDepartments: any[];
+  vaDeptStaffCounts: Record<string, number>;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  approved: 'bg-green-100 text-green-800 border-green-200',
+  pending:  'bg-yellow-100 text-yellow-800 border-yellow-200',
+  rejected: 'bg-red-100 text-red-800 border-red-200',
+};
+
+function VacationAnalyticsPanel({
+  vaMonth, setVaMonth,
+  vaDeptFilters, setVaDeptFilters,
+  vaStatusFilter, setVaStatusFilter,
+  vaSearch, setVaSearch,
+  vaRows, vaLoading, vaError, onLoad,
+  vacationSemesters,
+  vacationSlots,
+  vacationConfirmSlots,
+  vacationDepartments,
+  vaDeptStaffCounts,
+}: VacationAnalyticsPanelProps) {
+  const [selectedForm, setSelectedForm] = useState<any>(null);
+
+  // Active Semester Calculations
+  const activeSemester = React.useMemo(() => {
+    return vacationSemesters.find(sem => sem.is_active);
+  }, [vacationSemesters]);
+
+  const semSlots = React.useMemo(() => {
+    if (!activeSemester) return [];
+    return vacationSlots.filter(s => (s.semester || '').toLowerCase() === (activeSemester.name || '').toLowerCase());
+  }, [vacationSlots, activeSemester]);
+
+  const semConfirmSlots = React.useMemo(() => {
+    if (!activeSemester) return [];
+    return vacationConfirmSlots.filter(s => (s.semester || '').toLowerCase() === (activeSemester.name || '').toLowerCase());
+  }, [vacationConfirmSlots, activeSemester]);
+
+  // Export handlers
+  const downloadExcel = () => {
+    // 1. Department Summary Sheet
+    const summaryData = deptBreakdown.map(d => ({
+      'Department': d.dept,
+      'Total Applications': d.total,
+      'Slot Name': d.slotsList,
+      'Approved': d.approved,
+      'Pending': d.pending,
+      'Rejected': d.rejected,
+      'Approval Rate': d.total ? `${Math.round((d.approved / d.total) * 100)}%` : '0%'
+    }));
+    
+    // 2. Staff Applications Sheet
+    const appsData = filtered.map((r) => ({
+      'Staff Name': r.staff_name,
+      'Staff ID': r.staff_id,
+      'Department': r.department,
+      'Slot Name': r.slot_name,
+      'Semester': r.semester,
+      'Applied On': r.applied_on,
+      'Status': r.status,
+    }));
+    
+    const wb = (XLSX as any).utils.book_new();
+    
+    const wsSummary = (XLSX as any).utils.json_to_sheet(summaryData);
+    (XLSX as any).utils.book_append_sheet(wb, wsSummary, 'Department Summary');
+    
+    const wsApps = (XLSX as any).utils.json_to_sheet(appsData);
+    (XLSX as any).utils.book_append_sheet(wb, wsApps, 'Staff Applications');
+    
+    (XLSX as any).writeFile(wb, `vacation_analytics_${vaMonth}.xlsx`);
+  };
+
+  const downloadPDF = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    
+    // Title
+    doc.setFontSize(16);
+    doc.setTextColor(31, 41, 55);
+    doc.text(`Vacation Analytics Report - ${vaMonth}`, 14, 15);
+    doc.setFontSize(10);
+    doc.setTextColor(107, 114, 128);
+    doc.text(`Exported: ${new Date().toLocaleDateString()}`, 14, 21);
+
+    // Section 1: Department Summary Table
+    doc.setFontSize(12);
+    doc.setTextColor(55, 65, 81);
+    doc.text(`1. Department-wise Summary`, 14, 30);
+
+    const summaryHeaders = [['Department', 'Total', 'Slot Name', 'Approved', 'Pending', 'Rejected', 'Approval %']];
+    const summaryBody = deptBreakdown.map(d => [
+      d.dept,
+      d.total,
+      d.slotsList,
+      d.approved,
+      d.pending,
+      d.rejected,
+      d.total ? `${Math.round((d.approved / d.total) * 100)}%` : '-'
+    ]);
+
+    autoTable(doc, {
+      head: summaryHeaders,
+      body: summaryBody,
+      startY: 34,
+      theme: 'striped',
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] }, // Indigo matching UI
+      styles: { fontSize: 8, cellPadding: 2.5 },
+    });
+
+    const firstTableBottom = (doc as any).lastAutoTable?.finalY ?? 100;
+
+    // Section 2: Staff Applications Table
+    doc.setFontSize(12);
+    doc.setTextColor(55, 65, 81);
+    doc.text(`2. Staff Vacation Applications`, 14, firstTableBottom + 12);
+
+    const appsHeaders = [['Staff', 'Department', 'Slot / Semester', 'Applied On', 'Status']];
+    const appsBody = filtered.map(r => [
+      `${r.staff_name}\n(${r.staff_id})`,
+      r.department,
+      `${r.slot_name}${r.semester && r.semester !== '-' ? `\n${r.semester}` : ''}`,
+      r.applied_on,
+      r.status.toUpperCase()
+    ]);
+
+    autoTable(doc, {
+      head: appsHeaders,
+      body: appsBody,
+      startY: firstTableBottom + 16,
+      theme: 'striped',
+      headStyles: { fillColor: [124, 58, 237], textColor: [255, 255, 255] }, // Purple matching UI
+      styles: { fontSize: 8, cellPadding: 2.5 },
+      columnStyles: {
+        0: { cellWidth: 50 },
+        1: { cellWidth: 40 },
+        2: { cellWidth: 45 },
+        3: { cellWidth: 25 },
+        4: { cellWidth: 25 }
+      }
+    });
+
+    doc.save(`vacation_analytics_${vaMonth}.pdf`);
+  };
+
+  // Derived dept list from rows
+  const depts = React.useMemo(() => {
+    const s = new Set<string>();
+    vaRows.forEach(r => r.department && s.add(r.department));
+    return Array.from(s).sort();
+  }, [vaRows]);
+
+  // Filtered rows
+  const filtered = React.useMemo(() => {
+    return vaRows.filter(r => {
+      if (vaDeptFilters.length > 0 && !vaDeptFilters.includes(r.department)) return false;
+      if (vaStatusFilter && (r.status || '').toLowerCase() !== vaStatusFilter.toLowerCase()) return false;
+      if (vaSearch) {
+        const q = vaSearch.toLowerCase();
+        return (
+          String(r.staff_name || '').toLowerCase().includes(q) ||
+          String(r.staff_id || '').toLowerCase().includes(q) ||
+          String(r.department || '').toLowerCase().includes(q) ||
+          String(r.slot_name || '').toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [vaRows, vaDeptFilters, vaStatusFilter, vaSearch]);
+
+  // Summary counts
+  const total = filtered.length;
+  const approved = filtered.filter(r => (r.status || '').toLowerCase() === 'approved').length;
+  const pending  = filtered.filter(r => (r.status || '').toLowerCase() === 'pending').length;
+  const rejected = filtered.filter(r => (r.status || '').toLowerCase() === 'rejected').length;
+
+  // Dept-wise breakdown
+  const deptBreakdown = React.useMemo(() => {
+    const map: Record<string, { dept: string; total: number; approved: number; pending: number; rejected: number; slots: Set<string>; approvedStaff: Set<string> }> = {};
+    filtered.forEach(r => {
+      const d = r.department || 'N/A';
+      if (!map[d]) {
+        map[d] = {
+          dept: d,
+          total: 0,
+          approved: 0,
+          pending: 0,
+          rejected: 0,
+          slots: new Set<string>(),
+          approvedStaff: new Set<string>()
+        };
+      }
+      map[d].total++;
+      if (r.slot_name && r.slot_name !== '-') {
+        map[d].slots.add(r.slot_name);
+      }
+      const st = (r.status || '').toLowerCase();
+      if (st === 'approved') {
+        map[d].approved++;
+        if (r.staff_id && r.staff_id !== '-') {
+          map[d].approvedStaff.add(r.staff_id);
+        }
+      }
+      else if (st === 'pending') map[d].pending++;
+      else if (st === 'rejected') map[d].rejected++;
+    });
+    return Object.values(map).map(item => {
+      const totalStaff = vaDeptStaffCounts[item.dept] || 0;
+      const approvedUnique = item.approvedStaff.size;
+      const rate = totalStaff > 0
+        ? Math.round((approvedUnique / totalStaff) * 100)
+        : (item.total ? Math.round((item.approved / item.total) * 100) : 0);
+        
+      return {
+        ...item,
+        slotsList: Array.from(item.slots).join(', ') || '-',
+        rate,
+        totalStaff
+      };
+    }).sort((a, b) => b.total - a.total);
+  }, [filtered, vaDeptStaffCounts]);
+
+  return (
+    <div className="space-y-6">
+      {/* Active Semester Details Display Box */}
+      {activeSemester ? (
+        <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-100 rounded-xl p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="bg-purple-100 text-purple-800 text-xs px-2.5 py-1 rounded-full font-bold uppercase tracking-wider">Current Semester</span>
+            <h3 className="text-base font-bold text-gray-800">{activeSemester.name}</h3>
+            <span className="text-xs text-gray-500">({activeSemester.from_date} to {activeSemester.to_date})</span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Regular Slots */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Vacation Slots</h4>
+              {semSlots.length === 0 ? (
+                <p className="text-sm text-gray-500 italic">No regular slots configured</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {semSlots.map((s, idx) => (
+                    <div key={idx} className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm text-xs flex flex-col">
+                      <span className="font-semibold text-gray-800">{s.slot_name}</span>
+                      <span className="text-gray-500 text-[10px] mt-0.5">{s.from_date} to {s.to_date}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Compulsory Slots */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Compulsory Slots (Auto Vacation by Department)</h4>
+              {semConfirmSlots.length === 0 ? (
+                <p className="text-sm text-gray-500 italic">No compulsory slots configured</p>
+              ) : (
+                <div className="space-y-2">
+                  {semConfirmSlots.map((s, idx) => {
+                    const deptNames = (s.department_ids || []).map((did: any) => {
+                      const dept = vacationDepartments.find(d => Number(d.id) === Number(did));
+                      return dept ? dept.name : `Dept #${did}`;
+                    }).join(', ');
+                    
+                    return (
+                      <div key={idx} className="bg-white border border-gray-200 rounded-lg p-2 shadow-sm text-xs flex flex-col gap-1">
+                        <div className="flex justify-between items-center">
+                          <span className="font-semibold text-gray-800">{s.slot_name || 'Compulsory Slot'}</span>
+                          <span className="text-gray-500 text-[10px]">{s.from_date} to {s.to_date}</span>
+                        </div>
+                        {deptNames && (
+                          <div className="text-[10px] text-gray-500 border-t pt-1 mt-1 truncate" title={deptNames}>
+                            <strong>Departments:</strong> {deptNames}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 text-center text-sm text-gray-500">
+          No active semester configured. Define an active semester in the <span className="font-semibold text-purple-600">Vacation Settings</span> tab.
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-end bg-gray-50 rounded-lg p-4 border border-gray-200">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-gray-600">Month</label>
+          <input
+            type="month"
+            value={vaMonth}
+            onChange={e => setVaMonth(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-gray-600">Department</label>
+          <div className="relative group min-w-[160px]">
+            <div className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white cursor-pointer hover:border-gray-400 h-[38px] flex items-center">
+              <span className="text-gray-600 block truncate">
+                {vaDeptFilters.length === 0 ? 'All Departments' : `${vaDeptFilters.length} selected`}
+              </span>
+            </div>
+            <div className="absolute left-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-xl z-50 hidden group-hover:block max-h-60 overflow-y-auto p-2">
+              <label className="flex items-center gap-2 p-1.5 hover:bg-gray-50 rounded cursor-pointer border-b border-gray-100 mb-1">
+                <input
+                  type="checkbox"
+                  checked={vaDeptFilters.length === 0}
+                  onChange={() => setVaDeptFilters([])}
+                  className="rounded border-gray-300 text-purple-500 focus:ring-purple-400"
+                />
+                <span className="text-sm font-medium text-gray-700">Clear All</span>
+              </label>
+              {depts.map((d) => (
+                <label key={d} className="flex items-center gap-2 p-1.5 hover:bg-gray-50 rounded cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={vaDeptFilters.includes(d)}
+                    onChange={(e) => {
+                      if (e.target.checked) setVaDeptFilters([...vaDeptFilters, d]);
+                      else setVaDeptFilters(vaDeptFilters.filter(x => x !== d));
+                    }}
+                    className="rounded border-gray-300 text-purple-500 focus:ring-purple-400"
+                  />
+                  <span className="text-sm text-gray-700">{d}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-gray-600">Status</label>
+          <select
+            value={vaStatusFilter}
+            onChange={e => setVaStatusFilter(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          >
+            <option value="">All Statuses</option>
+            <option value="approved">Approved</option>
+            <option value="pending">Pending</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1 flex-1 min-w-[180px]">
+          <label className="text-xs font-medium text-gray-600">Search</label>
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Name / Staff ID / Department..."
+              value={vaSearch}
+              onChange={e => setVaSearch(e.target.value)}
+              className="w-full border border-gray-300 rounded-lg pl-8 pr-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onLoad(vaMonth)}
+            disabled={vaLoading}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 text-sm font-medium"
+          >
+            <RefreshCw size={14} className={vaLoading ? 'animate-spin' : ''} />
+            {vaLoading ? 'Loading…' : 'Load Data'}
+          </button>
+          {filtered.length > 0 && (
+            <>
+              <button
+                onClick={downloadExcel}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
+              >
+                <Download size={14} />
+                Excel
+              </button>
+              <button
+                onClick={downloadPDF}
+                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
+              >
+                <Download size={14} />
+                PDF
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {vaError && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{vaError}</div>
+      )}
+
+      {vaRows.length === 0 && !vaLoading && !vaError ? (
+        <div className="text-center py-16 text-gray-400">
+          <BarChart2 size={48} className="mx-auto mb-3 opacity-30" />
+          <p className="text-sm">Select a month and click <span className="font-medium text-purple-600">Load Data</span></p>
+        </div>
+      ) : (
+        <>
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {[
+              { label: 'Total Applications', value: total, color: 'bg-purple-50 text-purple-700 border-purple-200' },
+              { label: 'Approved', value: approved, color: 'bg-green-50 text-green-700 border-green-200' },
+              { label: 'Pending', value: pending, color: 'bg-yellow-50 text-yellow-700 border-yellow-200' },
+              { label: 'Rejected', value: rejected, color: 'bg-red-50 text-red-700 border-red-200' },
+            ].map(c => (
+              <div key={c.label} className={`rounded-lg border p-4 ${c.color}`}>
+                <p className="text-2xl font-bold">{c.value}</p>
+                <p className="text-xs mt-0.5 opacity-80">{c.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Dept-wise breakdown */}
+          {deptBreakdown.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-700">Department-wise Summary</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50 text-gray-600">
+                      <th className="text-left px-4 py-2">Department</th>
+                      <th className="text-right px-4 py-2">Total</th>
+                      <th className="text-left px-4 py-2">Slot Name</th>
+                      <th className="text-right px-4 py-2 text-green-700">Approved</th>
+                      <th className="text-right px-4 py-2 text-yellow-700">Pending</th>
+                      <th className="text-right px-4 py-2 text-red-700">Rejected</th>
+                      <th className="text-right px-4 py-2 text-gray-500">Approval %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deptBreakdown.map(d => (
+                      <tr key={d.dept} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-2 font-medium text-gray-900">{d.dept}</td>
+                        <td className="px-4 py-2 text-right font-semibold">{d.total}</td>
+                        <td className="px-4 py-2 text-left text-gray-600">{d.slotsList}</td>
+                        <td className="px-4 py-2 text-right text-green-700 font-medium">{d.approved}</td>
+                        <td className="px-4 py-2 text-right text-yellow-700 font-medium">{d.pending}</td>
+                        <td className="px-4 py-2 text-right text-red-700 font-medium">{d.rejected}</td>
+                        <td className="px-4 py-2 text-right text-gray-500">
+                          {d.rate !== undefined ? `${d.rate}%` : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Employee-wise table */}
+          <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700">
+                Staff Vacation Applications ({filtered.length})
+              </h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50 text-gray-600">
+                    <th className="text-left px-4 py-2">Staff</th>
+                    <th className="text-left px-4 py-2">Department</th>
+                    <th className="text-left px-4 py-2">Slot / Semester</th>
+                    <th className="text-left px-4 py-2">Applied On</th>
+                    <th className="text-left px-4 py-2">Status</th>
+                    <th className="text-left px-4 py-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.length === 0 ? (
+                    <tr><td colSpan={6} className="text-center py-8 text-gray-400">No records match the filters</td></tr>
+                  ) : filtered.map((r, i) => (
+                    <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-2">
+                        <div className="font-medium text-gray-900">{r.staff_name}</div>
+                        <div className="text-xs text-gray-500">{r.staff_id}</div>
+                      </td>
+                      <td className="px-4 py-2 text-gray-700">{r.department}</td>
+                      <td className="px-4 py-2">
+                        <div className="text-gray-900">{r.slot_name}</div>
+                        {r.semester && r.semester !== '-' && (
+                          <div className="text-xs text-gray-500">{r.semester}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{r.applied_on}</td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border capitalize ${STATUS_COLORS[(r.status || '').toLowerCase()] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                          {r.status || '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2">
+                        <button
+                          onClick={() => setSelectedForm(r)}
+                          className="px-3 py-1 bg-white border border-gray-200 rounded text-xs font-medium hover:bg-gray-50 text-purple-600 transition-colors shadow-sm"
+                        >
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {selectedForm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl flex flex-col max-h-full">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white rounded-t-lg">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{selectedForm.template_name || 'Request Form'}</h3>
+                <p className="text-sm text-gray-500">Applicant: {selectedForm.staff_name} ({selectedForm.staff_id})</p>
+              </div>
+              <button
+                onClick={() => setSelectedForm(null)}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto">
+              <div className="mb-6">
+                <h4 className="text-xs font-semibold text-gray-400 mb-3 uppercase tracking-wider">Form Fields</h4>
+                <div className="bg-gray-50 rounded-lg border border-gray-200 divide-y divide-gray-100 overflow-hidden">
+                  {Object.entries(selectedForm.form_data || {}).map(([key, value]) => {
+                    if (value === null || value === undefined) return null;
+                    
+                    const label = key
+                      .replace(/_/g, ' ')
+                      .replace(/\b\w/g, c => c.toUpperCase());
+                      
+                    let formattedValue = '';
+                    if (Array.isArray(value)) {
+                      formattedValue = value.map(v => String(v)).join(', ');
+                    } else if (typeof value === 'boolean') {
+                      formattedValue = value ? 'Yes' : 'No';
+                    } else {
+                      formattedValue = String(value);
+                    }
+                    
+                    return (
+                      <div key={key} className="grid grid-cols-3 gap-4 px-4 py-3 text-sm hover:bg-gray-100/50 transition-colors">
+                        <span className="font-semibold text-gray-500 col-span-1">
+                          {label}
+                        </span>
+                        <span className="text-gray-800 col-span-2 break-words font-medium">
+                          {formattedValue || '-'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {(!selectedForm.form_data || Object.keys(selectedForm.form_data).length === 0) && (
+                    <div className="p-4 text-center text-gray-400 italic">No details submitted.</div>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm mt-6">
+                <div>
+                  <span className="text-gray-500 block">Status</span>
+                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border capitalize mt-1 ${STATUS_COLORS[(selectedForm.status || '').toLowerCase()] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
+                    {selectedForm.status || '-'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-500 block">Applied On</span>
+                  <span className="font-medium text-gray-900 mt-1 block">{selectedForm.applied_on}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

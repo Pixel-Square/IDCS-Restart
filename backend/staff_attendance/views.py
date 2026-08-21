@@ -496,6 +496,249 @@ class AttendanceRecordViewSet(viewsets.ModelViewSet):
 
         return Response(analytics)
 
+    @action(detail=False, methods=['get'], url_path='monthly-lop-dashboard')
+    def monthly_lop_dashboard(self, request):
+        """
+        Monthly LOP (Loss of Pay) dashboard.
+        Returns total LOP days, department-wise summary, and employee-wise LOP details
+        for a given month. LOP = absent days (excl. holidays/Sundays) not covered by
+        approved leave requests.
+        Query params: month (YYYY-MM), department_id (optional), export=excel
+        """
+        try:
+            return self._monthly_lop_dashboard_inner(request)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _monthly_lop_dashboard_inner(self, request):
+        import calendar as cal_module
+        from datetime import timedelta
+        from academics.models import StaffProfile
+
+        month_str = request.query_params.get('month')
+        department_id_raw = request.query_params.get('department_id')
+        export_format = request.query_params.get('export', 'json')
+        
+        dept_ids = []
+        if department_id_raw:
+            dept_ids = [int(x) for x in department_id_raw.split(',') if x.strip().isdigit()]
+
+        if not month_str:
+            return Response({'error': 'month parameter is required (YYYY-MM)'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            parts = month_str.split('-')
+            year_val, month_val = int(parts[0]), int(parts[1])
+            month_start = date(year_val, month_val, 1)
+            month_end = date(year_val, month_val, cal_module.monthrange(year_val, month_val)[1])
+        except Exception:
+            return Response({'error': 'Invalid month format. Use YYYY-MM'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ---- Build holiday map ----
+        holidays_qs = Holiday.objects.filter(date__gte=month_start, date__lte=month_end).prefetch_related('departments')
+        global_holidays = set()
+        dept_holidays_map = {}
+        for h in holidays_qs:
+            dept_list = list(h.departments.values_list('id', flat=True))
+            if not dept_list:
+                global_holidays.add(h.date)
+            else:
+                for did in dept_list:
+                    dept_holidays_map.setdefault(did, set()).add(h.date)
+
+        def _is_holiday(d_date, d_id):
+            return d_date in global_holidays or (d_id and d_id in dept_holidays_map and d_date in dept_holidays_map[d_id])
+
+        # ---- Fetch active staff ----
+        staff_qs = StaffProfile.objects.filter(
+            status='ACTIVE', user__isnull=False
+        ).select_related('user', 'department')
+        
+        if dept_ids:
+            staff_qs = staff_qs.filter(department_id__in=dept_ids)
+            
+        staff_qs = staff_qs.order_by('department__name', 'user__first_name', 'user__username')
+
+        staff_users = list(staff_qs)
+        staff_user_ids = [sp.user_id for sp in staff_users]
+        dept_map = {sp.user_id: (sp.department_id if sp.department else None) for sp in staff_users}
+
+        if not staff_user_ids:
+            return Response({
+                'month': month_str,
+                'date_range': {'from_date': str(month_start), 'to_date': str(month_end)},
+                'summary': {'total_lop_days': 0.0, 'total_staff': 0, 'staff_with_lop': 0},
+                'department_summary': [],
+                'employee_details': [],
+            })
+
+        # ---- Build absent-units map from attendance records ----
+        absent_units_map = {uid: {} for uid in staff_user_ids}
+        att_records = AttendanceRecord.objects.filter(
+            user_id__in=staff_user_ids,
+            date__gte=month_start,
+            date__lte=month_end,
+        )
+        for record in att_records:
+            if record.date.weekday() == 6:   # Skip Sundays
+                continue
+            d_id = dept_map.get(record.user_id)
+            if _is_holiday(record.date, d_id):
+                continue
+            sv = (record.status or '').lower()
+            if sv == 'absent':
+                absent_units_map[record.user_id][record.date] = 1.0
+            elif sv in ('half_day', 'partial'):
+                absent_units_map[record.user_id][record.date] = 0.5
+            # present / cl / od / col / leave = 0 LOP units
+
+        # ---- Subtract approved leave requests (safe, no FK traversal) ----
+        try:
+            from staff_requests.models import StaffRequest
+            approved_requests = StaffRequest.objects.filter(
+                applicant_id__in=staff_user_ids,
+                status='approved',
+            ).only('applicant_id', 'form_data', 'template_id')
+
+            for req in approved_requests:
+                form_data = req.form_data or {}
+                start_f = (
+                    form_data.get('from_date')
+                    or form_data.get('start_date')
+                    or form_data.get('date')
+                )
+                end_f = form_data.get('to_date') or form_data.get('end_date') or start_f
+                if not start_f:
+                    continue
+                try:
+                    req_start = datetime.fromisoformat(str(start_f)).date()
+                    req_end = datetime.fromisoformat(str(end_f)).date()
+                except Exception:
+                    continue
+                if req_end < month_start or req_start > month_end:
+                    continue
+                cur = max(req_start, month_start)
+                end_bound = min(req_end, month_end)
+                while cur <= end_bound:
+                    d_id = dept_map.get(req.applicant_id)
+                    if cur.weekday() != 6 and not _is_holiday(cur, d_id):
+                        if absent_units_map.get(req.applicant_id, {}).get(cur, 0.0) > 0:
+                            absent_units_map[req.applicant_id][cur] = 0.0
+                    cur += timedelta(days=1)
+        except Exception:
+            # If leave-subtraction fails for any reason, continue with raw absent count
+            pass
+
+        # ---- Build per-staff LOP totals ----
+        lop_map = {
+            uid: round(sum(v for v in absent_units_map[uid].values()), 2)
+            for uid in staff_user_ids
+        }
+
+        # ---- Compile employee-wise details ----
+        dept_summary = {}
+        employee_details = []
+
+        for sp in staff_users:
+            uid = sp.user_id
+            lop_days = lop_map.get(uid, 0.0)
+            dept_name = sp.department.name if sp.department else 'N/A'
+            dept_code = getattr(sp.department, 'code', '') if sp.department else ''
+
+            employee_details.append({
+                'staff_user_id': uid,
+                'staff_id': sp.staff_id or '',
+                'name': sp.user.get_full_name() or sp.user.username,
+                'email': sp.user.email or '',
+                'department': dept_name,
+                'department_code': dept_code or '',
+                'lop_days': lop_days,
+            })
+
+            if dept_name not in dept_summary:
+                dept_summary[dept_name] = {
+                    'department': dept_name,
+                    'department_code': dept_code or '',
+                    'total_lop_days': 0.0,
+                    'total_staff': 0,
+                    'staff_with_lop': 0,
+                }
+            dept_summary[dept_name]['total_lop_days'] = round(
+                dept_summary[dept_name]['total_lop_days'] + lop_days, 2
+            )
+            dept_summary[dept_name]['total_staff'] += 1
+            if lop_days > 0:
+                dept_summary[dept_name]['staff_with_lop'] += 1
+
+        total_lop = round(sum(lop_map.values()), 2)
+        staff_with_lop_count = sum(1 for v in lop_map.values() if v > 0)
+        dept_summary_list = sorted(dept_summary.values(), key=lambda x: -x['total_lop_days'])
+
+        # ---- Excel export ----
+        if export_format == 'excel':
+            from django.http import HttpResponse
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill
+            from openpyxl.utils import get_column_letter
+
+            wb = Workbook()
+            ws1 = wb.active
+            ws1.title = "LOP Summary"
+            ws1.append(['Month', month_str])
+            ws1.append(['Total LOP Days (All Staff)', total_lop])
+            ws1.append(['Staff with LOP', staff_with_lop_count])
+            ws1.append([])
+            ws1.append(['Department', 'Total Staff', 'Staff with LOP', 'Total LOP Days'])
+            hdr_fill = PatternFill(start_color='E2E8F0', end_color='E2E8F0', fill_type='solid')
+            bold = Font(bold=True)
+            for cell in ws1[5]:
+                cell.fill = hdr_fill
+                cell.font = bold
+            for ds in dept_summary_list:
+                ws1.append([ds['department'], ds['total_staff'], ds['staff_with_lop'], ds['total_lop_days']])
+
+            ws2 = wb.create_sheet(title='Employee LOP Details')
+            ws2.append(['Staff ID', 'Name', 'Department', 'LOP Days'])
+            for cell in ws2[1]:
+                cell.fill = hdr_fill
+                cell.font = bold
+            for emp in sorted(employee_details, key=lambda x: -x['lop_days']):
+                ws2.append([emp['staff_id'], emp['name'], emp['department'], emp['lop_days']])
+
+            for ws in [ws1, ws2]:
+                for col in ws.columns:
+                    cl = get_column_letter(col[0].column)
+                    ws.column_dimensions[cl].width = max(
+                        max(len(str(c.value or '')) for c in col) + 3, 12
+                    )
+
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            resp = HttpResponse(
+                output.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
+            resp['Content-Disposition'] = f'attachment; filename="monthly_lop_{month_str}.xlsx"'
+            return resp
+
+        return Response({
+            'month': month_str,
+            'date_range': {'from_date': str(month_start), 'to_date': str(month_end)},
+            'summary': {
+                'total_lop_days': total_lop,
+                'total_staff': len(staff_user_ids),
+                'staff_with_lop': staff_with_lop_count,
+            },
+            'department_summary': dept_summary_list,
+            'employee_details': sorted(
+                employee_details,
+                key=lambda x: (-x['lop_days'], x['department'], x['name']),
+            ),
+        })
+
     # Alias for compatibility
     @action(detail=False, methods=['get'], url_path='organization_analytics')
     def organization_analytics_legacy(self, request):

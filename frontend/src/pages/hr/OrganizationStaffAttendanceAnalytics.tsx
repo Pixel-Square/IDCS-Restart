@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Calendar, BarChart3, Loader, Search, Plus, Trash2 } from 'lucide-react';
+import { Download, Calendar, BarChart3, Loader, Search, Plus, Trash2, TrendingDown, Users, Building2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import fetchWithAuth from '../../services/fetchAuth';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface AnalyticsData {
   date_range: {
@@ -58,6 +60,36 @@ interface MonthlyMatrixData {
   }>;
 }
 
+interface LOPEmployeeDetail {
+  staff_user_id: number;
+  staff_id: string;
+  name: string;
+  email: string;
+  department: string;
+  department_code: string;
+  lop_days: number;
+}
+
+interface LOPDeptSummary {
+  department: string;
+  department_code: string;
+  total_lop_days: number;
+  total_staff: number;
+  staff_with_lop: number;
+}
+
+interface LOPDashboardData {
+  month: string;
+  date_range: { from_date: string; to_date: string };
+  summary: {
+    total_lop_days: number;
+    total_staff: number;
+    staff_with_lop: number;
+  };
+  department_summary: LOPDeptSummary[];
+  employee_details: LOPEmployeeDetail[];
+}
+
 interface SpecialLimitItem {
   id: number;
   name: string;
@@ -89,6 +121,17 @@ export default function OrganizationStaffAttendanceAnalytics() {
   const [toDate, setToDate] = useState('');
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [reportType, setReportType] = useState('1');
+
+  // LOP Dashboard state
+  const [lopMonth, setLopMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [lopDeptIds, setLopDeptIds] = useState<string[]>([]);
+  const [lopPage, setLopPage] = useState(1);
+  const [lopData, setLopData] = useState<LOPDashboardData | null>(null);
+  const [lopLoading, setLopLoading] = useState(false);
+  const [lopError, setLopError] = useState<string | null>(null);
+  const [lopSearch, setLopSearch] = useState('');
+  const [lopExpandedDepts, setLopExpandedDepts] = useState<Set<string>>(new Set());
+  const [lopShowOnlyWithLOP, setLopShowOnlyWithLOP] = useState(false);
   const [departmentId, setDepartmentId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | MonthlyMatrixData | null>(null);
@@ -255,6 +298,149 @@ export default function OrganizationStaffAttendanceAnalytics() {
     } catch (err: any) {
       setError(err.message || 'Failed to reapply special attendance limit');
     }
+  };
+
+  const loadLopDashboard = async () => {
+    if (!lopMonth) {
+      setLopError('Please select a month');
+      return;
+    }
+    setLopLoading(true);
+    setLopError(null);
+    try {
+      const params = new URLSearchParams({ month: lopMonth });
+      if (lopDeptIds.length > 0) params.append('department_id', lopDeptIds.join(','));
+      const response = await fetchWithAuth(
+        `/api/staff-attendance/records/monthly-lop-dashboard/?${params.toString()}`
+      );
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to load LOP dashboard');
+      }
+      const data = await response.json();
+      setLopData(data);
+      setLopExpandedDepts(new Set());
+    } catch (err: any) {
+      setLopError(err.message || 'Failed to load LOP dashboard');
+    } finally {
+      setLopLoading(false);
+    }
+  };
+
+  const downloadLopExcel = async () => {
+    if (!lopMonth) return;
+    try {
+      const params = new URLSearchParams({ month: lopMonth, export: 'excel' });
+      if (lopDeptIds.length > 0) params.append('department_id', lopDeptIds.join(','));
+      const response = await fetchWithAuth(
+        `/api/staff-attendance/records/monthly-lop-dashboard/?${params.toString()}`
+      );
+      if (!response.ok) throw new Error('Failed to download LOP report');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `monthly_lop_${lopMonth}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setLopError(err.message || 'Failed to download LOP report');
+    }
+  };
+
+  const downloadLopPDF = () => {
+    if (!lopData) return;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    
+    // Title
+    doc.setFontSize(16);
+    doc.setTextColor(31, 41, 55);
+    doc.text(`Monthly LOP Report - ${lopMonth}`, 14, 15);
+    doc.setFontSize(10);
+    doc.setTextColor(107, 114, 128);
+    doc.text(`Date Range: ${lopData.date_range.from_date} to ${lopData.date_range.to_date}`, 14, 21);
+
+    // Summary stats
+    doc.setFontSize(11);
+    doc.setTextColor(55, 65, 81);
+    doc.text(`Summary Stats:`, 14, 29);
+    doc.setFontSize(9);
+    doc.text(`• Total LOP Days: ${lopData.summary.total_lop_days.toFixed(1)}`, 16, 34);
+    doc.text(`• Staff with LOP: ${lopData.summary.staff_with_lop} (out of ${lopData.summary.total_staff} total)`, 16, 39);
+    const avgLop = lopData.summary.staff_with_lop > 0 
+      ? (lopData.summary.total_lop_days / lopData.summary.staff_with_lop).toFixed(2)
+      : '0.00';
+    doc.text(`• Avg LOP per Affected Staff: ${avgLop}`, 16, 44);
+
+    // Section 1: Department Summary
+    doc.setFontSize(12);
+    doc.setTextColor(55, 65, 81);
+    doc.text(`1. Department-wise LOP Summary`, 14, 52);
+
+    const summaryHeaders = [['Department', 'Total Staff', 'Staff with LOP', 'Total LOP Days']];
+    const summaryBody = lopData.department_summary.map(d => [
+      d.department,
+      d.total_staff,
+      d.staff_with_lop,
+      d.total_lop_days.toFixed(1)
+    ]);
+
+    autoTable(doc, {
+      head: summaryHeaders,
+      body: summaryBody,
+      startY: 55,
+      theme: 'striped',
+      headStyles: { fillColor: [220, 38, 38], textColor: [255, 255, 255] }, // Red theme for LOP
+      styles: { fontSize: 8, cellPadding: 2.5 },
+    });
+
+    const firstTableBottom = (doc as any).lastAutoTable?.finalY ?? 100;
+
+    // Section 2: Employee Details (Filtered)
+    const filteredEmployees = lopData.employee_details.filter(emp => {
+      const q = lopSearch.toLowerCase();
+      const matchSearch =
+        !lopSearch ||
+        emp.name.toLowerCase().includes(q) ||
+        emp.staff_id.toLowerCase().includes(q) ||
+        emp.department.toLowerCase().includes(q);
+      const matchLOP = !lopShowOnlyWithLOP || emp.lop_days > 0;
+      return matchSearch && matchLOP;
+    });
+
+    // Sort descending by LOP days to show "top" staff
+    filteredEmployees.sort((a, b) => b.lop_days - a.lop_days);
+
+    doc.setFontSize(12);
+    doc.setTextColor(55, 65, 81);
+    doc.text(`2. Employee-wise LOP Details`, 14, firstTableBottom + 12);
+
+    const empHeaders = [['Staff ID', 'Name', 'Department', 'LOP Days']];
+    const empBody = filteredEmployees.map(emp => [
+      emp.staff_id,
+      emp.name,
+      emp.department,
+      emp.lop_days.toFixed(1)
+    ]);
+
+    autoTable(doc, {
+      head: empHeaders,
+      body: empBody,
+      startY: firstTableBottom + 16,
+      theme: 'striped',
+      headStyles: { fillColor: [55, 65, 81], textColor: [255, 255, 255] }, // Slate gray header
+      styles: { fontSize: 8, cellPadding: 2.5 },
+      columnStyles: {
+        0: { cellWidth: 30 },
+        1: { cellWidth: 55 },
+        2: { cellWidth: 70 },
+        3: { cellWidth: 25 }
+      }
+    });
+
+    doc.save(`monthly_lop_${lopMonth}.pdf`);
   };
 
   const loadAnalytics = async () => {
@@ -531,6 +717,424 @@ export default function OrganizationStaffAttendanceAnalytics() {
               {error}
             </div>
           )}
+        </div>
+
+        {/* ==================== Monthly LOP Dashboard ==================== */}
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden mb-8 border border-slate-100">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-red-600 via-red-500 to-orange-500 px-6 py-5">
+            <div className="flex items-center gap-3">
+              <div className="bg-white/20 rounded-lg p-2">
+                <TrendingDown className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white">Monthly LOP Dashboard</h2>
+                <p className="text-red-100 text-sm mt-0.5">
+                  Track Loss of Pay (LOP) days — total, department-wise and employee-wise
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6">
+            {/* Filters */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  <Calendar className="w-4 h-4 inline mr-1" />
+                  Month
+                </label>
+                <input
+                  type="month"
+                  value={lopMonth}
+                  onChange={(e) => setLopMonth(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-400 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Department (Optional)
+                </label>
+                <div className="relative group">
+                  <div className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white cursor-pointer hover:border-slate-400">
+                    <span className="text-slate-600 block truncate">
+                      {lopDeptIds.length === 0 ? 'All Departments' : `${lopDeptIds.length} selected`}
+                    </span>
+                  </div>
+                  <div className="absolute left-0 top-full mt-1 w-64 bg-white border border-slate-200 rounded-lg shadow-xl z-50 hidden group-hover:block max-h-60 overflow-y-auto p-2">
+                    <label className="flex items-center gap-2 p-1.5 hover:bg-slate-50 rounded cursor-pointer border-b border-slate-100 mb-1">
+                      <input
+                        type="checkbox"
+                        checked={lopDeptIds.length === 0}
+                        onChange={() => setLopDeptIds([])}
+                        className="rounded border-slate-300 text-red-500 focus:ring-red-400"
+                      />
+                      <span className="text-sm font-medium text-slate-700">Clear All (All Departments)</span>
+                    </label>
+                    {departments.map((dept) => (
+                      <label key={dept.id} className="flex items-center gap-2 p-1.5 hover:bg-slate-50 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={lopDeptIds.includes(String(dept.id))}
+                          onChange={(e) => {
+                            if (e.target.checked) setLopDeptIds([...lopDeptIds, String(dept.id)]);
+                            else setLopDeptIds(lopDeptIds.filter(id => id !== String(dept.id)));
+                          }}
+                          className="rounded border-slate-300 text-red-500 focus:ring-red-400"
+                        />
+                        <span className="text-sm text-slate-700">{dept.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={loadLopDashboard}
+                  disabled={lopLoading}
+                  className="w-full px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 disabled:bg-slate-400 transition-colors flex items-center justify-center gap-2 text-sm"
+                >
+                  {lopLoading ? (
+                    <><Loader className="w-4 h-4 animate-spin" /> Loading...</>
+                  ) : (
+                    <><TrendingDown className="w-4 h-4" /> Load LOP Data</>
+                  )}
+                </button>
+              </div>
+              {lopData && (
+                <div className="flex items-end gap-2">
+                  <button
+                    onClick={downloadLopExcel}
+                    className="flex-1 px-3 py-2 bg-emerald-600 text-white font-medium rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center gap-1.5 text-sm shadow-sm"
+                  >
+                    <Download className="w-4 h-4" /> Excel
+                  </button>
+                  <button
+                    onClick={downloadLopPDF}
+                    className="flex-1 px-3 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-1.5 text-sm shadow-sm"
+                  >
+                    <Download className="w-4 h-4" /> PDF
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Error */}
+            {lopError && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm mb-5">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                {lopError}
+              </div>
+            )}
+
+            {/* Results */}
+            {lopData && (
+              <div className="space-y-6">
+                {/* Summary Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="relative overflow-hidden bg-gradient-to-br from-red-50 to-red-100 rounded-xl border border-red-200 p-5">
+                    <div className="absolute top-0 right-0 w-20 h-20 bg-red-200/40 rounded-full -mr-6 -mt-6" />
+                    <p className="text-xs font-semibold text-red-500 uppercase tracking-wide mb-1">Total LOP Days</p>
+                    <p className="text-4xl font-bold text-red-700">{lopData.summary.total_lop_days.toFixed(1)}</p>
+                    <p className="text-xs text-red-500 mt-1">
+                      {lopData.date_range.from_date} — {lopData.date_range.to_date}
+                    </p>
+                  </div>
+                  <div className="relative overflow-hidden bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl border border-orange-200 p-5">
+                    <div className="absolute top-0 right-0 w-20 h-20 bg-orange-200/40 rounded-full -mr-6 -mt-6" />
+                    <p className="text-xs font-semibold text-orange-500 uppercase tracking-wide mb-1">Staff with LOP</p>
+                    <p className="text-4xl font-bold text-orange-700">{lopData.summary.staff_with_lop}</p>
+                    <p className="text-xs text-orange-500 mt-1">out of {lopData.summary.total_staff} total staff</p>
+                  </div>
+                  <div className="relative overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border border-slate-200 p-5">
+                    <div className="absolute top-0 right-0 w-20 h-20 bg-slate-200/40 rounded-full -mr-6 -mt-6" />
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Avg LOP per Staff</p>
+                    <p className="text-4xl font-bold text-slate-700">
+                      {lopData.summary.staff_with_lop > 0
+                        ? (lopData.summary.total_lop_days / lopData.summary.staff_with_lop).toFixed(2)
+                        : '0.00'}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">days per affected staff</p>
+                  </div>
+                </div>
+
+                {/* Department-wise Summary */}
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Building2 className="w-5 h-5 text-slate-600" />
+                    <h3 className="text-base font-semibold text-slate-800">Department-wise LOP Summary</h3>
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200">
+                          <th className="px-4 py-3 text-left font-semibold text-slate-700">Department</th>
+                          <th className="px-4 py-3 text-center font-semibold text-slate-700">Total Staff</th>
+                          <th className="px-4 py-3 text-center font-semibold text-orange-700">Staff with LOP</th>
+                          <th className="px-4 py-3 text-center font-semibold text-red-700">Total LOP Days</th>
+                          <th className="px-4 py-3 text-left font-semibold text-slate-700">LOP Distribution</th>
+                          <th className="px-4 py-3 text-center font-semibold text-slate-600">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lopData.department_summary.length === 0 ? (
+                          <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No LOP data found</td></tr>
+                        ) : (
+                          lopData.department_summary.map((dept, idx) => {
+                            const maxLop = Math.max(...lopData.department_summary.map(d => d.total_lop_days), 1);
+                            const barPct = (dept.total_lop_days / maxLop) * 100;
+                            const isExpanded = lopExpandedDepts.has(dept.department);
+                            const deptEmployees = lopData.employee_details.filter(e => e.department === dept.department);
+                            return (
+                              <React.Fragment key={dept.department}>
+                                <tr
+                                  className={`border-b border-slate-100 transition-colors hover:bg-slate-50 ${
+                                    idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                                  }`}
+                                >
+                                  <td className="px-4 py-3 font-medium text-slate-800">
+                                    <span className="inline-block bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded mr-2">
+                                      {dept.department_code || dept.department.slice(0, 4).toUpperCase()}
+                                    </span>
+                                    {dept.department}
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-slate-600">{dept.total_staff}</td>
+                                  <td className="px-4 py-3 text-center">
+                                    <span className={`font-semibold ${
+                                      dept.staff_with_lop > 0 ? 'text-orange-600' : 'text-slate-400'
+                                    }`}>{dept.staff_with_lop}</span>
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <span className={`font-bold text-base ${
+                                      dept.total_lop_days > 0 ? 'text-red-600' : 'text-slate-400'
+                                    }`}>{dept.total_lop_days.toFixed(1)}</span>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                      <div className="flex-1 bg-slate-200 rounded-full h-2 overflow-hidden">
+                                        <div
+                                          className="h-2 rounded-full bg-gradient-to-r from-red-500 to-orange-400 transition-all duration-500"
+                                          style={{ width: `${barPct}%` }}
+                                        />
+                                      </div>
+                                      <span className="text-xs text-slate-500 w-10 text-right">{barPct.toFixed(0)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <button
+                                      onClick={() => {
+                                        setLopExpandedDepts(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(dept.department)) next.delete(dept.department);
+                                          else next.add(dept.department);
+                                          return next;
+                                        });
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-medium transition-colors"
+                                    >
+                                      {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                      {isExpanded ? 'Hide' : 'Show'}
+                                    </button>
+                                  </td>
+                                </tr>
+                                {/* Expandable employee sub-rows */}
+                                {isExpanded && (
+                                  <tr className="bg-red-50/40 border-b border-red-100">
+                                    <td colSpan={6} className="px-6 py-3">
+                                      <div className="rounded-lg overflow-hidden border border-red-100">
+                                        <table className="w-full text-xs">
+                                          <thead>
+                                            <tr className="bg-red-100/60">
+                                              <th className="px-3 py-2 text-left font-semibold text-red-700">Staff ID</th>
+                                              <th className="px-3 py-2 text-left font-semibold text-red-700">Name</th>
+                                              <th className="px-3 py-2 text-center font-semibold text-red-700">LOP Days</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {deptEmployees.filter(e => e.lop_days > 0).length === 0 ? (
+                                              <tr><td colSpan={3} className="px-3 py-2 text-center text-slate-500">No LOP for any employee in this department</td></tr>
+                                            ) : (
+                                              deptEmployees
+                                                .filter(e => e.lop_days > 0)
+                                                .sort((a, b) => b.lop_days - a.lop_days)
+                                                .map((emp) => (
+                                                  <tr key={emp.staff_user_id} className="border-t border-red-100 hover:bg-red-50">
+                                                    <td className="px-3 py-1.5 text-slate-600">{emp.staff_id}</td>
+                                                    <td className="px-3 py-1.5 font-medium text-slate-800">{emp.name}</td>
+                                                    <td className="px-3 py-1.5 text-center font-bold text-red-600">{emp.lop_days.toFixed(1)}</td>
+                                                  </tr>
+                                                ))
+                                            )}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Employee-wise LOP Details */}
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-5 h-5 text-slate-600" />
+                      <h3 className="text-base font-semibold text-slate-800">Employee-wise LOP Details</h3>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <label className="inline-flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={lopShowOnlyWithLOP}
+                          onChange={(e) => setLopShowOnlyWithLOP(e.target.checked)}
+                          className="rounded border-slate-300 text-red-500 focus:ring-red-400"
+                        />
+                        Show only staff with LOP
+                      </label>
+                      <div className="relative">
+                        <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Search staff..."
+                          value={lopSearch}
+                          onChange={(e) => {
+                            setLopSearch(e.target.value);
+                            setLopPage(1);
+                          }}
+                          className="pl-8 pr-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-red-400 w-48"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const filtered = lopData.employee_details.filter(emp => {
+                      const q = lopSearch.toLowerCase();
+                      const matchSearch = !q || emp.name.toLowerCase().includes(q) || String(emp.staff_id).toLowerCase().includes(q) || emp.department.toLowerCase().includes(q);
+                      const matchLOP = !lopShowOnlyWithLOP || emp.lop_days > 0;
+                      return matchSearch && matchLOP;
+                    });
+                    
+                    // Sort descending by LOP days to show "top" staff
+                    filtered.sort((a, b) => b.lop_days - a.lop_days);
+
+                    const pageSize = 10;
+                    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+                    // Ensure page is in bounds
+                    const safePage = Math.max(1, Math.min(lopPage, totalPages));
+                    const currentData = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+                    return (
+                      <div className="overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200">
+                              <th className="px-4 py-3 text-left font-semibold text-slate-700">#</th>
+                              <th className="px-4 py-3 text-left font-semibold text-slate-700">Staff ID</th>
+                              <th className="px-4 py-3 text-left font-semibold text-slate-700">Name</th>
+                              <th className="px-4 py-3 text-left font-semibold text-slate-700">Department</th>
+                              <th className="px-4 py-3 text-center font-semibold text-red-700">LOP Days</th>
+                              <th className="px-4 py-3 text-left font-semibold text-slate-700">LOP Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.length === 0 ? (
+                              <tr>
+                                <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                                  No staff found matching your filters
+                                </td>
+                              </tr>
+                            ) : (
+                              currentData.map((emp, idx) => {
+                                const realIdx = (safePage - 1) * pageSize + idx + 1;
+                                return (
+                                  <tr
+                                    key={emp.staff_user_id}
+                                    className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                                      idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                                    }`}
+                                  >
+                                    <td className="px-4 py-3 text-slate-400 text-xs">{realIdx}</td>
+                                    <td className="px-4 py-3 font-mono text-slate-600 text-xs">{emp.staff_id}</td>
+                                    <td className="px-4 py-3 font-medium text-slate-800">{emp.name}</td>
+                                    <td className="px-4 py-3">
+                                      <span className="inline-block bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded">
+                                        {emp.department}
+                                      </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-center">
+                                      {emp.lop_days > 0 ? (
+                                        <span className="inline-block bg-red-100 text-red-700 font-bold text-sm px-3 py-0.5 rounded-full">
+                                          {emp.lop_days.toFixed(1)}
+                                        </span>
+                                      ) : (
+                                        <span className="inline-block bg-green-100 text-green-600 font-medium text-sm px-3 py-0.5 rounded-full">
+                                          0
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      {emp.lop_days === 0 ? (
+                                        <span className="text-xs text-green-600 font-medium">✓ No LOP</span>
+                                      ) : emp.lop_days <= 1 ? (
+                                        <span className="text-xs text-yellow-600 font-medium">⚠ Minor LOP</span>
+                                      ) : emp.lop_days <= 3 ? (
+                                        <span className="text-xs text-orange-600 font-medium">⚠ Moderate LOP</span>
+                                      ) : (
+                                        <span className="text-xs text-red-600 font-bold">✖ High LOP</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                        <div className="px-4 py-2 bg-slate-50 border-t border-slate-200 flex justify-between items-center text-xs text-slate-500">
+                          <span>Showing {currentData.length} of {filtered.length} staff</span>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              disabled={safePage === 1}
+                              onClick={() => setLopPage(p => Math.max(1, p - 1))}
+                              className="px-2 py-1 rounded bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Prev
+                            </button>
+                            <span className="font-medium text-slate-700">
+                              Page {safePage} of {totalPages}
+                            </span>
+                            <button
+                              disabled={safePage === totalPages}
+                              onClick={() => setLopPage(p => Math.min(totalPages, p + 1))}
+                              className="px-2 py-1 rounded bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!lopData && !lopLoading && (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                <TrendingDown className="w-14 h-14 mb-3 opacity-40" />
+                <p className="text-base font-medium">Select a month and click "Load LOP Data"</p>
+                <p className="text-sm mt-1">to view Loss of Pay statistics for the selected period</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* HR Special Department-Specific Time Limits */}

@@ -1125,6 +1125,37 @@ class StaffRequestViewSet(viewsets.ModelViewSet):
             'template__approval_steps',
             'approval_logs__approver'
         )
+        
+    @action(detail=False, methods=['get'])
+    def vacation_analytics(self, request):
+        year = request.query_params.get('year')
+        month = request.query_params.get('month')
+        
+        if not (request.user.is_superuser or (hasattr(request.user, 'user_roles') and request.user.user_roles.filter(role__name__in=['HR', 'ADMIN', 'IQAC']).exists())):
+            return Response({'detail': 'Not permitted'}, status=status.HTTP_403_FORBIDDEN)
+            
+        qs = StaffRequest.objects.filter(
+            template__name__icontains='Vacation',
+        ).select_related('applicant', 'template')
+        
+        if year:
+            qs = qs.filter(created_at__year=int(year))
+        if month:
+            qs = qs.filter(created_at__month=int(month))
+            
+        from academics.models import StaffProfile
+        from django.db.models import Count
+        dept_counts = {
+            item['department__name']: item['count']
+            for item in StaffProfile.objects.values('department__name').annotate(count=Count('id'))
+            if item['department__name']
+        }
+            
+        serializer = self.get_serializer(qs, many=True)
+        return Response({
+            'results': serializer.data,
+            'dept_staff_counts': dept_counts
+        })
     
     def get_serializer_class(self):
         """Use list serializer for list views, detail for everything else"""

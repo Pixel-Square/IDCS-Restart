@@ -536,6 +536,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<FacultyAttendancePage />} />}
                 />
                 <Route
+                  path="/iqac/request-templates"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'HR']} element={<RequestTemplatesPage />} />}
+                />
+                <Route
                   path="/ps/staff-attendance/view"
                   element={<ProtectedRoute user={user} requiredRoles={['PS', 'ADMIN']} element={<PSStaffAttendanceViewPage />} />}
                 />
