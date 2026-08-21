@@ -198,8 +198,12 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
         setError('Please fill OD Type and Reason fields.');
         return;
       }
-      if (!eventDetails.from_date || !eventDetails.kss_link || !files.event_proof) {
+      if (!eventDetails.from_date || !files.event_proof) {
         setError('Please fill all required event details (*) and upload event proof in the Event Details section.');
+        return;
+      }
+      if (String(eventDetails.kss_submission || '').trim().toUpperCase() === 'YES' && !eventDetails.kss_link) {
+        setError('Please provide the KSS Link since KSS Submission is Yes.');
         return;
       }
     }
@@ -212,6 +216,11 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
 
     const invalidOther = other.some((r, i) => !isOtherEmpty(r) && (!r.date || !r.bill_no || !r.expense_details || !r.amount || !files[`other_proof_${i}`]));
     if (invalidOther) { setError('Please fill all required fields (*) and upload proof in Other Expenses for the rows you entered.'); return; }
+
+    if (Number(advanceAmount) > 0 && !advanceDate) {
+      setError('Please provide the Advance Date since you entered an advance amount.');
+      return;
+    }
 
     if (Number(advanceAmount) > 0 && !files.advance_proof) {
       setError('Please upload an Advance Receipt Proof since you entered an advance amount.');
@@ -424,6 +433,22 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
             return <DynamicFormRenderer fields={schemaToRender} values={eventDetails} onChange={setEventDetails} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" isExpenseForm={true} />;
           })()}
 
+          {String(eventDetails.kss_submission || '').trim().toUpperCase() === 'YES' && (
+            <div className="mt-4 pt-4 border-t">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                KSS Link <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="url"
+                required
+                value={eventDetails.kss_link || ''}
+                onChange={e => setEventDetails(prev => ({ ...prev, kss_link: e.target.value }))}
+                className="w-full md:w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="https://..."
+              />
+            </div>
+          )}
+
           <div className="pt-2 border-t mt-4">
              <label className="block text-xs font-bold text-gray-700 mb-2">Upload Event Attended Proof <span className="text-red-500">*</span></label>
              <DragDropFileInput fileKey="event_proof" files={files} orientations={orientations} onChange={handleFileChange} />
@@ -489,7 +514,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
           <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">Total Fees Spend (₹)</label>
+                <label className="block text-xs font-bold text-gray-700 mb-1">Event Registration Fees Spent (₹)</label>
                 <input type="number" value={feesSpend || ''} onChange={e => setFeesSpend(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
@@ -497,7 +522,9 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
                 <input type="number" value={advanceAmount || ''} onChange={e => setAdvanceAmount(Number(e.target.value) || 0)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1">Advance Date</label>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Advance Date {Number(advanceAmount) > 0 && <span className="text-red-500">*</span>}
+                </label>
                 <input type="date" value={advanceDate} onChange={e => setAdvanceDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" />
               </div>
             </div>
@@ -518,7 +545,7 @@ export default function ExpenseFormTab({ odForms, budget, onSubmitted }: Props) 
               <div className="flex justify-between text-sm"><span className="text-gray-600">Travel Total</span><span className="font-semibold">₹{travelTotal.toLocaleString()}</span></div>
               <div className="flex justify-between text-sm"><span className="text-gray-600">Food Total</span><span className="font-semibold">₹{foodTotal.toLocaleString()}</span></div>
               <div className="flex justify-between text-sm"><span className="text-gray-600">Other Total</span><span className="font-semibold">₹{otherTotal.toLocaleString()}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-gray-600">Fees Spend</span><span className="font-semibold">₹{(feesSpend || 0).toLocaleString()}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-gray-600">Fees Spent</span><span className="font-semibold">₹{(feesSpend || 0).toLocaleString()}</span></div>
               <div className="flex justify-between text-base border-t pt-2"><span className="font-bold text-gray-900">Grand Total</span><span className="font-bold text-blue-700">₹{grandTotal.toLocaleString()}</span></div>
               <div className="flex justify-between text-sm"><span className="text-gray-600">Advance Received</span><span className="font-semibold text-orange-600">- ₹{(advanceAmount || 0).toLocaleString()}</span></div>
               <div className={`flex justify-between text-base border-t pt-2`}>

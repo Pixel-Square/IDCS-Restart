@@ -7716,7 +7716,7 @@ class EventAttendingViewSet(viewsets.ViewSet):
         for form in qs:
             staff_profile = getattr(form.staff, 'staff_profile', None)
             dept_name = getattr(getattr(staff_profile, 'department', None), 'name', '—')
-            od_type = '—'
+            od_type = 'Direct (No OD)'
             try:
                 fd = form.on_duty_request.form_data if form.on_duty_request else form.custom_event_details or {}
                 # 'type' is the OD/event type field; fall back chain
@@ -7724,8 +7724,8 @@ class EventAttendingViewSet(viewsets.ViewSet):
                     fd.get('type')
                     or fd.get('nature_of_event')
                     or fd.get('event_title')
-                    or (form.on_duty_request.template.name if form.on_duty_request else '—')
-                ) or '—'
+                    or (form.on_duty_request.template.name if form.on_duty_request else 'Direct (No OD)')
+                ) or 'Direct (No OD)'
             except Exception:
                 pass
             rows.append({
