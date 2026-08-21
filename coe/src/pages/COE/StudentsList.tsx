@@ -1110,7 +1110,7 @@ export default function StudentsList() {
           const conf = selectionMap[courseKey];
           const metaKey = normalizeCourseCode(course.course_code);
           const fixedQpType = courseMetaMap[metaKey]?.qpType || '';
-          const qpType = fixedQpType || conf?.qpType || 'QP1';
+          const qpType: 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE' = (fixedQpType || conf?.qpType || 'QP1') as 'QP1' | 'QP2' | 'TCPR' | 'TCPL' | 'OE';
 
           (course.students as AugStudent[]).forEach((student) => {
                records.push({

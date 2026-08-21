@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
@@ -49,6 +49,7 @@ import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
 // SwapRequestsPage removed — swap requests handled via modal
 import StudentAttendancePage from './pages/student/Attendance';
 import StudentAcademics from './pages/student/Academics';
+import StudentHallPlanPage from './pages/student/HallPlan';
 import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
 import AnnouncementsPage from './pages/announcements/AnnouncementsPage';
@@ -110,6 +111,7 @@ import MyProposalsPage from './pages/events/MyProposalsPage';
 import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
+import HallSelectionPage from './pages/HallSelectionPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -560,6 +562,10 @@ export default function App() {
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
                 />
+                <Route
+                  path="/student/hall-plan"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentHallPlanPage />} />}
+                />
                 {/* Student PBAS route removed */}
                 {/* Attendance pages removed */}
                 <Route
@@ -571,7 +577,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
                 />
                 <Route
-
+                  path="/hall-selection"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<HallSelectionPage user={user} />} />}
+                />
+                <Route
                   path="/staff/students"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
                 />

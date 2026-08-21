@@ -26,6 +26,9 @@ import FinalResultPage from './pages/COE/FinalResultPage';
 import DataViewPage from './pages/DataViewPage';
 import { logout } from './services/auth';
 import StudentsList from './pages/COE/StudentsList';
+import HallAllocationPage from './pages/COE/HallAllocationPage';
+import HallAllocationPlanPage from './pages/COE/HallAllocationPlanPage';
+import HallSelectionPage from './pages/COE/HallSelectionPage';
 
 function hasAccessToken(): boolean {
   if (typeof window === 'undefined') return false;
@@ -74,6 +77,8 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/coe/students', label: 'Students' },
     { to: '/coe/arrears', label: 'Arrears' },
     { to: '/coe/additional', label: 'Additional' },
+    { to: '/coe/hall-allocation', label: 'Hall Allocation' },
+    { to: '/coe/hall-selection', label: 'Hall Selection' },
     { to: '/coe/bundle-allocation', label: 'Bundles' },
     { to: '/coe/assigning', label: 'Assigning' },
     { to: '/coe/external-management', label: 'External Management' },
@@ -300,6 +305,9 @@ export default function App() {
         <Route path="/coe/attendance" element={<RequireAuth><AttendancePage /></RequireAuth>} />
         <Route path="/coe/arrears" element={<RequireAuth><ArrearList /></RequireAuth>} />
         <Route path="/coe/additional" element={<RequireAuth><AdditionalPage /></RequireAuth>} />
+        <Route path="/coe/hall-allocation" element={<RequireAuth><HallAllocationPage /></RequireAuth>} />
+        <Route path="/coe/hall-allocation/plan" element={<RequireAuth><HallAllocationPlanPage /></RequireAuth>} />
+        <Route path="/coe/hall-selection" element={<RequireAuth><HallSelectionPage /></RequireAuth>} />
         <Route path="/coe/bundle-allocation" element={<RequireAuth><BundleAllocation /></RequireAuth>} />
         <Route path="/coe/assigning" element={<RequireAuth><AssigningPage /></RequireAuth>} />
         <Route path="/coe/external-management" element={<RequireAuth><ExternalManagementPage /></RequireAuth>} />

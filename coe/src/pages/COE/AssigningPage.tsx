@@ -338,7 +338,8 @@ export default function AssigningPage() {
         setAssignments(newAssignments);
       } catch (err) {
         if (!active) return;
-        setError('Unable to load courses right now. Please try again.');
+        const errorMsg = err instanceof Error ? err.message : 'Unable to load courses right now. Please try again.';
+        setError(errorMsg);
       } finally {
         if (active) setLoading(false);
       }

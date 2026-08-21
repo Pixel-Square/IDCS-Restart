@@ -236,7 +236,8 @@ export default function CourseList() {
         setData(res);
       } catch (err) {
         if (!active) return;
-        setError('Unable to load courses right now. Please try again.');
+        const errorMsg = err instanceof Error ? err.message : 'Unable to load courses right now. Please try again.';
+        setError(errorMsg);
       } finally {
         // eslint-disable-next-line no-unsafe-finally
         if (!active) return;

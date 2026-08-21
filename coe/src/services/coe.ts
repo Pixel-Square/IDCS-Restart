@@ -101,13 +101,21 @@ export async function fetchCoeStudentsMap(params: { department: string; semester
       return res.json();
     }
 
-    const text = await res.text();
+    let text = '';
+    try {
+      text = await res.clone().text();
+    } catch {
+      text = '(unable to read response body)';
+    }
     lastError = `COE students map fetch failed: ${res.status} ${text}`;
 
     // Try alternate semester formats when backend rejects one representation.
     if (res.status === 400 || res.status === 404) {
       continue;
     }
+
+    // For non-retriable errors, throw immediately
+    throw new Error(lastError);
   }
 
   throw new Error(lastError || 'COE students map fetch failed.');

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, MapPin, Building2 } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -29,6 +29,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   staff_timetable: Calendar,
   student_attendance: ClipboardList,
   student_academics: GraduationCap,
+  student_hall_plan: Building2,
   period_attendance: ClipboardList,
   obe: BookOpen,
   obe_master: BookOpen,
@@ -76,6 +77,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_bar_scan_entry: ScanLine,
   coe_retrival: FileText,
   coe_one_page_report: FileText,
+  hall_selection: MapPin,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -425,6 +427,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_student) {
     items.push({ key: 'student_academics', label: 'My Marks', to: '/student/academics' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+    items.push({ key: 'student_hall_plan', label: 'Hall Plan', to: '/student/hall-plan' });
   }
 
   // Staff assigned subjects page
@@ -432,6 +435,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
+  if (flags.is_staff && !items.some((item) => item.key === 'hall_selection')) {
+    items.push({ key: 'hall_selection', label: 'Hall Selection', to: '/hall-selection' });
+  }
 
   // PBAS submission for staff
   if (flags.is_staff) {
