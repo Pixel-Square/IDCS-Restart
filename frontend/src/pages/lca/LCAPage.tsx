@@ -180,7 +180,6 @@ type LearnerCentricCode = 'L1' | 'L2' | 'L3' | '-';
 type PbrSummary = {
   fileName: string;
   studentsCount: number;
-  meanGpa: number;
   courseLevel: Exclude<CourseLevelCode, '-'>;
   gpaBreakdown: { hc: number; mc: number; ec: number }; // counts by GPA band
 };
@@ -202,20 +201,41 @@ function parseNumericCell(v: unknown): number | null {
   return null;
 }
 
-function courseLevelFromMeanGpa(meanGpa: number): Exclude<CourseLevelCode, '-'> {
-  // Mirrors the sheet: 0-6 => HARD (HC), 6-8 => MEDIUM (MC), >8 => EASY (EC)
-  // Resolve boundary by including 6 in HC and 8 in MC.
-  if (meanGpa <= 6) return 'HC';
-  if (meanGpa <= 8) return 'MC';
+function courseLevelFromBreakdown(breakdown: { hc: number; mc: number; ec: number }): Exclude<CourseLevelCode, '-'> {
+  const max = Math.max(breakdown.hc, breakdown.mc, breakdown.ec);
+  if (max === breakdown.hc) return 'HC';
+  if (max === breakdown.mc) return 'MC';
   return 'EC';
 }
 
-function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCode {
-  // As requested:
-  // EC => L1, MC => L2, HC => L3
-  if (level === 'EC') return 'L1';
-  if (level === 'MC') return 'L2';
-  if (level === 'HC') return 'L3';
+function numericFromCourseLevel(level: CourseLevelCode): number {
+  if (level === 'EC') return 1;
+  if (level === 'MC') return 2;
+  if (level === 'HC') return 3;
+  return 0;
+}
+
+function courseLevelFromNumeric(num: number): CourseLevelCode {
+  if (num === 1) return 'EC';
+  if (num === 2) return 'MC';
+  if (num === 3) return 'HC';
+  return '-';
+}
+
+function learnerCentricFromMatrix(lm: string, cm: CourseLevelCode): LearnerCentricCode {
+  if (lm === 'LL') {
+    if (cm === 'HC') return 'L1';
+    if (cm === 'MC') return 'L2';
+    if (cm === 'EC') return 'L2';
+  } else if (lm === 'ML') {
+    if (cm === 'HC') return 'L1';
+    if (cm === 'MC') return 'L2';
+    if (cm === 'EC') return 'L3';
+  } else if (lm === 'HL') {
+    if (cm === 'HC') return 'L2';
+    if (cm === 'MC') return 'L2';
+    if (cm === 'EC') return 'L3';
+  }
   return '-';
 }
 
@@ -273,8 +293,6 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
    }
  
    if (!gpas.length) throw new Error('No numeric "GPA conversion" values found.');
-   const mean = gpas.reduce((a, b) => a + b, 0) / gpas.length;
-   const meanRounded = Number(mean.toFixed(2));
  
    // GPA band counts: 0–6 = HC, 6–8 = MC, >8 = EC
    const gpaBreakdown = { hc: 0, mc: 0, ec: 0 };
@@ -287,8 +305,7 @@ function learnerCentricFromCourseLevel(level: CourseLevelCode): LearnerCentricCo
    return {
      fileName: file.name,
      studentsCount: gpas.length,
-     meanGpa: meanRounded,
-     courseLevel: courseLevelFromMeanGpa(meanRounded),
+     courseLevel: courseLevelFromBreakdown(gpaBreakdown),
      gpaBreakdown,
    };
 }
@@ -622,8 +639,15 @@ export default function LCAPage({
 
   const pbrCourseLevel: CourseLevelCode = useMemo(() => {
     if (hasPbr === true) {
-      if (excelCount === 2 && pbrCay2) return pbrCay2.courseLevel;
-      if (pbrCay1) return pbrCay1.courseLevel;
+      if (excelCount === 2 && pbrCay1 && pbrCay2) {
+        const val1 = numericFromCourseLevel(pbrCay1.courseLevel);
+        const val2 = numericFromCourseLevel(pbrCay2.courseLevel);
+        const mean = Math.floor((val1 + val2) / 2);
+        return courseLevelFromNumeric(mean);
+      }
+      if (excelCount === 1 && pbrCay1) return pbrCay1.courseLevel;
+      if (pbrCay2 && !pbrCay1) return pbrCay2.courseLevel;
+      if (pbrCay1 && !pbrCay2) return pbrCay1.courseLevel;
       return '-';
     }
     if (hasPbr === false) {
@@ -631,6 +655,12 @@ export default function LCAPage({
       return '-';
     }
     // Fallback if not selected yet
+    if (pbrCay1 && pbrCay2) {
+      const val1 = numericFromCourseLevel(pbrCay1.courseLevel);
+      const val2 = numericFromCourseLevel(pbrCay2.courseLevel);
+      const mean = Math.floor((val1 + val2) / 2);
+      return courseLevelFromNumeric(mean);
+    }
     if (pbrCay2) return pbrCay2.courseLevel;
     if (pbrCay1) return pbrCay1.courseLevel;
     if (pbrManualCourseLevel && pbrManualCourseLevel !== '-') return pbrManualCourseLevel;
@@ -638,8 +668,8 @@ export default function LCAPage({
   }, [pbrCay1, pbrCay2, pbrManualCourseLevel, hasPbr, excelCount]);
 
   const pbrLearnerCentricLevelCode: LearnerCentricCode = useMemo(
-    () => learnerCentricFromCourseLevel(pbrCourseLevel),
-    [pbrCourseLevel],
+    () => learnerCentricFromMatrix(learnersAt.code, pbrCourseLevel),
+    [learnersAt.code, pbrCourseLevel],
   );
 
   const learnerCentricLevelCode: LearnerCentricCode = useMemo(() => {
@@ -785,99 +815,98 @@ export default function LCAPage({
             </div>
           )}
 
-          <div style={{ height: 14 }} />
-
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.thLeft}>DATASET</th>
-                <th style={styles.th}>FILE</th>
-                <th style={styles.th}>STUDENTS</th>
-                <th style={styles.th}>MEAN GPA</th>
-                <th style={styles.th}>COURSE LEVEL</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-1</td>
-                <td style={styles.tdLeft}>{pbrCay1?.fileName || '—'}</td>
-                <td style={styles.td}>{pbrCay1?.studentsCount ?? '—'}</td>
-                <td style={styles.td}>{pbrCay1 ? pbrCay1.meanGpa : '—'}</td>
-                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1?.courseLevel || '—'}</td>
-              </tr>
-              <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-2</td>
-                <td style={styles.tdLeft}>{pbrCay2?.fileName || '—'}</td>
-                <td style={styles.td}>{pbrCay2?.studentsCount ?? '—'}</td>
-                <td style={styles.td}>{pbrCay2 ? pbrCay2.meanGpa : '—'}</td>
-                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2?.courseLevel || '—'}</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div style={{ height: 14 }} />
-
-          <table style={styles.table}>
-            <tbody>
-              <tr>
-                <td style={{ ...styles.tdLeft, fontWeight: 900, width: 220 }}>PREVIOUS BATCH RESULT (PBR)</td>
-                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
-                <td style={{ ...styles.tdLeft, fontWeight: 900 }}>Learner Centric Level</td>
-                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrLearnerCentricLevelCode === '-' ? '—' : pbrLearnerCentricLevelCode}</td>
-              </tr>
-              <tr>
-                <td style={{ ...styles.tdLeft, color: '#557085' }} colSpan={4}>
-                  Course level rule: mean GPA 0–6 = HC, 6–8 = MC, &gt;8 = EC. PBR uses CAY-2 when provided; otherwise CAY-1.
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* GPA Range Analysis */}
-          {(pbrCay1 || pbrCay2) && (
+          {hasPbr === true && (
             <>
               <div style={{ height: 14 }} />
-              <div style={{ fontWeight: 700, color: '#0b4a6f', marginBottom: 8, fontSize: 15 }}>GPA Range Analysis</div>
+
               <table style={styles.table}>
                 <thead>
                   <tr>
                     <th style={styles.thLeft}>DATASET</th>
-                    <th style={styles.th}>GPA 0–6 (Hard Course — HC)</th>
-                    <th style={styles.th}>GPA 6–8 (Medium Course — MC)</th>
-                    <th style={styles.th}>GPA &gt;8 (Easy Course — EC)</th>
-                    <th style={styles.th}>TOTAL STUDENTS</th>
-                    <th style={styles.th}>MEAN GPA</th>
+                    <th style={styles.th}>FILE</th>
+                    <th style={styles.th}>STUDENTS</th>
                     <th style={styles.th}>COURSE LEVEL</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[{ label: 'CAY-1', data: pbrCay1 }, { label: 'CAY-2', data: pbrCay2 }].map(({ label, data }) =>
-                    data ? (
-                      <tr key={label}>
-                        <td style={{ ...styles.tdLeft, fontWeight: 900 }}>{label}</td>
-                        <td style={{ ...styles.td, background: '#fef2f2', fontWeight: 700 }}>
-                          {data.gpaBreakdown?.hc ?? 0}
-                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
-                        </td>
-                        <td style={{ ...styles.td, background: '#fef9c3', fontWeight: 700 }}>
-                          {data.gpaBreakdown?.mc ?? 0}
-                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
-                        </td>
-                        <td style={{ ...styles.td, background: '#ecfdf5', fontWeight: 700 }}>
-                          {data.gpaBreakdown?.ec ?? 0}
-                          <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
-                        </td>
-                        <td style={styles.td}>{data.studentsCount}</td>
-                        <td style={{ ...styles.td, fontWeight: 700 }}>{data.meanGpa}</td>
-                        <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{data.courseLevel}</td>
-                      </tr>
-                    ) : null
-                  )}
+                  <tr>
+                    <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-1</td>
+                    <td style={styles.tdLeft}>{pbrCay1?.fileName || '—'}</td>
+                    <td style={styles.td}>{pbrCay1?.studentsCount ?? '—'}</td>
+                    <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1?.courseLevel || '—'}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...styles.tdLeft, fontWeight: 900 }}>CAY-2</td>
+                    <td style={styles.tdLeft}>{pbrCay2?.fileName || '—'}</td>
+                    <td style={styles.td}>{pbrCay2?.studentsCount ?? '—'}</td>
+                    <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2?.courseLevel || '—'}</td>
+                  </tr>
                 </tbody>
               </table>
-              <div style={{ marginTop: 8, color: '#557085', fontSize: 13 }}>
-                ℹ️  GPA 0–6 → Hard Course (HC) &nbsp;|&nbsp; GPA 6–8 → Medium Course (MC) &nbsp;|&nbsp; GPA &gt;8 → Easy Course (EC)
-              </div>
+
+              <div style={{ height: 14 }} />
+
+              <table style={styles.table}>
+                <tbody>
+                  <tr>
+                    <td style={{ ...styles.tdLeft, fontWeight: 900, width: 220 }}>PREVIOUS BATCH RESULT (PBR)</td>
+                    <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
+                    <td style={{ ...styles.tdLeft, fontWeight: 900 }}>Learner Centric Level</td>
+                    <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrLearnerCentricLevelCode === '-' ? '—' : pbrLearnerCentricLevelCode}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ ...styles.tdLeft, color: '#557085' }} colSpan={4}>
+                      Course level rule: Determined by the GPA range with the highest number of students. If two Excels are provided, the final course level is the mean of the two levels (rounded down).
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {/* GPA Range Analysis */}
+              {(pbrCay1 || pbrCay2) && (
+                <>
+                  <div style={{ height: 14 }} />
+                  <div style={{ fontWeight: 700, color: '#0b4a6f', marginBottom: 8, fontSize: 15 }}>GPA Range Analysis</div>
+                  <table style={styles.table}>
+                    <thead>
+                      <tr>
+                        <th style={styles.thLeft}>DATASET</th>
+                        <th style={styles.th}>GPA 0–6 (Hard Course — HC)</th>
+                        <th style={styles.th}>GPA 6–8 (Medium Course — MC)</th>
+                        <th style={styles.th}>GPA &gt;8 (Easy Course — EC)</th>
+                        <th style={styles.th}>TOTAL STUDENTS</th>
+                        <th style={styles.th}>COURSE LEVEL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[{ label: 'CAY-1', data: pbrCay1 }, { label: 'CAY-2', data: pbrCay2 }].map(({ label, data }) =>
+                        data ? (
+                          <tr key={label}>
+                            <td style={{ ...styles.tdLeft, fontWeight: 900 }}>{label}</td>
+                            <td style={{ ...styles.td, background: '#fef2f2', fontWeight: 700 }}>
+                              {data.gpaBreakdown?.hc ?? 0}
+                              <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                            </td>
+                            <td style={{ ...styles.td, background: '#fef9c3', fontWeight: 700 }}>
+                              {data.gpaBreakdown?.mc ?? 0}
+                              <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                            </td>
+                            <td style={{ ...styles.td, background: '#ecfdf5', fontWeight: 700 }}>
+                              {data.gpaBreakdown?.ec ?? 0}
+                              <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}> students</span>
+                            </td>
+                            <td style={styles.td}>{data.studentsCount}</td>
+                            <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{data.courseLevel}</td>
+                          </tr>
+                        ) : null
+                      )}
+                    </tbody>
+                  </table>
+                  <div style={{ marginTop: 8, color: '#557085', fontSize: 13 }}>
+                    ℹ️  GPA 0–6 → Hard Course (HC) &nbsp;|&nbsp; GPA 6–8 → Medium Course (MC) &nbsp;|&nbsp; GPA &gt;8 → Easy Course (EC)
+                  </div>
+                </>
+              )}
             </>
           )}
       </>
@@ -1253,14 +1282,20 @@ export default function LCAPage({
                   PREVIOUS BATCH RESULT (PBR)
                 </Link>
               </td>
-              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
-              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2 ? 'COURSE LEVEL (CAY-2)' : 'COURSE LEVEL (CAY-1)'}</td>
+              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }} colSpan={hasPbr === true ? 1 : 2}>{pbrCourseLevel === '-' ? '—' : pbrCourseLevel}</td>
+              {hasPbr === true && (
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>
+                  {excelCount === 2 ? 'COURSE LEVEL (CAY-1 & CAY-2 AVERAGE)' : (pbrCay2 ? 'COURSE LEVEL (CAY-2)' : 'COURSE LEVEL (CAY-1)')}
+                </td>
+              )}
             </tr>
-            <tr>
-              <td style={{ ...styles.tdLeft, fontWeight: 700 }}> </td>
-              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1 ? `Mean GPA: ${pbrCay1.meanGpa}` : '—'}</td>
-              <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2 ? `Mean GPA: ${pbrCay2.meanGpa}` : '—'}</td>
-            </tr>
+            {hasPbr === true && (
+              <tr>
+                <td style={{ ...styles.tdLeft, fontWeight: 700 }}> </td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay1 ? `Level: ${pbrCay1.courseLevel}` : '—'}</td>
+                <td style={{ ...styles.td, ...styles.cellGreen, fontWeight: 900 }}>{pbrCay2 ? `Level: ${pbrCay2.courseLevel}` : '—'}</td>
+              </tr>
+            )}
           </tbody>
         </table>
 
