@@ -1,0 +1,3428 @@
+[
+{
+  "model": "accounts.role",
+  "pk": 1,
+  "fields": {
+    "name": "hod",
+    "description": "Head of the Department"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 2,
+  "fields": {
+    "name": "mentor",
+    "description": "Mentor to a Student"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 5,
+  "fields": {
+    "name": "iqac",
+    "description": "Quality Assurance"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 7,
+  "fields": {
+    "name": "ahod",
+    "description": "Assistant head of the department"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 8,
+  "fields": {
+    "name": "HAA",
+    "description": "Academic Head"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 11,
+  "fields": {
+    "name": "STUDENT",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 12,
+  "fields": {
+    "name": "STAFF",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 13,
+  "fields": {
+    "name": "ADVISOR",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 14,
+  "fields": {
+    "name": "HOD",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 15,
+  "fields": {
+    "name": "AHOD",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 16,
+  "fields": {
+    "name": "AP",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 17,
+  "fields": {
+    "name": "PS",
+    "description": "Principal Secretary - manages staff attendance and administrative tasks"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 18,
+  "fields": {
+    "name": "HR",
+    "description": "Human Resources"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 19,
+  "fields": {
+    "name": "PRINCIPAL",
+    "description": "Principal of the college"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 20,
+  "fields": {
+    "name": "SECURITY",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 21,
+  "fields": {
+    "name": "CFSW",
+    "description": "Center for Student Well Fare"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 22,
+  "fields": {
+    "name": "COE",
+    "description": "Controller of Examinations"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 23,
+  "fields": {
+    "name": "EDC",
+    "description": "Entrepreneurship Development Cell"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 24,
+  "fields": {
+    "name": "LIBRARY",
+    "description": "Library Staff - RFID Card Assignment"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 25,
+  "fields": {
+    "name": "BRANDING",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 26,
+  "fields": {
+    "name": "NBA CA",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 27,
+  "fields": {
+    "name": "EXT_STAFF",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 28,
+  "fields": {
+    "name": "IQAC",
+    "description": "Internal Quality Assurance Cell"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 29,
+  "fields": {
+    "name": "CFFA",
+    "description": "Faculty affairs"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 30,
+  "fields": {
+    "name": "VISUAL_ADMIN",
+    "description": "Manages Power BI URL assignments for staff academic dashboards."
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 31,
+  "fields": {
+    "name": "DB_READER",
+    "description": "Database read-only role"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 32,
+  "fields": {
+    "name": "CODE_ADMIN",
+    "description": "Coder Admin - full access to coding platform"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 33,
+  "fields": {
+    "name": "CODE_COURSE_INCHARGE",
+    "description": "Coder Course Incharge - can create sessions and questions"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 34,
+  "fields": {
+    "name": "CODE_SECTION_INCHARGE",
+    "description": "Coder Section Incharge - can view student analytics"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 35,
+  "fields": {
+    "name": "PBAS_ADMIN",
+    "description": "PBAS Submissions Approver"
+  }
+},
+{
+  "model": "accounts.role",
+  "pk": 36,
+  "fields": {
+    "name": "PBAS_APPROVER",
+    "description": "PBAS Submissions Approver"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 3,
+  "fields": {
+    "code": "view.profile",
+    "description": "VIEW_SELF_PROFILE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 5,
+  "fields": {
+    "code": "staff.basic",
+    "description": "STAFF_BASIC_VIEW"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 6,
+  "fields": {
+    "code": "dept.manage",
+    "description": "MANAGE_DEPARTMENT"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 7,
+  "fields": {
+    "code": "dept.assist",
+    "description": "ASSISTANT_MANAGE_DEPARTMENT"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 8,
+  "fields": {
+    "code": "class.manage",
+    "description": "MANAGING_CLASS"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 9,
+  "fields": {
+    "code": "student.mentor",
+    "description": "STUDENT_MENTOR"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 13,
+  "fields": {
+    "code": "curriculum.master.view",
+    "description": "CURRICULUM_MASTER_VIEW"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 14,
+  "fields": {
+    "code": "curriculum.master.edit",
+    "description": "CURRICULUM_MASTER_EDIT"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 15,
+  "fields": {
+    "code": "curriculum.master.publish",
+    "description": "CURRICULUM_MASTER_PUBLISH"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 16,
+  "fields": {
+    "code": "curriculum.department.view",
+    "description": "CURRICULUM_DEPARTMENT_VIEW"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 17,
+  "fields": {
+    "code": "curriculum.department.edit",
+    "description": "CURRICULUM_DEPARTMENT_EDIT"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 18,
+  "fields": {
+    "code": "curriculum.department.approve",
+    "description": "CURRICULUM_DEPARTMENT_APPROVE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 19,
+  "fields": {
+    "code": "curriculum.elective.manage",
+    "description": "CURRICULUM_ELECTIVE_MANAGE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 20,
+  "fields": {
+    "code": "curriculum.regulation.manage",
+    "description": "CURRICULUM_REGULATION_MANAGE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 21,
+  "fields": {
+    "code": "academics.add_sectionadvisor",
+    "description": "ACADEMIC_ADD_SEC_ADV"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 22,
+  "fields": {
+    "code": "academics.change_sectionadvisor",
+    "description": "ACADEMIC_CHANGE_SEC_ADV"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 23,
+  "fields": {
+    "code": "academics.delete_sectionadvisor",
+    "description": "ACADEMIC_DELETE_SEC_ADV"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 24,
+  "fields": {
+    "code": "academics.assign_advisor",
+    "description": "Auto-added permission"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 25,
+  "fields": {
+    "code": "academics.assign_teaching",
+    "description": "Auto-added teaching permission"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 26,
+  "fields": {
+    "code": "academics.change_teaching",
+    "description": "Auto-added teaching permission"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 27,
+  "fields": {
+    "code": "academics.delete_teaching",
+    "description": "Auto-added teaching permission"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 28,
+  "fields": {
+    "code": "academics.view_my_students.",
+    "description": "VIEW_CLASS_STUDENTS"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 29,
+  "fields": {
+    "code": "timetable.manage_templates",
+    "description": "TIMETABLE_TEMP"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 30,
+  "fields": {
+    "code": "timetable.assign",
+    "description": "TIMETABLE_ASSIGN"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 31,
+  "fields": {
+    "code": "timetable.view",
+    "description": "TIMETABLE_VIEW"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 34,
+  "fields": {
+    "code": "academics.view_assigned_subjects",
+    "description": "VIEW_SUBJECTS"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 35,
+  "fields": {
+    "code": "academics.mark_attendance",
+    "description": "ATT_MARK"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 36,
+  "fields": {
+    "code": "academics.view_elective_teaching",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 37,
+  "fields": {
+    "code": "academics.assign_elective_teaching",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 38,
+  "fields": {
+    "code": "academics.view_all_staff",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 39,
+  "fields": {
+    "code": "academics.view_all_departments",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 40,
+  "fields": {
+    "code": "academics.change_elective_teaching",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 41,
+  "fields": {
+    "code": "academics.assign_mentor",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 42,
+  "fields": {
+    "code": "academics.view_my_mentees",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 43,
+  "fields": {
+    "code": "analytics.view_all_analytics",
+    "description": "Can view attendance analytics for all departments, classes, and students"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 44,
+  "fields": {
+    "code": "analytics.view_department_analytics",
+    "description": "Can view attendance analytics for own department classes and students"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 45,
+  "fields": {
+    "code": "analytics.view_class_analytics",
+    "description": "Can view attendance analytics for own class students"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 46,
+  "fields": {
+    "code": "curriculum.import_elective_choices",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 47,
+  "fields": {
+    "code": "academics.view_mentees",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 48,
+  "fields": {
+    "code": "obe.view",
+    "description": "OBE_VIEW"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 49,
+  "fields": {
+    "code": "obe.cdap.upload",
+    "description": "OBE_CDAP_UPLOAD"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 50,
+  "fields": {
+    "code": "obe.master.manage",
+    "description": "OBE_MASTER_MANAGE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 51,
+  "fields": {
+    "code": "academics.view_all_attendance",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 52,
+  "fields": {
+    "code": "academics.view_attendance_overall",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 53,
+  "fields": {
+    "code": "academics.view_department_attendance",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 54,
+  "fields": {
+    "code": "academics.view_class_attendance",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 55,
+  "fields": {
+    "code": "academics.view_section_attendance",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 56,
+  "fields": {
+    "code": "notifications.manage",
+    "description": "NOTIFICATIONS_MANAGE"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 57,
+  "fields": {
+    "code": "queries.manage",
+    "description": "QUERY_MANAGER"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 58,
+  "fields": {
+    "code": "academics.view_staffs_page",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 59,
+  "fields": {
+    "code": "academics.edit_staff",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 60,
+  "fields": {
+    "code": "students.view_students",
+    "description": "Can access the students page"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 61,
+  "fields": {
+    "code": "students.view_all_students",
+    "description": "Can view students from all departments and sections"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 62,
+  "fields": {
+    "code": "students.view_department_students",
+    "description": "Can view students from own department"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 63,
+  "fields": {
+    "code": "staff_attendance.upload_csv",
+    "description": "Upload staff attendance CSV files"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 64,
+  "fields": {
+    "code": "staff_attendance.view_attendance_records",
+    "description": "View staff attendance records"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 65,
+  "fields": {
+    "code": "staff_attendance.view_upload_logs",
+    "description": "View staff attendance upload logs"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 66,
+  "fields": {
+    "code": "staff_attendance.manage_attendance",
+    "description": "Manage staff attendance system"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 67,
+  "fields": {
+    "code": "feedback.feedback_page",
+    "description": "View feedback page"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 68,
+  "fields": {
+    "code": "feedback.create",
+    "description": "Create feedback forms (HOD)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 69,
+  "fields": {
+    "code": "feedback.reply",
+    "description": "Reply to feedback (Staff & Students)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 70,
+  "fields": {
+    "code": "feedback.principal_feedback_page",
+    "description": "Principal feedback page access"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 71,
+  "fields": {
+    "code": "feedback.principal_create",
+    "description": "Principal can create institutional feedback"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 72,
+  "fields": {
+    "code": "feedback.principal_analytics",
+    "description": "Principal can view feedback analytics"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 73,
+  "fields": {
+    "code": "accounts.profile_image_unlock_approve",
+    "description": "Approve profile image unlock requests"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 74,
+  "fields": {
+    "code": "idscan.assign_cards",
+    "description": "Can access RFID Card Assignment page"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 75,
+  "fields": {
+    "code": "idcsscan.scan",
+    "description": "Can use IDCS scan endpoints"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 76,
+  "fields": {
+    "code": "staff_requests.approve_requests",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 77,
+  "fields": {
+    "code": "branding.access",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 78,
+  "fields": {
+    "code": "branding.list_posters",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 79,
+  "fields": {
+    "code": "events.branding_review",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 80,
+  "fields": {
+    "code": "events.bulk_delete_proposals",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 81,
+  "fields": {
+    "code": "events.haa_approve",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 82,
+  "fields": {
+    "code": "events.hod_approve",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 83,
+  "fields": {
+    "code": "events.create_proposal",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 85,
+  "fields": {
+    "code": "feedback.principal_all_departments_access",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 86,
+  "fields": {
+    "code": "feedback.all_departments_access",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 87,
+  "fields": {
+    "code": "feedback.own_department_access",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 88,
+  "fields": {
+    "code": "obe.hod_obe_requests",
+    "description": "HOD: OBE Requests (sidebar visibility)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 89,
+  "fields": {
+    "code": "obe.master_obe_requests",
+    "description": "OBE: Master Requests (sidebar visibility and access)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 90,
+  "fields": {
+    "code": "applications.view_any_application",
+    "description": "Applications: View any application (HR override)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 91,
+  "fields": {
+    "code": "announcements.view_announcement_page",
+    "description": "View announcements page"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 92,
+  "fields": {
+    "code": "announcements.create_announcement",
+    "description": "Create announcements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 93,
+  "fields": {
+    "code": "announcements.manage_announcement",
+    "description": "Edit/delete announcements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 94,
+  "fields": {
+    "code": "coe.portal.access",
+    "description": "Access COE portal base"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 95,
+  "fields": {
+    "code": "coe.manage.exams",
+    "description": "Manage exam operations in COE portal"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 96,
+  "fields": {
+    "code": "coe.manage.results",
+    "description": "Manage result publication in COE portal"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 97,
+  "fields": {
+    "code": "coe.manage.circulars",
+    "description": "Manage circulars in COE portal"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 98,
+  "fields": {
+    "code": "coe.manage.calendar",
+    "description": "Manage academic calendar in COE portal"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 99,
+  "fields": {
+    "code": "lms.page.staff",
+    "description": "LMS page access for staff users"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 100,
+  "fields": {
+    "code": "lms.page.student",
+    "description": "LMS page access for student users"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 101,
+  "fields": {
+    "code": "lms.page.hod",
+    "description": "LMS page access for HOD users"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 102,
+  "fields": {
+    "code": "lms.page.ahod",
+    "description": "LMS page access for AHOD users"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 103,
+  "fields": {
+    "code": "lms.page.iqac",
+    "description": "LMS page access for IQAC users"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 104,
+  "fields": {
+    "code": "lms.materials.manage_own",
+    "description": "Create, update and delete own LMS materials"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 105,
+  "fields": {
+    "code": "lms.materials.view_student",
+    "description": "View LMS materials mapped to student courses"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 106,
+  "fields": {
+    "code": "lms.materials.view_department",
+    "description": "View LMS materials in managed departments"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 107,
+  "fields": {
+    "code": "lms.materials.view_all",
+    "description": "View LMS materials across all departments"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 108,
+  "fields": {
+    "code": "lms.quota.manage",
+    "description": "Manage LMS storage quota allocations for staff"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 109,
+  "fields": {
+    "code": "academic_calendar.admin",
+    "description": "Can access and manage Academic Calendar Admin page - upload/view/delete academic calendars"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 110,
+  "fields": {
+    "code": "curriculum.poll.create",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 111,
+  "fields": {
+    "code": "curriculum.poll.access",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 112,
+  "fields": {
+    "code": "curriculum.poll.view_results",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 113,
+  "fields": {
+    "code": "curriculum.choose_elective",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 114,
+  "fields": {
+    "code": "curriculum.manage_elective_poll",
+    "description": ""
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 115,
+  "fields": {
+    "code": "certificates.upload",
+    "description": "Upload certificates"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 116,
+  "fields": {
+    "code": "certificates.review",
+    "description": "Review certificates"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 117,
+  "fields": {
+    "code": "certificates.view_mentee_achievements",
+    "description": "View mentee achievements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 118,
+  "fields": {
+    "code": "certificates.view_advisee_achievements",
+    "description": "View advisee achievements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 119,
+  "fields": {
+    "code": "certificates.view_department_achievements",
+    "description": "View department achievements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 120,
+  "fields": {
+    "code": "certificates.view_all_achievements",
+    "description": "View all achievements"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 121,
+  "fields": {
+    "code": "certificates.export_reports",
+    "description": "Export certificate reports"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 122,
+  "fields": {
+    "code": "academic_v2.page.staff",
+    "description": "Access Academic 2.1 staff pages (Assigned Courses, Mark Entry)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 123,
+  "fields": {
+    "code": "academic_v2.page.admin",
+    "description": "Access Academic 2.1 admin pages (Publish Control, Class Types, Patterns, Approvals)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 124,
+  "fields": {
+    "code": "academic_v2.marks.view_own",
+    "description": "View own course marks"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 125,
+  "fields": {
+    "code": "academic_v2.marks.edit_own",
+    "description": "Enter and edit marks for assigned courses"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 126,
+  "fields": {
+    "code": "academic_v2.marks.publish",
+    "description": "Publish marks (locks for editing)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 127,
+  "fields": {
+    "code": "academic_v2.marks.request_edit",
+    "description": "Request edit access for published marks"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 128,
+  "fields": {
+    "code": "academic_v2.marks.view_all",
+    "description": "View all marks across departments"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 129,
+  "fields": {
+    "code": "academic_v2.admin.semester_config",
+    "description": "Manage semester configurations (due dates, publish control)"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 130,
+  "fields": {
+    "code": "academic_v2.admin.class_types",
+    "description": "Manage class types and exam assignments"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 131,
+  "fields": {
+    "code": "academic_v2.admin.qp_patterns",
+    "description": "Manage question paper patterns"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 132,
+  "fields": {
+    "code": "academic_v2.admin.approve_edit",
+    "description": "Approve edit requests for published marks"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 133,
+  "fields": {
+    "code": "academic_v2.hod.view_department",
+    "description": "View department marks and internal reports"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 134,
+  "fields": {
+    "code": "academic_v2.hod.approve_edit",
+    "description": "HOD approve edit requests"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 135,
+  "fields": {
+    "code": "academic_v2.internal.view_own",
+    "description": "View internal marks for own courses"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 136,
+  "fields": {
+    "code": "academic_v2.internal.view_department",
+    "description": "View internal marks for department"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 137,
+  "fields": {
+    "code": "academic_v2.internal.view_all",
+    "description": "View all internal marks"
+  }
+},
+{
+  "model": "accounts.permission",
+  "pk": 138,
+  "fields": {
+    "code": "academic_v2.internal.export",
+    "description": "Export internal marks to Excel/PDF"
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 6,
+  "fields": {
+    "role": 1,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 8,
+  "fields": {
+    "role": 1,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 9,
+  "fields": {
+    "role": 1,
+    "permission": 6
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 10,
+  "fields": {
+    "role": 7,
+    "permission": 7
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 11,
+  "fields": {
+    "role": 7,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 12,
+  "fields": {
+    "role": 7,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 15,
+  "fields": {
+    "role": 2,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 16,
+  "fields": {
+    "role": 2,
+    "permission": 9
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 17,
+  "fields": {
+    "role": 5,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 20,
+  "fields": {
+    "role": 8,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 24,
+  "fields": {
+    "role": 8,
+    "permission": 13
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 25,
+  "fields": {
+    "role": 8,
+    "permission": 14
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 26,
+  "fields": {
+    "role": 8,
+    "permission": 15
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 27,
+  "fields": {
+    "role": 8,
+    "permission": 20
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 28,
+  "fields": {
+    "role": 5,
+    "permission": 13
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 29,
+  "fields": {
+    "role": 5,
+    "permission": 14
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 30,
+  "fields": {
+    "role": 5,
+    "permission": 15
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 31,
+  "fields": {
+    "role": 1,
+    "permission": 16
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 32,
+  "fields": {
+    "role": 1,
+    "permission": 17
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 34,
+  "fields": {
+    "role": 1,
+    "permission": 19
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 35,
+  "fields": {
+    "role": 7,
+    "permission": 16
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 36,
+  "fields": {
+    "role": 7,
+    "permission": 17
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 37,
+  "fields": {
+    "role": 5,
+    "permission": 16
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 38,
+  "fields": {
+    "role": 5,
+    "permission": 17
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 39,
+  "fields": {
+    "role": 5,
+    "permission": 18
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 40,
+  "fields": {
+    "role": 1,
+    "permission": 21
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 41,
+  "fields": {
+    "role": 1,
+    "permission": 22
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 42,
+  "fields": {
+    "role": 1,
+    "permission": 23
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 46,
+  "fields": {
+    "role": 1,
+    "permission": 24
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 54,
+  "fields": {
+    "role": 5,
+    "permission": 29
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 64,
+  "fields": {
+    "role": 11,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 65,
+  "fields": {
+    "role": 11,
+    "permission": 31
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 66,
+  "fields": {
+    "role": 12,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 67,
+  "fields": {
+    "role": 12,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 68,
+  "fields": {
+    "role": 12,
+    "permission": 31
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 69,
+  "fields": {
+    "role": 12,
+    "permission": 34
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 70,
+  "fields": {
+    "role": 12,
+    "permission": 35
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 71,
+  "fields": {
+    "role": 13,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 72,
+  "fields": {
+    "role": 13,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 73,
+  "fields": {
+    "role": 13,
+    "permission": 8
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 74,
+  "fields": {
+    "role": 13,
+    "permission": 25
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 75,
+  "fields": {
+    "role": 13,
+    "permission": 27
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 76,
+  "fields": {
+    "role": 13,
+    "permission": 26
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 77,
+  "fields": {
+    "role": 13,
+    "permission": 31
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 78,
+  "fields": {
+    "role": 13,
+    "permission": 30
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 80,
+  "fields": {
+    "role": 1,
+    "permission": 36
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 81,
+  "fields": {
+    "role": 1,
+    "permission": 25
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 82,
+  "fields": {
+    "role": 1,
+    "permission": 26
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 83,
+  "fields": {
+    "role": 1,
+    "permission": 27
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 84,
+  "fields": {
+    "role": 1,
+    "permission": 37
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 85,
+  "fields": {
+    "role": 13,
+    "permission": 38
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 87,
+  "fields": {
+    "role": 13,
+    "permission": 39
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 88,
+  "fields": {
+    "role": 12,
+    "permission": 39
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 89,
+  "fields": {
+    "role": 1,
+    "permission": 40
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 90,
+  "fields": {
+    "role": 13,
+    "permission": 41
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 91,
+  "fields": {
+    "role": 12,
+    "permission": 42
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 95,
+  "fields": {
+    "role": 5,
+    "permission": 46
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 96,
+  "fields": {
+    "role": 14,
+    "permission": 3
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 97,
+  "fields": {
+    "role": 14,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 98,
+  "fields": {
+    "role": 14,
+    "permission": 6
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 99,
+  "fields": {
+    "role": 14,
+    "permission": 16
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 100,
+  "fields": {
+    "role": 14,
+    "permission": 17
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 101,
+  "fields": {
+    "role": 14,
+    "permission": 19
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 102,
+  "fields": {
+    "role": 14,
+    "permission": 21
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 103,
+  "fields": {
+    "role": 14,
+    "permission": 22
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 104,
+  "fields": {
+    "role": 14,
+    "permission": 23
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 105,
+  "fields": {
+    "role": 14,
+    "permission": 24
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 106,
+  "fields": {
+    "role": 14,
+    "permission": 25
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 107,
+  "fields": {
+    "role": 14,
+    "permission": 26
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 108,
+  "fields": {
+    "role": 14,
+    "permission": 27
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 109,
+  "fields": {
+    "role": 14,
+    "permission": 36
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 110,
+  "fields": {
+    "role": 14,
+    "permission": 37
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 111,
+  "fields": {
+    "role": 14,
+    "permission": 40
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 113,
+  "fields": {
+    "role": 12,
+    "permission": 47
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 114,
+  "fields": {
+    "role": 1,
+    "permission": 48
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 115,
+  "fields": {
+    "role": 1,
+    "permission": 49
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 116,
+  "fields": {
+    "role": 5,
+    "permission": 50
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 117,
+  "fields": {
+    "role": 5,
+    "permission": 48
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 118,
+  "fields": {
+    "role": 12,
+    "permission": 48
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 119,
+  "fields": {
+    "role": 12,
+    "permission": 49
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 120,
+  "fields": {
+    "role": 13,
+    "permission": 48
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 121,
+  "fields": {
+    "role": 13,
+    "permission": 49
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 122,
+  "fields": {
+    "role": 14,
+    "permission": 48
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 123,
+  "fields": {
+    "role": 14,
+    "permission": 49
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 128,
+  "fields": {
+    "role": 5,
+    "permission": 20
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 131,
+  "fields": {
+    "role": 5,
+    "permission": 39
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 137,
+  "fields": {
+    "role": 5,
+    "permission": 43
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 139,
+  "fields": {
+    "role": 5,
+    "permission": 56
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 140,
+  "fields": {
+    "role": 13,
+    "permission": 45
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 141,
+  "fields": {
+    "role": 5,
+    "permission": 57
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 142,
+  "fields": {
+    "role": 5,
+    "permission": 58
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 143,
+  "fields": {
+    "role": 5,
+    "permission": 38
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 144,
+  "fields": {
+    "role": 14,
+    "permission": 53
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 145,
+  "fields": {
+    "role": 14,
+    "permission": 44
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 146,
+  "fields": {
+    "role": 14,
+    "permission": 58
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 147,
+  "fields": {
+    "role": 14,
+    "permission": 59
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 148,
+  "fields": {
+    "role": 5,
+    "permission": 59
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 149,
+  "fields": {
+    "role": 14,
+    "permission": 60
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 150,
+  "fields": {
+    "role": 14,
+    "permission": 62
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 151,
+  "fields": {
+    "role": 13,
+    "permission": 60
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 152,
+  "fields": {
+    "role": 5,
+    "permission": 60
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 153,
+  "fields": {
+    "role": 5,
+    "permission": 61
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 154,
+  "fields": {
+    "role": 13,
+    "permission": 28
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 155,
+  "fields": {
+    "role": 14,
+    "permission": 42
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 156,
+  "fields": {
+    "role": 17,
+    "permission": 63
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 157,
+  "fields": {
+    "role": 17,
+    "permission": 64
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 158,
+  "fields": {
+    "role": 17,
+    "permission": 65
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 159,
+  "fields": {
+    "role": 17,
+    "permission": 66
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 160,
+  "fields": {
+    "role": 14,
+    "permission": 67
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 161,
+  "fields": {
+    "role": 14,
+    "permission": 68
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 162,
+  "fields": {
+    "role": 12,
+    "permission": 67
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 163,
+  "fields": {
+    "role": 12,
+    "permission": 69
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 164,
+  "fields": {
+    "role": 11,
+    "permission": 67
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 165,
+  "fields": {
+    "role": 11,
+    "permission": 69
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 166,
+  "fields": {
+    "role": 5,
+    "permission": 67
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 167,
+  "fields": {
+    "role": 5,
+    "permission": 68
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 168,
+  "fields": {
+    "role": 19,
+    "permission": 70
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 169,
+  "fields": {
+    "role": 19,
+    "permission": 71
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 170,
+  "fields": {
+    "role": 19,
+    "permission": 72
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 171,
+  "fields": {
+    "role": 19,
+    "permission": 67
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 172,
+  "fields": {
+    "role": 5,
+    "permission": 51
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 173,
+  "fields": {
+    "role": 5,
+    "permission": 52
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 174,
+  "fields": {
+    "role": 5,
+    "permission": 73
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 175,
+  "fields": {
+    "role": 24,
+    "permission": 74
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 176,
+  "fields": {
+    "role": 20,
+    "permission": 75
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 177,
+  "fields": {
+    "role": 5,
+    "permission": 76
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 179,
+  "fields": {
+    "role": 14,
+    "permission": 76
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 181,
+  "fields": {
+    "role": 25,
+    "permission": 77
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 182,
+  "fields": {
+    "role": 25,
+    "permission": 78
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 183,
+  "fields": {
+    "role": 25,
+    "permission": 79
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 184,
+  "fields": {
+    "role": 25,
+    "permission": 80
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 185,
+  "fields": {
+    "role": 12,
+    "permission": 83
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 186,
+  "fields": {
+    "role": 14,
+    "permission": 82
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 187,
+  "fields": {
+    "role": 8,
+    "permission": 81
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 188,
+  "fields": {
+    "role": 19,
+    "permission": 85
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 189,
+  "fields": {
+    "role": 5,
+    "permission": 86
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 190,
+  "fields": {
+    "role": 14,
+    "permission": 87
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 191,
+  "fields": {
+    "role": 14,
+    "permission": 88
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 192,
+  "fields": {
+    "role": 5,
+    "permission": 89
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 193,
+  "fields": {
+    "role": 18,
+    "permission": 90
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 194,
+  "fields": {
+    "role": 11,
+    "permission": 91
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 195,
+  "fields": {
+    "role": 12,
+    "permission": 91
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 196,
+  "fields": {
+    "role": 12,
+    "permission": 92
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 197,
+  "fields": {
+    "role": 1,
+    "permission": 91
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 198,
+  "fields": {
+    "role": 1,
+    "permission": 92
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 199,
+  "fields": {
+    "role": 5,
+    "permission": 91
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 200,
+  "fields": {
+    "role": 5,
+    "permission": 92
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 201,
+  "fields": {
+    "role": 19,
+    "permission": 91
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 202,
+  "fields": {
+    "role": 19,
+    "permission": 92
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 203,
+  "fields": {
+    "role": 19,
+    "permission": 93
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 204,
+  "fields": {
+    "role": 12,
+    "permission": 99
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 205,
+  "fields": {
+    "role": 12,
+    "permission": 104
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 206,
+  "fields": {
+    "role": 11,
+    "permission": 100
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 207,
+  "fields": {
+    "role": 11,
+    "permission": 105
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 208,
+  "fields": {
+    "role": 1,
+    "permission": 101
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 209,
+  "fields": {
+    "role": 1,
+    "permission": 106
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 210,
+  "fields": {
+    "role": 7,
+    "permission": 102
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 211,
+  "fields": {
+    "role": 7,
+    "permission": 106
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 212,
+  "fields": {
+    "role": 5,
+    "permission": 103
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 213,
+  "fields": {
+    "role": 5,
+    "permission": 107
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 214,
+  "fields": {
+    "role": 5,
+    "permission": 108
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 215,
+  "fields": {
+    "role": 28,
+    "permission": 109
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 216,
+  "fields": {
+    "role": 5,
+    "permission": 109
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 221,
+  "fields": {
+    "role": 11,
+    "permission": 113
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 222,
+  "fields": {
+    "role": 28,
+    "permission": 114
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 223,
+  "fields": {
+    "role": 11,
+    "permission": 115
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 224,
+  "fields": {
+    "role": 13,
+    "permission": 118
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 225,
+  "fields": {
+    "role": 14,
+    "permission": 119
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 226,
+  "fields": {
+    "role": 28,
+    "permission": 120
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 227,
+  "fields": {
+    "role": 28,
+    "permission": 121
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 228,
+  "fields": {
+    "role": 29,
+    "permission": 58
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 229,
+  "fields": {
+    "role": 29,
+    "permission": 5
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 230,
+  "fields": {
+    "role": 12,
+    "permission": 122
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 231,
+  "fields": {
+    "role": 12,
+    "permission": 124
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 232,
+  "fields": {
+    "role": 12,
+    "permission": 125
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 233,
+  "fields": {
+    "role": 12,
+    "permission": 126
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 234,
+  "fields": {
+    "role": 12,
+    "permission": 127
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 235,
+  "fields": {
+    "role": 12,
+    "permission": 135
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 236,
+  "fields": {
+    "role": 1,
+    "permission": 122
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 237,
+  "fields": {
+    "role": 1,
+    "permission": 124
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 238,
+  "fields": {
+    "role": 1,
+    "permission": 125
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 239,
+  "fields": {
+    "role": 1,
+    "permission": 126
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 240,
+  "fields": {
+    "role": 1,
+    "permission": 127
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 241,
+  "fields": {
+    "role": 1,
+    "permission": 133
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 242,
+  "fields": {
+    "role": 1,
+    "permission": 134
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 243,
+  "fields": {
+    "role": 1,
+    "permission": 135
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 244,
+  "fields": {
+    "role": 1,
+    "permission": 136
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 245,
+  "fields": {
+    "role": 1,
+    "permission": 138
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 246,
+  "fields": {
+    "role": 7,
+    "permission": 122
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 247,
+  "fields": {
+    "role": 7,
+    "permission": 124
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 248,
+  "fields": {
+    "role": 7,
+    "permission": 125
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 249,
+  "fields": {
+    "role": 7,
+    "permission": 126
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 250,
+  "fields": {
+    "role": 7,
+    "permission": 127
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 251,
+  "fields": {
+    "role": 7,
+    "permission": 133
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 252,
+  "fields": {
+    "role": 7,
+    "permission": 135
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 253,
+  "fields": {
+    "role": 7,
+    "permission": 136
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 254,
+  "fields": {
+    "role": 5,
+    "permission": 122
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 255,
+  "fields": {
+    "role": 5,
+    "permission": 123
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 256,
+  "fields": {
+    "role": 5,
+    "permission": 128
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 257,
+  "fields": {
+    "role": 5,
+    "permission": 129
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 258,
+  "fields": {
+    "role": 5,
+    "permission": 130
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 259,
+  "fields": {
+    "role": 5,
+    "permission": 131
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 260,
+  "fields": {
+    "role": 5,
+    "permission": 132
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 261,
+  "fields": {
+    "role": 5,
+    "permission": 137
+  }
+},
+{
+  "model": "accounts.rolepermission",
+  "pk": 262,
+  "fields": {
+    "role": 5,
+    "permission": 138
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "0871bcf5-6da8-4fa1-ad6d-0fa42f22a307",
+  "fields": {
+    "code": "TOTAL_CQI",
+    "label": "Total CQI (grand total of all CQI inputs for this student)",
+    "description": "Sum of all CQI input values entered for the current student across all covered COs. Useful for whole-student threshold checks.",
+    "category": "core",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 12,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.828Z",
+    "updated_at": "2026-08-17T09:11:17.828Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "39b74778-56f2-4a5e-90b1-db2b18f7e4a5",
+  "fields": {
+    "code": "X",
+    "label": "X — alias for CQI input value",
+    "description": "Alias for [CQI]. The raw CQI mark entered by faculty for this student/CO.",
+    "category": "core",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": false,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 14,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.829Z",
+    "updated_at": "2026-08-17T09:11:17.829Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "4ad8f4e9-32fb-4921-ab4b-1c93d19ef54a",
+  "fields": {
+    "code": "AFTER_CQI_COX_TOTAL",
+    "label": "After CQI COx Total — CO total after CQI (dynamic alias)",
+    "description": "Dynamic alias for the current CO weighted total AFTER CQI is applied. Equivalent to AFTER_CQI when used in a per-CO context. COX is substituted with the actual CO number at runtime.",
+    "category": "co_dynamic",
+    "is_dynamic_co": true,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 32,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.836Z",
+    "updated_at": "2026-08-17T09:11:17.836Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "6efbe609-8847-4f55-afac-c2837881650b",
+  "fields": {
+    "code": "CO-RAW",
+    "label": "CO Raw marks (current CO, from exams)",
+    "description": "Total raw marks obtained by the student for the current CO across all non-CQI exams.",
+    "category": "co_alias",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 20,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.830Z",
+    "updated_at": "2026-08-17T09:11:17.830Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "9a1b89b9-c9ee-4827-8fe8-3896c8e9d983",
+  "fields": {
+    "code": "BEFORE_CQI",
+    "label": "Before CQI (current CO total before adding CQI marks)",
+    "description": "The weighted CO total accumulated from all non-CQI exams for the current CO, BEFORE any CQI contribution is applied. This is the primary attainment check token.",
+    "category": "core",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 10,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.826Z",
+    "updated_at": "2026-08-17T09:11:17.826Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "9bb76bfe-355b-4c2b-84b9-45e8d2abe87b",
+  "fields": {
+    "code": "CQI",
+    "label": "CQI input value (entered by faculty for this CO)",
+    "description": "The raw CQI mark entered by the faculty for the current student and CO (0–10 scale).",
+    "category": "core",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": false,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 13,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.829Z",
+    "updated_at": "2026-08-17T09:11:17.829Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "9d1aed63-ce13-4d29-a166-8aaa8b2cb6b8",
+  "fields": {
+    "code": "AFTER_CQI",
+    "label": "After CQI (current CO total after adding CQI marks)",
+    "description": "The estimated CO total AFTER applying the CQI contribution. Equals BEFORE_CQI + CQI input value.",
+    "category": "core",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 11,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.827Z",
+    "updated_at": "2026-08-17T09:11:17.827Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "a1f6dfdf-1e48-426f-8e9a-41fefed78347",
+  "fields": {
+    "code": "CO-TOTAL-RAW",
+    "label": "CO Total Raw (alias for CO-RAW)",
+    "description": "Alias for [CO-RAW]. Provided for clarity in formulas.",
+    "category": "co_alias",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": false,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 23,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.833Z",
+    "updated_at": "2026-08-17T09:11:17.833Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "b3aff556-23a5-445f-b930-2c274df035d2",
+  "fields": {
+    "code": "CO-TOTAL-WEIGHT",
+    "label": "CO Total Weight % (alias for CO-WEIGHT)",
+    "description": "Alias for [CO-WEIGHT]. Provided for clarity in formulas.",
+    "category": "co_alias",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": false,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 24,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.833Z",
+    "updated_at": "2026-08-17T09:11:17.833Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "d5272c5b-cb01-4229-bf50-225c68c6a60a",
+  "fields": {
+    "code": "CO-WEIGHT",
+    "label": "CO Weighted % (current CO, before CQI)",
+    "description": "Weighted percentage for the current CO: (CO-RAW / CO-MAX) × 100.",
+    "category": "co_alias",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 22,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.832Z",
+    "updated_at": "2026-08-17T09:11:17.832Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "d635c2a6-6fbe-4e5b-afd1-6200f1582c42",
+  "fields": {
+    "code": "BEFORE_CQI_COX_TOTAL",
+    "label": "Before CQI COx Total — CO total before CQI (dynamic alias)",
+    "description": "Dynamic alias for the current CO weighted total BEFORE CQI is applied. Equivalent to BEFORE_CQI when used in a per-CO context. COX is substituted with the actual CO number at runtime.",
+    "category": "co_dynamic",
+    "is_dynamic_co": true,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 31,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.835Z",
+    "updated_at": "2026-08-17T09:11:17.835Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "f5ac407f-bac3-45b1-8261-e6c8008a3c2b",
+  "fields": {
+    "code": "COX_PERCENT",
+    "label": "COx Percent — weighted % for the current CO (dynamic alias)",
+    "description": "Dynamic alias that resolves to CO1_PERCENT, CO2_PERCENT, … at runtime based on the current CO being evaluated. Equals (CO-RAW / CO-MAX) × 100. Use this in conditions to check if the student has attained the threshold for THIS CO.",
+    "category": "co_dynamic",
+    "is_dynamic_co": true,
+    "is_system": true,
+    "available_in_condition": true,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 30,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.834Z",
+    "updated_at": "2026-08-17T09:11:17.834Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqitoken",
+  "pk": "fff1f06e-2883-4687-90fe-c9bada38ca23",
+  "fields": {
+    "code": "CO-MAX",
+    "label": "CO Maximum marks (current CO)",
+    "description": "Maximum achievable marks for the current CO across all non-CQI exams.",
+    "category": "co_alias",
+    "is_dynamic_co": false,
+    "is_system": true,
+    "available_in_condition": false,
+    "available_in_formula": true,
+    "college": null,
+    "class_type": null,
+    "order": 21,
+    "is_active": true,
+    "created_at": "2026-08-17T09:11:17.831Z",
+    "updated_at": "2026-08-17T09:11:17.831Z"
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "33e86848-fe07-42b6-b394-c781de06f31e",
+  "fields": {
+    "code": "<=",
+    "symbol": "≤",
+    "label": "Less than or equal",
+    "order": 2,
+    "is_active": true
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "45c79049-4863-428e-9366-b346481f4ac9",
+  "fields": {
+    "code": "==",
+    "symbol": "=",
+    "label": "Equal to",
+    "order": 5,
+    "is_active": true
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "7c496c84-e654-4f91-ba5c-c59872903fbc",
+  "fields": {
+    "code": ">=",
+    "symbol": "≥",
+    "label": "Greater than or equal",
+    "order": 4,
+    "is_active": true
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "7c770770-d694-472f-b604-1d10016af85b",
+  "fields": {
+    "code": "!=",
+    "symbol": "≠",
+    "label": "Not equal to",
+    "order": 6,
+    "is_active": true
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "bb9ce9c3-fd02-4496-8ce5-c52416ca023e",
+  "fields": {
+    "code": ">",
+    "symbol": ">",
+    "label": "Greater than",
+    "order": 3,
+    "is_active": true
+  }
+},
+{
+  "model": "academic_v2.acv2cqioperator",
+  "pk": "fd594960-6595-4406-a8cb-4938286be1fc",
+  "fields": {
+    "code": "<",
+    "symbol": "<",
+    "label": "Less than",
+    "order": 1,
+    "is_active": true
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 1,
+  "fields": {
+    "code": "THEORY",
+    "label": "Theory",
+    "is_active": true,
+    "sort_order": 1,
+    "created_at": "2026-08-17T09:11:24.013Z",
+    "updated_at": "2026-08-17T09:11:24.013Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 2,
+  "fields": {
+    "code": "THEORY_PMBL",
+    "label": "Theory (PMBL)",
+    "is_active": true,
+    "sort_order": 2,
+    "created_at": "2026-08-17T09:11:24.014Z",
+    "updated_at": "2026-08-17T09:11:24.014Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 3,
+  "fields": {
+    "code": "LAB",
+    "label": "Lab",
+    "is_active": true,
+    "sort_order": 3,
+    "created_at": "2026-08-17T09:11:24.015Z",
+    "updated_at": "2026-08-18T09:15:45.390Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 4,
+  "fields": {
+    "code": "PURE_LAB",
+    "label": "Pure Lab",
+    "is_active": true,
+    "sort_order": 4,
+    "created_at": "2026-08-17T09:11:24.015Z",
+    "updated_at": "2026-08-17T09:11:24.015Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 5,
+  "fields": {
+    "code": "TCPL",
+    "label": "TCPL",
+    "is_active": true,
+    "sort_order": 5,
+    "created_at": "2026-08-17T09:11:24.016Z",
+    "updated_at": "2026-08-19T06:47:42.297Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 6,
+  "fields": {
+    "code": "TCPR",
+    "label": "TCPR",
+    "is_active": true,
+    "sort_order": 6,
+    "created_at": "2026-08-17T09:11:24.016Z",
+    "updated_at": "2026-08-19T09:26:24.753Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 7,
+  "fields": {
+    "code": "PRACTICAL",
+    "label": "Practical",
+    "is_active": true,
+    "sort_order": 7,
+    "created_at": "2026-08-17T09:11:24.017Z",
+    "updated_at": "2026-08-17T09:11:24.017Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 8,
+  "fields": {
+    "code": "PRBL",
+    "label": "PRBL",
+    "is_active": true,
+    "sort_order": 8,
+    "created_at": "2026-08-17T09:11:24.017Z",
+    "updated_at": "2026-08-19T07:03:06.174Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 9,
+  "fields": {
+    "code": "PROJECT",
+    "label": "Project",
+    "is_active": true,
+    "sort_order": 9,
+    "created_at": "2026-08-17T09:11:24.018Z",
+    "updated_at": "2026-08-17T09:11:24.018Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 10,
+  "fields": {
+    "code": "AUDIT",
+    "label": "Audit",
+    "is_active": true,
+    "sort_order": 10,
+    "created_at": "2026-08-17T09:11:24.019Z",
+    "updated_at": "2026-08-17T09:11:24.019Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 11,
+  "fields": {
+    "code": "SPECIAL",
+    "label": "Special",
+    "is_active": true,
+    "sort_order": 11,
+    "created_at": "2026-08-17T09:11:24.019Z",
+    "updated_at": "2026-08-17T09:11:24.019Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 12,
+  "fields": {
+    "code": "TH",
+    "label": "Theory",
+    "is_active": true,
+    "sort_order": 0,
+    "created_at": "2026-08-17T16:13:46.367Z",
+    "updated_at": "2026-08-20T05:37:28.283Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 13,
+  "fields": {
+    "code": "PR",
+    "label": "Project",
+    "is_active": true,
+    "sort_order": 0,
+    "created_at": "2026-08-17T16:14:45.624Z",
+    "updated_at": "2026-08-19T06:11:58.823Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 14,
+  "fields": {
+    "code": "PMBL",
+    "label": "PMBL",
+    "is_active": true,
+    "sort_order": 0,
+    "created_at": "2026-08-17T16:15:15.597Z",
+    "updated_at": "2026-08-19T07:06:40.784Z"
+  }
+},
+{
+  "model": "curriculum.classtype",
+  "pk": 15,
+  "fields": {
+    "code": "Pure LAB",
+    "label": "Lab",
+    "is_active": true,
+    "sort_order": 0,
+    "created_at": "2026-08-19T05:17:04.345Z",
+    "updated_at": "2026-08-19T07:07:23.181Z"
+  }
+}
+]

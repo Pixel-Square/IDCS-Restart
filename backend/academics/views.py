@@ -78,6 +78,9 @@ from .models import StudentMentorMap
 from django.db import transaction
 
 
+
+
+
 def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
     """Best-effort backfill: create TeachingAssignment rows from StudentSubjectBatch.
 

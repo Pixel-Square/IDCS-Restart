@@ -841,8 +841,18 @@ export default function TeachingAssignmentsPage(){
         if (id > 0) curriculumRowIds.add(id);
       });
       
-      // Return only curriculum rows that have assignments
-      return curriculum.filter(c => curriculumRowIds.has(c.id));
+      // Return only curriculum rows that have assignments, AND whose semester matches the current section semester
+      return curriculum.filter(c => {
+        if (!curriculumRowIds.has(c.id)) return false;
+        
+        const cSem = Number(c.semester);
+        const sSem = Number(String(section.semester || '').replace('Sem ', '').trim());
+        if (!isNaN(cSem) && cSem > 0 && !isNaN(sSem) && sSem > 0) {
+          if (cSem !== sSem) return false;
+        }
+        
+        return true;
+      });
     }
     
     const sectionRows = sharedSectionCurriculum[section.id]
@@ -941,6 +951,34 @@ export default function TeachingAssignmentsPage(){
 
       return false
     });
+  }
+
+  // Returns ALL assignments for a section + curriculum-row pair (used for multi-faculty delete/save loops)
+  const findExistingAssignments = (sectionId: number, curricularRowId: number | any): any[] => {
+    const targetSectionId = normalizeId(sectionId)
+    const targetRowId = normalizeId(typeof curricularRowId === 'number' ? curricularRowId : curricularRowId?.id)
+
+    return assignments.filter(a => {
+      const assignmentSectionId =
+        normalizeId((a as any).section_details?.id) ??
+        normalizeId((a as any).section_id) ??
+        normalizeId((a as any).section)
+
+      if (!targetSectionId || assignmentSectionId !== targetSectionId) {
+        return false
+      }
+
+      const assignmentRowId =
+        normalizeId((a as any).curriculum_row_details?.id) ??
+        normalizeId((a as any).curriculum_row?.id) ??
+        normalizeId((a as any).curriculum_row_id)
+
+      if (targetRowId && assignmentRowId && assignmentRowId === targetRowId) {
+        return true
+      }
+
+      return false
+    })
   }
 
   const getAssignmentStaffDisplay = (assignment: TeachingAssignment | any) => {
@@ -1430,6 +1468,7 @@ export default function TeachingAssignmentsPage(){
                           <tbody className="divide-y divide-gray-100">
                             {sectionSubjects.map(subject => {
                               const existingAssignment = findExistingAssignment(section.id, subject);
+                              const existingAssignments = findExistingAssignments(section.id, subject.id);
                               const editing = isEditing(section.id, subject.id);
                               
                               return (
@@ -1718,6 +1757,7 @@ export default function TeachingAssignmentsPage(){
                         <tbody className="divide-y divide-gray-100">
                           {relevantSections.map(sec => {
                             const existingAssignment = findExistingAssignment(sec.id, parent);
+                            const existingAssignments = findExistingAssignments(sec.id, parent.id);
                             const editing = isEditing(sec.id, parent.id);
                             return (
                               <tr key={sec.id} className="hover:bg-white/60">

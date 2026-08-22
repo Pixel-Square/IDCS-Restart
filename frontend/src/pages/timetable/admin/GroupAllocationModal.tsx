@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Search, Plus, Trash2, CheckSquare, Square, Layers, BookOpen, Clock, Copy, Clipboard, Pencil } from 'lucide-react';
+import { X, Search, Plus, Trash2, CheckSquare, Square, Layers, BookOpen, Clock, Copy, Clipboard, Pencil, Building2 } from 'lucide-react';
 import fetchWithAuth from '../../../services/fetchAuth';
 
 export interface ExceptionCourse {
@@ -18,6 +18,7 @@ export interface GroupAllocation {
   exceptionCourses: ExceptionCourse[];
   individualPeriods: number; // No of Periods (Individual / Single)
   pairedPeriods: number; // Pair Periods (2-consecutive period block pairs)
+  venueAvailability?: number; // Integer: max simultaneous sections that can use the venue in the same period
   blockPeriodEnabled?: boolean;
   blockPeriodCount?: number;
   createdAt: string;
@@ -69,6 +70,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
   // Period Settings
   const [individualPeriods, setIndividualPeriods] = useState(1);
   const [pairedPeriods, setPairedPeriods] = useState(0);
+  const [venueAvailability, setVenueAvailability] = useState<number>(1);
 
   // Loaded DB data
   const [rawSections, setRawSections] = useState<any[]>([]);
@@ -90,6 +92,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setSelectedExceptionCourses([]);
     setIndividualPeriods(1);
     setPairedPeriods(0);
+    setVenueAvailability(1);
   };
 
   // Fetch sections and mixed sections on mount/open
@@ -338,6 +341,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
     setSelectedExceptionCourses(alloc.exceptionCourses || []);
     setIndividualPeriods(alloc.individualPeriods !== undefined ? alloc.individualPeriods : 1);
     setPairedPeriods(alloc.pairedPeriods !== undefined ? alloc.pairedPeriods : (alloc.blockPeriodEnabled ? (alloc.blockPeriodCount || 1) : 0));
+    setVenueAvailability(alloc.venueAvailability !== undefined ? alloc.venueAvailability : 1);
     setActiveTab('create');
   };
 
@@ -367,6 +371,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
               exceptionCourses: selectedExceptionCourses,
               individualPeriods: Math.max(0, individualPeriods || 0),
               pairedPeriods: Math.max(0, pairedPeriods || 0),
+              venueAvailability: Math.max(1, parseInt(String(venueAvailability), 10) || 1),
               blockPeriodEnabled: pairedPeriods > 0,
               blockPeriodCount: pairedPeriods,
             }
@@ -383,6 +388,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
         exceptionCourses: selectedExceptionCourses,
         individualPeriods: Math.max(0, individualPeriods || 0),
         pairedPeriods: Math.max(0, pairedPeriods || 0),
+        venueAvailability: Math.max(1, parseInt(String(venueAvailability), 10) || 1),
         blockPeriodEnabled: pairedPeriods > 0,
         blockPeriodCount: pairedPeriods,
         createdAt: new Date().toISOString(),
@@ -769,7 +775,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                   {/* Individual / Single Periods */}
                   <div className="bg-white p-3.5 rounded-xl border border-indigo-200/80 shadow-xs flex items-center justify-between">
                     <div>
@@ -785,7 +791,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                         max={10}
                         value={individualPeriods}
                         onChange={(e) => setIndividualPeriods(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                        className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                        className="w-16 px-2.5 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
                       />
                     </div>
                   </div>
@@ -796,7 +802,7 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                       <label className="block text-xs font-bold text-gray-800">
                         Pair Periods (Block)
                       </label>
-                      <span className="text-[11px] text-gray-500">2-consecutive period pairs (e.g. 2&3)</span>
+                      <span className="text-[11px] text-gray-500">2-consecutive pairs (e.g. 2&3)</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <input
@@ -805,7 +811,28 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                         max={5}
                         value={pairedPeriods}
                         onChange={(e) => setPairedPeriods(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                        className="w-20 px-3 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                        className="w-16 px-2.5 py-1.5 border border-indigo-300 rounded-lg text-sm font-bold text-center bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Venue Availability / Capacity */}
+                  <div className="bg-white p-3.5 rounded-xl border border-sky-200 shadow-xs flex items-center justify-between">
+                    <div>
+                      <label className="block text-xs font-bold text-sky-950 flex items-center gap-1">
+                        <Building2 size={13} className="text-sky-600" />
+                        Venue Availability
+                      </label>
+                      <span className="text-[11px] text-gray-500">Max simultaneous classes</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={venueAvailability}
+                        onChange={(e) => setVenueAvailability(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="w-16 px-2.5 py-1.5 border border-sky-300 rounded-lg text-sm font-bold text-center bg-sky-50 text-sky-900 focus:ring-2 focus:ring-sky-500 shadow-sm"
                       />
                     </div>
                   </div>
@@ -841,6 +868,9 @@ export default function GroupAllocationModal({ isOpen, onClose, onAllocationsUpd
                             Individual Periods ({alloc.individualPeriods ?? 1})
                           </span>
                         )}
+                        <span className="bg-sky-100 text-sky-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                          🏛️ Venue Availability: {alloc.venueAvailability ?? 1}
+                        </span>
                       </div>
                       <div className="text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
                         <span>Years: <strong>{alloc.selectedYears.join(', ')}</strong></span>

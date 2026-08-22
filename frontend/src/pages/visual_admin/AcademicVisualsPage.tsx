@@ -508,7 +508,6 @@ export default function AcademicVisualsPage() {
     return {
       academicYear: multiFilters.academicYears.length > 0 ? multiFilters.academicYears : 'All Years',
       department: multiFilters.departments.length > 0 ? multiFilters.departments : 'All Departments',
-      yearLevel: multiFilters.yearLevels.length > 0 ? multiFilters.yearLevels : 'All Years',
       semester: multiFilters.semesters.length > 0 ? multiFilters.semesters : 'All Semesters',
       section: multiFilters.sections.length > 0 ? multiFilters.sections : 'All Sections',
       subjectName: multiFilters.subjectNames.length > 0 ? multiFilters.subjectNames : 'All Subjects',
@@ -516,7 +515,7 @@ export default function AcademicVisualsPage() {
       test: multiFilters.tests.length > 0 ? multiFilters.tests : 'All Tests',
       courseCategory: multiFilters.courseCategories.length > 0 ? multiFilters.courseCategories : 'All Categories',
       assessmentType: multiFilters.assessmentTypes.length > 0 ? multiFilters.assessmentTypes : 'All Assessments',
-      resultStatus: multiFilters.resultStatuses.length > 0 ? multiFilters.resultStatuses : 'All',
+      performanceLevel: multiFilters.performanceLevels.length > 0 ? multiFilters.performanceLevels : 'All',
     };
   };
 
@@ -1569,7 +1568,7 @@ export default function AcademicVisualsPage() {
                       Avg: <strong className="text-slate-800">{queryRes.summary.averageMarks}</strong>
                     </span>
                     <span>
-                      Pass: <strong className="text-slate-800">{queryRes.summary.passPercentage}%</strong>
+                      Pass: <strong className="text-slate-800">{queryRes.summary.above58Percentage}%</strong>
                     </span>
                     <span>
                       Total: <strong className="text-slate-800">{queryRes.summary.totalStudents}</strong>

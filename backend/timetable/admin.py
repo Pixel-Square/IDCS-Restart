@@ -1,7 +1,15 @@
 from django.contrib import admin
-from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
+from .models import TimetableTemplate, TimetableSlot, TimetableAssignment, Venue
 from .models import SpecialTimetable, SpecialTimetableEntry, PeriodSwapRequest
 # from .models import TeacherConstraints, SubjectRequirements, TeacherSubjectMapping, GeneratedTimetable, GenerationLog
+
+
+@admin.register(Venue)
+class VenueAdmin(admin.ModelAdmin):
+    list_display = ('name', 'code', 'venue_type', 'capacity', 'location', 'is_active')
+    list_filter = ('venue_type', 'is_active')
+    search_fields = ('name', 'code', 'location')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(TimetableTemplate)
@@ -21,7 +29,7 @@ class TimetableSlotAdmin(admin.ModelAdmin):
 
 @admin.register(TimetableAssignment)
 class TimetableAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('period', 'day', 'section', 'staff', 'curriculum_row', 'subject_text')
+    list_display = ('period', 'day', 'section', 'staff', 'curriculum_row', 'venue', 'subject_text')
     list_filter = ('period__template', 'day')
     search_fields = ('subject_text',)
 

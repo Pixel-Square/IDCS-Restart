@@ -327,18 +327,29 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
             <div className="text-xs text-gray-500">QP Type: {props.selectedQpType}</div>
           </div>
 
-          {!isCqi && !isCurrentlyEditing && (
-            <button
-              type="button"
-              onClick={handleCopySchema}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
-                schemaCopied ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-              }`}
-              title="Copy question schema to clipboard (title, CO, BTL, max, enabled)"
-            >
-              {schemaCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              {schemaCopied ? 'Copied!' : 'Copy Schema'}
-            </button>
+          {!isCqi && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopySchema}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border font-medium transition-colors ${
+                  schemaCopied ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+                title="Copy question schema to clipboard (title, CO, BTL, max, enabled)"
+              >
+                {schemaCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {schemaCopied ? 'Copied!' : 'Copy Schema'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSchemaInputText(''); setSchemaInputError(null); setSchemaInputOpen(true); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium"
+                title="Paste a copied schema to replace the current question table"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                Input Schema
+              </button>
+            </div>
           )}
 
           {/* Edit / Save / Delete / Cancel buttons */}
@@ -352,17 +363,6 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
           )}
           {isCurrentlyEditing && props.onSave && (
             <>
-              {!isCqi && (
-                <button
-                  type="button"
-                  onClick={() => { setSchemaInputText(''); setSchemaInputError(null); setSchemaInputOpen(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium"
-                  title="Paste a copied schema to replace the current question table"
-                >
-                  <ClipboardPaste className="w-3.5 h-3.5" />
-                  Input Schema
-                </button>
-              )}
               <button
                 onClick={handleSaveClick}
                 disabled={saving}
@@ -380,7 +380,7 @@ export default function QpExamAssignmentEditorPopup(props: Props) {
               )}
             </>
           )}
-          {props.onDelete && !isCurrentlyEditing && (
+          {props.onDelete && (
             <button
               onClick={props.onDelete}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 font-medium"

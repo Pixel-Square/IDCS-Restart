@@ -1,8 +1,8 @@
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .models import TimetableTemplate, TimetableSlot, TimetableAssignment, SpecialTimetable, SpecialTimetableEntry
-from .serializers import TimetableTemplateSerializer, PeriodDefinitionSerializer, TimetableAssignmentSerializer, SpecialTimetableSerializer, SpecialTimetableEntrySerializer
+from .models import TimetableTemplate, TimetableSlot, TimetableAssignment, SpecialTimetable, SpecialTimetableEntry, Venue
+from .serializers import TimetableTemplateSerializer, PeriodDefinitionSerializer, TimetableAssignmentSerializer, SpecialTimetableSerializer, SpecialTimetableEntrySerializer, VenueSerializer
 from .models import PeriodSwapRequest
 from .serializers import PeriodSwapRequestSerializer
 from accounts.utils import get_user_permissions
@@ -805,6 +805,7 @@ class SectionTimetableView(APIView):
             'staff',
             'curriculum_row',
             'subject_batch',
+            'venue',
             'subject_batch__staff',
             'subject_batch__staff__user',
         ).filter(section=sec)
@@ -987,6 +988,10 @@ class SectionTimetableView(APIView):
                 'elective_subject_id': elective_id,
                 'subject_batch': {'id': sb.pk, 'name': getattr(sb, 'name', None)} if sb else None,
                 'staff': staff_data,
+                'venue': (
+                    {'id': getattr(a.venue, 'id', None), 'name': getattr(a.venue, 'name', None), 'venue_type': getattr(a.venue, 'venue_type', None)}
+                    if getattr(a, 'venue', None) else None
+                ),
             }
 
             # Avoid duplicate entries for the same period: prefer student-specific batch
@@ -2143,8 +2148,32 @@ class TimetableSlotViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAuthenticated,)
 
 
+class VenueViewSet(viewsets.ModelViewSet):
+    """CRUD for physical venues (labs/halls). Used to reserve a venue so only one
+    section can occupy it during a given day+period."""
+    queryset = Venue.objects.all()
+    serializer_class = VenueSerializer
+    permission_classes = (IsAuthenticated,)
+    filterset_fields = ('venue_type', 'is_active')
+    search_fields = ('name', 'code', 'location')
+    ordering_fields = ('name',)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        venue_type = self.request.query_params.get('venue_type')
+        if venue_type:
+            qs = qs.filter(venue_type=venue_type)
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None and is_active != '':
+            try:
+                qs = qs.filter(is_active=_coerce_int(is_active) or 0)
+            except Exception:
+                pass
+        return qs
+
+
 class TimetableAssignmentViewSet(viewsets.ModelViewSet):
-    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch', 'subject_batch__staff')
+    queryset = TimetableAssignment.objects.select_related('period', 'section', 'staff', 'curriculum_row', 'subject_batch', 'venue', 'subject_batch__staff')
     serializer_class = TimetableAssignmentSerializer
     permission_classes = (IsAuthenticated,)
 

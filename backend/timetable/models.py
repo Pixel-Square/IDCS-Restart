@@ -14,6 +14,45 @@ DAYS_OF_WEEK = (
     (7, 'Sunday'),
 )
 
+VENUE_TYPE_CHOICES = (
+    ('LAB', 'Laboratory'),
+    ('THEORY', 'Theory Hall'),
+    ('SEMINAR', 'Seminar Hall'),
+    ('COMPUTER', 'Computer Lab'),
+    ('OTHER', 'Other'),
+)
+
+
+class Venue(models.Model):
+    """A physical venue (e.g. 'Physics Lab') that can only host one class at a time.
+
+    Multiple sections share a limited set of venues (labs). A single assignment
+    carries an optional ``venue`` reference. The conflict rule enforced by the
+    serializer is that no two assignments may use the *same venue* on the same
+    ``day`` + ``period`` (regardless of which section they belong to), so two
+    sections can never be booked into the same lab in the same period.
+    """
+    name = models.CharField(max_length=128)
+    code = models.CharField(max_length=64, blank=True, null=True)
+    venue_type = models.CharField(max_length=32, choices=VENUE_TYPE_CHOICES, default='OTHER')
+    capacity = models.PositiveSmallIntegerField(default=0, help_text='Optional max student capacity (0 = unlimited)')
+    location = models.CharField(max_length=256, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Venue'
+        verbose_name_plural = 'Venues'
+        ordering = ('name',)
+        constraints = [
+            models.UniqueConstraint(fields=['name'], name='unique_venue_name'),
+        ]
+
+    def __str__(self):
+        return self.name
+
 
 class TimetableTemplate(models.Model):
     """A saved template that defines the days and periods (slots) for a timetable.
@@ -84,6 +123,9 @@ class TimetableAssignment(models.Model):
     curriculum_row = models.ForeignKey('curriculum.CurriculumDepartment', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
     # optional: link to a staff-created subject batch (subject-scoped group of students)
     subject_batch = models.ForeignKey('academics.StudentSubjectBatch', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
+    # optional: the physical venue (lab/hall) this assignment needs. Two sections
+    # may not share the same venue in the same day+period (enforced in serializer).
+    venue = models.ForeignKey('timetable.Venue', on_delete=models.SET_NULL, null=True, blank=True, related_name='timetable_assignments')
     subject_text = models.CharField(max_length=256, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

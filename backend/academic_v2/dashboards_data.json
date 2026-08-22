@@ -1,0 +1,93 @@
+{
+  "dash-1787137949770": {
+    "id": "dash-1787137949770",
+    "name": "New Academic Analytics Dashboard",
+    "status": "published",
+    "accessRoles": [
+      "Super Admin",
+      "Admin",
+      "Principal",
+      "Dean",
+      "HOD",
+      "Faculty"
+    ],
+    "multiFilters": {
+      "academicYears": [],
+      "departments": [
+        "103",
+        "104",
+        "148"
+      ],
+      "semesters": [
+        "Semester 6"
+      ],
+      "sections": [],
+      "subjectNames": [],
+      "subjectCodes": [],
+      "tests": [],
+      "courseCategories": [],
+      "assessmentTypes": [],
+      "performanceLevels": []
+    },
+    "visuals": [
+      {
+        "id": "vis-line-exam-1787201326653",
+        "title": "Assessment Progression \u2013 CIA 1 vs CIA 2 vs Model Exam",
+        "type": "line",
+        "dataset": "student_marks",
+        "xAxisField": "test",
+        "yAxisField": "average_marks",
+        "compareBy": "Department",
+        "analysisMode": "compare",
+        "aggregation": "average",
+        "showLegend": true,
+        "showGrid": true,
+        "layout": {
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        }
+      },
+      {
+        "id": "vis-bar-exam-1787201326653",
+        "title": "Pass Percentage Comparison",
+        "type": "bar",
+        "dataset": "student_marks",
+        "xAxisField": "test",
+        "yAxisField": "pass_percentage",
+        "compareBy": "department",
+        "analysisMode": "compare",
+        "aggregation": "average",
+        "showGrid": true,
+        "showLegend": true,
+        "layout": {
+          "x": 6,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        }
+      },
+      {
+        "id": "vis-1787201445091",
+        "title": "Performance Score Comparison",
+        "type": "gauge",
+        "dataset": "student_marks",
+        "xAxisField": "department",
+        "yAxisField": "marks_obtained",
+        "compareBy": "Section",
+        "analysisMode": "compare",
+        "aggregation": "average",
+        "showLegend": true,
+        "showGrid": true,
+        "layout": {
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        }
+      }
+    ],
+    "updatedDate": "2026-08-20"
+  }
+}

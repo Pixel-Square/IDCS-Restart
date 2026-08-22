@@ -712,12 +712,17 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
   }
 
-  // Visual Admin & Academic Visuals entries
+  // Visual Admin entries
   const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN') || Boolean((data as any)?.is_superuser);
   if (isVisualAdmin) {
     if (!items.some((item) => item.key === 'visual_admin_dashboard')) {
       items.push({ key: 'visual_admin_dashboard', label: 'Visual Admin', to: '/visual-admin' });
     }
+  }
+
+  // Academic Visuals (accessible to multiple roles)
+  const canSeeAcademicVisuals = isVisualAdmin || rolesUpper.some(r => ['PRINCIPAL', 'IQAC', 'ADMIN', 'SUPER_ADMIN'].includes(r));
+  if (canSeeAcademicVisuals) {
     if (!items.some((item) => item.key === 'academic_visuals')) {
       items.push({ key: 'academic_visuals', label: 'Academic Visuals', to: '/academic-visuals' });
     }

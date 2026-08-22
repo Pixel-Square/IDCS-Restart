@@ -206,3 +206,32 @@ urlpatterns += [
 ]
 
 
+
+# Academic Performance & Analytics Endpoints (Scoped RBAC)
+from .academic_performance_views import (
+    PublishedDashboardsListView,
+    AcademicPerformanceAnalyticsView,
+    StudentSearchView,
+    StudentProgressReportView,
+    StudentCompareView,
+    FacultyWiseAnalyticsView,
+    ClassAdvisorDeepDiveView,
+    RangeAnalysisView,
+    ComparisonPerformanceAnalyticsView,
+    StudentCurriculumMarksView,
+    StudentAnalysisChartsView
+)
+
+urlpatterns += [
+    path('performance/dashboards/', PublishedDashboardsListView.as_view(), name='academic-performance-dashboards'),
+    path('performance/analytics/', AcademicPerformanceAnalyticsView.as_view(), name='academic-performance-analytics'),
+    path('performance/student-search/', StudentSearchView.as_view(), name='academic-performance-student-search'),
+    path('performance/student/<str:student_id>/', StudentProgressReportView.as_view(), name='academic-performance-student-report'),
+    path('performance/student-compare/', StudentCompareView.as_view(), name='academic-performance-student-compare'),
+    path('performance/faculty-wise/', FacultyWiseAnalyticsView.as_view(), name='academic-performance-faculty-wise'),
+    path('performance/class-advisor/<str:section_id>/', ClassAdvisorDeepDiveView.as_view(), name='academic-performance-class-advisor'),
+    path('performance/range-analysis/', RangeAnalysisView.as_view(), name='academic-performance-range-analysis'),
+    path('performance/comparison-analytics/', ComparisonPerformanceAnalyticsView.as_view(), name='academic-performance-comparison-analytics'),
+    path('performance/student-curriculum-marks/', StudentCurriculumMarksView.as_view(), name='academic-performance-student-curriculum-marks'),
+    path('performance/student-analysis-charts/<str:student_id>/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts'),
+]

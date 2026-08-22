@@ -5,6 +5,7 @@ import TimetableCreator from './TimetableCreator';
 import TimetableGenerator from './TimetableGenerator';
 import GroupAllocationModal from './GroupAllocationModal';
 import CreditBasedAllocationModal from './CreditBasedAllocationModal';
+import VenueAllocationModal from './VenueAllocationModal';
 
 interface TimetableTemplate {
   id: string;
@@ -71,6 +72,7 @@ export default function TimetableAdminPage() {
   const [semesterTemplates, setSemesterTemplates] = useState<SemesterTemplate[]>([]);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
+  const [showVenueModal, setShowVenueModal] = useState(false);
 
   // Load templates from API on component mount
   useEffect(() => {
@@ -205,6 +207,12 @@ export default function TimetableAdminPage() {
             >
               🎯 Credit Allocations
             </button>
+            <button
+              onClick={() => setShowVenueModal(true)}
+              className="bg-sky-600 hover:bg-sky-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+            >
+              🏛️ Venue Exceptions
+            </button>
           </div>
         </div>
 
@@ -261,6 +269,12 @@ export default function TimetableAdminPage() {
         <CreditBasedAllocationModal
           isOpen={showCreditModal}
           onClose={() => setShowCreditModal(false)}
+        />
+
+        {/* Venue Allocation Modal */}
+        <VenueAllocationModal
+          isOpen={showVenueModal}
+          onClose={() => setShowVenueModal(false)}
         />
       </div>
     </div>

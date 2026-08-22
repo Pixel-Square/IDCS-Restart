@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
-from academics.models import Department, AcademicYear, Semester, Section, Subject, TeachingAssignment
+from academics.models import Department, AcademicYear, BatchYear, Semester, Section, Subject, TeachingAssignment
 from OBE.models import (
     Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark,
     ModelExamMark, LabExamMark, FinalInternalMark
@@ -16,8 +16,27 @@ from OBE.models import (
 
 logger = logging.getLogger(__name__)
 
-# IN-MEMORY & DATABASE PERSISTENT DASHBOARDS STORE
-DASHBOARDS_STORE = {}
+# PERSISTENT DASHBOARDS FILE STORAGE
+import os
+DASHBOARDS_FILE = os.path.join(os.path.dirname(__file__), 'dashboards_data.json')
+
+def load_dashboards_store():
+    if os.path.exists(DASHBOARDS_FILE):
+        try:
+            with open(DASHBOARDS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading dashboards data: {e}")
+    return {}
+
+def save_dashboards_store(store):
+    try:
+        with open(DASHBOARDS_FILE, 'w') as f:
+            json.dump(store, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving dashboards data: {e}")
+
+DASHBOARDS_STORE = load_dashboards_store()
 
 MARK_RANGES = [
     ("0-10", 0.0, 10.0),
@@ -78,32 +97,38 @@ class AcademicDashboardListView(APIView):
             "visuals": data.get("visuals", [])
         }
         DASHBOARDS_STORE[dash_id] = dashboard_def
+        save_dashboards_store(DASHBOARDS_STORE)
         return Response(dashboard_def, status=status.HTTP_201_CREATED)
 
 class AcademicDashboardDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request, pk):
-        dash = DASHBOARDS_STORE.get(pk)
+    def get(self, request, *args, **kwargs):
+        dash_id = kwargs.get('dash_id') or kwargs.get('pk') or (args[0] if args else None)
+        dash = DASHBOARDS_STORE.get(dash_id)
         if dash:
             return Response(dash, status=status.HTTP_200_OK)
         return Response({"error": "Dashboard not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    def put(self, request, pk):
+    def put(self, request, *args, **kwargs):
+        dash_id = kwargs.get('dash_id') or kwargs.get('pk') or (args[0] if args else None)
         data = request.data or {}
-        if pk in DASHBOARDS_STORE:
-            DASHBOARDS_STORE[pk].update(data)
-            DASHBOARDS_STORE[pk]["updatedDate"] = datetime.now().strftime("%Y-%m-%d")
-            return Response(DASHBOARDS_STORE[pk], status=status.HTTP_200_OK)
+        if dash_id in DASHBOARDS_STORE:
+            DASHBOARDS_STORE[dash_id].update(data)
+            DASHBOARDS_STORE[dash_id]["updatedDate"] = datetime.now().strftime("%Y-%m-%d")
+            save_dashboards_store(DASHBOARDS_STORE)
+            return Response(DASHBOARDS_STORE[dash_id], status=status.HTTP_200_OK)
         else:
-            DASHBOARDS_STORE[pk] = data
+            DASHBOARDS_STORE[dash_id] = data
+            save_dashboards_store(DASHBOARDS_STORE)
             return Response(data, status=status.HTTP_200_OK)
 
-    def delete(self, request, pk):
-        if pk in DASHBOARDS_STORE:
-            del DASHBOARDS_STORE[pk]
-            return Response({"success": True}, status=status.HTTP_200_OK)
-        return Response({"error": "Dashboard not found"}, status=status.HTTP_404_NOT_FOUND)
+    def delete(self, request, *args, **kwargs):
+        dash_id = kwargs.get('dash_id') or kwargs.get('pk') or (args[0] if args else None)
+        if dash_id in DASHBOARDS_STORE:
+            del DASHBOARDS_STORE[dash_id]
+            save_dashboards_store(DASHBOARDS_STORE)
+        return Response({"success": True, "deletedId": dash_id}, status=status.HTTP_200_OK)
 
 class AcademicVisualDynamicOptionsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -166,6 +191,18 @@ class AcademicVisualDynamicOptionsView(APIView):
             # Default current academic year
             if not academic_years:
                 academic_years = ["2026-27", "2025-26", "2024-25"]
+            # Batches from Database
+            batch_qs = BatchYear.objects.all().order_by('-name')
+            batches = []
+            seen_batches = set()
+            for by in batch_qs:
+                by_name = str(by.name or '').strip()
+                if by_name and by_name not in seen_batches:
+                    seen_batches.add(by_name)
+                    batches.append(by_name)
+            if not batches:
+                batches = ["2023-2027", "2024-2028"]
+
 
             # 3. Canonical Subjects with TA Linkages & Metadata
             sub_qs = Subject.objects.all().order_by('name', 'code')
@@ -256,6 +293,7 @@ class AcademicVisualDynamicOptionsView(APIView):
         return Response({
             "departments": departments,
             "academicYears": academic_years,
+            "batches": batches,
             "semesters": semesters,
             "sections": sections,
             "subjects": subjects,
@@ -329,7 +367,13 @@ class AcademicDashboardQueryView(APIView):
             all_possible_tests = [
                 (Cia1Mark, "CIA 1", "mark"),
                 (Cia2Mark, "CIA 2", "mark"),
-                (ModelExamMark, "Model Exam", "total_mark")
+                (Ssa1Mark, "SSA 1", "mark"),
+                (Ssa2Mark, "SSA 2", "mark"),
+                (Formative1Mark, "FA 1 (Formative 1)", "total"),
+                (Formative2Mark, "FA 2 (Formative 2)", "total"),
+                (ModelExamMark, "Model Exam", "total_mark"),
+                (LabExamMark, "Lab Exam", "total_mark"),
+                (FinalInternalMark, "Final Internal", "final_mark")
             ]
 
             models_to_query = []
@@ -384,9 +428,9 @@ class AcademicDashboardQueryView(APIView):
                     except:
                         sub_sem_num = 5
                     
-                    sec_name = "A"
-                    dept_code = "CSE"
-                    dept_display = "CSE"
+                    sec_name = getattr(st_profile.section, 'name', "A") if st_profile and st_profile.section else "A"
+                    dept_code = str(getattr(st_profile.home_department, 'code', 'CSE')).strip() if st_profile and st_profile.home_department else "CSE"
+                    dept_display = str(getattr(st_profile.home_department, 'short_name', dept_code)).strip() if st_profile and st_profile.home_department else "CSE"
                     acad_yr = "2026-27"
 
                     if item.teaching_assignment:
@@ -397,7 +441,7 @@ class AcademicDashboardQueryView(APIView):
                         
                         if item.teaching_assignment.staff and item.teaching_assignment.staff.department:
                             d_obj = item.teaching_assignment.staff.department
-                            dept_code = str(d_obj.code or 'CSE').strip()
+                            dept_code = str(d_obj.code or dept_code).strip()
                             dept_display = str(d_obj.short_name or d_obj.name or dept_code).strip()
 
                     # Department filter match against both code & short name
@@ -525,6 +569,7 @@ class AcademicDashboardQueryView(APIView):
         }
         active_series_dim = dim_key_map.get(compare_by, compare_by) if compare_by else ""
         x_axis_dim = dim_key_map.get(x_axis, x_axis)
+        y_axis_dim = dim_key_map.get(y_axis, y_axis)
 
         # 1. KPI & Gauge Comparison
         if vis_type in ['kpi', 'gauge']:
