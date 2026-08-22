@@ -105,6 +105,30 @@ def resolve_dashboard_capabilities(user) -> Dict:
         if r not in {str(x).upper() for x in role_names}:
             role_names.append(r)
 
+    # Academic audit access: staff assigned as auditors for any audit assignment.
+    is_audit_auditor = False
+    try:
+        st = getattr(user, 'staff_profile', None)
+        if st is not None:
+            from audits.models import AuditDepartmentAssignment
+            is_audit_auditor = AuditDepartmentAssignment.objects.filter(auditors=st).exists()
+    except Exception:
+        is_audit_auditor = False
+
+    # Academic audit ATR: HOD/AHOD of a department whose audit has ATR rows to act on.
+    # Appears once the auditor completes (submits) the audit and ATR rows are created.
+    is_audit_atr = False
+    try:
+        from audits.services import get_user_department_ids
+        dept_ids = get_user_department_ids(user)
+        if dept_ids:
+            from audits.models import AuditDepartmentAssignment
+            is_audit_atr = AuditDepartmentAssignment.objects.filter(
+                department_id__in=dept_ids,
+                atrs__isnull=False,
+            ).exists()
+    except Exception:
+        is_audit_atr = False
 
     is_iqac_main = False
     try:
@@ -190,7 +214,9 @@ def resolve_dashboard_capabilities(user) -> Dict:
             or 'IQAC' in {str(r).upper() for r in role_names}
         ),
         'can_view_achievement_reports': 'IQAC' in {str(r).upper() for r in role_names},
-
+        'is_audit_auditor': is_audit_auditor,
+        'is_audit_atr': is_audit_atr,
+        'is_audit_hod': bool({'HOD', 'AHOD'} & dept_role_names),
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.

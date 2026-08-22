@@ -36,6 +36,7 @@ const GROUP_COLORS: Record<string, string> = {
   Advisor:  'bg-teal-50   text-teal-700   border-teal-200',
   RFID:     'bg-orange-50 text-orange-700  border-orange-200',
   HR:       'bg-rose-50   text-rose-700   border-rose-200',
+  Audit:    'bg-cyan-50   text-cyan-700   border-cyan-200',
 }
 
 const ROLE_COLORS: Record<string, string> = {

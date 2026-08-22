@@ -67,6 +67,9 @@ export const PAGE_REGISTRY: PageEntry[] = [
   { path: '/iqac/event-approvals',       label: 'Event Approvals',               icon: 'CheckSquare',   group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/applications-admin',    label: 'Applications Admin',            icon: 'Inbox',         group: 'IQAC',     roles: ['IQAC'] },
   { path: '/iqac/pbas',                  label: 'PBAS Manager',                  icon: 'PenLine',       group: 'IQAC',     roles: ['IQAC'] },
+  { path: '/iqac/audits',                label: 'Academic Audit',                icon: 'ClipboardList', group: 'IQAC',    roles: ['IQAC'] },
+  { path: '/audits',                     label: 'Audit Entry',                   icon: 'PenLine',       group: 'Audit',    roles: ['STAFF', 'HOD', 'IQAC'] },
+  { path: '/audits/atr',                 label: 'Audit ATR',                     icon: 'FileText',      group: 'Audit',    roles: ['HOD', 'IQAC'] },
 
   // ── Advisor ───────────────────────────────────────────────────────────────
   { path: '/advisor/timetable',          label: 'Timetable',                     icon: 'Clock',         group: 'Advisor',  roles: ['ADVISOR'] },

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
+import { getApiBase } from '../../services/apiBase';
 import useDashboard from '../../hooks/useDashboard';
 import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, RefreshCw, Award } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
@@ -41,6 +42,9 @@ import { fetchAllQueries } from '../../services/queries';
   hod_events: PartyPopper,
   iqac_event_approvals: PartyPopper,
   academic_controller: Layout,
+  academic_audit: ClipboardList,
+  academic_audit_auditor: ClipboardList,
+  audit_admin: Shield,
   notifications: Bell,
   academic_calendar: Calendar,
   academic_calendar_admin: Calendar,
@@ -366,6 +370,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const isIqac = rolesUpper.includes('IQAC');
   const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
+  const isAuditAuditor = Boolean((data.flags || {}).is_audit_auditor);
+  const isAuditAtr = Boolean((data.flags || {}).is_audit_atr);
+  const isAdmin = rolesUpper.includes('ADMIN') || Boolean((data as any)?.is_superuser);
 
   
 
@@ -573,6 +580,18 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (isIqac && !items.some((item) => item.key === 'batch_archival')) {
     items.push({ key: 'batch_archival', label: 'Batch Archival', to: '/iqac/batch-archival' });
   }
+  if (isIqac && !items.some((item) => item.key === 'academic_audit')) {
+    items.push({ key: 'academic_audit', label: 'Academic Audit Mgt', to: '/iqac/audits' });
+  }
+  if (isAuditAuditor && !items.some((item) => item.key === 'academic_audit_auditor')) {
+    items.push({ key: 'academic_audit_auditor', label: 'Audit Assigned', to: '/audits' });
+  }
+  if (isAuditAtr && !items.some((item) => item.key === 'audit_atr')) {
+    items.push({ key: 'audit_atr', label: 'Audit ATR', to: '/audits/atr' });
+  }
+  if (isAdmin && !items.some((item) => item.key === 'audit_admin')) {
+    items.push({ key: 'audit_admin', label: 'Audit Admin', to: '#' });
+  }
   // PBAS Manager intentionally hidden from sidebar for all users
   
   if (isIqac && !items.some((item) => item.key === 'applications_admin')) {
@@ -766,6 +785,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       if (isFacultyGroup) {
                         e.preventDefault();
                         setExpanded({ faculty_directory: !expanded.faculty_directory });
+                        return;
+                      }
+                      if (i.key === 'audit_admin') {
+                        e.preventDefault();
+                        window.open(`${getApiBase()}/admin/audits/`, '_blank', 'noopener,noreferrer');
                         return;
                       }
                       // preserve mobile toggle behaviour
