@@ -1734,7 +1734,8 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
                 except Exception:
                     co_count = 5
                 co_numbers = list(range(1, co_count + 1))
-                covered_cos = ex.covered_cos if isinstance(ex.covered_cos, list) else co_numbers
+                covered_cos_val = getattr(ex, 'covered_cos', None)
+                covered_cos = covered_cos_val if isinstance(covered_cos_val, list) else co_numbers
                 if not covered_cos:
                     covered_cos = co_numbers
 

@@ -3,12 +3,15 @@ import fetchWithAuth from './fetchAuth';
 export interface DashboardVisualConfig {
   id: string;
   title: string;
-  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table';
+  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table' | 'scatter' | 'gauge';
   dataset: string;
-  category: string;
-  measure: string;
-  seriesField: string;
+  xAxisField: string;
+  yAxisField: string;
+  compareBy: string;
   aggregation: 'average' | 'sum' | 'count' | 'min' | 'max';
+  analysisMode?: string;
+  showLegend?: boolean;
+  showGrid?: boolean;
   department?: string;
   semester?: number | string;
   selectedSubjects?: string[];
@@ -16,41 +19,65 @@ export interface DashboardVisualConfig {
   layout: { x: number; y: number; w: number; h: number };
 }
 
+export interface DepartmentOption {
+  id: string;
+  name: string;
+}
+
+export interface SubjectOption {
+  code: string;
+  name: string;
+  department?: string;
+  semester?: number;
+}
+
+export interface GlobalDashboardFilters {
+  academicYears: string[];
+  departments: string[];
+  semesters: string[];
+  sections: string[];
+  subjectNames: string[];
+  subjectCodes: string[];
+  tests: string[];
+  courseCategories: string[];
+  assessmentTypes: string[];
+  performanceLevels: string[];
+}
+
 export interface DashboardDefinition {
   id: string;
   name: string;
-  department: string;
-  academicYear: string;
-  year: string;
-  semester: number | string;
-  status: 'published' | 'draft';
+  department?: string;
+  academicYear?: string;
+  year?: string;
+  semester?: number | string;
+  status: 'published' | 'draft' | string;
   accessRoles: string[];
-  createdDate: string;
-  updatedDate: string;
-  globalFilters: {
-    academicYear: string;
-    department: string;
-    year: string;
-    semester: number | string;
-    subjects: string[];
-    test: string;
-  };
+  createdDate?: string;
+  updatedDate?: string;
+  multiFilters: GlobalDashboardFilters;
   visuals: DashboardVisualConfig[];
 }
 
 export interface DynamicOptionsResponse {
-  departments: string[];
+  departments: DepartmentOption[];
   semesters: number[];
+  sections: string[];
   academicYears: string[];
-  subjects: Array<{ id: string; name: string; department?: string; semester?: number }>;
+  batches: string[];
+  subjects: SubjectOption[];
   tests: Array<{ id: string; name: string }>;
+  courseCategories: string[];
+  assessmentTypes: string[];
   dbConnected: boolean;
 }
 
 export interface DashboardQueryResult {
   columns: string[];
+  series?: any[];
   rows: any[];
   pivotedData: any[];
+  summary?: any;
   meta: {
     dataset: string;
     recordCount: number;
@@ -99,13 +126,17 @@ export async function createDashboard(
     accessRoles: ['Super Admin', 'Admin', 'HOD', 'Faculty'],
     createdDate: new Date().toISOString().split('T')[0],
     updatedDate: new Date().toISOString().split('T')[0],
-    globalFilters: {
-      academicYear: academicYear || '2026-27',
-      department: dept || 'CSE',
-      year: year || '3rd Year',
-      semester: semester || 5,
-      subjects: [],
-      test: ''
+    multiFilters: {
+      academicYears: academicYear ? [academicYear] : [],
+      departments: dept ? [dept] : [],
+      semesters: semester ? [semester.toString()] : [],
+      sections: [],
+      subjectNames: [],
+      subjectCodes: [],
+      tests: [],
+      courseCategories: [],
+      assessmentTypes: [],
+      performanceLevels: []
     },
     visuals: []
   };
@@ -183,17 +214,21 @@ export async function fetchDynamicOptions(): Promise<DynamicOptionsResponse> {
     }
   }
   return {
-    departments: ['CSE', 'AI & DS', 'ECE', 'EEE', 'MECH', 'CIVIL', 'IT'],
+    departments: [],
     semesters: [1, 2, 3, 4, 5, 6, 7, 8],
+    sections: [],
     academicYears: ['2026-27', '2025-26'],
+    batches: [],
     subjects: [],
     tests: [],
+    courseCategories: [],
+    assessmentTypes: [],
     dbConnected: false,
   };
 }
 
 export async function queryDashboardVisualData(
-  globalFilters: DashboardDefinition['globalFilters'],
+  multiFilters: GlobalDashboardFilters,
   visualConfig: DashboardVisualConfig
 ): Promise<DashboardQueryResult> {
   for (const ep of ENDPOINTS) {
@@ -201,7 +236,7 @@ export async function queryDashboardVisualData(
       const res = await fetchWithAuth(`${ep}/dashboard-query/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ globalFilters, visualConfig }),
+        body: JSON.stringify({ multiFilters, visualConfig }),
       });
       if (res.ok) {
         const data: DashboardQueryResult = await res.json();
@@ -215,8 +250,10 @@ export async function queryDashboardVisualData(
   // Pure Empty State Response — ZERO fake substitute data!
   return {
     columns: [],
+    series: [],
     rows: [],
     pivotedData: [],
+    summary: {},
     meta: {
       dataset: visualConfig.dataset,
       recordCount: 0,
