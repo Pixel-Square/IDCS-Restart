@@ -760,7 +760,7 @@ class RangeAnalysisView(APIView):
             marks_qs = marks_model.objects.filter(subject__code=subject_code)
             
             if req_dept:
-                marks_qs = marks_qs.filter(student__department__code=req_dept)
+                marks_qs = marks_qs.filter(get_mark_dept_q(req_dept))
             if req_batch:
                 marks_qs = marks_qs.filter(student__batch=req_batch)
             if req_sem:

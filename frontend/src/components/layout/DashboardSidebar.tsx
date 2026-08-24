@@ -40,6 +40,8 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   hod_events: PartyPopper,
   iqac_event_approvals: PartyPopper,
   academic_controller: Layout,
+  academic_performance: BookOpen,
+  academic_visuals: BarChart2,
   notifications: Bell,
   academic_calendar: Calendar,
   pbas: ClipboardList,
@@ -591,6 +593,20 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // Requests Hub: ONLY for users with staff_requests.approve_requests permission
   if ((canAccessPendingApprovals || canAccessApplicationsInbox) && !items.some(item => item.key === 'requests_hub')) {
     items.push({ key: 'requests_hub', label: 'Requests', to: '/requests' });
+  }
+
+  // Academic Performance (accessible to all users)
+  if (!items.some((item) => item.key === 'academic_performance')) {
+    items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
+  }
+
+  // Academic Visuals (accessible to multiple roles)
+  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN');
+  const canSeeAcademicVisuals = isVisualAdmin || rolesUpper.some(r => ['PRINCIPAL', 'IQAC', 'ADMIN', 'SUPER_ADMIN'].includes(r));
+  if (canSeeAcademicVisuals) {
+    if (!items.some((item) => item.key === 'academic_visuals')) {
+      items.push({ key: 'academic_visuals', label: 'Academic Visuals', to: '/academic-visuals' });
+    }
   }
 
   // Add Token Raise for all users at the end (no permission check needed)

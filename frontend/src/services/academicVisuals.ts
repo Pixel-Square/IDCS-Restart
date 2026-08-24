@@ -86,6 +86,8 @@ export interface DynamicOptionsResponse {
   tests: Array<{ id: string; name: string }>;
   courseCategories: string[];
   assessmentTypes: string[];
+  performanceLevels?: string[];
+  markRanges?: string[];
   dbConnected: boolean;
   subjectMappings?: Array<{ subjectName: string; subjectCode: string }>;
 }
@@ -99,7 +101,6 @@ export interface DashboardQueryResult {
   meta: {
     dataset: string;
     recordCount: number;
-    dbConnected: boolean;
     lastUpdated?: string;
     message?: string;
     compareBy?: string;

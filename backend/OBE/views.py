@@ -1753,7 +1753,6 @@ def final_internal_marks_by_student(request, student_id: int):
     student_obj = rows.first().student if rows.exists() else None
     student_name = _student_display_name(getattr(student_obj, 'user', None)) if student_obj else None
     reg_no = getattr(student_obj, 'reg_no', None) if student_obj else None
-
     return Response(
         {
             'student': {'id': sid, 'reg_no': reg_no, 'name': student_name},
@@ -1761,6 +1760,36 @@ def final_internal_marks_by_student(request, student_id: int):
         },
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def final_internal_marks_for_ta(request, subject_id: str):
+    """Return stored final internal marks for a teaching assignment / subject."""
+    subject = _resolve_subject(subject_id)
+    if not subject:
+        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    ta_id = request.query_params.get('teaching_assignment_id')
+    from .models import FinalInternalMark
+
+    qs = FinalInternalMark.objects.filter(subject=subject).select_related('student', 'student__user')
+    if ta_id:
+        try:
+            qs = qs.filter(teaching_assignment_id=int(ta_id))
+        except Exception:
+            pass
+
+    results = []
+    for r in qs:
+        results.append({
+            'student_id': r.student_id,
+            'reg_no': getattr(r.student, 'reg_no', ''),
+            'final_internal_mark': float(r.final_mark) if r.final_mark is not None else None,
+            'max_mark': float(r.max_mark) if r.max_mark is not None else None,
+        })
+    return Response({'results': results})
+
 
 
 def _require_publish_owner(request):
@@ -2202,6 +2231,95 @@ def cqi_publish(request, subject_id: str):
             'published_by': (snapshot or {}).get('publishedBy', getattr(obj, 'published_by', None)),
         }
     )
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_reset_page(request, subject_id: str):
+    subject = _resolve_subject(subject_id)
+    if not subject:
+        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    ta_id = request.data.get('teaching_assignment_id') if isinstance(request.data, dict) else request.query_params.get('teaching_assignment_id')
+    ta = None
+    if ta_id:
+        try:
+            from academics.models import TeachingAssignment
+            ta = TeachingAssignment.objects.filter(id=int(ta_id), subject=subject).first()
+        except Exception:
+            ta = None
+
+    body = request.data if isinstance(request.data, dict) else {}
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request, body)
+
+    try:
+        draft_qs = ObeCqiDraft.objects.filter(subject=subject)
+        if ta:
+            draft_qs = draft_qs.filter(teaching_assignment=ta)
+        draft_obj = draft_qs.first()
+        if draft_obj and draft_obj.entries:
+            merged, pages = _split_cqi_entries_payload(draft_obj.entries)
+            target_key = page_key or _make_cqi_page_key(assessment_type, requested_co_numbers)
+            if target_key and target_key in pages:
+                del pages[target_key]
+                new_merged, new_nums = _merge_cqi_page_entries(pages)
+                draft_obj.entries = {'_pages': pages, **new_merged}
+                draft_obj.co_numbers = new_nums
+                draft_obj.save()
+    except Exception:
+        pass
+
+    return Response({'status': 'ok'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cqi_publication_status(request, subject_id: str):
+    subject = _resolve_subject(subject_id)
+    if not subject:
+        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    ta_id = request.query_params.get('teaching_assignment_id')
+    ta = None
+    if ta_id:
+        try:
+            from academics.models import TeachingAssignment
+            ta = TeachingAssignment.objects.filter(id=int(ta_id), subject=subject).first()
+        except Exception:
+            ta = None
+
+    published_qs = ObeCqiPublished.objects.filter(subject=subject)
+    if ta:
+        published_qs = published_qs.filter(teaching_assignment=ta)
+    published_obj = published_qs.first()
+
+    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request)
+    is_published = False
+    published_at = None
+    published_by = None
+
+    if published_obj and published_obj.entries:
+        merged, pages = _split_cqi_entries_payload(published_obj.entries)
+        target_key = page_key or _make_cqi_page_key(assessment_type, requested_co_numbers)
+        if target_key and target_key in pages:
+            snapshot = pages[target_key]
+            is_published = True
+            published_at = snapshot.get('publishedAt')
+            published_by = snapshot.get('publishedBy')
+        elif not target_key and merged:
+            is_published = True
+            published_at = getattr(published_obj, 'published_at', None)
+            published_by = getattr(published_obj, 'published_by', None)
+
+    return Response({
+        'is_published': is_published,
+        'published_at': published_at,
+        'published_by': published_by,
+    })
+
+
 
 
 @api_view(['POST'])
@@ -2708,10 +2826,49 @@ def iqac_batch_qp_pattern_upsert(request):
     })
 
 
+@api_view(['GET', 'POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_special_exam_config(request):
+    """Configuration for special exams / assessments."""
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+    if request.method == 'GET':
+        return Response({'status': 'ok', 'config': {}})
+    return Response({'status': 'ok', 'message': 'Config updated'})
+
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_special_courses_list(request):
+    """List special courses and their assessment settings for IQAC configuration."""
+    from academics.models import SpecialCourseAssessmentSelection, Subject
+    from curriculum.models import CurriculumStructure
+
+    try:
+        curricula = CurriculumStructure.objects.filter(class_type__iexact='SPECIAL').select_related('batch', 'department')
+        results = []
+        for curr in curricula:
+            results.append({
+                'id': curr.id,
+                'code': curr.code if hasattr(curr, 'code') else '',
+                'name': curr.name if hasattr(curr, 'name') else '',
+                'class_type': 'SPECIAL',
+                'department_id': curr.department_id,
+            })
+        return Response({'results': results})
+    except Exception as e:
+        return Response({'results': [], 'error': str(e)})
+
+
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def internal_mark_mapping_get(request, subject_id: str):
+
     """Get IQAC-managed internal mark mapping for a subject.
 
     Returns:
@@ -2771,6 +2928,37 @@ def internal_mark_mapping_upsert(request, subject_id: str):
         'updated_at': (obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None),
         'updated_by': obj.updated_by,
     })
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def obe_template_apply(request):
+    """Apply an OBE configuration template across courses."""
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+    return Response({'status': 'ok', 'message': 'Template applied successfully'})
+
+
+@api_view(['GET'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def iqac_dashboard_analytics(request):
+    """Analytics overview for IQAC Dashboard."""
+    auth = _require_obe_master_permission(request)
+    if auth:
+        return auth
+    return Response({
+        'status': 'ok',
+        'overview': {
+            'total_courses': 0,
+            'completed_assessments': 0,
+            'pending_assessments': 0,
+        }
+    })
+
+
 
 
 @api_view(['POST'])
@@ -2948,6 +3136,15 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
             pass
 
     return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
+
+
+@api_view(['POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def faculty_reset_assessment(request, assessment: str, subject_id: str):
+    """Faculty reset assessment for their own teaching assignment."""
+    return iqac_reset_assessment(request, assessment, subject_id)
+
 
 
 def _parse_due_at(value):

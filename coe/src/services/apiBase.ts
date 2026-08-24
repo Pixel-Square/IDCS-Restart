@@ -5,6 +5,12 @@ function trimTrailingSlashes(value: string): string {
 function getFallbackFromEnvOrDefault(): string {
   const fromEnv = (import.meta as any)?.env?.VITE_API_BASE_FALLBACK
   if (fromEnv) return trimTrailingSlashes(String(fromEnv))
+  if (typeof window !== 'undefined' && window.location) {
+    const host = String(window.location.hostname || '').toLowerCase()
+    if (host.includes('coe5') || host.includes('idcs5') || host.includes('db5')) {
+      return 'https://db5.krgi.co.in'
+    }
+  }
   return 'https://db.krgi.co.in'
 }
 
@@ -23,6 +29,10 @@ export function getApiBase(): string {
 
   if (typeof window !== 'undefined' && window.location) {
     const host = String(window.location.hostname || '').trim().toLowerCase()
+    if (host.includes('coe5') || host.includes('idcs5')) {
+      return 'https://db5.krgi.co.in'
+    }
+
     const port = String(window.location.port || '').trim()
     const protocol = String(window.location.protocol || 'http:').trim()
 

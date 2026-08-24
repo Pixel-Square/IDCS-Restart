@@ -352,6 +352,7 @@ _PROD_WEB_ORIGINS = [
     'https://db5.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
+    'https://coe5.krgi.co.in',
 ]
 
 # CSRF trusted origins must be absolute http(s) origins in Django 4+.
@@ -362,6 +363,7 @@ _PROD_CSRF_ORIGINS = [
     'https://db5.krgi.co.in',
     'https://cloud.krgi.co.in',
     'https://coe.krgi.co.in',
+    'https://coe5.krgi.co.in',
 ]
 
 _DEFAULT_DEBUG_ORIGINS = [

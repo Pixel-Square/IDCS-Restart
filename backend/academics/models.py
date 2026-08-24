@@ -267,7 +267,25 @@ class Section(models.Model):
                 # fail silently and continue saving without semester
                 pass
 
-        return super().save(*args, **kwargs)
+class MixedSection(models.Model):
+    name = models.CharField(max_length=128, help_text='Name of the mixed section (e.g., Lab Group A, Project Batch 1)')
+    description = models.TextField(blank=True, help_text='Additional details about this mixed section')
+    batch = models.ForeignKey('Batch', on_delete=models.CASCADE, related_name='mixed_sections', help_text='The batch this mixed section belongs to')
+    sections = models.ManyToManyField('Section', related_name='mixed_sections', help_text='Regular sections that are part of this mixed section')
+    semester = models.ForeignKey('Semester', on_delete=models.SET_NULL, null=True, blank=True, related_name='mixed_sections', help_text='Semester for this mixed section')
+    academic_year = models.ForeignKey('AcademicYear', on_delete=models.CASCADE, null=True, blank=True, related_name='mixed_sections', help_text='Academic year this mixed section is active in')
+    is_active = models.BooleanField(default=True, help_text='Whether this mixed section is currently active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Mixed Section'
+        verbose_name_plural = 'Mixed Sections'
+        ordering = ('batch', 'name')
+        unique_together = ('name', 'batch')
+
+    def __str__(self):
+        return f"{self.name} ({self.batch})"
 
 
 class Batch(models.Model):
@@ -451,6 +469,13 @@ class StudentProfile(models.Model):
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     batch = models.CharField(max_length=32, blank=True)
     status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
+    mixed_section = models.ForeignKey(
+        MixedSection,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='students',
+        help_text='Optional mixed section assignment for cross-section activities'
+    )
 
     # Permanent degree department — never changes even when the student is
     # in S&H sections during Year 1.  For Year 2+ students this mirrors
@@ -928,7 +953,8 @@ class StudentMentorMap(models.Model):
 
 
 class SectionAdvisor(models.Model):
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, related_name='advisor_mappings')
+    section = models.ForeignKey(Section, on_delete=models.CASCADE, null=True, blank=True, related_name='advisor_mappings')
+    mixed_section = models.ForeignKey(MixedSection, on_delete=models.CASCADE, null=True, blank=True, related_name='advisor_mappings')
     advisor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='section_advisories')
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='section_advisors')
     is_active = models.BooleanField(default=True)

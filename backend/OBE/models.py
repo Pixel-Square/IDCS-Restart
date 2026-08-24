@@ -507,6 +507,128 @@ class Cia2Mark(models.Model):
         ]
 
 
+class ProjectMark(models.Model):
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='project_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='project_marks',
+    )
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='project_marks')
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_project_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_project_mark_subject_student_legacy',
+            ),
+        ]
+
+
+class ModelExamMark(models.Model):
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='model_exam_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='model_exam_marks',
+    )
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='model_exam_marks')
+    total_mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=['subject', 'student', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_model_mark_subject_student_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_model_mark_subject_student_legacy',
+            ),
+        ]
+
+
+class ModelExamCOMark(models.Model):
+    model_exam_mark = models.ForeignKey(ModelExamMark, on_delete=models.CASCADE, related_name='co_marks')
+    co_num = models.IntegerField()
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['model_exam_mark', 'co_num'], name='unique_model_co_mark'),
+        ]
+
+
+class LabExamMark(models.Model):
+    ASSESSMENT_CHOICES = (
+        ('cia1', 'CIA 1 LAB'),
+        ('cia2', 'CIA 2 LAB'),
+        ('model', 'MODEL LAB'),
+        ('formative1', 'Lab 1 (Formative1)'),
+        ('formative2', 'Lab 2 (Formative2)'),
+        ('review1', 'Review 1 (Lab-style)'),
+        ('review2', 'Review 2 (Lab-style)'),
+    )
+
+    subject = models.ForeignKey('academics.Subject', on_delete=models.CASCADE, related_name='lab_exam_marks')
+    teaching_assignment = models.ForeignKey(
+        'academics.TeachingAssignment',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='lab_exam_marks',
+    )
+    student = models.ForeignKey('academics.StudentProfile', on_delete=models.CASCADE, related_name='lab_exam_marks')
+    assessment = models.CharField(max_length=20, choices=ASSESSMENT_CHOICES, default='model')
+    total_mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=['subject', 'student', 'assessment', 'teaching_assignment'],
+                condition=Q(teaching_assignment__isnull=False),
+                name='unique_lab_mark_subject_student_assessment_ta',
+            ),
+            UniqueConstraint(
+                fields=['subject', 'student', 'assessment'],
+                condition=Q(teaching_assignment__isnull=True),
+                name='unique_lab_mark_subject_student_assessment_legacy',
+            ),
+        ]
+
+
+class LabExamCOMark(models.Model):
+    lab_exam_mark = models.ForeignKey(LabExamMark, on_delete=models.CASCADE, related_name='co_marks')
+    co_num = models.IntegerField()
+    mark = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    percentage = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=['lab_exam_mark', 'co_num'], name='unique_lab_co_mark'),
+        ]
+
+
 class Cia1PublishedSheet(models.Model):
     """Published CIA1 sheet snapshot (question-wise) used for CO attainment calculations."""
 
@@ -956,6 +1078,79 @@ class ObeGlobalPublishControl(models.Model):
         return f"global:sem={self.semester_id or '-'} ay={self.academic_year_id or '-'}:{self.assessment} open={self.is_open}"
 
 
+class CdapTemplate(models.Model):
+    id = models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True)
+    key = models.CharField(max_length=64, unique=True)
+    name = models.TextField()
+    sheet_number = models.PositiveIntegerField(default=1)
+    header_row_line = models.PositiveIntegerField(default=12)
+    field_definitions = models.JSONField(default=list)
+    is_active = models.BooleanField(default=False)
+    created_by = models.IntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.IntegerField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'cdap_templates'
+
+
+class ObeTemplatePreset(models.Model):
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    payload = models.JSONField(default=dict)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_template_presets')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_template_preset'
+        ordering = ['-created_at']
+
+
+class ObeAuditChange(models.Model):
+    subject_code = models.CharField(max_length=64)
+    template = models.ForeignKey(ObeTemplatePreset, on_delete=models.SET_NULL, null=True, blank=True, related_name='audit_changes')
+    before_snapshot = models.JSONField(default=dict)
+    after_snapshot = models.JSONField(default=dict)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='obe_audit_changes')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_audit_change'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['subject_code', 'created_at'], name='obe_audit_c_subject_1c2c47_idx'),
+            models.Index(fields=['template', 'created_at'], name='obe_audit_c_templat_bbfd46_idx'),
+        ]
+
+
+class SpecialCourseQpPattern(models.Model):
+    teaching_assignment = models.ForeignKey('academics.TeachingAssignment', on_delete=models.CASCADE, related_name='special_qp_patterns')
+    exam = models.CharField(max_length=50)
+    pattern = models.JSONField(default=dict)
+    updated_by = models.IntegerField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_special_course_qp_pattern'
+        indexes = [models.Index(fields=['teaching_assignment', 'exam'], name='obe_special_teachin_1200df_idx')]
+        constraints = [
+            UniqueConstraint(fields=('teaching_assignment', 'exam'), name='unique_special_qp_per_ta_exam'),
+        ]
+
+
+class SpecialCourseCoWeights(models.Model):
+    teaching_assignment = models.OneToOneField('academics.TeachingAssignment', on_delete=models.CASCADE, related_name='special_co_weights')
+    weights = models.JSONField(default=dict)
+    updated_by = models.IntegerField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'obe_special_course_co_weights'
+
+
 class ObeMarkTableLock(models.Model):
     """Authoritative lock state for an OBE mark-entry table.
 
@@ -1136,6 +1331,7 @@ class ClassTypeWeights(models.Model):
     cia1 = models.DecimalField(max_digits=7, decimal_places=2, default=3)
     formative1 = models.DecimalField(max_digits=7, decimal_places=2, default=2.5)
     internal_mark_weights = models.JSONField(default=list, blank=True)
+    exam_assignments = models.JSONField(default=list, blank=True)
 
     updated_by = models.IntegerField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1237,7 +1433,7 @@ class CourseQuestionBankLog(models.Model):
         ('created', 'Created'),
         ('updated', 'Updated'),
         ('finalized', 'Finalized'),
-        ('unfinalezed', 'Unfinalized'),
+        ('unfinalized', 'Unfinalized'),
     )
     
     question_bank = models.ForeignKey(

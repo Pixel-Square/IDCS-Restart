@@ -512,3 +512,43 @@ export async function assignExternalCodes(): Promise<{ message: string; count: n
   if (!res.ok) throw new Error('Failed to assign external codes');
   return res.json();
 }
+
+export type CoeFinalResultEntry = {
+  reg_no: string;
+  name: string;
+  course_code: string;
+  total_marks: number | string;
+  qp_type?: string;
+};
+
+export async function fetchCoeFinalResult(dept: string, semester: string): Promise<{ results: CoeFinalResultEntry[]; message?: string }> {
+  const query = new URLSearchParams({ dept, semester }).toString();
+  const res = await fetchWithAuth(`/api/coe/final-result/?${query}`);
+  if (!res.ok) {
+    // If endpoint doesn't exist yet, return gracefully with empty results
+    return { results: [], message: 'No final result records found.' };
+  }
+  return res.json();
+}
+
+export type ResultCheckEntry = {
+  dummy_number: string;
+  reg_no: string;
+  student_name: string;
+  course_code: string;
+  course_name: string;
+  qp_type: string;
+  total_marks: number | string;
+  max_marks: number | string;
+};
+
+export async function fetchResultCheck(dept: string, semester: string): Promise<{ results: ResultCheckEntry[]; count: number; message?: string }> {
+  const query = new URLSearchParams({ dept, semester }).toString();
+  const res = await fetchWithAuth(`/api/coe/result-check/?${query}`);
+  if (!res.ok) {
+    return { results: [], count: 0, message: 'No result check records found.' };
+  }
+  return res.json();
+}
+
+

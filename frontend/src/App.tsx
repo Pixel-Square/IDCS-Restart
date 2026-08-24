@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { derivePrimaryRole, getMe } from "./services/auth";
 import { seedUCState } from "./utils/underConstruction";
+import { safeLazy } from './utils/safeLazy';
+const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
+const AcademicVisualsPage = safeLazy(() => import('./pages/visual_admin/AcademicVisualsPage'), 'AcademicVisualsPage');
 import Navbar from "./components/navigation/Navbar";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
@@ -255,6 +258,8 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/academic-performance" element={<AcademicPerformancePage />} />
+                <Route path="/academic-visuals" element={<AcademicVisualsPage />} />
                 <Route path="/credits" element={<CreditsPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
                 <Route
