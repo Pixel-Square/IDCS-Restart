@@ -70,6 +70,43 @@ class FingerprintEnrollment(models.Model):
         return f"{self.user_id} – {self.get_finger_display()} ({'active' if self.is_active else 'inactive'})"
 
 
+class BiometricFingerprintData(models.Model):
+    """
+    Dedicated table storing structured biometric fingerprint logs, slot assignments,
+    hardware template hex/base64 records, and user associations.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="biometric_fingerprint_records",
+    )
+    reg_no = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    staff_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    finger_name = models.CharField(max_length=32, blank=True, default="Right Index")
+    slot_id = models.IntegerField(null=True, blank=True, db_index=True, help_text="Hardware sensor slot number (1-300)")
+    template_b64 = models.TextField(help_text="Base64 encoded template data")
+    template_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    quality_score = models.IntegerField(default=80)
+    device_type = models.CharField(max_length=64, default="esp32_r307")
+    device_ip = models.CharField(max_length=64, blank=True, default="")
+    sensor_raw_output = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(fields=["slot_id", "is_active"]),
+            models.Index(fields=["reg_no", "is_active"]),
+            models.Index(fields=["staff_id", "is_active"]),
+            models.Index(fields=["template_hash", "is_active"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"BiometricRecord #{self.id}: {self.reg_no or self.staff_id or self.user_id} (Slot {self.slot_id})"
+
+
 class GatepassOfflineScan(models.Model):
     class Direction(models.TextChoices):
         OUT = "OUT", "OUT"

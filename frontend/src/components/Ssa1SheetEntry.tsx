@@ -264,7 +264,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // For SPECIAL courses: derive max marks from QP pattern
   const qpDerivedMax = useMemo(() => {
-    if (classTypeKey !== 'SPECIAL' || !iqacPattern?.marks?.length) return null;
+    if (!iqacPattern?.marks?.length) return null;
     const marks = iqacPattern.marks;
     const cos = Array.isArray(iqacPattern.cos) ? iqacPattern.cos : [];
     const total = marks.reduce((s, m) => s + (Number.isFinite(m) ? m : 0), 0);
@@ -323,7 +323,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // Per-question structure derived from QP pattern for SPECIAL courses
   const qpQuestions = useMemo(() => {
-    if (classTypeKey !== 'SPECIAL' || !iqacPattern) return [] as Array<{max: number; coKey: 'co1' | 'co2'}>;
+    if (!iqacPattern) return [] as Array<{max: number; coKey: 'co1' | 'co2'}>;
     const marks = Array.isArray((iqacPattern as any).marks) ? (iqacPattern as any).marks as number[] : [];
     const cos = Array.isArray((iqacPattern as any).cos) ? (iqacPattern as any).cos as (number | string)[] : [];
     return marks.map((m, i) => {
@@ -336,7 +336,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [iqacPattern, classTypeKey, effectiveCoA]);
 
   // Use per-question entry mode for SPECIAL courses with QP pattern
-  const useQpQEntry = !isReview && classTypeKey === 'SPECIAL' && qpQuestions.length > 0;
+  const useQpQEntry = !isReview && qpQuestions.length > 0;
 
   const reviewCfg = isReview ? ((((masterCfg as any)?.review_config || {}).TCPR || {})[assessmentKey] || {}) : null;
   const reviewSplitEnabled = Boolean(isReview && (reviewCfg as any)?.split_enabled);

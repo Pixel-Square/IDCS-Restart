@@ -16,6 +16,7 @@ from django.utils import timezone
 from datetime import timedelta
 import decimal
 import io
+import re
 import zipfile
 
 from .permissions import IsHODOfDepartment
@@ -2146,6 +2147,144 @@ class IqacInternalMarksCourseExportView(APIView):
         )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response
+
+
+class IqacMarksSemesterZipExportView(APIView):
+    """Download semester-wise multi-exam Excel sheets packaged in a ZIP archive.
+
+    Folder hierarchy:
+      Semester <N>/
+        <Department>/
+          <CourseCode>_<CourseName>_<SectionName>.xlsx
+            -> Sheets: SSA1, CIA1, Formative1, SSA2, CIA2, Formative2, Model Exam, Final Internal, ...
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'Only IQAC/OBE master can download marks export.'}, status=403)
+
+        from academics.services_marks_export import generate_semester_courses_marks_zip
+
+        semesters_param = request.query_params.get('semesters') or request.query_params.get('semester')
+        sem_list = []
+        if semesters_param:
+            for p in str(semesters_param).split(','):
+                p = p.strip()
+                if p.isdigit():
+                    sem_list.append(int(p))
+
+        academic_year = request.query_params.get('academic_year')
+        dept_id_raw = request.query_params.get('department_id')
+        dept_id = int(dept_id_raw) if dept_id_raw and str(dept_id_raw).isdigit() else None
+        batch = request.query_params.get('batch')
+        regulation = request.query_params.get('regulation')
+
+        try:
+            zip_buf, count = generate_semester_courses_marks_zip(
+                semesters=sem_list,
+                academic_year=academic_year,
+                department_id=dept_id,
+                batch=batch,
+                regulation=regulation,
+            )
+
+            if count == 0:
+                return Response({'detail': 'No course sections found for the selected semesters.'}, status=404)
+
+            sem_label = f"semesters_{'_'.join(str(s) for s in sorted(sem_list))}" if sem_list else "all_semesters"
+            filename = f"marks_export_{sem_label}.zip"
+
+            response = HttpResponse(zip_buf.getvalue(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            import logging
+            logging.exception("Marks zip export failed: %s", e)
+            return Response({'detail': f'Error generating marks export: {str(e)}'}, status=500)
+
+    def post(self, request):
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'Only IQAC/OBE master can download marks export.'}, status=403)
+
+        from academics.services_marks_export import generate_semester_courses_marks_zip
+
+        data = request.data if isinstance(request.data, dict) else {}
+        semesters_raw = data.get('semesters', [])
+        sem_list = []
+        if isinstance(semesters_raw, list):
+            for s in semesters_raw:
+                try:
+                    sem_list.append(int(s))
+                except Exception:
+                    pass
+        elif isinstance(semesters_raw, str):
+            for p in semesters_raw.split(','):
+                p = p.strip()
+                if p.isdigit():
+                    sem_list.append(int(p))
+
+        academic_year = data.get('academic_year')
+        dept_id = data.get('department_id')
+        if dept_id:
+            try:
+                dept_id = int(dept_id)
+            except Exception:
+                dept_id = None
+        batch = data.get('batch')
+        regulation = data.get('regulation')
+
+        try:
+            zip_buf, count = generate_semester_courses_marks_zip(
+                semesters=sem_list,
+                academic_year=academic_year,
+                department_id=dept_id,
+                batch=batch,
+                regulation=regulation,
+            )
+
+            if count == 0:
+                return Response({'detail': 'No course sections found for the selected semesters.'}, status=404)
+
+            sem_label = f"semesters_{'_'.join(str(s) for s in sorted(sem_list))}" if sem_list else "all_semesters"
+            filename = f"marks_export_{sem_label}.zip"
+
+            response = HttpResponse(zip_buf.getvalue(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            import logging
+            logging.exception("Marks zip export failed: %s", e)
+            return Response({'detail': f'Error generating marks export: {str(e)}'}, status=500)
+
+
+class IqacMarksExportPreviewView(APIView):
+    """Get count and department statistics for selected semesters."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        if not _user_is_iqac_admin(request.user):
+            return Response({'detail': 'Only IQAC/OBE master can view preview.'}, status=403)
+
+        from academics.services_marks_export import get_semester_export_preview
+
+        semesters_param = request.query_params.get('semesters') or request.query_params.get('semester')
+        sem_list = []
+        if semesters_param:
+            for p in str(semesters_param).split(','):
+                p = p.strip()
+                if p.isdigit():
+                    sem_list.append(int(p))
+
+        try:
+            preview = get_semester_export_preview(semesters=sem_list)
+            return Response(preview)
+        except Exception as e:
+            import logging
+            logging.exception("Marks export preview failed: %s", e)
+            return Response({'detail': f'Error fetching preview: {str(e)}'}, status=500)
 
 
 class SectionAdvisorViewSet(viewsets.ModelViewSet):

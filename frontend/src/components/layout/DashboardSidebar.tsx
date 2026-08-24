@@ -1018,6 +1018,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                           <Grid className="w-4 h-4" /> <span>Internal marks</span>
                         </Link>
                       </li>
+                      <li>
+                        <Link to={'/iqac/academic-controller?tab=export_marks'} className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm ${loc.pathname.startsWith('/iqac/academic-controller') && new URLSearchParams(loc.search).get('tab') === 'export_marks' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`} onClick={() => { if (window.innerWidth < 1024) toggle(); }}>
+                          <Grid className="w-4 h-4" /> <span>Export Marks</span>
+                        </Link>
+                      </li>
                     </ul>
                   ) : null}
 

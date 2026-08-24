@@ -252,11 +252,15 @@ class ESP32FingerprintSensor:
     def _extract_slot(output: str) -> Optional[int]:
         if not output:
             return None
+        # Try progressively looser patterns to find the slot/match ID
         patterns = [
-            r"\bslot\s*[:#-]\s*(\d{1,3})\b",
-            r"\bmatch\s*[:#-]\s*(\d{1,3})\b",
-            r"\bfinger(?:print)?\s*id\s*[:#-]\s*(\d{1,3})\b",
-            r"\bid\s*[:#-]\s*(\d{1,3})\b",
+            r"\bslot\s*[:#-]?\s*(\d{1,3})\b",
+            r"\bmatch(?:ed)?\s*[:#-]?\s*(?:slot\s*)?#?\s*(\d{1,3})\b",
+            r"\bfinger(?:print)?\s*(?:id|no|#)?\s*[:#-]?\s*(\d{1,3})\b",
+            r"\bid\s*[:#-]?\s*(\d{1,3})\b",
+            r"#\s*(\d{1,3})\b",
+            r":\s*(\d{1,3})\b",
+            r"\b(\d{1,3})\b",  # last resort: first 1-3 digit number in output
         ]
         for pat in patterns:
             m = re.search(pat, output, flags=re.IGNORECASE)
@@ -458,6 +462,8 @@ class ESP32FingerprintSensor:
                 if not mapped_user:
                     mapped_user = self._extract_user_from_output(output)
 
+                log.info("Monitor resolved -> slot=%s mapped_user=%s slot_map=%s", slot, mapped_user, self.slot_to_user)
+
                 return {
                     "template_b64": self._build_esp32_template(mapped_user, output, slot, "monitor"),
                     "quality_score": 80,
@@ -465,6 +471,7 @@ class ESP32FingerprintSensor:
                     "esp32_output": output[:500],
                     "slot": slot,
                     "user_id": mapped_user,
+                    "slot_map": dict(self.slot_to_user),
                 }
             except Exception as e:
                 log.error("Monitor scan error: %s", e)
@@ -557,6 +564,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/status", "/info"):
             self._json_response({"service": "fingerprint-bridge", "version": "3.0.0", **sensor.info()})
+        elif self.path == "/lookup":
+            # Returns the full slot->user and user->slot maps for backend use
+            self._json_response({
+                "slot_to_user": sensor.slot_to_user,
+                "user_to_slot": {k: v for k, v in sensor.user_to_slot.items()},
+                "map_path": MAP_PATH,
+            })
         else:
             self._json_response({"error": "Not found"}, 404)
 
@@ -571,7 +585,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
             body = self._read_json_body()
             user_id = str(body.get("user_id", body.get("name", "capture"))).strip() or "capture"
-            result = sensor.capture(user_id=user_id)
+            explicit_mode = str(body.get("mode", "")).strip().upper()
+
+            if explicit_mode == "M" or user_id.lower() in {"verify", "monitor", "scan"}:
+                result = sensor.monitor_scan()
+            else:
+                result = sensor.enroll(user_id=user_id)
+
             if "error" in result:
                 code = int(result.get("code", 0) or 0)
                 status = 404 if code == 404 else (503 if code < 0 else 400)

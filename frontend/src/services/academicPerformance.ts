@@ -296,13 +296,22 @@ export async function fetchClassAdvisorDeepDive(sectionId: string): Promise<Clas
   return response.json();
 }
 
-export async function fetchRangeAnalysis(ranges?: Array<{ min: number; max: number; label: string }>): Promise<RangeAnalysisResponse> {
-  const url = `${API_BASE}/api/academic-v2/performance/range-analysis/`;
-  const response = await fetchWithAuth(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ranges }),
-  });
+export async function fetchRangeAnalysis(filters: {
+  dept?: string;
+  year?: string;
+  sem?: string;
+  exam?: string;
+  subject_code?: string;
+}): Promise<RangeAnalysisResponse> {
+  const queryParams = new URLSearchParams();
+  if (filters.dept) queryParams.set('dept', filters.dept);
+  if (filters.year) queryParams.set('year', filters.year);
+  if (filters.sem) queryParams.set('sem', filters.sem);
+  if (filters.exam) queryParams.set('exam', filters.exam);
+  if (filters.subject_code) queryParams.set('subject_code', filters.subject_code);
+
+  const url = `${API_BASE}/api/academic-v2/performance/range-analysis/?${queryParams.toString()}`;
+  const response = await fetchWithAuth(url);
   if (!response.ok) {
     throw new Error('Failed to fetch range analysis');
   }

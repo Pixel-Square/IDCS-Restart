@@ -3,7 +3,7 @@ import fetchWithAuth from './fetchAuth';
 export interface DashboardVisualConfig {
   id: string;
   title: string;
-  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table' | 'scatter' | 'gauge';
+  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table' | 'scatter' | 'gauge' | 'matrix';
   dataset: string;
   xAxisField: string;
   yAxisField: string;
@@ -22,26 +22,43 @@ export interface DashboardVisualConfig {
 export interface DepartmentOption {
   id: string;
   name: string;
+  code?: string;
+  label?: string;
 }
 
 export interface SubjectOption {
   code: string;
   name: string;
   department?: string;
-  semester?: number;
+  departments?: string[];
+  semester?: number | string;
+  semesterNum?: number | string;
+  academicYears?: string[];
+  sections?: string[];
 }
 
 export interface GlobalDashboardFilters {
-  academicYears: string[];
-  departments: string[];
-  semesters: string[];
-  sections: string[];
-  subjectNames: string[];
-  subjectCodes: string[];
-  tests: string[];
-  courseCategories: string[];
-  assessmentTypes: string[];
-  performanceLevels: string[];
+  academicYears?: string[];
+  departments?: string[];
+  semesters?: string[];
+  sections?: string[];
+  subjectNames?: string[];
+  subjectCodes?: string[];
+  tests?: string[];
+  courseCategories?: string[];
+  assessmentTypes?: string[];
+  performanceLevels?: string[];
+  
+  academicYear?: string | string[];
+  department?: string | string[];
+  semester?: string | string[] | number | number[];
+  section?: string | string[];
+  subjectName?: string | string[];
+  subjectCode?: string | string[];
+  test?: string | string[];
+  courseCategory?: string | string[];
+  assessmentType?: string | string[];
+  performanceLevel?: string | string[];
 }
 
 export interface DashboardDefinition {
@@ -70,6 +87,7 @@ export interface DynamicOptionsResponse {
   courseCategories: string[];
   assessmentTypes: string[];
   dbConnected: boolean;
+  subjectMappings?: Array<{ subjectName: string; subjectCode: string }>;
 }
 
 export interface DashboardQueryResult {
@@ -84,6 +102,7 @@ export interface DashboardQueryResult {
     dbConnected: boolean;
     lastUpdated?: string;
     message?: string;
+    compareBy?: string;
   };
 }
 

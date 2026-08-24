@@ -149,7 +149,7 @@ export default function AcademicPerformancePage() {
   };
 
   // Active Standard Tab
-  const [activeTab, setActiveTab] = useState<'principal' | 'hod' | 'faculty' | 'advisor' | 'student' | 'range' | 'custom_dash'>('principal');
+  const [activeTab, setActiveTab] = useState<'principal' | 'hod' | 'faculty' | 'advisor' | 'student' | 'range' | 'custom_dash' | ''>('');
 
   // Sticky Filters
   const [selectedYear, setSelectedYear] = useState<string>('');
@@ -190,6 +190,7 @@ export default function AcademicPerformancePage() {
 
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeData, setRangeData] = useState<RangeAnalysisResponse | null>(null);
+  const [selectedRangeSubject, setSelectedRangeSubject] = useState<string>('');
 
   // Custom Dashboard Query Results (for Published Dashboards from Visual Admin)
   const [customVisualResults, setCustomVisualResults] = useState<Record<string, DashboardQueryResult>>({});
@@ -208,7 +209,7 @@ export default function AcademicPerformancePage() {
     loadOptions();
   }, []);
 
-  const isInitialLoad = useRef(true);
+
 
   const loadInitialData = async () => {
     setLoading(true);
@@ -228,9 +229,8 @@ export default function AcademicPerformancePage() {
       });
       setData(res);
 
-      // Auto-set tab based on resolved role ONLY on initial load
-      if (isInitialLoad.current) {
-        isInitialLoad.current = false;
+      // Auto-set tab based on resolved role ONLY if it hasn't been set yet
+      if (activeTab === '') {
         if (res.user_context?.is_principal) {
           setActiveTab('principal');
         } else if (res.user_context?.is_hod) {
@@ -286,10 +286,21 @@ export default function AcademicPerformancePage() {
 
   // Load Range Analysis when tab is switched
   useEffect(() => {
-    if (activeTab === 'range') {
-      fetchRangeAnalysis().then(res => setRangeData(res));
+    if (activeTab === 'range' && selectedRangeSubject) {
+      setRangeLoading(true);
+      fetchRangeAnalysis({
+        dept: selectedDept,
+        year: selectedYear,
+        sem: selectedSem,
+        exam: selectedExamType,
+        subject_code: selectedRangeSubject
+      })
+        .then(res => setRangeData(res))
+        .finally(() => setRangeLoading(false));
+    } else if (activeTab === 'range' && !selectedRangeSubject) {
+      setRangeData(null);
     }
-  }, [activeTab]);
+  }, [activeTab, selectedDept, selectedYear, selectedSem, selectedExamType, selectedRangeSubject]);
 
   // Load Student Curriculum Marks when tab is switched or filters change
   useEffect(() => {
@@ -623,67 +634,69 @@ export default function AcademicPerformancePage() {
 
       <main className="max-w-7xl mx-auto px-6 pt-6 space-y-6">
         {/* Metric Cards Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Active Students</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-1">
-                {data?.metrics?.total_students ? data.metrics.total_students.toLocaleString() : '2,850'}
-              </h3>
-              <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                <TrendingUp className="w-3.5 h-3.5" /> Live Enrollment
-              </p>
+        {activeDashboardId === 'overall_overview' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in-50">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Active Students</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">
+                  {data?.metrics?.total_students ? data.metrics.total_students.toLocaleString() : '2,850'}
+                </h3>
+                <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
+                  <TrendingUp className="w-3.5 h-3.5" /> Live Enrollment
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 border border-blue-100">
+                <Users className="w-6 h-6" />
+              </div>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 border border-blue-100">
-              <Users className="w-6 h-6" />
-            </div>
-          </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Academic Average</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-1">
-                {data?.metrics?.overall_marks_pct || 68.5}%
-              </h3>
-              <p className="text-xs text-blue-600 font-semibold mt-1 flex items-center gap-1">
-                <Award className="w-3.5 h-3.5" /> Target: &gt; 58%
-              </p>
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Academic Average</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">
+                  {data?.metrics?.overall_marks_pct || 68.5}%
+                </h3>
+                <p className="text-xs text-blue-600 font-semibold mt-1 flex items-center gap-1">
+                  <Award className="w-3.5 h-3.5" /> Target: &gt; 58%
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
+                <GraduationCap className="w-6 h-6" />
+              </div>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
-              <GraduationCap className="w-6 h-6" />
-            </div>
-          </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pass Rate Percentage</p>
-              <h3 className="text-2xl font-black text-slate-900 mt-1">
-                {data?.metrics?.overall_pass_pct || 82.4}%
-              </h3>
-              <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> &gt; 50% Threshold
-              </p>
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pass Rate Percentage</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">
+                  {data?.metrics?.overall_pass_pct || 82.4}%
+                </h3>
+                <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> &gt; 50% Threshold
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-100">
+                <Award className="w-6 h-6" />
+              </div>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-100">
-              <Award className="w-6 h-6" />
-            </div>
-          </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Students Needing Support</p>
-              <h3 className="text-2xl font-black text-amber-600 mt-1">
-                {data?.total_weak_students || 30}
-              </h3>
-              <p className="text-xs text-amber-700 font-semibold mt-1 flex items-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5" /> Requires Mentorship
-              </p>
-            </div>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 border border-amber-100">
-              <AlertTriangle className="w-6 h-6" />
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Students Needing Support</p>
+                <h3 className="text-2xl font-black text-amber-600 mt-1">
+                  {data?.total_weak_students || 30}
+                </h3>
+                <p className="text-xs text-amber-700 font-semibold mt-1 flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5" /> Requires Mentorship
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 border border-amber-100">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* View Mode: Custom Published Dashboard */}
         {activeTab === 'custom_dash' && (
@@ -1221,10 +1234,44 @@ export default function AcademicPerformancePage() {
         )}
 
         {/* View Mode: Range Analysis */}
-        {activeTab === 'range' && (
+        {activeTab === 'range' && (() => {
+          const rangeSubjects = (dynamicOptions?.subjects || []).filter((sub: any) => {
+            if (selectedDept && sub.department !== selectedDept && (!sub.departments || !sub.departments.includes(selectedDept))) return false;
+            if (selectedSem && String(sub.semester) !== selectedSem && String(sub.semesterNum) !== selectedSem) return false;
+            return true;
+          });
+          
+          return (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900 mb-4">Academic Score Range Distribution</h3>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
+                <h3 className="text-base font-bold text-slate-900">Academic Score Range Distribution</h3>
+                <div className="relative max-w-sm w-full">
+                  <input
+                    type="text"
+                    list="range-subjects-list"
+                    placeholder="Search Subject by Name or Code..."
+                    className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
+                    value={selectedRangeSubject}
+                    onChange={(e) => setSelectedRangeSubject(e.target.value)}
+                  />
+                  <datalist id="range-subjects-list">
+                    {rangeSubjects.map((sub: any) => (
+                      <option key={sub.code} value={sub.code}>{sub.code} - {sub.name}</option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+              
+              {rangeLoading ? (
+                <div className="flex items-center justify-center h-72">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-500 border-t-transparent"></div>
+                </div>
+              ) : !selectedRangeSubject ? (
+                <div className="flex items-center justify-center h-72 text-slate-500 text-sm">
+                  Please select a subject to view its range distribution.
+                </div>
+              ) : (
               <div className="h-72 w-full min-w-0">
                 <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <BarChart data={rangeData?.range_distribution || []}>
@@ -1236,9 +1283,11 @@ export default function AcademicPerformancePage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* View Mode: Individual Student Analysis */}
         {activeTab === 'student' && (
@@ -1450,22 +1499,37 @@ export default function AcademicPerformancePage() {
                     </div>
                   </div>
 
-                  {/* Attendance Line Chart */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                   {/* Subject Marks Table */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col">
                     <h4 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-emerald-500" />
-                      Semester Attendance
+                      <GraduationCap className="w-4 h-4 text-emerald-500" />
+                      Subject Performance Details
                     </h4>
-                    <div className="h-64 w-full min-w-0" style={{ minHeight: '256px', width: '100%' }}>
-                      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={200}>
-                        <LineChart data={studentChartsData?.attendance_series || []}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                          <XAxis dataKey="week" tick={{ fontSize: 11, fill: '#64748B' }} />
-                          <YAxis tick={{ fontSize: 11, fill: '#64748B' }} domain={[0, 100]} />
-                          <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                          <Line type="monotone" dataKey="attendance_pct" name="Attendance %" stroke="#10B981" strokeWidth={3} dot={{ r: 4, fill: '#10B981', strokeWidth: 2, stroke: '#fff' }} />
-                        </LineChart>
-                      </ResponsiveContainer>
+                    <div className="overflow-x-auto flex-1 min-h-[256px]">
+                      <table className="min-w-full divide-y divide-slate-100 text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Code</th>
+                            <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Subject Name</th>
+                            <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Marks Obtained</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {studentChartsData?.marks_data && studentChartsData.marks_data.length > 0 ? (
+                            studentChartsData.marks_data.map((mark: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-700">{mark.subject_code}</td>
+                                <td className="px-4 py-3 text-slate-600">{mark.subject_name}</td>
+                                <td className="whitespace-nowrap px-4 py-3 text-right font-black text-slate-900">{mark.score}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={3} className="px-4 py-8 text-center text-slate-400 font-medium">No subject marks available</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>

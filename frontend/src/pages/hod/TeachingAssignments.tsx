@@ -1060,6 +1060,19 @@ export default function TeachingAssignmentsPage(){
     });
   }
 
+  // Returns ALL assignments for an elective (used for multi-faculty support)
+  const findExistingElectiveAssignments = (electiveId: number): any[] => {
+    return assignments.filter(a => {
+      const aElectiveId = Number(
+        (a as any).elective_subject_id ||
+        ((a as any).elective_subject && typeof (a as any).elective_subject === 'object' ? (a as any).elective_subject.id : (a as any).elective_subject) ||
+        ((a as any).elective_subject_details && (a as any).elective_subject_details.id) ||
+        0
+      );
+      return aElectiveId === Number(electiveId);
+    });
+  }
+
   const getElectiveAssignmentKey = (electiveId: number) => `elective-${electiveId}`
 
   const startEditingElective = (electiveId: number) => {

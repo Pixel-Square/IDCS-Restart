@@ -23,10 +23,12 @@ from idcsscan.views import (
     FingerprintStatusView,
     FingerprintResetAllView,
     FingerprintIdentifyView,
+    UnifiedPeopleSearchView,
 )
 
 urlpatterns = [
     path('ping/',                PingView.as_view(),               name='idscan-ping'),
+    path('people-search/',       UnifiedPeopleSearchView.as_view(), name='idscan-people-search'),
     path('lookup/',              LookupByUIDView.as_view(),        name='idscan-lookup'),
     path('lookup-any/',          LookupAnyView.as_view(),          name='idscan-lookup-any'),
     path('search/',              SearchStudentsView.as_view(),      name='idscan-search'),

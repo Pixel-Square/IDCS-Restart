@@ -299,7 +299,6 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // Override CO max from QP pattern for SPECIAL courses
   const qpDerivedMax = useMemo(() => {
-    if (classTypeKey !== 'SPECIAL') return null;
     if (!iqacPattern || !Array.isArray(iqacPattern.marks) || !Array.isArray(iqacPattern.cos)) return null;
     const marks = iqacPattern.marks as number[];
     const cos = iqacPattern.cos as (number | string)[];
@@ -335,7 +334,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
 
   // Per-question structure derived from QP pattern for SPECIAL courses
   const qpQuestions = useMemo(() => {
-    if (classTypeKey !== 'SPECIAL' || !iqacPattern) return [] as Array<{max: number; coKey: 'co3' | 'co4'}>;
+    if (!iqacPattern) return [] as Array<{max: number; coKey: 'co3' | 'co4'}>;
     const marks = Array.isArray((iqacPattern as any).marks) ? (iqacPattern as any).marks as number[] : [];
     const cos = Array.isArray((iqacPattern as any).cos) ? (iqacPattern as any).cos as (number | string)[] : [];
     return marks.map((m, i) => {
@@ -348,7 +347,7 @@ export default function Ssa2SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [iqacPattern, classTypeKey, effectiveCoA]);
 
   // Use per-question entry mode for SPECIAL courses with QP pattern
-  const useQpQEntry = !isReview && classTypeKey === 'SPECIAL' && qpQuestions.length > 0;
+  const useQpQEntry = !isReview && qpQuestions.length > 0;
 
   const BTL_MAX = {
     btl1: getBtlMaxFromCfg(ssa2Cfg, 1, DEFAULT_BTL_MAX.btl1),

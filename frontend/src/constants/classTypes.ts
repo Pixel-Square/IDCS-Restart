@@ -40,12 +40,12 @@ export function normalizeObeClassType(raw?: string | null): string {
   if (!compact) return '';
   if (compact.includes('TCPR')) return 'TCPR';
   if (compact.includes('TCPL')) return 'TCPL';
-  if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY')) return 'THEORY';
+  if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY') || compact === 'TH') return 'THEORY';
   if (compact === 'PRBL' || compact === 'PROJECT' || compact.includes('PROJECT')) return 'PROJECT';
   if (compact === 'LAB2') return 'LAB2';
   if (compact === 'PURELAB') return 'PURE_LAB';
   if (compact === 'LAB' || compact === 'L' || compact.startsWith('LAB')) return 'LAB';
-  if (compact === 'PRACTICAL' || compact.startsWith('PRACT')) return 'PRACTICAL';
+  if (compact === 'PRACTICAL' || compact.startsWith('PRACT') || compact === 'PR') return 'PRACTICAL';
   if (compact === 'AUDIT') return 'AUDIT';
   if (compact === 'SPECIAL') return 'SPECIAL';
   if (compact === 'ENGLISH') return 'ENGLISH';

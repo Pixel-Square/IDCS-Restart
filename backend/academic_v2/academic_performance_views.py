@@ -633,7 +633,7 @@ class FacultyWiseAnalyticsView(APIView):
 
         faculties = []
         for staff in staff_qs[:15]:
-            assignments = TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section", "curriculum_row", "curriculum_row__subject")
+            assignments = TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section", "curriculum_row")
             handled_subjects = []
             for ta in assignments:
                 sub_marks = Cia1Mark.objects.filter(teaching_assignment=ta)
@@ -642,8 +642,8 @@ class FacultyWiseAnalyticsView(APIView):
                 pass_c = sub_marks.filter(mark__gte=25).count()
                 handled_subjects.append({
                     "id": str(ta.id),
-                    "subject_name": ta.subject.name if ta.subject else (ta.curriculum_row.subject.subject_name if (ta.curriculum_row and hasattr(ta.curriculum_row.subject, 'subject_name')) else (ta.curriculum_row.subject.name if (ta.curriculum_row and hasattr(ta.curriculum_row.subject, 'name')) else "Course")),
-                    "subject_code": ta.subject.code if ta.subject else (ta.curriculum_row.subject.subject_code if (ta.curriculum_row and hasattr(ta.curriculum_row.subject, 'subject_code')) else (ta.curriculum_row.subject.code if (ta.curriculum_row and hasattr(ta.curriculum_row.subject, 'code')) else "SUB")),
+                    "subject_name": ta.subject.name if ta.subject else (ta.curriculum_row.course_name if ta.curriculum_row else "Course"),
+                    "subject_code": ta.subject.code if ta.subject else (ta.curriculum_row.course_code if ta.curriculum_row else "SUB"),
                     "section": ta.section.name if ta.section else "A",
                     "student_count": cnt or 60,
                     "pass_percentage": round((pass_c / max(1, cnt)) * 100, 1) if cnt > 0 else 88.0,
@@ -727,9 +727,96 @@ class ClassAdvisorDeepDiveView(APIView):
 
 
 class RangeAnalysisView(APIView):
-    permission_classes = [permissions.AllowAny]
-    def post(self, request):
-        return Response({}, status=status.HTTP_200_OK)
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            auth_ctx = resolve_user_auth_context(request.user)
+            params = request.query_params
+
+            subject_code = params.get('subject_code', '')
+            req_exam = params.get('exam', 'CIA 1')
+            req_dept = params.get('dept', '')
+            req_batch = params.get('year', '')
+            req_sem = params.get('sem', '')
+            
+            # Map exam to model
+            if req_exam == "CIA 2":
+                marks_model = Cia2Mark
+                mark_field = "mark"
+                max_score = 50.0
+            elif req_exam == "Model Exam":
+                marks_model = ModelExamMark
+                mark_field = "total_mark"
+                max_score = 100.0
+            else:
+                marks_model = Cia1Mark
+                mark_field = "mark"
+                max_score = 50.0
+
+            if not subject_code:
+                return Response({"total_students": 0, "range_distribution": []})
+
+            marks_qs = marks_model.objects.filter(subject__code=subject_code)
+            
+            if req_dept:
+                marks_qs = marks_qs.filter(student__department__code=req_dept)
+            if req_batch:
+                marks_qs = marks_qs.filter(student__batch=req_batch)
+            if req_sem:
+                try:
+                    sem_num = int(req_sem)
+                    marks_qs = marks_qs.filter(student__section__semester__number=sem_num)
+                except ValueError:
+                    pass
+
+            ranges = [
+                {"label": "0-10", "min": 0, "max": 10},
+                {"label": "11-20", "min": 11, "max": 20},
+                {"label": "21-30", "min": 21, "max": 30},
+                {"label": "31-40", "min": 31, "max": 40},
+                {"label": "41-50", "min": 41, "max": 50},
+                {"label": "51-60", "min": 51, "max": 60},
+                {"label": "61-70", "min": 61, "max": 70},
+                {"label": "71-80", "min": 71, "max": 80},
+                {"label": "81-90", "min": 81, "max": 90},
+                {"label": "91-100", "min": 91, "max": 100},
+            ]
+
+            total_students = marks_qs.count()
+            range_distribution = []
+
+            for r in ranges:
+                # Convert raw scores to percentages if necessary, or assume the ranges are percentage-based?
+                # The user said "marks", and usually out of 100. But if max_score is 50, a mark of 40 is 80%.
+                # For simplicity, we calculate the percentage equivalent of the mark.
+                # Actually, the user's ranges (0-10, 11-20... 91-100) implies percentage OR marks out of 100. 
+                # Model Exam is out of 100. CIA is out of 50.
+                # Let's normalize everything to percentage so the bins 0-100 always work.
+                
+                # To query by percentage, we need to calculate: mark / max_score * 100
+                # Using Django ORM annotation or we can just calculate raw boundaries:
+                min_raw = (r["min"] / 100.0) * max_score
+                max_raw = (r["max"] / 100.0) * max_score
+                
+                count = marks_qs.filter(**{f"{mark_field}__gte": min_raw, f"{mark_field}__lte": max_raw}).count()
+                
+                range_distribution.append({
+                    "label": r["label"],
+                    "min": r["min"],
+                    "max": r["max"],
+                    "student_count": count,
+                    "percentage": round((count / total_students * 100.0), 1) if total_students > 0 else 0
+                })
+
+            return Response({
+                "total_students": total_students,
+                "range_distribution": range_distribution
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 def parse_multi_param(param_val):

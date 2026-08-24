@@ -1328,7 +1328,7 @@ export default function MarkEntryPage() {
   const getSanitizedCoMarks = (coMarks: Record<string, number | null | undefined>) => {
     const nextCoMarks: Record<string, number> = {};
     Object.entries(coMarks || {}).forEach(([key, value]) => {
-      if (value === null || value === undefined || (value as any) === '' || Number(value) === 0) return;
+      if (value === null || value === undefined || (value as any) === '') return;
       const numValue = Number(value);
       if (Number.isFinite(numValue)) nextCoMarks[key] = numValue;
     });

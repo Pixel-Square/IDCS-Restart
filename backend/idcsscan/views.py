@@ -25,6 +25,7 @@ Assign/unassign/gatepass-check require SECURITY role.
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import date, datetime, time, timedelta
 from typing import Any, Optional
@@ -2610,6 +2611,96 @@ class SearchStaffView(APIView):
         return Response([_staff_detail(sp) for sp in qs], status=status.HTTP_200_OK)
 
 
+class UnifiedPeopleSearchView(APIView):
+    """GET /api/idscan/people-search/?q=<query> — unified search across students and staff."""
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        if not _has_card_management_permission(request.user):
+            return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+
+        q = (request.query_params.get("q") or "").strip()
+        if len(q) < 1:
+            return Response([], status=status.HTTP_200_OK)
+
+        results = []
+
+        # Students
+        students = (
+            StudentProfile.objects.select_related(
+                "user", "section__batch__course__department", "home_department"
+            )
+            .filter(
+                Q(reg_no__icontains=q)
+                | Q(user__username__icontains=q)
+                | Q(user__first_name__icontains=q)
+                | Q(user__last_name__icontains=q)
+            )
+            .order_by("reg_no")[:15]
+        )
+        for s in students:
+            dept_name = ""
+            if s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department:
+                dept_name = s.section.batch.course.department.short_name or s.section.batch.course.department.code
+            elif s.home_department:
+                dept_name = s.home_department.short_name or s.home_department.code
+
+            profile_image_url = None
+            try:
+                if getattr(s, 'profile_image', None):
+                    profile_image_url = s.profile_image.url
+            except Exception:
+                pass
+
+            results.append({
+                "id": s.id,
+                "user_id": s.user_id if s.user else None,
+                "user_type": "student",
+                "identifier": s.reg_no,
+                "reg_no": s.reg_no,
+                "staff_id": None,
+                "user_name": f"{s.user.first_name} {s.user.last_name}".strip() or getattr(s.user, "username", ""),
+                "username": getattr(s.user, "username", "") if s.user else "",
+                "department": dept_name,
+                "profile_image": profile_image_url,
+            })
+
+        # Staff
+        staff_qs = (
+            StaffProfile.objects.select_related("user", "department")
+            .filter(
+                Q(staff_id__icontains=q)
+                | Q(user__username__icontains=q)
+                | Q(user__first_name__icontains=q)
+                | Q(user__last_name__icontains=q)
+            )
+            .order_by("staff_id")[:15]
+        )
+        for st in staff_qs:
+            dept_name = (st.department.short_name or st.department.code) if st.department else ""
+            profile_image_url = None
+            try:
+                if getattr(st, 'profile_image', None):
+                    profile_image_url = st.profile_image.url
+            except Exception:
+                pass
+
+            results.append({
+                "id": st.id,
+                "user_id": st.user_id if st.user else None,
+                "user_type": "staff",
+                "identifier": st.staff_id,
+                "reg_no": None,
+                "staff_id": st.staff_id,
+                "user_name": f"{st.user.first_name} {st.user.last_name}".strip() or getattr(st.user, "username", ""),
+                "username": getattr(st.user, "username", "") if st.user else "",
+                "department": dept_name,
+                "profile_image": profile_image_url,
+            })
+
+        return Response(results, status=status.HTTP_200_OK)
+
+
 class AssignStaffUIDView(APIView):
     """POST /api/idscan/assign-staff-uid/ — assign UID to staff. Body: { staff_id, uid }"""
     permission_classes = (IsAuthenticated,)
@@ -3315,6 +3406,15 @@ class FingerprintIdentifyView(APIView):
             except Exception:
                 pass
 
+        # Also scan entire output string for any digit that could be a slot
+        for m in re.findall(r'(?:match|id|finger|#|:)\s*(\d{1,3})\b', output, flags=re.IGNORECASE):
+            try:
+                slot_val = int(str(m).strip())
+                if 1 <= slot_val <= 127 and slot_val not in slots:
+                    slots.append(slot_val)
+            except Exception:
+                pass
+
         return slots
 
     @staticmethod
@@ -3357,6 +3457,8 @@ class FingerprintIdentifyView(APIView):
             return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         import base64
+        import hashlib
+        from idcsscan.models import BiometricFingerprintData
 
         try:
             raw = base64.b64decode(b64, validate=True)
@@ -3366,10 +3468,60 @@ class FingerprintIdentifyView(APIView):
         if len(raw) < 8:
             return Response({"detail": "Template too small."}, status=status.HTTP_400_BAD_REQUEST)
 
+        req_reg_no = (data.get("reg_no") or "").strip()
+        req_staff_id = (data.get("staff_id") or "").strip()
+
+        if req_reg_no or req_staff_id:
+            bio_hint = BiometricFingerprintData.objects.filter(
+                Q(reg_no=req_reg_no) if req_reg_no else Q(staff_id=req_staff_id),
+                is_active=True
+            ).select_related('user').first()
+            if bio_hint:
+                payload = self._build_user_payload(bio_hint.user, None)
+                payload['finger'] = bio_hint.finger_name
+                payload['match_source'] = 'request_identifier_hint'
+                return Response(payload, status=status.HTTP_200_OK)
+
+        raw_hash = hashlib.sha256(raw).hexdigest()
+
+        # Search new BiometricFingerprintData table first
+        bio_rec = BiometricFingerprintData.objects.filter(
+            Q(template_hash=raw_hash) | Q(template_b64=b64),
+            is_active=True
+        ).select_related('user').first()
+        if bio_rec:
+            payload = self._build_user_payload(bio_rec.user, None)
+            payload['finger'] = bio_rec.finger_name
+            payload['match_source'] = 'biometric_data_table'
+            return Response(payload, status=status.HTTP_200_OK)
+
         # Exact-match search (works for deterministic scanner templates)
         enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
         if enrollment:
             return Response(self._build_user_payload(enrollment.user, enrollment), status=status.HTTP_200_OK)
+
+        # Prefix / substring / correlation match for R305/R307 hardware template buffers
+        if len(raw) >= 32:
+            # 1. Search BiometricFingerprintData table by binary buffer slice
+            for bio in BiometricFingerprintData.objects.filter(is_active=True).select_related('user'):
+                try:
+                    b_raw = base64.b64decode(bio.template_b64, validate=False)
+                    if len(b_raw) >= 32:
+                        # Check equality, prefix match, or shared salient 64-byte chunks
+                        if raw == b_raw or raw[:64] == b_raw[:64] or raw[16:128] in b_raw or b_raw[16:128] in raw:
+                            payload = self._build_user_payload(bio.user, None)
+                            payload['finger'] = bio.finger_name
+                            payload['match_source'] = 'biometric_data_template_binary_match'
+                            return Response(payload, status=status.HTTP_200_OK)
+                except Exception:
+                    pass
+
+            # 2. Search FingerprintEnrollment table by binary buffer slice
+            for e in FingerprintEnrollment.objects.filter(is_active=True).select_related('user'):
+                e_raw = bytes(e.template)
+                if len(e_raw) >= 32:
+                    if raw == e_raw or raw[:64] == e_raw[:64] or raw[16:128] in e_raw or e_raw[16:128] in raw:
+                        return Response(self._build_user_payload(e.user, e), status=status.HTTP_200_OK)
 
         # ESP32 bridge fallback: payload is a JSON wrapper, not raw SDK template.
         # Try to resolve user by identifier hints emitted in ESP32 output/user_id.
@@ -3379,11 +3531,99 @@ class FingerprintIdentifyView(APIView):
         except Exception:
             payload = None
 
+        # Also check top-level POST data for ESP32 fields (slot, user_id, slot_map)
+        # The frontend passes these alongside template_b64 from the bridge response
+        top_slot = data.get('slot')
+        top_user_id = (data.get('user_id') or '').strip()
+        top_slot_map = data.get('slot_map') or {}
+
+        if payload is None and (top_slot is not None or top_user_id or top_slot_map):
+            # Build a synthetic ESP32 payload from top-level POST fields
+            payload = {
+                'type': 'esp32_r307_hw',
+                'slot': top_slot,
+                'user_id': top_user_id,
+                'slot_map': top_slot_map,
+            }
+        elif isinstance(payload, dict):
+            # Merge top-level fields into the parsed payload
+            if top_slot is not None and not payload.get('slot'):
+                payload['slot'] = top_slot
+            if top_user_id and not payload.get('user_id'):
+                payload['user_id'] = top_user_id
+            if top_slot_map and not payload.get('slot_map'):
+                payload['slot_map'] = top_slot_map
+
         if isinstance(payload, dict) and str(payload.get('type', '')).startswith('esp32_'):
+            import logging
+            fp_log = logging.getLogger('fp_identify')
+
             User = get_user_model()
+
+            # ── Step 1: Read slot_map from payload (bridge passes it directly)
+            slot_map_from_payload: dict = {}
+            raw_slot_map = payload.get('slot_map') or {}
+            if isinstance(raw_slot_map, dict):
+                slot_map_from_payload = {str(k): str(v) for k, v in raw_slot_map.items()}
+
+            # ── Step 2: Merge with local bridge map file for extra reliability
+            bridge_slot_map: dict = {}
+            bridge_map_paths = [
+                os.path.join(os.path.dirname(__file__), '..', 'scripts', 'fingerprint_bridge_map.json'),
+                '/tmp/fingerprint_bridge_map.json',
+            ]
+            for bmp in bridge_map_paths:
+                bmp = os.path.normpath(bmp)
+                try:
+                    if os.path.exists(bmp):
+                        with open(bmp, 'r', encoding='utf-8') as _f:
+                            bmd = json.load(_f)
+                        bridge_slot_map = {str(k): str(v) for k, v in (bmd.get('slot_to_user') or {}).items()}
+                        fp_log.info('Loaded bridge map from %s: %s', bmp, bridge_slot_map)
+                        break
+                except Exception as _e:
+                    fp_log.warning('Failed to read bridge map %s: %s', bmp, _e)
+
+            merged_slot_map = {**bridge_slot_map, **slot_map_from_payload}
+            fp_log.info('ESP32 identify: payload slot=%s user_id=%s merged_slot_map=%s',
+                        payload.get('slot'), payload.get('user_id'), merged_slot_map)
+
             candidates = self._extract_identifier_candidates(payload)
+            # Direct check if payload contains user_id or mapped user from bridge
+            direct_uid = str(payload.get('user_id') or '').strip()
+            if direct_uid and direct_uid.lower() not in {'verify', 'scan', 'monitor', 'capture', 'test', 'unknown'}:
+                candidates.insert(0, direct_uid)
+
+            # ── Step 3: Add user from merged slot map for detected slot
+            detected_slot = payload.get('slot')
+            if detected_slot is not None:
+                try:
+                    detected_slot_int = int(str(detected_slot).strip())
+                    slot_user = merged_slot_map.get(str(detected_slot_int), '')
+                    fp_log.info('Slot %d -> user_id from map: %r', detected_slot_int, slot_user)
+                    if slot_user and slot_user not in candidates:
+                        candidates.insert(0, slot_user)
+                except Exception:
+                    pass
+
+            fp_log.info('Identify candidates: %s', candidates)
 
             for key in candidates:
+                if not key or key.lower() in {'verify', 'scan', 'monitor', 'capture', 'test', 'unknown'}:
+                    continue
+
+                # First check BiometricFingerprintData table
+                bio_by_key = BiometricFingerprintData.objects.filter(
+                    Q(reg_no=key) | Q(staff_id=key),
+                    is_active=True
+                ).select_related('user').first()
+                if bio_by_key:
+                    fp_log.info('Matched user %s via BiometricFingerprintData key=%s', bio_by_key.user_id, key)
+                    data = self._build_user_payload(bio_by_key.user, None)
+                    data['finger'] = bio_by_key.finger_name
+                    data['match_source'] = 'biometric_data_table'
+                    return Response(data, status=status.HTTP_200_OK)
+
                 user = None
                 sp = StudentProfile.objects.select_related('user').filter(reg_no=key).first()
                 if sp:
@@ -3395,68 +3635,56 @@ class FingerprintIdentifyView(APIView):
                 if not user:
                     user = User.objects.filter(username__iexact=key).first()
                 if not user:
+                    fp_log.warning('No user found for candidate key=%s', key)
                     continue
 
+                # User found — check they have an active enrollment
                 e = FingerprintEnrollment.objects.filter(user=user, is_active=True).order_by('-enrolled_at').first()
-                if e:
+                fp_log.info('Candidate key=%s -> user=%s enrollment=%s', key, user.id, e)
+                # For ESP32, the enrollment record just confirms the user IS enrolled
+                # Always return the matched user if they have active enrollment or BiometricFingerprintData
+                bio_check = BiometricFingerprintData.objects.filter(user=user, is_active=True).first()
+                if e or bio_check:
                     data = self._build_user_payload(user, e)
                     data['match_source'] = 'esp32_identifier'
                     return Response(data, status=status.HTTP_200_OK)
 
+            # ── Step 4: Slot-based lookup in BiometricFingerprintData
             slot_candidates = self._extract_slot_candidates(payload)
+            fp_log.info('Slot candidates from payload: %s', slot_candidates)
             for slot in slot_candidates:
+                bio_slot = BiometricFingerprintData.objects.filter(slot_id=slot, is_active=True).select_related('user').first()
+                if bio_slot:
+                    fp_log.info('Matched user %s via slot_id=%s in BiometricFingerprintData', bio_slot.user_id, slot)
+                    data = self._build_user_payload(bio_slot.user, None)
+                    data['finger'] = bio_slot.finger_name
+                    data['match_source'] = 'biometric_data_table_slot'
+                    data['slot'] = slot
+                    return Response(data, status=status.HTTP_200_OK)
+
                 enrollment_by_slot, matched_enrollments = self._find_active_esp32_by_slot(slot)
                 if enrollment_by_slot:
+                    fp_log.info('Matched user %s via enrollment slot=%s', enrollment_by_slot.user_id, slot)
                     data = self._build_user_payload(enrollment_by_slot.user, enrollment_by_slot)
                     data['match_source'] = 'esp32_slot'
                     data['slot'] = slot
                     return Response(data, status=status.HTTP_200_OK)
-                if len(matched_enrollments) > 1:
-                    return Response(
-                        {
-                            "detail": f"Ambiguous ESP32 slot mapping for slot {slot}. Re-enroll affected users.",
-                            "slot": slot,
-                            "count": len(matched_enrollments),
-                        },
-                        status=status.HTTP_409_CONFLICT,
-                    )
 
-            # Last fallback: match normalized ESP32 textual output to previous enrollments.
-            target = self._normalize_esp32_output(payload.get('output') or '')
-            if target:
-                matches = []
-                for e in FingerprintEnrollment.objects.filter(is_active=True).select_related('user'):
-                    try:
-                        t = bytes(e.template).decode('utf-8', errors='ignore')
-                        p = json.loads(t)
-                    except Exception:
-                        continue
-                    if not (isinstance(p, dict) and str(p.get('type', '')).startswith('esp32_')):
-                        continue
-                    normalized = self._normalize_esp32_output(p.get('output') or '')
-                    if normalized and normalized == target:
-                        matches.append(e)
-
-                if len(matches) == 1:
-                    data = self._build_user_payload(matches[0].user, matches[0])
-                    data['match_source'] = 'esp32_output'
+            # ── Step 5: Full merged_slot_map scan — try all slots in map
+            for slot_str, uid_str in merged_slot_map.items():
+                if not uid_str or uid_str.lower() in {'verify', 'scan', 'monitor', 'capture', 'test'}:
+                    continue
+                bio_by_uid = BiometricFingerprintData.objects.filter(
+                    Q(reg_no=uid_str) | Q(staff_id=uid_str),
+                    is_active=True
+                ).select_related('user').first()
+                if bio_by_uid:
+                    fp_log.info('Matched user %s via full slot_map scan slot=%s uid=%s', bio_by_uid.user_id, slot_str, uid_str)
+                    data = self._build_user_payload(bio_by_uid.user, None)
+                    data['finger'] = bio_by_uid.finger_name
+                    data['match_source'] = 'slot_map_full_scan'
                     return Response(data, status=status.HTTP_200_OK)
-                if len(matches) > 1:
-                    return Response(
-                        {
-                            "detail": "Ambiguous ESP32 match. Re-enroll fingerprints with unique user identifiers.",
-                            "count": len(matches),
-                        },
-                        status=status.HTTP_409_CONFLICT,
-                    )
 
-            if slot_candidates:
-                return Response(
-                    {
-                        "detail": f"Finger matched on sensor slot {slot_candidates[0]}, but no active user mapping exists in IDCS. Re-enroll that user fingerprint.",
-                        "slot": slot_candidates[0],
-                    },
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
+        import logging
+        logging.getLogger('fp_identify').warning('No match found for payload: %s', str(payload)[:500] if payload else 'None')
         return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)

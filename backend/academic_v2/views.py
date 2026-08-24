@@ -3805,19 +3805,26 @@ def get_pattern_for_exam(request, course_id, exam_type):
     # (Need to determine batch from course/semester - simplified here)
     
     # 3. Global pattern
-    pattern = AcV2QpPattern.objects.filter(
-        qp_type=exam_type,
-        class_type=course.class_type,
-        is_active=True
-    ).first()
+    ct = course.class_type
     
+    base_qs = AcV2QpPattern.objects.filter(qp_type=exam_type, is_active=True)
+    pattern = None
+    
+    if ct is not None:
+        scoped = base_qs.filter(class_type=ct)
+        if not scoped.exists():
+            scoped = base_qs.filter(class_type__name__iexact=ct.name) | base_qs.filter(class_type__short_code__iexact=ct.short_code)
+            
+        if ct.short_code == 'TH':
+            scoped = scoped | base_qs.filter(class_type__name__iexact='THEORY') | base_qs.filter(class_type__short_code__iexact='TH')
+        elif ct.short_code == 'PR':
+            scoped = scoped | base_qs.filter(class_type__name__iexact='PRACTICAL') | base_qs.filter(class_type__short_code__iexact='PR')
+            
+        pattern = scoped.order_by('-updated_at').first()
+        
     if not pattern:
         # Fallback to global without class type
-        pattern = AcV2QpPattern.objects.filter(
-            qp_type=exam_type,
-            class_type__isnull=True,
-            is_active=True
-        ).first()
+        pattern = base_qs.filter(class_type__isnull=True).order_by('-updated_at').first()
     
     if pattern:
         return Response({
@@ -4748,14 +4755,38 @@ def faculty_exam_info(request, exam_id):
         except Exception:
             ct = None
 
+        ct_name = None
+        try:
+            ct_name = ea.section.course.class_type_name
+        except Exception:
+            ct_name = None
+
         base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
         matched_pattern = None
 
-        # 1) Class Type + QP Type + Exam name match
+        scoped = base_qs.none()
         if ct is not None:
             scoped = base_qs.filter(class_type=ct)
+            if not scoped.exists():
+                scoped = base_qs.filter(class_type__name__iexact=ct.name) | base_qs.filter(class_type__short_code__iexact=ct.short_code)
+        elif ct_name:
+            scoped = base_qs.filter(class_type__name__iexact=ct_name) | base_qs.filter(class_type__short_code__iexact=ct_name)
+        
+        # Also include generic TH/THEORY aliases just in case
+        if (ct and ct.short_code == 'TH') or (ct_name and ct_name.upper() in ['TH', 'THEORY']):
+            scoped = scoped | base_qs.filter(class_type__name__iexact='THEORY') | base_qs.filter(class_type__short_code__iexact='TH')
+        elif (ct and ct.short_code == 'PR') or (ct_name and ct_name.upper() in ['PR', 'PRACTICAL']):
+            scoped = scoped | base_qs.filter(class_type__name__iexact='PRACTICAL') | base_qs.filter(class_type__short_code__iexact='PR')
+
+        if scoped.exists():
             if exam_key:
                 matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
+                if not matched_pattern:
+                    exam_key_nospace = exam_key.replace(' ', '').lower()
+                    for p in scoped.order_by('-updated_at'):
+                        if p.name and p.name.replace(' ', '').lower() == exam_key_nospace:
+                            matched_pattern = p
+                            break
             else:
                 matched_pattern = scoped.order_by('-updated_at').first()
 
@@ -4764,6 +4795,12 @@ def faculty_exam_info(request, exam_id):
             global_qs = base_qs.filter(class_type__isnull=True)
             if exam_key:
                 matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
+                if not matched_pattern:
+                    exam_key_nospace = exam_key.replace(' ', '').lower()
+                    for p in global_qs.order_by('-updated_at'):
+                        if p.name and p.name.replace(' ', '').lower() == exam_key_nospace:
+                            matched_pattern = p
+                            break
             else:
                 matched_pattern = global_qs.order_by('-updated_at').first()
 

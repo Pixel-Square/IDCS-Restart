@@ -201,10 +201,10 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
             raw = base64.b64decode(value, validate=True)
         except Exception:
             raise serializers.ValidationError("Invalid base64 data for template.")
-        if len(raw) < 16:
+        if len(raw) < 8:
             raise serializers.ValidationError("Template too small — probably invalid.")
-        if len(raw) > 10_000:
-            raise serializers.ValidationError("Template exceeds 10 KB limit.")
+        if len(raw) > 50_000:
+            raise serializers.ValidationError("Template exceeds 50 KB limit.")
         return raw
 
     def validate(self, attrs):
@@ -232,6 +232,42 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
                 raise serializers.ValidationError({"staff_id": "Staff not found."})
         else:
             raise serializers.ValidationError("Provide one of: user_id, reg_no, or staff_id.")
+
+        # Check for duplicate fingerprint registration across different users
+        template_bytes = attrs.get("template_b64")
+        if template_bytes:
+            import hashlib
+            import json
+            from idcsscan.models import BiometricFingerprintData
+            t_hash = hashlib.sha256(template_bytes).hexdigest()
+
+            # Check if this exact template hash is already enrolled for another user
+            existing_bio = BiometricFingerprintData.objects.filter(
+                template_hash=t_hash,
+                is_active=True
+            ).exclude(user=user).select_related('user').first()
+
+            if existing_bio:
+                other_user_name = existing_bio.user.get_full_name() or existing_bio.user.username or f"User #{existing_bio.user.id}"
+                raise serializers.ValidationError({
+                    "detail": f"This fingerprint is already registered to another user ({other_user_name}, {existing_bio.reg_no or existing_bio.staff_id}). Cannot register the same finger for two users."
+                })
+
+            # Check if slot already belongs to another user
+            try:
+                p = json.loads(template_bytes.decode('utf-8', errors='ignore'))
+                if isinstance(p, dict) and p.get('slot'):
+                    existing_slot = BiometricFingerprintData.objects.filter(
+                        slot_id=p['slot'],
+                        is_active=True
+                    ).exclude(user=user).select_related('user').first()
+                    if existing_slot:
+                        other_name = existing_slot.user.get_full_name() or existing_slot.user.username
+                        raise serializers.ValidationError({
+                            "detail": f"Fingerprint slot #{p['slot']} is already assigned to {other_name}. Duplicate enrollment prevented."
+                        })
+            except Exception:
+                pass
 
         attrs["resolved_user"] = user
         return attrs
@@ -280,4 +316,84 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
                     device_type=device,
                     is_active=True,
                 )
+
+            # Also persist to dedicated BiometricFingerprintData table
+            try:
+                import hashlib
+                import json
+                import os
+                import logging
+                from idcsscan.models import BiometricFingerprintData
+                _log = logging.getLogger('fp_enroll')
+
+                reg_no = (validated_data.get("reg_no") or "").strip()
+                staff_id_val = (validated_data.get("staff_id") or "").strip()
+                b64_str = base64.b64encode(template_bytes).decode("ascii")
+                t_hash = hashlib.sha256(template_bytes).hexdigest()
+
+                slot_val = None
+                sensor_out = ""
+
+                # Try 1: JSON parse the template bytes (ESP32 format)
+                try:
+                    p = json.loads(template_bytes.decode('utf-8', errors='ignore'))
+                    if isinstance(p, dict):
+                        slot_val = p.get('slot')
+                        sensor_out = str(p.get('output', ''))
+                        _log.info('Slot from template JSON: %s', slot_val)
+                except Exception:
+                    pass
+
+                # Try 2: Get slot from the just-saved enrollment record
+                if not slot_val:
+                    try:
+                        p = json.loads(bytes(enrollment.template).decode('utf-8', errors='ignore'))
+                        if isinstance(p, dict) and p.get('slot'):
+                            slot_val = p['slot']
+                            sensor_out = str(p.get('output', ''))
+                            _log.info('Slot from enrollment template: %s', slot_val)
+                    except Exception:
+                        pass
+
+                # Try 3: Read from bridge map file by identifier
+                if not slot_val:
+                    identifier = reg_no or staff_id_val
+                    bridge_map_paths = [
+                        os.path.join(os.path.dirname(__file__), '..', 'scripts', 'fingerprint_bridge_map.json'),
+                    ]
+                    for bmp in bridge_map_paths:
+                        bmp = os.path.normpath(bmp)
+                        try:
+                            if os.path.exists(bmp):
+                                with open(bmp, 'r', encoding='utf-8') as _f:
+                                    bmd = json.load(_f)
+                                user_to_slot = {str(k): v for k, v in (bmd.get('user_to_slot') or {}).items()}
+                                if identifier and identifier in user_to_slot:
+                                    slot_val = int(user_to_slot[identifier])
+                                    _log.info('Slot from bridge map file: identifier=%s slot=%s', identifier, slot_val)
+                                    break
+                        except Exception as bme:
+                            _log.warning('Bridge map read error: %s', bme)
+
+                _log.info('Saving BiometricFingerprintData: reg_no=%s finger=%s slot_id=%s', reg_no, finger, slot_val)
+
+                BiometricFingerprintData.objects.update_or_create(
+                    user=user,
+                    finger_name=str(finger),
+                    defaults={
+                        "reg_no": reg_no,
+                        "staff_id": staff_id_val,
+                        "slot_id": slot_val,
+                        "template_b64": b64_str,
+                        "template_hash": t_hash,
+                        "quality_score": quality or 80,
+                        "device_type": device or "esp32_r307",
+                        "sensor_raw_output": str(sensor_out)[:1000],
+                        "is_active": True,
+                    }
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger('fp_enroll').error('BiometricFingerprintData save error: %s', e)
+
         return enrollment
