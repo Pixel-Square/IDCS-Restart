@@ -694,6 +694,16 @@ export default function HallAllocationPlanPage() {
     shiftedIndices: Set<number>;
   }
 
+  // Fisher-Yates shuffle — produces a new random permutation every call
+  const fisherYatesShuffle = <T,>(arr: T[]): T[] => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
   const buildHallExportData = async (): Promise<ExportHallData[]> => {
     const hallsData: ExportHallData[] = [];
 
@@ -714,18 +724,45 @@ export default function HallAllocationPlanPage() {
       deptPools[item.department] = [...(deptPools[item.department] || []), ...students];
     }
 
-    const availableDepts = deptNames.filter((d) => deptPools[d] && deptPools[d].length > 0);
-    if (availableDepts.length === 0) return hallsData;
+    const allDepts = deptNames.filter((d) => deptPools[d] && deptPools[d].length > 0);
+    if (allDepts.length === 0) return hallsData;
+
+    // ── RANDOMIZE dept order each run so hall combinations change every time ──
+    // The shuffle ensures different departments are paired into different halls
+    // on every "Generate Plan" click, cycling through all valid arrangements.
+    const availableDepts = fisherYatesShuffle(allDepts);
 
     // Step 2: Pack halls sequentially to achieve MINIMAL halls (100% packing in non-final halls, 0 gaps)
     const sortedHalls = [...rows].sort((a, b) => (b.rows * b.cols) - (a.rows * a.cols) || a.hallNumber.localeCompare(b.hallNumber));
     let activePair: string[] = [];
 
     const getNextAvailableDept = (exclude: string[] = []) => {
-      // Prioritize departments with largest remaining pools first to maintain balanced pairing
-      const remainingDepts = availableDepts.filter((d) => !exclude.includes(d) && deptPools[d] && deptPools[d].length > 0);
-      remainingDepts.sort((a, b) => (deptPools[b]?.length || 0) - (deptPools[a]?.length || 0));
-      return remainingDepts[0];
+      // Weighted random: bias toward larger pools for balance, but add randomness
+      // so the same combination is not always produced for equal-size pools.
+      const remaining = availableDepts.filter(
+        (d) => !exclude.includes(d) && deptPools[d] && deptPools[d].length > 0
+      );
+      if (remaining.length === 0) return undefined;
+
+      // Build a weighted pool: each dept gets weight = pool size (so larger depts
+      // still tend to get picked earlier and fill halls more efficiently), but
+      // a random "bonus" up to 20% of total students prevents lock-step repetition.
+      const totalStudents = remaining.reduce((s, d) => s + (deptPools[d]?.length || 0), 0);
+      const bonus = Math.max(1, Math.floor(totalStudents * 0.20));
+
+      let totalWeight = 0;
+      const weights: number[] = remaining.map((d) => {
+        const w = (deptPools[d]?.length || 1) + Math.floor(Math.random() * bonus);
+        totalWeight += w;
+        return w;
+      });
+
+      let rand = Math.random() * totalWeight;
+      for (let i = 0; i < remaining.length; i++) {
+        rand -= weights[i];
+        if (rand <= 0) return remaining[i];
+      }
+      return remaining[remaining.length - 1];
     };
 
     const allocateHallBuckets = (capacity: number) => {
@@ -991,8 +1028,9 @@ export default function HallAllocationPlanPage() {
             for (let k = 0; k < countToPlace; k++) {
               const fromIdx = overflowStudentIndices[k];
               const toIdx = validEmptySlots[k];
+              const sDept = overflowHall.studentDepts[fromIdx] || overflowDept;
               targetHall.students[toIdx] = overflowHall.students[fromIdx];
-              targetHall.studentDepts[toIdx] = overflowDept;
+              targetHall.studentDepts[toIdx] = sDept;
               targetHall.shiftedIndices.add(toIdx);
               overflowHall.students[fromIdx] = '';
               overflowHall.studentDepts[fromIdx] = '';
@@ -1075,8 +1113,9 @@ export default function HallAllocationPlanPage() {
           for (let k = 0; k < selectedDonorPositions.length; k++) {
             const fromIdx = selectedDonorPositions[k];
             const toIdx = emptySlotIndices[k];
+            const dDept = donorSourceHall.studentDepts[fromIdx] || donorDept;
             targetGapHall.students[toIdx] = donorSourceHall.students[fromIdx];
-            targetGapHall.studentDepts[toIdx] = donorDept;
+            targetGapHall.studentDepts[toIdx] = dDept;
             targetGapHall.donorIndices.add(toIdx);
             donorSourceHall.students[fromIdx] = '';
             donorSourceHall.studentDepts[fromIdx] = '';
@@ -1088,8 +1127,9 @@ export default function HallAllocationPlanPage() {
           for (let k = 0; k < countToShift; k++) {
             const fromIdx = overflowStudentIndices[k];
             const toIdx = newlyFreedInDonor[k];
+            const sDept = overflowHall.studentDepts[fromIdx] || overflowDept;
             donorSourceHall.students[toIdx] = overflowHall.students[fromIdx];
-            donorSourceHall.studentDepts[toIdx] = overflowDept;
+            donorSourceHall.studentDepts[toIdx] = sDept;
             donorSourceHall.shiftedIndices.add(toIdx);
             overflowHall.students[fromIdx] = '';
             overflowHall.studentDepts[fromIdx] = '';
@@ -1107,25 +1147,57 @@ export default function HallAllocationPlanPage() {
       }
     }
 
-    // Remove halls that are now completely empty (freed by optimization)
-    return halls.filter((h) => h.students.some((s) => s !== ''));
+    // Remove halls that are now completely empty (freed by optimization) and recalculate department student counts
+    return halls
+      .filter((h) => h.students.some((s) => s !== ''))
+      .map((h) => {
+        const counts: Record<string, number> = {};
+        for (let i = 0; i < h.students.length; i++) {
+          const s = h.students[i];
+          const d = h.studentDepts[i];
+          if (s && d) {
+            counts[d] = (counts[d] || 0) + 1;
+          }
+        }
+        const depts = Object.keys(counts);
+        return {
+          ...h,
+          dept_counts: counts,
+          department: depts.join(' / '),
+          departments: depts,
+        };
+      });
   };
   // ─────────────────────────────────────────────────────────────────────────
 
   const buildExcelPreviewRows = (hallsData: ExportHallData[]) => {
     const previewRows: Array<Array<string | number>> = [];
 
-    // Master Summary Table Preview
+    // Master Summary Table Preview (Pure Dept-wise breakdown)
     previewRows.push([`${examDate} ${selectedSession} | ${examTitle} Hall Allocation | ${semesterText}`]);
     previewRows.push(['Dept', 'Count Breakdown', 'Assigned Halls']);
 
     const deptMap: Record<string, { counts: number[]; halls: string[] }> = {};
     for (const hall of hallsData) {
-      if (!deptMap[hall.department]) {
-        deptMap[hall.department] = { counts: [], halls: [] };
+      if (hall.dept_counts && Object.keys(hall.dept_counts).length > 0) {
+        for (const [dept, count] of Object.entries(hall.dept_counts)) {
+          if (count > 0) {
+            if (!deptMap[dept]) deptMap[dept] = { counts: [], halls: [] };
+            deptMap[dept].counts.push(count);
+            deptMap[dept].halls.push(hall.hall_name);
+          }
+        }
+      } else {
+        const depts = hall.departments && hall.departments.length > 0
+          ? hall.departments
+          : (hall.department ? hall.department.split(' / ') : ['General']);
+        const countEach = Math.floor(hall.students.length / depts.length);
+        for (const dept of depts) {
+          if (!deptMap[dept]) deptMap[dept] = { counts: [], halls: [] };
+          deptMap[dept].counts.push(countEach);
+          deptMap[dept].halls.push(hall.hall_name);
+        }
       }
-      deptMap[hall.department].counts.push(hall.students.length);
-      deptMap[hall.department].halls.push(hall.hall_name);
     }
 
     for (const [dept, info] of Object.entries(deptMap)) {
@@ -1478,10 +1550,13 @@ export default function HallAllocationPlanPage() {
         halls: hallsData.map((hall) => ({
           hall_name: hall.hall_name,
           department: hall.department,
+          departments: hall.departments,
+          dept_counts: hall.dept_counts,
           rows: hall.rows,
           cols: hall.cols,
           pattern: hall.pattern,
           students: hall.students,
+          student_depts: hall.studentDepts,
           donor_indices: Array.from((hall as any).donorIndices || []),
           shifted_indices: Array.from((hall as any).shiftedIndices || []),
         })),
@@ -1529,6 +1604,207 @@ export default function HallAllocationPlanPage() {
   };
 
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [pdfPreviewFilename, setPdfPreviewFilename] = useState('attendance_sheet.pdf');
+
+  const openPdfPreview = (blobUrl: string, filename: string) => {
+    // Revoke any previous preview URL
+    if (pdfPreviewUrl) {
+      window.URL.revokeObjectURL(pdfPreviewUrl);
+    }
+    setPdfPreviewUrl(blobUrl);
+    setPdfPreviewFilename(filename);
+  };
+
+  const closePdfPreview = () => {
+    if (pdfPreviewUrl) {
+      window.URL.revokeObjectURL(pdfPreviewUrl);
+    }
+    setPdfPreviewUrl(null);
+    setPdfPreviewFilename('attendance_sheet.pdf');
+  };
+
+  const downloadPdfFromPreview = () => {
+    if (!pdfPreviewUrl) return;
+    const anchor = document.createElement('a');
+    anchor.href = pdfPreviewUrl;
+    anchor.download = pdfPreviewFilename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setMessage('✓ Attendance Sheet PDF downloaded successfully.');
+  };
+
+  const handleDownloadAttendancePdf = async () => {
+    if (plan.length === 0) {
+      setError('Generate a hall plan before exporting Attendance PDF.');
+      return;
+    }
+    if (!examTitle.trim() || !semesterText.trim() || !examDate.trim()) {
+      setError('Please fill in exam title, semester, and exam date before exporting Attendance PDF.');
+      return;
+    }
+    setError(null);
+    setMessage(null);
+    setIsExportingPdf(true);
+    try {
+      const hallsData = await getEffectiveExportHallsData();
+      if (hallsData.length === 0) {
+        setError('No hall has students to export. Please check the plan and student data.');
+        return;
+      }
+
+      const studentNamesMap: Record<string, string> = {};
+      selectionStudents.forEach((st) => {
+        if (st.reg_no && st.name) studentNamesMap[st.reg_no] = st.name;
+      });
+
+      const payload = JSON.stringify({
+        exam_title: examTitle,
+        semester_text: semesterText,
+        date_str: examDate,
+        session: selectedSession || plan[0]?.session || 'FN',
+        halls: hallsData.map((hall) => ({
+          hall_name: hall.hall_name,
+          department: hall.department,
+          departments: hall.departments,
+          dept_counts: hall.dept_counts,
+          rows: hall.rows,
+          cols: hall.cols,
+          pattern: hall.pattern,
+          students: hall.students,
+          student_depts: hall.studentDepts,
+        })),
+        student_names_map: studentNamesMap,
+      });
+
+      const response = await fetchWithAuth('/api/coe/hall-attendance-pdf/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+
+      if (!response.ok) {
+        let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+        try {
+          const err = await response.json();
+          errorMsg = err.error || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
+
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('Downloaded PDF is empty.');
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const filename = `attendance_sheet_${examDate.replace(/\//g, '-')}_${selectedSession}.pdf`;
+      openPdfPreview(url, filename);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      setError(err instanceof Error ? err.message : 'Unable to export Attendance PDF.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleDownloadAttendancePdfForLog = async (log: HallAllocationPlanLog) => {
+    setError(null);
+    setMessage(null);
+    setIsExportingPdf(true);
+    try {
+      const rawHalls: (ExportHallData & { studentDepts: string[] })[] = [];
+      const planHalls = Array.from(new Set(log.plan.map((p) => p.hallNumber)));
+
+      for (const hallNumber of planHalls) {
+        const row = log.rows.find((r) => r.hallNumber === hallNumber);
+        if (!row) continue;
+        const hallPlanEntries = log.plan.filter((p) => p.hallNumber === hallNumber);
+        const depts = Array.from(new Set(hallPlanEntries.map((p) => p.department))).join(' / ');
+        const hallStudents: string[] = [];
+        const studentDepts: string[] = [];
+
+        for (const entry of hallPlanEntries) {
+          const blockKey = getBlockKey(entry.department, entry.semester, entry.session);
+          const regs = log.studentSelectionMap[blockKey] || [];
+          regs.forEach((reg) => {
+            hallStudents.push(reg);
+            studentDepts.push(entry.department);
+          });
+        }
+
+        const maxSeats = row.rows * row.cols;
+        while (hallStudents.length < maxSeats) {
+          hallStudents.push('');
+          studentDepts.push('');
+        }
+
+        const counts: Record<string, number> = {};
+        for (let i = 0; i < maxSeats; i++) {
+          const s = hallStudents[i];
+          const d = studentDepts[i];
+          if (s && d) counts[d] = (counts[d] || 0) + 1;
+        }
+
+        rawHalls.push({
+          hall_name: row.hallNumber,
+          department: depts,
+          departments: Object.keys(counts),
+          dept_counts: counts,
+          rows: row.rows,
+          cols: row.cols,
+          pattern: row.pattern,
+          students: hallStudents.slice(0, maxSeats),
+          studentDepts: studentDepts.slice(0, maxSeats),
+        });
+      }
+
+      const hallsToExport = log.optimizedHallsData && log.optimizedHallsData.length > 0
+        ? log.optimizedHallsData
+        : rawHalls;
+
+      const payload = JSON.stringify({
+        exam_title: log.examTitle,
+        semester_text: log.semesterText,
+        date_str: log.examDate,
+        session: log.session || 'FN',
+        halls: hallsToExport.map((hall) => ({
+          hall_name: hall.hall_name,
+          department: hall.department,
+          departments: hall.departments,
+          dept_counts: hall.dept_counts,
+          rows: hall.rows,
+          cols: hall.cols,
+          pattern: hall.pattern,
+          students: hall.students,
+          student_depts: hall.studentDepts,
+        })),
+      });
+
+      const response = await fetchWithAuth('/api/coe/hall-attendance-pdf/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+
+      if (!response.ok) throw new Error('Failed to generate attendance PDF for log.');
+
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('Generated PDF is empty.');
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const filename = `attendance_sheet_${log.examTitle.replace(/\s+/g, '_')}_${(log.examDate || '').replace(/\//g, '-')}.pdf`;
+      openPdfPreview(url, filename);
+    } catch (err: any) {
+      setError(err?.message || 'Unable to generate attendance PDF for log.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
 
   const handlePublishPlan = async () => {
     if (plan.length === 0) {
@@ -1557,10 +1833,13 @@ export default function HallAllocationPlanPage() {
         halls: hallsData.map((hall) => ({
           hall_name: hall.hall_name,
           department: hall.department,
+          departments: hall.departments,
+          dept_counts: hall.dept_counts,
           rows: hall.rows,
           cols: hall.cols,
           pattern: hall.pattern,
           students: hall.students,
+          student_depts: hall.studentDepts,
         })),
       });
 
@@ -1622,9 +1901,20 @@ export default function HallAllocationPlanPage() {
           studentDepts.push('');
         }
 
+        const counts: Record<string, number> = {};
+        for (let i = 0; i < maxSeats; i++) {
+          const s = hallStudents[i];
+          const d = studentDepts[i];
+          if (s && d) {
+            counts[d] = (counts[d] || 0) + 1;
+          }
+        }
+
         rawHalls.push({
           hall_name: row.hallNumber,
           department: depts,
+          departments: Object.keys(counts),
+          dept_counts: counts,
           rows: row.rows,
           cols: row.cols,
           pattern: row.pattern,
@@ -1645,10 +1935,13 @@ export default function HallAllocationPlanPage() {
         halls: hallsToPublish.map((hall) => ({
           hall_name: hall.hall_name,
           department: hall.department,
+          departments: hall.departments,
+          dept_counts: hall.dept_counts,
           rows: hall.rows,
           cols: hall.cols,
           pattern: hall.pattern,
           students: hall.students,
+          student_depts: hall.studentDepts,
         })),
       });
 
@@ -1744,6 +2037,15 @@ export default function HallAllocationPlanPage() {
               className="rounded-lg bg-[#3c6a5a] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2f5649] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isExportingExcel ? 'Preparing Excel...' : 'Download Excel'}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadAttendancePdf}
+              disabled={plan.length === 0 || isExportingPdf}
+              className="rounded-lg bg-[#4338ca] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3730a3] disabled:cursor-not-allowed disabled:opacity-60 shadow-sm"
+              title="Download official hall attendance sheet PDF"
+            >
+              {isExportingPdf ? 'Generating PDF...' : '📄 Attendance PDF'}
             </button>
           </div>
         </div>
@@ -2104,18 +2406,26 @@ export default function HallAllocationPlanPage() {
                   </p>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between gap-2 border-t border-[#f0e4dc] pt-3">
+                <div className="mt-4 flex items-center justify-between gap-1.5 border-t border-[#f0e4dc] pt-3">
                   <button
                     type="button"
                     onClick={() => handleLoadLog(log)}
-                    className="flex-1 rounded-lg bg-[#3c6a5a] px-3 py-1.5 text-center text-xs font-bold text-white transition hover:bg-[#2f5649]"
+                    className="flex-1 rounded-lg bg-[#3c6a5a] px-2.5 py-1.5 text-center text-xs font-bold text-white transition hover:bg-[#2f5649]"
                   >
                     Open Plan
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleDownloadAttendancePdfForLog(log)}
+                    className="rounded-lg bg-[#4338ca] px-2 py-1.5 text-xs font-bold text-white transition hover:bg-[#3730a3]"
+                    title="Download attendance sheet PDF for this plan"
+                  >
+                    📄 PDF
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handlePublishLog(log)}
-                    className="rounded-lg bg-[#1f493d] px-2.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#16382f]"
+                    className="rounded-lg bg-[#1f493d] px-2 py-1.5 text-xs font-bold text-white transition hover:bg-[#16382f]"
                     title="Publish this saved plan to student IDCS portal"
                   >
                     📢 Publish
@@ -2123,7 +2433,7 @@ export default function HallAllocationPlanPage() {
                   <button
                     type="button"
                     onClick={() => handleDeleteLog(log.id)}
-                    className="rounded-lg border border-[#d8a791] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#7a2038] hover:bg-[#fbeee8]"
+                    className="rounded-lg border border-[#d8a791] bg-white px-2 py-1.5 text-xs font-semibold text-[#7a2038] hover:bg-[#fbeee8]"
                     title="Delete this saved log"
                   >
                     Delete
@@ -2273,6 +2583,46 @@ export default function HallAllocationPlanPage() {
                 {isExportingExcel ? 'Downloading...' : 'Download Excel'}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pdfPreviewUrl ? (
+        <div className="fixed inset-0 z-[60] flex flex-col bg-[#1e1e2e]/95 backdrop-blur-sm">
+          {/* Header Bar */}
+          <div className="flex items-center justify-between border-b border-[#3d3d5c] bg-[#2b1a1f]/90 px-5 py-3 shadow-lg">
+            <div className="flex items-center gap-3">
+              <span className="text-lg">📄</span>
+              <div>
+                <h3 className="text-base font-bold text-white">Attendance Sheet Preview</h3>
+                <p className="text-xs text-[#a0a0b8]">{pdfPreviewFilename}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={downloadPdfFromPreview}
+                className="flex items-center gap-1.5 rounded-lg bg-[#4338ca] px-4 py-2 text-sm font-bold text-white shadow-md transition hover:bg-[#3730a3] hover:shadow-lg"
+              >
+                ⬇ Download PDF
+              </button>
+              <button
+                type="button"
+                onClick={closePdfPreview}
+                className="rounded-lg border border-[#4d4d6d] bg-[#2d2d44] px-3 py-2 text-sm font-semibold text-[#e0e0f0] transition hover:bg-[#3d3d55] hover:text-white"
+              >
+                ✕ Close
+              </button>
+            </div>
+          </div>
+          {/* PDF Viewer */}
+          <div className="flex-1 overflow-hidden p-3">
+            <iframe
+              src={pdfPreviewUrl}
+              title="Attendance Sheet PDF Preview"
+              className="h-full w-full rounded-lg border border-[#3d3d5c] bg-white shadow-inner"
+              style={{ minHeight: '500px' }}
+            />
           </div>
         </div>
       ) : null}

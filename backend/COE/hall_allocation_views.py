@@ -223,29 +223,93 @@ class SeatingArrangementExcelView(APIView):
         ws_summary = wb.active
         ws_summary.title = "Master Allocation Summary"
 
-        # Calculate Department breakdown per hall dynamically
+        # Pre-cache department codes for fast register number prefix lookup
+        from academics.models import Department, StudentProfile
+        dept_mapping = {d.code: (d.short_name or d.code) for d in Department.objects.all()}
+        dept_cache = {}
+
+        def get_student_dept(reg, cache, mapping):
+            reg = str(reg).strip()
+            if not reg:
+                return None
+            if reg in cache:
+                return cache[reg]
+            if len(reg) >= 11:
+                code_slice = reg[8:11]
+                if code_slice in mapping:
+                    cache[reg] = mapping[code_slice]
+                    return mapping[code_slice]
+            # Fallback to StudentProfile lookup
+            sp = StudentProfile.objects.filter(reg_no=reg).select_related('home_department').first()
+            if sp and sp.home_department:
+                val = sp.home_department.short_name or sp.home_department.code
+                cache[reg] = val
+                return val
+            return None
+
+        def resolve_hall_dept_counts(hall):
+            """
+            Returns a clean dictionary of {dept_name: count} for all non-empty students in this hall.
+            Always computes directly from individual student records to guarantee 100% accuracy before and after optimization.
+            """
+            students = hall.get('students', [])
+            student_depts = hall.get('student_depts') or hall.get('studentDepts') or []
+            dept_name = hall.get('department', '')
+
+            counts = {}
+            for i, s in enumerate(students):
+                s_clean = str(s).strip()
+                if not s_clean:
+                    continue
+                # 1. Check if student register number directly identifies department (Anna Univ code)
+                d = get_student_dept(s_clean, dept_cache, dept_mapping)
+                
+                # 2. If not found by register number, check student_depts list
+                if not d and i < len(student_depts):
+                    cand = str(student_depts[i]).strip()
+                    if cand and " / " not in cand:
+                        d = cand
+                
+                # 3. Fallback to single department if hall only has one dept
+                if not d and dept_name and " / " not in dept_name:
+                    d = dept_name
+
+                if d:
+                    counts[d] = counts.get(d, 0) + 1
+                else:
+                    counts['Other'] = counts.get('Other', 0) + 1
+
+            # Fallback if counts was empty (e.g. dummy test data without dept codes)
+            if not counts:
+                valid_count = len([s for s in students if str(s).strip()])
+                raw_depts = [d.strip() for d in (hall.get('departments') or dept_name.split(' / ')) if d.strip()]
+                if not raw_depts:
+                    raw_depts = [dept_name] if dept_name else ['General']
+                if len(raw_depts) == 1:
+                    counts[raw_depts[0]] = valid_count
+                elif valid_count > 0:
+                    base = valid_count // len(raw_depts)
+                    rem = valid_count % len(raw_depts)
+                    for idx_d, d_name in enumerate(raw_depts):
+                        counts[d_name] = base + (1 if idx_d < rem else 0)
+
+            return counts
+
+        # Calculate Department breakdown per hall dynamically (Pure Dept-wise)
         dept_halls_map = {}
         dept_counts_map = {}
 
         for hall in halls:
             hall_name = hall.get('hall_name', 'Hall')
-            dept_counts = hall.get('dept_counts')
+            hall_counts = resolve_hall_dept_counts(hall)
 
-            if dept_counts and isinstance(dept_counts, dict):
-                for dept, count in dept_counts.items():
+            for dept, count in hall_counts.items():
+                if count > 0:
                     if dept not in dept_halls_map:
                         dept_halls_map[dept] = []
                         dept_counts_map[dept] = []
                     dept_halls_map[dept].append(hall_name)
                     dept_counts_map[dept].append(count)
-            else:
-                dept = hall.get('department', 'Dept')
-                student_count = len(hall.get('students', []))
-                if dept not in dept_halls_map:
-                    dept_halls_map[dept] = []
-                    dept_counts_map[dept] = []
-                dept_halls_map[dept].append(hall_name)
-                dept_counts_map[dept].append(student_count)
 
         # Banner Row
         banner_text = f"{date_str} {session}   |   {exam_title} Hall Allocation   |   {semester_text}"
@@ -280,9 +344,10 @@ class SeatingArrangementExcelView(APIView):
         ws_summary.column_dimensions['B'].width = 22
 
         summary_row_idx = 3
-        for dept, counts in dept_counts_map.items():
+        for dept in sorted(dept_counts_map.keys()):
+            counts = dept_counts_map[dept]
             hall_list = dept_halls_map[dept]
-            breakdown_str = "+".join(map(str, counts))
+            breakdown_str = " + ".join(map(str, counts))
             if len(counts) > 1:
                 breakdown_str += f" = {sum(counts)}"
 
@@ -307,13 +372,12 @@ class SeatingArrangementExcelView(APIView):
             summary_row_idx += 1
 
         # =========================================================================
-        # =========================================================================
         # SHEET 2: Seating Arrangement (Individual Halls)
         # =========================================================================
         ws = wb.create_sheet(title="Seating Arrangement")
         current_row = 1
 
-        all_depts = list(dept_halls_map.keys())
+        all_depts = sorted(list(dept_halls_map.keys()))
         global_dept_label = " / ".join(all_depts) if all_depts else "Department"
 
         def apply_cell_style(cell, border_style=border, fill_style=None, font_style=None, align_style=None):
@@ -338,7 +402,17 @@ class SeatingArrangementExcelView(APIView):
             students = hall.get('students', [])
             pattern = hall.get('pattern', 'Zigzag')
             dept_name = hall.get('department', global_dept_label)
-            total_students = len([s for s in students if str(s).strip()])
+
+            # Department split for this specific hall (always computed directly from seated students)
+            counts = resolve_hall_dept_counts(hall)
+            total_students = sum(counts.values()) if counts else len([s for s in students if str(s).strip()])
+            hall_dept_label = " / ".join(sorted(counts.keys())) if counts else dept_name
+
+            if counts:
+                breakdown_parts = [f"{d}: {c}" for d, c in sorted(counts.items()) if c > 0]
+                summary_value = f"{' | '.join(breakdown_parts)} | TOTAL: {total_students}"
+            else:
+                summary_value = f"{dept_name}  TOTAL={total_students}"
 
             # Each seat column consists of exactly 2 Excel columns: S.No + Reg No (no spacer columns)
             total_cols = max(cols * 2, 6)
@@ -377,7 +451,7 @@ class SeatingArrangementExcelView(APIView):
                 summary_end = total_cols - 2
                 ws.merge_cells(start_row=meta_row, end_row=meta_row, start_column=summary_start, end_column=summary_end)
                 style_merge_range(ws, meta_row, meta_row, summary_start, summary_end, fill_style=header_fill)
-                summary_cell = ws.cell(row=meta_row, column=summary_start, value=f"{dept_name}  TOTAL={total_students}")
+                summary_cell = ws.cell(row=meta_row, column=summary_start, value=summary_value)
                 summary_cell.font = summary_font
                 summary_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -401,7 +475,7 @@ class SeatingArrangementExcelView(APIView):
                 # Cols 3-4: Dept & Total
                 ws.merge_cells(start_row=meta_row, end_row=meta_row, start_column=3, end_column=4)
                 style_merge_range(ws, meta_row, meta_row, 3, 4, fill_style=header_fill)
-                summary_cell = ws.cell(row=meta_row, column=3, value=f"{dept_name} TOTAL={total_students}")
+                summary_cell = ws.cell(row=meta_row, column=3, value=summary_value)
                 summary_cell.font = summary_font
                 summary_cell.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -422,7 +496,7 @@ class SeatingArrangementExcelView(APIView):
                 reg_col = c * 2 + 2
 
                 sno_header = ws.cell(row=header_row, column=sno_col, value="S.No")
-                reg_header = ws.cell(row=header_row, column=reg_col, value=dept_name)
+                reg_header = ws.cell(row=header_row, column=reg_col, value=hall_dept_label)
 
                 for cell in (sno_header, reg_header):
                     apply_cell_style(cell, border_style=border, fill_style=header_fill, font_style=header_font, align_style=Alignment(horizontal="center", vertical="center"))

@@ -12,6 +12,7 @@ from .kv_views import CoeKeyValueStoreView
 from .views_save import CoeResetExamDummies, CoeSaveExamDummies
 from .external_staff_views import ExternalStaffListView, AssignExternalCodesView, ExternalStaffDbMirrorView, ExternalStaffAdminSourceView, ExternalStaffAcademicsProfilesView
 from .hall_allocation_views import SeatingArrangementExcelView, PublishHallPlanView, StudentHallPlanView
+from .hall_attendance_pdf_views import HallAttendancePdfView
 
 urlpatterns = [
     path('portal/', CoePortalContextView.as_view(), name='coe_portal_context'),
@@ -32,4 +33,5 @@ urlpatterns = [
     path('seating-arrangement-excel/', SeatingArrangementExcelView.as_view(), name='coe_seating_arrangement_excel'),
     path('publish-hall-plan/', PublishHallPlanView.as_view(), name='coe_publish_hall_plan'),
     path('student-hall-plan/', StudentHallPlanView.as_view(), name='coe_student_hall_plan'),
+    path('hall-attendance-pdf/', HallAttendancePdfView.as_view(), name='coe_hall_attendance_pdf'),
 ]
