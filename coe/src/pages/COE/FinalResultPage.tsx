@@ -267,7 +267,8 @@ export default function FinalResultPage() {
         }
       } catch (err) {
         if (!active) return;
-        setError('Unable to load courses for the selected filters right now. Please try again.');
+        const errorMsg = err instanceof Error ? err.message : 'Unable to load courses for the selected filters right now. Please try again.';
+        setError(errorMsg);
         setRows([]);
       } finally {
         if (active) setLoadingCourses(false);

@@ -9,4 +9,15 @@ class Migration(migrations.Migration):
         ('OBE', '0063_coursequestionbanklog_and_more'),
     ]
 
-    operations = []
+    operations = [
+        migrations.AddField(
+            model_name='coursequestionbank',
+            name='question_type',
+            field=models.CharField(
+                max_length=1, 
+                choices=[('D', 'Descriptive'), ('O', 'Objective')], 
+                default='D', 
+                help_text='D=Descriptive, O=Objective'
+            ),
+        ),
+    ]

@@ -4,22 +4,17 @@ import OBEPage from './obe/OBEPage';
 import OBEMasterPage from './obe/OBEMasterPage';
 import OBEDueDatesPage from './obe/OBEDueDatesPage';
 import QuestionBankPage from './QuestionBankPage';
-import AcademicVisualsPage from './visual_admin/AcademicVisualsPage';
 
 export default function AcademicPage(): JSX.Element {
   const location = useLocation();
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const initialTab = (params.get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank' | 'academic_visuals') || 'obe';
-  const [tab, setTab] = useState<'obe' | 'obe_master' | 'due_dates' | 'question_bank' | 'academic_visuals'>(initialTab);
+  const initialTab = (params.get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank') || 'obe';
+  const [tab, setTab] = useState<'obe' | 'obe_master' | 'due_dates' | 'question_bank'>(initialTab);
 
   // decide which tabs to show based on permissions exposed via window.__APP_ME__ if available
   const perms = (window as any).__APP_ME__?.permissions || (window as any).__ME__?.permissions || [];
-  const rolesUpper = (window as any).__APP_ME__?.roles?.map((r: string) => String(r || '').toUpperCase()) || [];
   const lower = Array.isArray(perms) ? perms.map((p: any) => String(p || '').toLowerCase()) : [];
   const canObeMaster = lower.includes('obe.master.manage');
-  
-  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN') || Boolean((window as any).__APP_ME__?.is_superuser);
-  const canSeeAcademicVisuals = isVisualAdmin || rolesUpper.some((r: string) => ['PRINCIPAL', 'IQAC', 'ADMIN', 'SUPER_ADMIN'].includes(r));
 
   const tabs = useMemo(() => {
     const out: Array<{ key: string; label: string }> = [];
@@ -29,11 +24,8 @@ export default function AcademicPage(): JSX.Element {
       out.push({ key: 'obe_master', label: 'OBE Master' });
       out.push({ key: 'due_dates', label: 'OBE: Due Dates' });
     }
-    if (canSeeAcademicVisuals) {
-      out.push({ key: 'academic_visuals', label: 'Academic Visuals' });
-    }
     return out;
-  }, [canObeMaster, canSeeAcademicVisuals]);
+  }, [canObeMaster]);
 
   // ensure selected tab is available
   React.useEffect(() => {
@@ -42,7 +34,7 @@ export default function AcademicPage(): JSX.Element {
 
   useEffect(() => {
     // respond to URL changes (e.g. /academic?tab=obe_master)
-    const p = new URLSearchParams(location.search).get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank' | 'academic_visuals' | null;
+    const p = new URLSearchParams(location.search).get('tab') as 'obe' | 'obe_master' | 'due_dates' | 'question_bank' | null;
     if (p && tabs.some((t) => t.key === p) && p !== tab) setTab(p);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
@@ -78,7 +70,6 @@ export default function AcademicPage(): JSX.Element {
         {tab === 'obe_master' && canObeMaster && <OBEMasterPage />}
         {tab === 'due_dates' && canObeMaster && <OBEDueDatesPage />}
         {tab === 'question_bank' && <QuestionBankPageWrapper />}
-        {tab === 'academic_visuals' && canSeeAcademicVisuals && <AcademicVisualsPage />}
       </div>
     </main>
   );

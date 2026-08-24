@@ -1459,7 +1459,7 @@ export default function QuestionBankPage({ courseCode, courseName, allowAllColum
                                       }}
                                       onPaste={(e) => {
                                         const items = e.clipboardData.items;
-                                        for (const item of Array.from(items)) {
+                                        for (const item of items) {
                                           if (item.type.indexOf('image') !== -1) {
                                             const file = item.getAsFile();
                                             if (!file) continue;

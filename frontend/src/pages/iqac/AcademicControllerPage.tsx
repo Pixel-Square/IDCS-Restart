@@ -8,11 +8,9 @@ import AcademicControllerCQIPage from './AcademicControllerCQIPage';
 import AcademicControllerActiveLearningPage from './AcademicControllerActiveLearningPage';
 import AcademicControllerPublishPage from './AcademicControllerPublishPage';
 import AcademicControllerInternalMarksPage from './AcademicControllerInternalMarksPage';
-import AcademicControllerExportMarksPage from './AcademicControllerExportMarksPage';
-import IQACDashboardPage from './IQACDashboardPage';
 import IQACQuestionBankPage from './IQACQuestionBankPage';
 
-type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'internal_marks' | 'export_marks' | 'weights' | 'active_learning' | 'qp' | 'cqi' | 'question_bank' | 'publish';
+type TabKey = 'dashboard' | 'due_dates' | 'courses' | 'internal_marks' | 'weights' | 'active_learning' | 'qp' | 'cqi' | 'question_bank' | 'publish';
 
 export default function AcademicControllerPage(): JSX.Element {
   const location = useLocation();
@@ -36,7 +34,6 @@ export default function AcademicControllerPage(): JSX.Element {
     { key: 'courses', label: 'Courses' },
     { key: 'question_bank', label: 'Question Bank' },
     { key: 'internal_marks', label: 'Internal marks' },
-    { key: 'export_marks', label: 'Export Marks' },
     { key: 'qp', label: 'QP' },
     { key: 'cqi', label: 'CQI Editor' },
     { key: 'publish', label: 'PUBLISH' },
@@ -72,14 +69,15 @@ export default function AcademicControllerPage(): JSX.Element {
       </div>
 
       <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, padding: 12, background: '#fff' }}>
-        {tab === 'dashboard' && <IQACDashboardPage />}
+        {tab === 'dashboard' && (
+          <div style={{ color: '#6b7280' }}>Dashboard coming soon.</div>
+        )}
         {tab === 'weights' && <AcademicControllerWeightsPage />}
         {tab === 'active_learning' && <AcademicControllerActiveLearningPage />}
         {tab === 'due_dates' && <OBEDueDatesPage />}
         {tab === 'courses' && <AcademicControllerCoursesPage />}
         {tab === 'question_bank' && <IQACQuestionBankPage />}
         {tab === 'internal_marks' && <AcademicControllerInternalMarksPage />}
-        {tab === 'export_marks' && <AcademicControllerExportMarksPage />}
         {tab === 'qp' && <AcademicControllerQPPage />}
         {tab === 'cqi' && <AcademicControllerCQIPage />}
         {tab === 'publish' && <AcademicControllerPublishPage />}

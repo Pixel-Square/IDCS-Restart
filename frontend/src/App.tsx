@@ -7,14 +7,12 @@ import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
-import TimetableAdminPage from './pages/timetable/admin/TimetableAdminPage';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
 import IQACEventApprovalPage from './pages/iqac/IQACEventApprovalPage';
 import AcademicControllerPage from './pages/iqac/AcademicControllerPage';
 import AcademicControllerCoursePage from './pages/iqac/AcademicControllerCoursePage';
 import AcademicControllerCourseMarksPage from './pages/iqac/AcademicControllerCourseMarksPage';
 import AcademicControllerCourseOBEPage from './pages/iqac/AcademicControllerCourseOBEPage';
-import AcademicControllerCourseLcaPage from './pages/iqac/AcademicControllerCourseLcaPage';
 import IQACQuestionBankLogsPage from './pages/iqac/IQACQuestionBankLogsPage';
 import IQACQuestionBankPage from './pages/iqac/IQACQuestionBankPage';
 import InternalMarkPage from './pages/iqac/InternalMarkPage';
@@ -22,20 +20,16 @@ import OBERequestsPage from './pages/obe/OBERequestsPage';
 import OBEDueDatesPage from './pages/obe/OBEDueDatesPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import HomePage from "./components/containers/HomePage";
-import Login from './pages/auth/Login';
 import DashboardPage from "./pages/dashboard/Dashboard";
 import ProfilePage from "./pages/profile/Profile";
 import SettingsPage from './pages/settings/SettingsPage';
 import WhatsAppSenderPage from './pages/settings/WhatsAppSenderPage';
-import SystemTransitionsPage from './pages/dashboard/SystemTransitionsPage';
 import UnderConstructionManagerPage from './pages/settings/UnderConstructionManagerPage';
-import ConditionsPage from './pages/settings/ConditionsPage';
 import UCGate from './components/UCGate';
 import MasterList from './pages/curriculum/MasterList';
 import MasterEditor from './pages/curriculum/MasterEditor';
 import DeptList from './pages/curriculum/DeptList';
 import ElectiveImport from './pages/curriculum/ElectiveImport';
-import ElectivePollPage from './pages/curriculum/ElectivePollPage';
 import AcademicPage from './pages/AcademicPage';
 import QuestionImportPage from "./pages/tools/QuestionImportPage";
 import OBEPage from './pages/obe/OBEPage';
@@ -55,6 +49,7 @@ import AttendanceAnalytics from './pages/staff/AttendanceAnalytics';
 // SwapRequestsPage removed — swap requests handled via modal
 import StudentAttendancePage from './pages/student/Attendance';
 import StudentAcademics from './pages/student/Academics';
+import StudentHallPlanPage from './pages/student/HallPlan';
 import MentorAssign from './pages/advisor/MentorAssign';
 import NotificationsPage from './pages/Notifications';
 import AnnouncementsPage from './pages/announcements/AnnouncementsPage';
@@ -63,10 +58,6 @@ import FeedbackPage from './pages/feedback/FeedbackPage';
 import StaffsPage from './pages/StaffsPage';
 import AcademicCalendarRedirect from './pages/academicCalendar/AcademicCalendarRedirect';
 import AcademicCalendarPage from './pages/academicCalendar/AcademicCalendarPage';
-import AcademicCalendarAdmin from './pages/academicCalendar/AcademicCalendarAdmin';
-import AcademicCalendarView from './pages/academicCalendar/AcademicCalendarView';
-import CalendarEvents from './pages/academicCalendar/CalendarEvents';
-import { AcademicCalendarAdminPage } from './pages/academicCalendar/admin';
 import BrandingLayout from './pages/branding/BrandingLayout';
 import HodResultAnalysisPage from './pages/hod/HodResultAnalysisPage';
 import HodEventsListPage from './pages/hod/events/HodEventsListPage';
@@ -75,8 +66,6 @@ import CanvaDesignEditorPage from './pages/hod/events/CanvaDesignEditorPage';
 import PosterMakerPage from './pages/events/PosterMakerPage';
 import PBASSubmissionPage from './pages/staff/PBASSubmissionPage';
 import PBASManagerPage from './pages/iqac/PBASManagerPage';
-import PBASAdminPage from './pages/pbas/admin/PBASAdminPage';
-import PBASApprovalsPage from './pages/pbas/approvals/PBASApprovalsPage';
 import { StaffAttendanceUpload } from './pages/PS';
 import { MyAttendance } from './pages/staff';
 import HODStaffAttendancePage from './pages/hod/StaffAttendance';
@@ -92,7 +81,6 @@ import ExtStaffProfilesPage from './pages/EXTStaff/ExtStaffProfilesPage';
 import SalaryPage from './pages/staff/SalaryPage';
 import MyRequestsPage from './pages/staff-requests/MyRequestsPage';
 import PendingApprovalsPage from './pages/staff-requests/PendingApprovalsPage';
-import EventAttendingPage from './pages/staff-requests/EventAttendingPage';
 import ApplicationsAdminPage from './pages/iqac/ApplicationsAdminPage';
 import ApplicationsInboxPage from './pages/applications/ApplicationsInboxPage';
 import ApplicationsPage from './pages/applications/ApplicationsPage';
@@ -109,7 +97,6 @@ import IDCSScanTestPage from './pages/IDCSScan/TestPage';
 import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
-import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
 import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
@@ -124,45 +111,7 @@ import MyProposalsPage from './pages/events/MyProposalsPage';
 import ProposalApprovalPage from './pages/events/ProposalApprovalPage';
 import CreditsPage from './pages/CreditsPage';
 import RetrivalPage from './pages/COE/RetrivalPage';
-import LmsPage from './pages/lms/LmsPage';
-import FilePreviewPage from './pages/lms/FilePreviewPage';
-import { LazyErrorBoundary } from './components/LazyErrorBoundary';
-import { safeLazy } from './utils/safeLazy';
-
-// Academic 2.1 - Lazy load pages for code splitting
-const AcV2AdminDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/AcademicV2AdminDashboard'), 'AcademicV2AdminDashboard');
-
-// Visual Admin
-const VisualAdminDashboard = safeLazy(() => import('./pages/visual_admin/VisualAdminDashboard'), 'VisualAdminDashboard');
-const VisualAdminURLsPage = safeLazy(() => import('./pages/visual_admin/VisualAdminURLsPage'), 'VisualAdminURLsPage');
-const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
-const AcademicVisualsPage = safeLazy(() => import('./pages/visual_admin/AcademicVisualsPage'), 'AcademicVisualsPage');
-
-const AcV2PublishControlPage = safeLazy(() => import('./pages/Academic 2.1/admin/PublishControlPage'), 'PublishControlPage');
-const AcV2ExamManagementPage = safeLazy(() => import('./pages/Academic 2.1/admin/ExamManagementPage'), 'ExamManagementPage');
-const AcV2QpPatternEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/QpPatternEditorPage'), 'QpPatternEditorPage');
-const AcV2ApprovalInboxPage = safeLazy(() => import('./pages/Academic 2.1/admin/ApprovalInboxPage'), 'ApprovalInboxPage');
-const AcV2InternalMarkAdminPage = safeLazy(() => import('./pages/Academic 2.1/admin/InternalMarkAdminPage'), 'InternalMarkAdminPage');
-const AcV2WeightagePage = safeLazy(() => import('./pages/Academic 2.1/admin/WeightagePage'), 'WeightagePage');
-const AcV2CoAttainmentConfigPage = safeLazy(() => import('./pages/Academic 2.1/admin/coattainment/CoAttainmentConfig'), 'CoAttainmentConfig');
-const AcV2ExportImportManagerPage = safeLazy(() => import('./pages/Academic 2.1/admin/export_import/ExportImportManagerPage'), 'ExportImportManagerPage');
-const AcV2CourseListPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CourseListPage'), 'CourseListPage');
-const AcV2MarkEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/MarkEntryPage'), 'MarkEntryPage');
-const AcV2InternalMarkPage = safeLazy(() => import('./pages/Academic 2.1/faculty/InternalMarkPage'), 'InternalMarkPage');
-const AcV2CqiEntryPage = safeLazy(() => import('./pages/Academic 2.1/faculty/CqiEntryPage'), 'CqiEntryPage');
-const AcV2CourseManagerDashboard = safeLazy(() => import('./pages/Academic 2.1/admin/CourseManagerDashboard'), 'CourseManagerDashboard');
-const AcV2CourseFacultyPage = safeLazy(() => import('./pages/Academic 2.1/admin/CourseFacultyPage'), 'CourseFacultyPage');
-const AcV2AdminBypassCoursePage = safeLazy(() => import('./pages/Academic 2.1/admin/AdminBypassCoursePage'), 'AdminBypassCoursePage');
-const AcV2BypassLogsPage = safeLazy(() => import('./pages/Academic 2.1/admin/BypassLogsPage'), 'BypassLogsPage');
-const AcV2BypassShareLandingPage = safeLazy(() => import('./pages/Academic 2.1/admin/bypass/BypassShareLandingPage'), 'BypassShareLandingPage');
-const AcV2PassMarkSettingsPage = safeLazy(() => import('./pages/Academic 2.1/admin/SettingsPage'), 'SettingsPage');
-const AcV2GoogleSheetsPage = safeLazy(() => import('./pages/Academic 2.1/admin/GoogleSheetsPage'), 'GoogleSheetsPage');
-const AcV2CdapTemplateEditorPage = safeLazy(() => import('./pages/Academic 2.1/admin/cdap/CDAPTemplateEditorPage'), 'CDAPTemplateEditorPage');
-const AcV2CdapTemplatesPage = AcV2CdapTemplateEditorPage;
-const AcV2LCAWorkflowPage = safeLazy(() => import('./pages/Academic 2.1/faculty/LCAWorkflowPage'), 'LCAWorkflowPage');
-const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
-const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
-const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
+import HallSelectionPage from './pages/HallSelectionPage';
 
 type RoleObj = { name: string };
 type Me = {
@@ -180,10 +129,6 @@ export default function App() {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const { collapsed } = useSidebar();
-  const bootstrapMeTimeoutMs = Math.max(
-    Number((import.meta as any)?.env?.VITE_ME_BOOTSTRAP_TIMEOUT) || 20000,
-    5000,
-  );
 
   const canAccessCoePortal = (currentUser: Me | null) => {
     if (!currentUser) return false;
@@ -214,11 +159,11 @@ export default function App() {
     let cancelled = false
     const timeout = setTimeout(() => {
       if (!cancelled) {
-        console.warn(`getMe() timed out after ${bootstrapMeTimeoutMs}ms`)
+        console.warn('getMe() timed out')
         setUser(null)
         setLoading(false)
       }
-    }, bootstrapMeTimeoutMs)
+    }, 5000)
 
     getMe()
       .then((r) => {
@@ -243,7 +188,7 @@ export default function App() {
       .finally(() => { if (!cancelled) { clearTimeout(timeout); setLoading(false) } })
 
     return () => { cancelled = true; clearTimeout(timeout) }
-  }, [bootstrapMeTimeoutMs]);
+  }, []);
 
   useEffect(() => {
     const onMeUpdated = (event: Event) => {
@@ -309,7 +254,6 @@ export default function App() {
             <div className="app-main-zoom">
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/login" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/credits" element={<CreditsPage />} />
                 <Route path="/profile" element={<ProfilePage user={user} />} />
@@ -324,14 +268,6 @@ export default function App() {
                 <Route
                   path="/settings/under-construction"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<UnderConstructionManagerPage />} />}
-                />
-                <Route
-                  path="/settings/notification-templates"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<NotificationsPage />} />}
-                />
-                <Route
-                  path="/settings/conditions"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<ConditionsPage />} />}
                 />
                 <Route
                   path="/iqac/applications-admin"
@@ -404,16 +340,8 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredPermissions={["announcements.view_announcement_page"]} element={<AnnouncementsPage user={user} />} />}
                 />
                 <Route
-                  path="/lms"
-                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<LmsPage user={user} />} />}
-                />
-                <Route
-                  path="/lms/preview/file/:materialId"
-                  element={<ProtectedRoute user={user} requiredRoles={["STUDENT", "STAFF", "FACULTY", "HOD", "AHOD", "IQAC"]} requiredPermissions={["lms.page.student", "lms.page.staff", "lms.page.hod", "lms.page.ahod", "lms.page.iqac"]} element={<FilePreviewPage />} />}
-                />
-                <Route
                   path="/ps/staff-attendance/upload"
-                  element={<ProtectedRoute user={user} requiredRoles={['PS', 'IQAC']} element={<StaffAttendanceUpload />} />}
+                  element={<ProtectedRoute user={user} requiredRoles={['PS']} element={<StaffAttendanceUpload />} />}
                 />
                 <Route
                   path="/feedback"
@@ -425,24 +353,8 @@ export default function App() {
                 />
                 <Route path="/academic-calendar" element={<AcademicCalendarRedirect user={user} />} />
                 <Route
-                  path="/iqac/calendar-admin"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarAdminPage />} />}
-                />
-                <Route
                   path="/iqac/calendar"
                   element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarPage mode="iqac" />} />}
-                />
-                <Route
-                  path="/iqac/calendar/admin"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarAdmin />} />}
-                />
-                <Route
-                  path="/iqac/calendar/admin/view/:id"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<AcademicCalendarView />} />}
-                />
-                <Route
-                  path="/iqac/calendar/events"
-                  element={<ProtectedRoute user={user} requiredRoles={['IQAC']} element={<CalendarEvents />} />}
                 />
                 <Route
                   path="/hod/calendar"
@@ -461,10 +373,6 @@ export default function App() {
                 <Route
                   path="/curriculum/elective-import"
                   element={<ProtectedRoute user={user} requiredPermissions={["curriculum.import_elective_choices"]} element={<ElectiveImport />} />}
-                />
-                <Route
-                  path="/curriculum/elective-poll"
-                  element={<ProtectedRoute user={user} requiredPermissions={["curriculum.manage_elective_poll", "curriculum.choose_elective", "curriculum.hod_elective_manage"]} requiredRoles={["IQAC"]} element={<ElectivePollPage user={user} />} />}
                 />
 
                 {/* OBE/marks/COAttainment routes removed */}
@@ -536,7 +444,7 @@ export default function App() {
                 />
                 <Route
                   path="/iqac/timetable"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["timetable.manage_templates"]} element={<TimetableAdminPage />} />}
+                  element={<ProtectedRoute user={user} requiredPermissions={["timetable.manage_templates"]} element={<HodTimetableEditor />} />}
                 />
                 <Route
                   path="/iqac/event-approvals"
@@ -563,10 +471,6 @@ export default function App() {
                     element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<IQACQuestionBankLogsPage />} />}
                   />
                 <Route
-                  path="/iqac/academic-controller/course/:courseCode/lca/:taId"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<AcademicControllerCourseLcaPage />} />}
-                />
-                <Route
                   path="/iqac/academic-controller/course/:courseCode/internal-mark/:taId"
                   element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} requiredPermissions={["obe.master.manage"]} element={<InternalMarkPage />} />}
                 />
@@ -577,10 +481,6 @@ export default function App() {
                 <Route
                   path="/iqac/obe-requests"
                   element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<ObeRequestsPage />} />}
-                />
-                <Route
-                  path="/iqac/system-transitions"
-                  element={<ProtectedRoute user={user} requiredRoles={["IQAC"]} element={<SystemTransitionsPage />} />}
                 />
                 {/* PBAS IQAC route removed */}
                 <Route
@@ -619,10 +519,6 @@ export default function App() {
                 <Route
                   path="/idscan/gatescan"
                   element={<ProtectedRoute user={user} requiredRoles={['SECURITY']} element={<RFReaderGateScanPage />} />}
-                />
-                <Route
-                  path="/idscan/fingerprint"
-                  element={<ProtectedRoute user={user} requiredRoles={['LIBRARY', 'SECURITY', 'IQAC', 'ADMIN']} element={<FingerprintEnrollPage />} />}
                 />
                 <Route
                   path="/iqac/rf-reader"
@@ -666,6 +562,10 @@ export default function App() {
                   path="/student/academics"
                   element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentAcademics />} />}
                 />
+                <Route
+                  path="/student/hall-plan"
+                  element={<ProtectedRoute user={user} requiredProfile={'STUDENT'} element={<StudentHallPlanPage />} />}
+                />
                 {/* Student PBAS route removed */}
                 {/* Attendance pages removed */}
                 <Route
@@ -677,7 +577,10 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["academics.view_assigned_subjects"]} element={<AssignedSubjectsPage />} />}
                 />
                 <Route
-
+                  path="/hall-selection"
+                  element={<ProtectedRoute user={user} requiredProfile={'STAFF'} element={<HallSelectionPage user={user} />} />}
+                />
+                <Route
                   path="/staff/students"
                   element={<ProtectedRoute user={user} requiredProfile={'STAFF'} requiredPermissions={["students.view_students"]} element={<StudentsPage user={user} />} />}
                 />
@@ -756,16 +659,6 @@ export default function App() {
                   path="/staff-requests/pending-approvals"
                   element={<ProtectedRoute user={user} requiredRoles={['HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS', 'PRINCIPAL', 'ADMIN']} requiredPermissions={['staff_requests.approve_requests']} element={<PendingApprovalsPage />} />}
                 />
-                <Route
-                  path="/staff-requests/event-attending"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['STAFF', 'HOD', 'AHOD', 'HR', 'HAA', 'IQAC', 'PS']}
-                      element={<EventAttendingPage />}
-                    />
-                  }
-                />
                 
                 <Route
                   path="/attendance-analytics/requests"
@@ -797,594 +690,6 @@ export default function App() {
                     />
                   }
                 />
-
-                {/* ── Academic 2.1 Routes ─────────────────────────────────── */}
-                {/* Admin Dashboard */}
-                <Route
-                  path="/academic-v2/admin"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                            <AcV2AdminDashboard />
-                          </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/export-import-manager"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                          <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                            <AcV2ExportImportManagerPage />
-                          </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* Admin Routes (IQAC only) */}
-                <Route
-                  path="/academic-v2/admin/publish-control"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2PublishControlPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/exam-management"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2ExamManagementPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/cycles"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={<Navigate to="/academic-v2/admin/exam-management?tab=cycles" replace />}
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/class-types"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={<Navigate to="/academic-v2/admin/exam-management?tab=class-types" replace />}
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/qp-patterns"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2QpPatternEditorPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/exam-assignments"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={<Navigate to="/academic-v2/admin/exam-management?tab=exam-assignments" replace />}
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/approvals"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2ApprovalInboxPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/internal-marks"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2InternalMarkAdminPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/weightage"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2WeightagePage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/co-attainment-config"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CoAttainmentConfigPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/google-sheets"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2GoogleSheetsPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/cdap-monitor"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <Navigate to="/academic-v2/admin/cdap-templates" replace />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/cdap-templates"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CdapTemplatesPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/cdap-templates/new"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CdapTemplateEditorPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/cdap-templates/:templateId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['IQAC']}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CdapTemplateEditorPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* Faculty Routes (Staff) */}
-                <Route
-                  path="/academic-v2/courses"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CourseListPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/course/:courseId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2InternalMarkPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/course/:courseId/cqi"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CqiEntryPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/course/:courseId/lca"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2LCAWorkflowPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* Academic 2.1 Student Routes */}
-                <Route
-                  path="/academic-v2/student/dashboard"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentDashboardPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/student/courses"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentCourseListPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/student/course/:courseId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STUDENT'}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2StudentCourseDetailPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/cqi/:examId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CqiEntryPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/exam/:examId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.staff']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2MarkEntryPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* Academic 2.1 Admin - Course Manager & Bypass */}
-                <Route
-                  path="/academic-v2/admin/course-manager"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CourseManagerDashboard />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/course-manager/:taId/faculty"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2CourseFacultyPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/bypass/:sessionId/course/:courseId"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2AdminBypassCoursePage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/bypass/logs"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2BypassLogsPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* Shared bypass link landing — handles its own auth check & redirect */}
-                <Route
-                  path="/academic-v2/bypass-share/:token"
-                  element={
-                    <LazyErrorBoundary>
-                    <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                      <AcV2BypassShareLandingPage />
-                    </React.Suspense>
-                    </LazyErrorBoundary>
-                  }
-                />
-                <Route
-                  path="/academic-v2/admin/pass-mark"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredProfile={'STAFF'}
-                      requiredPermissions={['academic_v2.page.admin']}
-                      element={
-                        <LazyErrorBoundary>
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcV2PassMarkSettingsPage />
-                        </React.Suspense>
-                        </LazyErrorBoundary>
-                      }
-                    />
-                  }
-                />
-                {/* ── Visual Admin Routes ─────────────────────────────── */}
-                <Route
-                  path="/academic-performance"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcademicPerformancePage />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/academic-visuals"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['VISUAL_ADMIN', 'PRINCIPAL', 'IQAC', 'SUPER_ADMIN', 'ADMIN']}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <AcademicVisualsPage />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/visual-admin"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['VISUAL_ADMIN']}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <VisualAdminDashboard />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-                <Route
-                  path="/visual-admin/urls"
-                  element={
-                    <ProtectedRoute
-                      user={user}
-                      requiredRoles={['VISUAL_ADMIN']}
-                      element={
-                        <React.Suspense fallback={<div className="p-6 text-center">Loading...</div>}>
-                          <VisualAdminURLsPage />
-                        </React.Suspense>
-                      }
-                    />
-                  }
-                />
-
-                {/* ────────────────────────────────────────────────────────────── */}
-
-                {/* PBAS staff and admin routes */}
-                <Route path="/pbas/staff" element={<ProtectedRoute user={user} requiredRoles={["STAFF"]} element={<PBASSubmissionPage />} />} />
-                <Route path="/pbas/admin" element={<ProtectedRoute user={user} requiredRoles={["PBAS_ADMIN"]} element={<PBASAdminPage />} />} />
-                <Route path="/pbas/approvals" element={<ProtectedRoute user={user} requiredRoles={["PBAS_APPROVER", "PBAS_ADMIN", "PBAS_MANAGER", "PBASADMIN", "IQAC", "ADMIN", "PRINCIPAL", "PS"]} element={<PBASApprovalsPage user={user} />} />} />
-
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />
@@ -1397,7 +702,6 @@ export default function App() {
         <div className="pt-16">
           <Routes>
             <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
-            <Route path="/login" element={<Login />} />
             <Route path="/credits" element={<CreditsPage />} />
             <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
           </Routes>

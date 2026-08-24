@@ -183,7 +183,7 @@ export default function QuestionBankTypesModal({ onClose }: { onClose: () => voi
                       <input type="number" value={tpl.btl || ''} onChange={e => updateTemplate(i, 'btl', e.target.value === '' ? null : parseInt(e.target.value))} style={{ width: '60px', padding: '4px' }}/>
                     </td>}
                     {formData.active_columns?.includes('college') && <td style={{ padding: '4px', borderBottom: '1px solid #e5e7eb' }}>
-                      <input value={(tpl as any).college || ''} onChange={e => updateTemplate(i, 'college' as any, e.target.value)} style={{ width: '80px', padding: '4px' }}/>
+                      <input value={tpl.college || ''} onChange={e => updateTemplate(i, 'college', e.target.value)} style={{ width: '80px', padding: '4px' }}/>
                     </td>}
                     {formData.active_columns?.includes('course_outcome') && <td style={{ padding: '4px', borderBottom: '1px solid #e5e7eb' }}>
                       <input value={tpl.course_outcome || ''} onChange={e => updateTemplate(i, 'course_outcome', e.target.value)} style={{ width: '80px', padding: '4px' }}/>
