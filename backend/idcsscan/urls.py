@@ -17,6 +17,7 @@ from idcsscan.views import (
     GatepassOfflinePullAllView,
     GatepassOfflineIgnoreAllView,
     BulkEntryPeopleView,
+    FingerprintAllocateSlotView,
     FingerprintEnrollView,
     FingerprintListView,
     FingerprintDeactivateView,
@@ -24,6 +25,11 @@ from idcsscan.views import (
     FingerprintResetAllView,
     FingerprintIdentifyView,
     UnifiedPeopleSearchView,
+    BioSecureGroupListView,
+    BioSecureGroupDetailView,
+    BioSecureSectionsListView,
+    BioSecureStudentStatusView,
+    BioSecureStudentLogsView,
 )
 
 urlpatterns = [
@@ -59,10 +65,18 @@ urlpatterns = [
     path('bulk-entry/people/', BulkEntryPeopleView.as_view(), name='idscan-bulk-entry-people'),
 
     # Fingerprint enrollment
+    path('fingerprint/allocate-slot/', FingerprintAllocateSlotView.as_view(), name='idscan-fingerprint-allocate-slot'),
     path('fingerprint/enroll/',     FingerprintEnrollView.as_view(),     name='idscan-fingerprint-enroll'),
     path('fingerprint/list/',       FingerprintListView.as_view(),       name='idscan-fingerprint-list'),
     path('fingerprint/deactivate/', FingerprintDeactivateView.as_view(), name='idscan-fingerprint-deactivate'),
     path('fingerprint/status/',     FingerprintStatusView.as_view(),     name='idscan-fingerprint-status'),
     path('fingerprint/reset-all/',  FingerprintResetAllView.as_view(),  name='idscan-fingerprint-reset-all'),
     path('fingerprint/identify/',   FingerprintIdentifyView.as_view(), name='idscan-fingerprint-identify'),
+
+    # BioSecure
+    path('biosecure/groups/',        BioSecureGroupListView.as_view(),    name='idscan-biosecure-groups'),
+    path('biosecure/groups/<int:pk>/', BioSecureGroupDetailView.as_view(), name='idscan-biosecure-groups-detail'),
+    path('biosecure/sections/',      BioSecureSectionsListView.as_view(), name='idscan-biosecure-sections'),
+    path('biosecure/student/status/', BioSecureStudentStatusView.as_view(), name='idscan-biosecure-student-status'),
+    path('biosecure/student/logs/',  BioSecureStudentLogsView.as_view(),  name='idscan-biosecure-student-logs'),
 ]

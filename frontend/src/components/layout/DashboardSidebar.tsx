@@ -81,6 +81,11 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_one_page_report: FileText,
   hall_selection: MapPin,
   idscan_fingerprint: Fingerprint,
+  academic_v2_admin: Layout,
+  academic_v2_faculty: BookOpen,
+  academic_v2_student: GraduationCap,
+  biosecure_admin: Shield,
+  student_biosecure: Shield,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -430,6 +435,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_student) {
     items.push({ key: 'student_academics', label: 'My Marks', to: '/student/academics' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
+    items.push({ key: 'student_biosecure', label: 'BioSecure Logs', to: '/biosecure/student/logs' });
     items.push({ key: 'student_hall_plan', label: 'Hall Plan', to: '/student/hall-plan' });
   }
 
@@ -524,6 +530,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_bulk_entry', label: 'Bulk RFID Entry', to: '/idscan/bulk-entry' });
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
     items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
+    items.push({ key: 'biosecure_admin', label: 'BioSecure Batches', to: '/biosecure/admin' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
     items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
   }
@@ -614,6 +621,28 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Add Token Raise for all users at the end (no permission check needed)
   items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
+
+  // ── Academic 2.1 ────────────────────────────────────────────────────────
+  const canSeeAc2Admin = rolesUpper.includes('ADMIN') || rolesUpper.includes('IQAC') || rolesUpper.includes('SUPER_ADMIN');
+  if (canSeeAc2Admin && !items.some((item) => item.key === 'academic_v2_admin')) {
+    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 (Admin)', to: '/academic-v2/admin' });
+  }
+
+  if (flags.is_staff && !items.some((item) => item.key === 'academic_v2_faculty')) {
+    items.push({ key: 'academic_v2_faculty', label: 'Academic 2.1 (Faculty)', to: '/academic-v2/courses' });
+  }
+
+  if (flags.is_student && !items.some((item) => item.key === 'academic_v2_student')) {
+    items.push({ key: 'academic_v2_student', label: 'Academic 2.1 (Student)', to: '/academic-v2/student/dashboard' });
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
+  // ── BIOSECURE_ADMIN / Staff BioSecure Access ──────────────────────────────────
+  // If the user has BIOSECURE_ADMIN, IQAC, ADMIN, or SECURITY role, ensure BioSecure Batches is available
+  const canAccessBioSecureAdmin = rolesUpper.includes('BIOSECURE_ADMIN') || rolesUpper.includes('IQAC') || rolesUpper.includes('ADMIN') || permsLower.includes('biosecure.admin_only');
+  if (canAccessBioSecureAdmin && !items.some((item) => item.key === 'biosecure_admin')) {
+    items.push({ key: 'biosecure_admin', label: 'BioSecure Batches', to: '/biosecure/admin' });
+  }
 
   return (
     <>

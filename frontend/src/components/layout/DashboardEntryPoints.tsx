@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight, X, RefreshCw } from 'lucide-react';
+import { User, BookOpen, GraduationCap, Calendar, Clock, CheckCircle, XCircle, AlertCircle, Bell, ArrowRight, X, RefreshCw, ShieldCheck } from 'lucide-react';
 import { apiClient } from '../../services/auth';
 import { getApiBase } from '../../services/apiBase';
+import fetchWithAuth from '../../services/fetchAuth';
 import { useNavigate } from 'react-router-dom';
 
 interface DashboardEntryPointsProps {
-  user?: { username: string; profile_type?: string; profile?: any } | null;
+  user?: any;
 }
 
 interface Announcement {
@@ -92,15 +93,112 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   };
   
   const designation = getDesignation();
-  const isStaff = user?.profile_type?.toUpperCase() === 'STAFF';
+  const rawRoles = Array.isArray(user?.roles) ? user.roles : [];
+  const upperRoles = rawRoles.map((r: any) => (typeof r === 'string' ? r : r?.name || '').toUpperCase());
+  const profileTypeUpper = String(user?.profile_type || '').toUpperCase();
+  const isStaff = profileTypeUpper === 'STAFF' || upperRoles.includes('STAFF') || Boolean(user?.is_staff);
+  const isStudent = profileTypeUpper === 'STUDENT' || upperRoles.includes('STUDENT') || Boolean(user?.is_student) || (!isStaff && Boolean(user?.student_profile));
 
-  // Fetch today's attendance status for staff and announcements
+  // BioSecure State
+  const [biosecureStatus, setBiosecureStatus] = useState<any>(null);
+  const [biosecureCurrentBatch, setBiosecureCurrentBatch] = useState<any>(null);
+  const [biosecureNextBatch, setBiosecureNextBatch] = useState<any>(null);
+  const [biosecureTimerText, setBiosecureTimerText] = useState<string>('');
+
+  const fetchBioSecureStatus = async () => {
+    try {
+      const res = await fetchWithAuth('/api/idscan/biosecure/student/status/');
+      if (res && res.ok) {
+        const data = await res.json();
+        setBiosecureStatus(data);
+        setBiosecureCurrentBatch(data.current_batch || null);
+        setBiosecureNextBatch(data.next_batch || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch BioSecure status:', err);
+    }
+  };
+
+  // Real-time Countdown Timer for BioSecure Batch
+  useEffect(() => {
+    if (!isStudent || !biosecureStatus?.active) return;
+
+    const updateTimer = () => {
+      const now = new Date();
+      if (biosecureCurrentBatch) {
+        // Countdown until current active batch ends
+        const endDt = new Date(biosecureCurrentBatch.end_iso);
+        const diffMs = endDt.getTime() - now.getTime();
+        if (diffMs > 0) {
+          const totalSecs = Math.floor(diffMs / 1000);
+          const hrs = Math.floor(totalSecs / 3600);
+          const mins = Math.floor((totalSecs % 3600) / 60);
+          const secs = totalSecs % 60;
+          setBiosecureTimerText(
+            `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`
+          );
+        } else {
+          // Batch ended: refresh status to transition to next batch timer
+          fetchBioSecureStatus();
+        }
+      } else if (biosecureNextBatch) {
+        // Countdown until next batch starts
+        const startDt = new Date(biosecureNextBatch.start_iso);
+        const diffMs = startDt.getTime() - now.getTime();
+        if (diffMs > 0) {
+          const totalSecs = Math.floor(diffMs / 1000);
+          const hrs = Math.floor(totalSecs / 3600);
+          const mins = Math.floor((totalSecs % 3600) / 60);
+          const secs = totalSecs % 60;
+          setBiosecureTimerText(
+            `${hrs > 0 ? `${hrs}h ` : ''}${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`
+          );
+        } else {
+          // Next batch started: refresh status to make it active
+          fetchBioSecureStatus();
+        }
+      } else {
+        setBiosecureTimerText('');
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isStudent, biosecureStatus, biosecureCurrentBatch, biosecureNextBatch]);
+
+  // Fetch today's attendance status for staff, BioSecure for student, and announcements
   useEffect(() => {
     if (isStaff) {
       fetchTodayAttendance();
     }
+    if (isStudent) {
+      fetchBioSecureStatus();
+      
+      // Real-time live polling for student BioSecure scan updates without requiring page refresh
+      const pollInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          fetchBioSecureStatus();
+        }
+      }, 3000); // Check every 3 seconds for instant live updates upon fingerprint placement
+
+      const handleVisibilityOrFocus = () => {
+        if (document.visibilityState === 'visible') {
+          fetchBioSecureStatus();
+        }
+      };
+
+      window.addEventListener('focus', handleVisibilityOrFocus);
+      document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+      return () => {
+        clearInterval(pollInterval);
+        window.removeEventListener('focus', handleVisibilityOrFocus);
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      };
+    }
     fetchRecentAnnouncements();
-  }, [isStaff]);
+  }, [isStaff, isStudent]);
 
   const fetchTodayAttendance = async () => {
     try {
@@ -312,48 +410,110 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
         </div>
       </div>
 
-      {/* Attendance Status for Staff */}
-      {isStaff && (
-        <div className={`rounded-xl p-6 shadow-md border ${
-          attendanceStatus ? getAttendanceColor(attendanceStatus.status) : 'bg-gray-50 border-gray-200'
-        }`}>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center flex-shrink-0 shadow-sm">
-              {loadingAttendance ? (
-                <Clock className="w-6 h-6 text-gray-400 animate-spin" />
-              ) : attendanceStatus ? (
-                getAttendanceIcon(attendanceStatus.status)
-              ) : (
-                <AlertCircle className="w-6 h-6 text-gray-400" />
-              )}
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-gray-900">Today's Attendance</h3>
-              {loadingAttendance ? (
-                <p className="text-gray-600 mt-1">Loading...</p>
-              ) : attendanceStatus ? (
-                <div className="mt-1">
-                  <p className="text-gray-900 font-medium">Status: {getStatusText(attendanceStatus.status)}</p>
-                  <div className="flex flex-wrap gap-2 mt-2 text-xs sm:text-sm">
-                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-800 font-semibold">
-                      FN: {getSessionStatusText(attendanceStatus.fn_status)}
+      {/* ── BIOSECURE ATTENDANCE & LIVE BATCH TIMER FOR STUDENTS ── */}
+      {isStudent && biosecureStatus?.active && (
+        <div
+          onClick={() => navigate('/biosecure/student/logs')}
+          className="relative overflow-hidden rounded-xl bg-gradient-to-r from-slate-900 via-slate-800 to-teal-950 p-5 sm:p-6 text-white shadow-md border border-slate-700/60 hover:border-emerald-500/50 transition-all cursor-pointer group"
+        >
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-4">
+              {/* Icon Container */}
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 border ${
+                biosecureCurrentBatch
+                  ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+                  : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+              }`}>
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold tracking-wide uppercase bg-emerald-500/20 text-emerald-200 border border-emerald-500/30">
+                    BioSecure Attendance
+                  </span>
+                  {biosecureStatus?.group_name && (
+                    <span className="text-xs font-semibold text-slate-300">
+                      Group: <span className="text-white font-bold">{biosecureStatus.group_name}</span>
                     </span>
-                    <span className="inline-flex items-center px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 font-semibold">
-                      AN: {getSessionStatusText(attendanceStatus.an_status)}
-                    </span>
+                  )}
+                </div>
+
+                <div className="mt-1.5">
+                  {biosecureCurrentBatch ? (
+                    <p className="text-sm font-medium text-slate-200">
+                      Active Batch:{' '}
+                      <span className="text-amber-300 font-bold">{biosecureCurrentBatch.name}</span>{' '}
+                      <span className="text-slate-400 font-normal text-xs">({biosecureCurrentBatch.start_time} - {biosecureCurrentBatch.end_time})</span>
+                    </p>
+                  ) : biosecureNextBatch ? (
+                    <p className="text-sm font-medium text-slate-200">
+                      Next Scheduled Batch:{' '}
+                      <span className="text-emerald-300 font-bold">{biosecureNextBatch.name}</span>{' '}
+                      <span className="text-slate-400 font-normal text-xs">({biosecureNextBatch.start_time} - {biosecureNextBatch.end_time})</span>
+                    </p>
+                  ) : biosecureStatus?.active ? (
+                    <p className="text-sm text-slate-300 font-normal">All BioSecure biometric batches for today completed.</p>
+                  ) : (
+                    <p className="text-sm text-slate-300 font-normal">View your BioSecure biometric timeline and attendance logs.</p>
+                  )}
+                </div>
+
+                {/* Fingerprint placement status for active session */}
+                {biosecureCurrentBatch && (
+                  <div className="mt-2 flex items-center gap-2 text-xs">
+                    {biosecureCurrentBatch.placed ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-medium border border-emerald-500/30">
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        Fingerprint placed on scanner ({biosecureCurrentBatch.verified_at || 'Verified'})
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-500/20 text-rose-300 font-medium border border-rose-500/30">
+                        <Clock className="w-3.5 h-3.5 text-rose-400 animate-spin" />
+                        Attendance Pending: Place your finger on classroom scanner
+                      </span>
+                    )}
                   </div>
-                  <div className="flex gap-4 mt-1 text-sm text-gray-600">
-                    {attendanceStatus.morning_in && (
-                      <span>In: {attendanceStatus.morning_in}</span>
-                    )}
-                    {attendanceStatus.evening_out && (
-                      <span>Out: {attendanceStatus.evening_out}</span>
-                    )}
+                )}
+              </div>
+            </div>
+
+            {/* Timers & Click Affordance */}
+            <div className="flex items-center gap-4 self-start md:self-auto">
+              {/* Active Running Batch Timer */}
+              {biosecureCurrentBatch && biosecureTimerText && (
+                <div className="px-3.5 py-2 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 flex items-center gap-2.5 shadow-inner">
+                  <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold tracking-wider text-rose-400">
+                      Batch Ends In
+                    </p>
+                    <p className="text-sm font-black font-mono text-rose-100 leading-tight">
+                      {biosecureTimerText}
+                    </p>
                   </div>
                 </div>
-              ) : (
-                <p className="text-gray-600 mt-1">Unable to load attendance status</p>
               )}
+
+              {/* Next Upcoming Batch Timer */}
+              {!biosecureCurrentBatch && biosecureNextBatch && biosecureTimerText && (
+                <div className="px-3.5 py-2 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 flex items-center gap-2.5 shadow-inner">
+                  <Clock className="w-4 h-4 text-emerald-400" />
+                  <div>
+                    <p className="text-[10px] uppercase font-bold tracking-wider text-emerald-400">
+                      Starts In
+                    </p>
+                    <p className="text-sm font-black font-mono text-emerald-100 leading-tight">
+                      {biosecureTimerText}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Subtle navigation arrow icon indicating clickable card */}
+              <div className="hidden sm:flex w-9 h-9 rounded-xl bg-white/10 group-hover:bg-white/20 border border-white/10 items-center justify-center text-slate-300 group-hover:text-white transition transform group-hover:translate-x-0.5">
+                <ArrowRight className="w-4 h-4" />
+              </div>
             </div>
           </div>
         </div>

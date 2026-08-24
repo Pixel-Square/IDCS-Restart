@@ -8,6 +8,7 @@ const AcademicVisualsPage = safeLazy(() => import('./pages/visual_admin/Academic
 import Navbar from "./components/navigation/Navbar";
 import DashboardSidebar from './components/layout/DashboardSidebar';
 import { useSidebar } from './components/layout/SidebarContext';
+import { academicV2Routes } from './pages/Academic 2.1/routes';
 import TimetableEditor from './pages/advisor/TimetableEditor';
 import HodTimetableEditor from './pages/iqac/TimetableEditor';
 import ObeRequestsPage from './pages/iqac/ObeRequestsPage';
@@ -101,6 +102,8 @@ import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
 import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
+import BioSecureAdminPage from './pages/biosecure/admin/BioSecureAdminPage';
+import BioSecureStudentLogsPage from './pages/biosecure/student/BioSecureStudentLogsPage';
 import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
@@ -523,6 +526,14 @@ export default function App() {
                   element={<ProtectedRoute user={user} requiredRoles={['LIBRARY', 'SECURITY', 'IQAC', 'ADMIN']} element={<FingerprintEnrollPage />} />}
                 />
                 <Route
+                  path="/biosecure/admin"
+                  element={<ProtectedRoute user={user} requiredRoles={['IQAC', 'ADMIN', 'SECURITY', 'HOD', 'BIOSECURE_ADMIN']} element={<BioSecureAdminPage />} />}
+                />
+                <Route
+                  path="/biosecure/student/logs"
+                  element={<ProtectedRoute user={user} element={<BioSecureStudentLogsPage />} />}
+                />
+                <Route
                   path="/idscan/gatepass"
                   element={<ProtectedRoute user={user} requiredRoles={['SECURITY']} element={<IDCSScanGatepassPage />} />}
                 />
@@ -700,6 +711,34 @@ export default function App() {
                     />
                   }
                 />
+
+                {/* Academic 2.1 Routes */}
+                {academicV2Routes.map((route, idx) => {
+                  let requiredRoles: string[] | undefined;
+                  let requiredProfile: 'STUDENT' | 'STAFF' | undefined;
+                  if (route.path?.includes('/admin')) {
+                    requiredRoles = ['IQAC', 'ADMIN', 'SUPER_ADMIN'];
+                  } else if (route.path?.includes('/student')) {
+                    requiredProfile = 'STUDENT';
+                  } else {
+                    requiredProfile = 'STAFF';
+                  }
+                  return (
+                    <Route
+                      key={`ac2-${idx}`}
+                      path={`/${route.path}`}
+                      element={
+                        <ProtectedRoute
+                          user={user}
+                          requiredRoles={requiredRoles}
+                          requiredProfile={requiredProfile}
+                          element={route.element as React.ReactElement}
+                        />
+                      }
+                    />
+                  );
+                })}
+
                 <Route path="*" element={user ? <Navigate to="/dashboard" replace /> : <HomePage user={user} />} />
                 {/* Prevent regular users from accessing Branding-only routes */}
                 <Route path="/branding/*" element={<Navigate to="/dashboard" replace />} />

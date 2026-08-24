@@ -278,10 +278,11 @@ async function detectScannerConnection(
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const FINGERS = [
-  { key: 'R_THUMB', label: 'Right Thumb' },
-  { key: 'R_INDEX', label: 'Right Index' },
-  { key: 'L_THUMB', label: 'Left Thumb' },
-  { key: 'L_INDEX', label: 'Left Index' },
+  { key: 'R_INDEX_1', label: 'Right Index (Sample 1)' },
+  { key: 'R_INDEX_2', label: 'Right Index (Sample 2)' },
+  { key: 'R_INDEX_3', label: 'Right Index (Sample 3)' },
+  { key: 'R_INDEX_4', label: 'Right Index (Sample 4)' },
+  { key: 'R_INDEX_5', label: 'Right Index (Sample 5)' },
 ] as const;
 
 type FingerKey = (typeof FINGERS)[number]['key'];
@@ -531,7 +532,13 @@ export default function FingerprintEnrollPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token()}`,
         },
-        body: JSON.stringify({ template_b64: capture.template_b64 }),
+        body: JSON.stringify({
+          template_b64: capture.template_b64,
+          slot: capture.slot,
+          slot_id: capture.slot,
+          user_id: capture.user_id,
+          device_id: resolved.type === 'esp32_bridge' ? 'esp32_bridge' : undefined,
+        }),
       });
 
       if (!monitorActiveRef.current) return;
@@ -560,6 +567,7 @@ export default function FingerprintEnrollPage() {
       if (res.status === 404) {
         const err = await res.json().catch(() => ({}));
         const unmatchedMsg = String(err?.detail || 'Finger detected but no enrolled match found');
+        setLastIdentified(null);
         monitorConsecutiveErrorsRef.current = 0;
         setMonitorEvents((prev) => [
           { at: new Date().toLocaleTimeString(), status: 'unmatched' as const, text: unmatchedMsg },
@@ -1023,10 +1031,27 @@ export default function FingerprintEnrollPage() {
               ? String(userInfo.identifier || idValue.trim() || f.key || 'capture').trim()
               : undefined;
 
+          // Dynamically allocate unique dedicated hardware slot on R305
+          let targetSlot = i + 1;
+          if (resolved.type === 'esp32_bridge') {
+            try {
+              const idParam = idType === 'reg_no' ? `reg_no=${encodeURIComponent(idValue.trim())}` : `staff_id=${encodeURIComponent(idValue.trim())}`;
+              const slotRes = await fetch(`${apiBase}/api/idscan/fingerprint/allocate-slot/?${idParam}&finger=${f.key}`, {
+                headers: { Authorization: `Bearer ${token()}` },
+              });
+              if (slotRes.ok) {
+                const slotData = await slotRes.json();
+                if (slotData?.slot) targetSlot = Number(slotData.slot);
+              }
+            } catch (slotErr) {
+              console.warn('Slot allocation fallback to local index:', slotErr);
+            }
+          }
+
           const result = await captureFromScanner(resolved.type, resolved.url, {
             userId: esp32CaptureUserId,
             mode: resolved.type === 'esp32_bridge' ? 'C' : undefined,
-            slot: i + 1,
+            slot: targetSlot,
           });
 
           if (result.template_b64) {
@@ -1038,7 +1063,7 @@ export default function FingerprintEnrollPage() {
                       status: 'enrolled',
                       template_b64: result.template_b64,
                       quality_score: result.quality_score,
-                      slot: result.slot ?? null,
+                      slot: result.slot ?? targetSlot,
                       errorMsg: null,
                     }
                   : s,
@@ -1317,7 +1342,7 @@ export default function FingerprintEnrollPage() {
                       className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-md transition disabled:opacity-50"
                     >
                       <Fingerprint className="w-4 h-4 animate-pulse" />
-                      Start Capturing All 4 Fingers
+                      Start Capturing 5 Index Samples
                     </button>
                   ) : (
                     <button
@@ -1332,7 +1357,7 @@ export default function FingerprintEnrollPage() {
                 </div>
 
                 {/* Finger Step-by-Step Guidance */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 mb-4">
                   {slots.map((slot, idx) => {
                     const isCur = autoEnrolling && activeFingerIndex === idx;
                     const isEnr = slot.status === 'enrolled';

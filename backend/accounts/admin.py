@@ -835,6 +835,7 @@ class UserAdmin(DjangoUserAdmin):
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
     list_display = ('name', 'description', 'get_permissions')
+    search_fields = ('name', 'description')
 
     def get_permissions(self, obj):
         return ", ".join([rp.permission.code for rp in obj.role_permissions.all()])
@@ -862,6 +863,17 @@ class UserRoleForm(forms.ModelForm):
 class UserRoleAdmin(admin.ModelAdmin):
     form = UserRoleForm
     list_display = ('user', 'role')
+    search_fields = (
+        'user__username',
+        'user__email',
+        'user__first_name',
+        'user__last_name',
+        'role__name',
+        'user__student_profile__reg_no',
+        'user__staff_profile__staff_id',
+    )
+    list_filter = ('role',)
+    autocomplete_fields = ('user', 'role')
 
 
 @admin.register(Permission)

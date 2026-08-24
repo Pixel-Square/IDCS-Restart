@@ -18,6 +18,11 @@ class FingerprintEnrollment(models.Model):
         R_MIDDLE = "R_MIDDLE", "Right Middle"
         R_RING = "R_RING", "Right Ring"
         R_LITTLE = "R_LITTLE", "Right Little"
+        R_INDEX_1 = "R_INDEX_1", "Right Index (Sample 1)"
+        R_INDEX_2 = "R_INDEX_2", "Right Index (Sample 2)"
+        R_INDEX_3 = "R_INDEX_3", "Right Index (Sample 3)"
+        R_INDEX_4 = "R_INDEX_4", "Right Index (Sample 4)"
+        R_INDEX_5 = "R_INDEX_5", "Right Index (Sample 5)"
 
     class TemplateFormat(models.TextChoices):
         ISO_19794_2 = "ISO_19794_2", "ISO 19794-2"
@@ -83,6 +88,7 @@ class BiometricFingerprintData(models.Model):
     reg_no = models.CharField(max_length=64, blank=True, default="", db_index=True)
     staff_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     finger_name = models.CharField(max_length=32, blank=True, default="Right Index")
+    sample_index = models.PositiveSmallIntegerField(default=1, help_text="Sample index (1-5) for multi-sample finger registration")
     slot_id = models.IntegerField(null=True, blank=True, db_index=True, help_text="Hardware sensor slot number (1-300)")
     template_b64 = models.TextField(help_text="Base64 encoded template data")
     template_hash = models.CharField(max_length=64, blank=True, default="", db_index=True)
@@ -168,3 +174,63 @@ class GatepassOfflineScan(models.Model):
 
     def __str__(self) -> str:
         return f"{self.uid} {self.direction} {self.status}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BioSecure System: Class Groups, Batches, and Attendance Logs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BioSecureClassGroup(models.Model):
+    name = models.CharField(max_length=128, unique=True, help_text="Name of the Class Group (e.g. AI&DS Year 2 Lab Batch)")
+    description = models.TextField(blank=True, default="")
+    sections = models.ManyToManyField('academics.Section', related_name='biosecure_groups', blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class BioSecureBatch(models.Model):
+    group = models.ForeignKey(BioSecureClassGroup, on_delete=models.CASCADE, related_name='batches')
+    name = models.CharField(max_length=128, blank=True, default="", help_text="Optional batch label (e.g. Morning Session)")
+    start_time = models.TimeField(help_text="Batch Start Time (e.g. 08:45:00)")
+    end_time = models.TimeField(help_text="Batch End Time (e.g. 17:00:00)")
+    # Days active: comma-separated e.g. "SUN,MON,TUE,WED,THU,FRI,SAT"
+    days = models.CharField(max_length=64, default="MON,TUE,WED,THU,FRI", help_text="Active days (SUN,MON,TUE,WED,THU,FRI,SAT)")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("start_time",)
+
+    def __str__(self) -> str:
+        return f"{self.group.name} - {self.name or 'Batch'} ({self.start_time.strftime('%I:%M %p')} to {self.end_time.strftime('%I:%M %p')})"
+
+
+class BioSecureAttendanceLog(models.Model):
+    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='biosecure_attendance_logs')
+    group = models.ForeignKey(BioSecureClassGroup, on_delete=models.CASCADE, related_name='attendance_logs')
+    batch = models.ForeignKey(BioSecureBatch, on_delete=models.CASCADE, related_name='attendance_logs')
+    date = models.DateField(db_index=True)
+    placed = models.BooleanField(default=False, help_text="True if biometric finger placed on time")
+    verified_at = models.DateTimeField(null=True, blank=True)
+    finger_name = models.CharField(max_length=32, blank=True, default="")
+    slot_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-date", "-created_at")
+        unique_together = ("student", "batch", "date")
+        indexes = [
+            models.Index(fields=["student", "date"]),
+            models.Index(fields=["batch", "date"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student} - {self.batch} ({self.date}): {'Placed' if self.placed else 'Missed'}"

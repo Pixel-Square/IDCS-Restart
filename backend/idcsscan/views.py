@@ -3015,6 +3015,56 @@ from idcsscan.serializers import (
 )
 
 
+class FingerprintAllocateSlotView(APIView):
+    """
+    GET /api/idscan/fingerprint/allocate-slot/
+    Query params: ?reg_no=... OR ?staff_id=... OR ?user_id=...&finger=R_THUMB
+
+    Returns a unique dedicated hardware slot (1..300) on the R305 sensor.
+    If the user already has this specific finger enrolled, reuses their existing slot.
+    Otherwise allocates the next free slot on the sensor.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from idcsscan.models import BiometricFingerprintData
+        User = get_user_model()
+        user_id = request.query_params.get("user_id")
+        reg_no = (request.query_params.get("reg_no") or "").strip()
+        staff_id = (request.query_params.get("staff_id") or "").strip()
+        finger = (request.query_params.get("finger") or "").strip()
+
+        user = None
+        if user_id:
+            user = User.objects.filter(pk=user_id).first()
+        elif reg_no:
+            sp = StudentProfile.objects.select_related("user").filter(reg_no=reg_no).first()
+            user = sp.user if sp else None
+        elif staff_id:
+            sp = StaffProfile.objects.select_related("user").filter(staff_id=staff_id).first()
+            user = sp.user if sp else None
+
+        # Check if this exact user + finger already has a slot
+        if user and finger:
+            existing = BiometricFingerprintData.objects.filter(user=user, finger_name=finger, is_active=True).first()
+            if existing and existing.slot_id and 1 <= existing.slot_id <= 300:
+                return Response({"slot": existing.slot_id, "reused": True}, status=status.HTTP_200_OK)
+
+        # Allocate next free slot from 1 to 300
+        used_slots = set(BiometricFingerprintData.objects.filter(is_active=True).values_list("slot_id", flat=True))
+        if user and finger:
+            # If this record was inactive or we're re-enrolling, don't count its own slot as used
+            pass
+
+        allocated_slot = 1
+        for s in range(1, 301):
+            if s not in used_slots:
+                allocated_slot = s
+                break
+
+        return Response({"slot": allocated_slot, "reused": False}, status=status.HTTP_200_OK)
+
+
 class FingerprintEnrollView(APIView):
     """
     POST /api/idscan/fingerprint/enroll/
@@ -3309,15 +3359,17 @@ class FingerprintIdentifyView(APIView):
     """
     POST /api/idscan/fingerprint/identify/
 
-    Body: { "template_b64": "<base64>" }
-
-    NOTE: This performs an exact-byte equality lookup against stored
-    `FingerprintEnrollment.template` values. This is a best-effort / simple
-    server-side matcher — for robust biometric matching a proper matcher/SDK
-    should be integrated.
+    Accepts:
+      {
+        "template_b64": "<base64>",
+        "slot": 1,
+        "device_type": "esp32_bridge"
+      }
+    Identifies the enrolled student or staff, matches hardware slot & hash,
+    and automatically records active BioSecure Batch attendance logs.
     """
-
-    permission_classes = [IsAuthenticated]
+    from rest_framework.permissions import AllowAny
+    permission_classes = [AllowAny]
 
     @staticmethod
     def _build_user_payload(user, enrollment=None):
@@ -3515,7 +3567,6 @@ class FingerprintIdentifyView(APIView):
         if matched_slot_num and matched_slot_num > 0:
             qs = BiometricFingerprintData.objects.filter(slot_id=matched_slot_num, is_active=True)
             if req_device:
-                # If device specified, prioritize device match
                 dev_qs = qs.filter(Q(device_type__icontains=req_device) | Q(device_type='esp32_bridge') | Q(device_type='esp32_r307'))
                 bio_by_slot = dev_qs.select_related('user').first() or qs.select_related('user').first()
             else:
@@ -3526,11 +3577,18 @@ class FingerprintIdentifyView(APIView):
                 payload['finger'] = bio_by_slot.finger_name
                 payload['slot'] = matched_slot_num
                 payload['match_source'] = 'hardware_slot_direct'
+
+                # Auto-record BioSecure attendance for student if they belong to an active batch today
+                try:
+                    self._record_biosecure_log(bio_by_slot.user, bio_by_slot.finger_name, matched_slot_num)
+                except Exception as bse:
+                    logging.getLogger('fp_identify').warning('BioSecure attendance log error: %s', bse)
+
                 return Response(payload, status=status.HTTP_200_OK)
 
         raw_hash = hashlib.sha256(raw).hexdigest()
 
-        # Search new BiometricFingerprintData table first
+        # Search BiometricFingerprintData table by hash
         bio_rec = BiometricFingerprintData.objects.filter(
             Q(template_hash=raw_hash) | Q(template_b64=b64),
             is_active=True
@@ -3539,185 +3597,417 @@ class FingerprintIdentifyView(APIView):
             payload = self._build_user_payload(bio_rec.user, None)
             payload['finger'] = bio_rec.finger_name
             payload['match_source'] = 'biometric_data_table'
+            try:
+                self._record_biosecure_log(bio_rec.user, bio_rec.finger_name, bio_rec.slot_id)
+            except Exception:
+                pass
             return Response(payload, status=status.HTTP_200_OK)
 
-        # Exact-match search (works for deterministic scanner templates)
-        enrollment = FingerprintEnrollment.objects.filter(template=raw, is_active=True).select_related('user').first()
-        if enrollment:
-            return Response(self._build_user_payload(enrollment.user, enrollment), status=status.HTTP_200_OK)
-
-        # Prefix / substring / correlation match for R305/R307 hardware template buffers
-        if len(raw) >= 32:
-            # 1. Search BiometricFingerprintData table by binary buffer slice
-            for bio in BiometricFingerprintData.objects.filter(is_active=True).select_related('user'):
-                try:
-                    b_raw = base64.b64decode(bio.template_b64, validate=False)
-                    if len(b_raw) >= 32:
-                        # Check equality, prefix match, or shared salient 64-byte chunks
-                        if raw == b_raw or raw[:64] == b_raw[:64] or raw[16:128] in b_raw or b_raw[16:128] in raw:
-                            payload = self._build_user_payload(bio.user, None)
-                            payload['finger'] = bio.finger_name
-                            payload['match_source'] = 'biometric_data_template_binary_match'
-                            return Response(payload, status=status.HTTP_200_OK)
-                except Exception:
-                    pass
-
-            # 2. Search FingerprintEnrollment table by binary buffer slice
-            for e in FingerprintEnrollment.objects.filter(is_active=True).select_related('user'):
-                e_raw = bytes(e.template)
-                if len(e_raw) >= 32:
-                    if raw == e_raw or raw[:64] == e_raw[:64] or raw[16:128] in e_raw or e_raw[16:128] in raw:
-                        return Response(self._build_user_payload(e.user, e), status=status.HTTP_200_OK)
-
-        # ESP32 bridge fallback: payload is a JSON wrapper, not raw SDK template.
-        # Try to resolve user by identifier hints emitted in ESP32 output/user_id.
-        try:
-            decoded_text = raw.decode('utf-8', errors='ignore')
-            payload = json.loads(decoded_text)
-        except Exception:
-            payload = None
-
-        # Also check top-level POST data for ESP32 fields (slot, user_id, slot_map)
-        # The frontend passes these alongside template_b64 from the bridge response
-        top_slot = data.get('slot')
-        top_user_id = (data.get('user_id') or '').strip()
-        top_slot_map = data.get('slot_map') or {}
-
-        if payload is None and (top_slot is not None or top_user_id or top_slot_map):
-            # Build a synthetic ESP32 payload from top-level POST fields
-            payload = {
-                'type': 'esp32_r307_hw',
-                'slot': top_slot,
-                'user_id': top_user_id,
-                'slot_map': top_slot_map,
-            }
-        elif isinstance(payload, dict):
-            # Merge top-level fields into the parsed payload
-            if top_slot is not None and not payload.get('slot'):
-                payload['slot'] = top_slot
-            if top_user_id and not payload.get('user_id'):
-                payload['user_id'] = top_user_id
-            if top_slot_map and not payload.get('slot_map'):
-                payload['slot_map'] = top_slot_map
-
-        if isinstance(payload, dict) and str(payload.get('type', '')).startswith('esp32_'):
-            import logging
-            fp_log = logging.getLogger('fp_identify')
-
-            User = get_user_model()
-
-            # ── Step 1: Read slot_map from payload (bridge passes it directly)
-            slot_map_from_payload: dict = {}
-            raw_slot_map = payload.get('slot_map') or {}
-            if isinstance(raw_slot_map, dict):
-                slot_map_from_payload = {str(k): str(v) for k, v in raw_slot_map.items()}
-
-            # ── Step 2: Merge with local bridge map file for extra reliability
-            bridge_slot_map: dict = {}
-            bridge_map_paths = [
-                os.path.join(os.path.dirname(__file__), '..', 'scripts', 'fingerprint_bridge_map.json'),
-                '/tmp/fingerprint_bridge_map.json',
-            ]
-            for bmp in bridge_map_paths:
-                bmp = os.path.normpath(bmp)
-                try:
-                    if os.path.exists(bmp):
-                        with open(bmp, 'r', encoding='utf-8') as _f:
-                            bmd = json.load(_f)
-                        bridge_slot_map = {str(k): str(v) for k, v in (bmd.get('slot_to_user') or {}).items()}
-                        fp_log.info('Loaded bridge map from %s: %s', bmp, bridge_slot_map)
-                        break
-                except Exception as _e:
-                    fp_log.warning('Failed to read bridge map %s: %s', bmp, _e)
-
-            merged_slot_map = {**bridge_slot_map, **slot_map_from_payload}
-            fp_log.info('ESP32 identify: payload slot=%s user_id=%s merged_slot_map=%s',
-                        payload.get('slot'), payload.get('user_id'), merged_slot_map)
-
-            candidates = self._extract_identifier_candidates(payload)
-            # Direct check if payload contains user_id or mapped user from bridge
-            direct_uid = str(payload.get('user_id') or '').strip()
-            if direct_uid and direct_uid.lower() not in {'verify', 'scan', 'monitor', 'capture', 'test', 'unknown'}:
-                candidates.insert(0, direct_uid)
-
-            # ── Step 3: Add user from merged slot map for detected slot
-            detected_slot = payload.get('slot')
-            if detected_slot is not None:
-                try:
-                    detected_slot_int = int(str(detected_slot).strip())
-                    slot_user = merged_slot_map.get(str(detected_slot_int), '')
-                    fp_log.info('Slot %d -> user_id from map: %r', detected_slot_int, slot_user)
-                    if slot_user and slot_user not in candidates:
-                        candidates.insert(0, slot_user)
-                except Exception:
-                    pass
-
-            fp_log.info('Identify candidates: %s', candidates)
-
-            for key in candidates:
-                if not key or key.lower() in {'verify', 'scan', 'monitor', 'capture', 'test', 'unknown'}:
-                    continue
-
-                # First check BiometricFingerprintData table
-                bio_by_key = BiometricFingerprintData.objects.filter(
-                    Q(reg_no=key) | Q(staff_id=key),
-                    is_active=True
-                ).select_related('user').first()
-                if bio_by_key:
-                    fp_log.info('Matched user %s via BiometricFingerprintData key=%s', bio_by_key.user_id, key)
-                    data = self._build_user_payload(bio_by_key.user, None)
-                    data['finger'] = bio_by_key.finger_name
-                    data['match_source'] = 'biometric_data_table'
-                    return Response(data, status=status.HTTP_200_OK)
-
-                user = None
-                sp = StudentProfile.objects.select_related('user').filter(reg_no=key).first()
-                if sp:
-                    user = sp.user
-                if not user:
-                    st = StaffProfile.objects.select_related('user').filter(staff_id=key).first()
-                    if st:
-                        user = st.user
-                if not user:
-                    user = User.objects.filter(username__iexact=key).first()
-                if not user:
-                    fp_log.warning('No user found for candidate key=%s', key)
-                    continue
-
-                # User found — check they have an active enrollment
-                e = FingerprintEnrollment.objects.filter(user=user, is_active=True).order_by('-enrolled_at').first()
-                fp_log.info('Candidate key=%s -> user=%s enrollment=%s', key, user.id, e)
-                # For ESP32, the enrollment record just confirms the user IS enrolled
-                # Always return the matched user if they have active enrollment or BiometricFingerprintData
-                bio_check = BiometricFingerprintData.objects.filter(user=user, is_active=True).first()
-                if e or bio_check:
-                    data = self._build_user_payload(user, e)
-                    data['match_source'] = 'esp32_identifier'
-                    return Response(data, status=status.HTTP_200_OK)
-
-            # ── Step 4: Slot-based lookup in BiometricFingerprintData
-            slot_candidates = self._extract_slot_candidates(payload)
-            fp_log.info('Slot candidates from payload: %s', slot_candidates)
-            for slot in slot_candidates:
-                bio_slot = BiometricFingerprintData.objects.filter(slot_id=slot, is_active=True).select_related('user').first()
-                if bio_slot:
-                    fp_log.info('Matched user %s via slot_id=%s in BiometricFingerprintData', bio_slot.user_id, slot)
-                    data = self._build_user_payload(bio_slot.user, None)
-                    data['finger'] = bio_slot.finger_name
-                    data['match_source'] = 'biometric_data_table_slot'
-                    data['slot'] = slot
-                    return Response(data, status=status.HTTP_200_OK)
-
-                enrollment_by_slot, matched_enrollments = self._find_active_esp32_by_slot(slot)
-                if enrollment_by_slot:
-                    fp_log.info('Matched user %s via enrollment slot=%s', enrollment_by_slot.user_id, slot)
-                    data = self._build_user_payload(enrollment_by_slot.user, enrollment_by_slot)
-                    data['match_source'] = 'esp32_slot'
-                    data['slot'] = slot
-                    return Response(data, status=status.HTTP_200_OK)
-
-            # (End of ESP32 bridge lookup)
-
         import logging
-        logging.getLogger('fp_identify').warning('No match found for payload: %s', str(payload)[:500] if payload else 'None')
+        logging.getLogger('fp_identify').warning('No match found for probe: slot=%s hash=%s', req_slot, raw_hash[:16])
         return Response({"detail": "No matching fingerprint found."}, status=status.HTTP_404_NOT_FOUND)
+
+    def _record_biosecure_log(self, user, finger_name, slot_id):
+        from datetime import datetime, date, timedelta
+        from django.utils import timezone
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch, BioSecureAttendanceLog
+
+        if not hasattr(user, 'student_profile'):
+            return
+        sp = user.student_profile
+        sec = sp.section
+        if not sec:
+            return
+
+        today = date.today()
+        now = datetime.now()
+        now_time = now.time()
+        day_name = today.strftime('%a').upper() # 'MON', 'TUE'...
+
+        # Find active groups containing this student's section
+        groups = BioSecureClassGroup.objects.filter(sections=sec, is_active=True)
+        for g in groups:
+            for b in g.batches.filter(is_active=True):
+                # Check day match e.g. MON, TUE
+                b_days = [d.strip().upper() for d in b.days.split(',') if d.strip()]
+                if b_days and day_name not in b_days and 'ALL' not in b_days:
+                    continue
+
+                # STRICT WINDOW MATCH:
+                # Student must be placing finger during this batch's window (or 10 mins before start)
+                b_start_dt = datetime.combine(today, b.start_time) - timedelta(minutes=10)
+                b_end_dt = datetime.combine(today, b.end_time)
+
+                if b_start_dt <= now <= b_end_dt:
+                    # Mark ONLY this specific active batch as Present / Placed for today
+                    BioSecureAttendanceLog.objects.update_or_create(
+                        student=user,
+                        batch=b,
+                        date=today,
+                        defaults={
+                            'group': g,
+                            'placed': True,
+                            'verified_at': timezone.now(),
+                            'finger_name': finger_name or '',
+                            'slot_id': slot_id,
+                        }
+                    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BioSecure Class Groups & Batches Admin API Views
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BioSecureGroupListView(APIView):
+    """
+    GET /api/idscan/biosecure/groups/
+    POST /api/idscan/biosecure/groups/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from idcsscan.models import BioSecureClassGroup
+        from academics.models import Section
+        groups = BioSecureClassGroup.objects.prefetch_related('sections', 'batches').filter(is_active=True)
+        data = []
+        for g in groups:
+            data.append({
+                "id": g.id,
+                "name": g.name,
+                "description": g.description,
+                "sections": [{"id": s.id, "name": s.name, "batch_name": str(s.batch) if s.batch else ""} for s in g.sections.all()],
+                "batches": [
+                    {
+                        "id": b.id,
+                        "name": b.name,
+                        "start_time": b.start_time.strftime("%H:%M"),
+                        "end_time": b.end_time.strftime("%H:%M"),
+                        "days": b.days,
+                    }
+                    for b in g.batches.filter(is_active=True)
+                ],
+                "created_at": g.created_at.isoformat(),
+            })
+        return Response({"groups": data}, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch
+        from academics.models import Section
+        name = (request.data.get("name") or "").strip()
+        description = (request.data.get("description") or "").strip()
+        section_ids = request.data.get("section_ids") or []
+        batches_data = request.data.get("batches") or []
+
+        if not name:
+            return Response({"detail": "Group name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        group_id = request.data.get("group_id")
+        if group_id:
+            group = BioSecureClassGroup.objects.filter(pk=group_id).first()
+            if not group:
+                return Response({"detail": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+            group.name = name
+            group.description = description
+            group.is_active = True
+            group.save()
+        else:
+            group, created = BioSecureClassGroup.objects.get_or_create(
+                name=name,
+                defaults={"description": description, "is_active": True}
+            )
+            if not created:
+                group.description = description
+                group.is_active = True
+                group.save()
+
+        if section_ids is not None:
+            sections = Section.objects.filter(id__in=section_ids)
+            group.sections.set(sections)
+
+        # Clear & recreate or update batches
+        if batches_data is not None:
+            group.batches.all().delete()
+            for bd in batches_data:
+                st = bd.get("start_time")
+                et = bd.get("end_time")
+                days = bd.get("days") or "SUN,MON,TUE,WED,THU,FRI,SAT"
+                bname = bd.get("name") or ""
+                if st and et:
+                    BioSecureBatch.objects.create(
+                        group=group,
+                        name=bname,
+                        start_time=st,
+                        end_time=et,
+                        days=days,
+                        is_active=True
+                    )
+
+        return Response({"detail": "Class group created/updated successfully.", "group_id": group.id}, status=status.HTTP_200_OK)
+
+
+class BioSecureGroupDetailView(APIView):
+    """
+    GET, PUT, PATCH, DELETE /api/idscan/biosecure/groups/<id>/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
+
+    def patch(self, request, pk):
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch
+        from academics.models import Section
+        g = BioSecureClassGroup.objects.filter(pk=pk).first()
+        if not g:
+            return Response({"detail": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        name = request.data.get("name")
+        description = request.data.get("description", g.description)
+        section_ids = request.data.get("section_ids")
+        batches_data = request.data.get("batches")
+
+        if name:
+            g.name = name
+        g.description = description
+        g.is_active = True
+        g.save()
+
+        if section_ids is not None:
+            sections = Section.objects.filter(id__in=section_ids)
+            g.sections.set(sections)
+
+        if batches_data is not None:
+            g.batches.all().delete()
+            for bd in batches_data:
+                st = bd.get("start_time")
+                et = bd.get("end_time")
+                days = bd.get("days") or "SUN,MON,TUE,WED,THU,FRI,SAT"
+                bname = bd.get("name") or ""
+                if st and et:
+                    BioSecureBatch.objects.create(
+                        group=g,
+                        name=bname,
+                        start_time=st,
+                        end_time=et,
+                        days=days,
+                        is_active=True
+                    )
+
+        return Response({"detail": "Group updated successfully.", "group_id": g.id}, status=status.HTTP_200_OK)
+
+    def delete(self, request, pk):
+        from idcsscan.models import BioSecureClassGroup
+        g = BioSecureClassGroup.objects.filter(pk=pk).first()
+        if not g:
+            return Response({"detail": "Group not found."}, status=status.HTTP_404_NOT_FOUND)
+        g.is_active = False
+        g.save()
+        return Response({"detail": "Group deleted."}, status=status.HTTP_200_OK)
+
+
+class BioSecureSectionsListView(APIView):
+    """
+    GET /api/idscan/biosecure/sections/
+    Returns list of all active sections across departments with Name - Batch - Semester details.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from academics.models import Section
+        sections = Section.objects.select_related(
+            'batch',
+            'semester',
+            'batch__department',
+            'batch__course',
+            'batch__batch_year',
+            'managing_department'
+        ).all().order_by('batch__name', 'name')
+        
+        data = []
+        for s in sections:
+            dept_name = ""
+            if s.managing_department:
+                dept_name = s.managing_department.short_name or s.managing_department.name
+            elif s.batch and s.batch.department:
+                dept_name = s.batch.department.short_name or s.batch.department.name
+            elif s.batch and s.batch.course and s.batch.course.department:
+                dept_name = s.batch.course.department.short_name or s.batch.course.department.name
+
+            batch_str = str(s.batch) if s.batch else "No Batch"
+            sem_str = str(s.semester) if s.semester else "No Semester"
+
+            # Rich comprehensive label: "Section A - CSE 2022 - Sem 8"
+            full_label = f"Section {s.name} - {batch_str} - {sem_str}"
+            if dept_name and dept_name not in batch_str:
+                full_label = f"{dept_name} - {full_label}"
+
+            data.append({
+                "id": s.id,
+                "name": s.name,
+                "batch_name": batch_str,
+                "semester": sem_str,
+                "department": dept_name,
+                "label": full_label,
+            })
+        return Response({"sections": data}, status=status.HTTP_200_OK)
+
+
+class BioSecureStudentStatusView(APIView):
+    """
+    GET /api/idscan/biosecure/student/status/
+    Returns current student's active group, today's batches, current running batch timer,
+    and upcoming next batch timer.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from datetime import datetime, date, timedelta
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch, BioSecureAttendanceLog
+
+        user = request.user
+        if not hasattr(user, 'student_profile'):
+            return Response({"active": False, "detail": "Not a student profile."}, status=status.HTTP_200_OK)
+
+        sp = user.student_profile
+        sec = sp.section
+        if not sec:
+            return Response({"active": False, "detail": "Student section not assigned."}, status=status.HTTP_200_OK)
+
+        today = date.today()
+        now = datetime.now()
+        now_time = now.time()
+        day_code = today.strftime('%a').upper() # 'MON', 'TUE'...
+
+        # Find active groups containing this student's section
+        groups = BioSecureClassGroup.objects.prefetch_related('batches').filter(sections=sec, is_active=True)
+        if not groups.exists():
+            return Response({"active": False, "detail": "No active BioSecure group for student section."}, status=status.HTTP_200_OK)
+
+        group = groups.first()
+        batches = group.batches.filter(is_active=True)
+
+        today_batches = []
+        current_batch = None
+        next_batch = None
+
+        for b in batches:
+            b_days = [d.strip().upper() for d in b.days.split(',') if d.strip()]
+            if b_days and day_code not in b_days and 'ALL' not in b_days:
+                continue
+
+            # Check if student placed attendance today for this batch
+            log = BioSecureAttendanceLog.objects.filter(student=user, batch=b, date=today).first()
+            placed = bool(log and log.placed)
+
+            # Build datetime objects for today
+            b_start_dt = datetime.combine(today, b.start_time)
+            b_end_dt = datetime.combine(today, b.end_time)
+
+            batch_info = {
+                "id": b.id,
+                "name": b.name or f"Batch ({b.start_time.strftime('%I:%M %p')} - {b.end_time.strftime('%I:%M %p')})",
+                "start_time": b.start_time.strftime("%I:%M %p"),
+                "end_time": b.end_time.strftime("%I:%M %p"),
+                "start_iso": b_start_dt.isoformat(),
+                "end_iso": b_end_dt.isoformat(),
+                "placed": placed,
+                "verified_at": log.verified_at.strftime("%I:%M:%S %p") if (log and log.verified_at) else None,
+                "is_running": b_start_dt <= now <= b_end_dt,
+                "is_past": now > b_end_dt,
+                "is_future": now < b_start_dt,
+            }
+            today_batches.append(batch_info)
+
+            if b_start_dt <= now <= b_end_dt:
+                current_batch = batch_info
+            elif now < b_start_dt and (next_batch is None or b_start_dt < datetime.fromisoformat(next_batch['start_iso'])):
+                next_batch = batch_info
+
+        return Response({
+            "active": True,
+            "group_name": group.name,
+            "today_batches": today_batches,
+            "current_batch": current_batch,
+            "next_batch": next_batch,
+            "current_time": now.isoformat(),
+        }, status=status.HTTP_200_OK)
+
+
+class BioSecureStudentLogsView(APIView):
+    """
+    GET /api/idscan/biosecure/student/logs/?date=YYYY-MM-DD
+    Returns timeline logs for the student on the selected date or all historical logs.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from datetime import datetime, date
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch, BioSecureAttendanceLog
+
+        user = request.user
+        if not hasattr(user, 'student_profile'):
+            return Response({"detail": "Not a student profile."}, status=status.HTTP_400_BAD_REQUEST)
+
+        sp = user.student_profile
+        sec = sp.section
+        req_date_str = request.query_params.get("date")
+
+        selected_date = date.today()
+        if req_date_str:
+            try:
+                selected_date = datetime.strptime(req_date_str, "%Y-%m-%d").date()
+            except Exception:
+                selected_date = date.today()
+
+        day_code = selected_date.strftime('%a').upper()
+        now = datetime.now()
+
+        groups = BioSecureClassGroup.objects.prefetch_related('batches').filter(sections=sec, is_active=True)
+        if not groups.exists():
+            return Response({"logs": [], "all_dates": []}, status=status.HTTP_200_OK)
+
+        group = groups.first()
+        batches = group.batches.filter(is_active=True)
+
+        day_logs = []
+        for b in batches:
+            b_days = [d.strip().upper() for d in b.days.split(',') if d.strip()]
+            if b_days and day_code not in b_days and 'ALL' not in b_days:
+                continue
+
+            log = BioSecureAttendanceLog.objects.filter(student=user, batch=b, date=selected_date).first()
+            placed = bool(log and log.placed)
+
+            b_start_dt = datetime.combine(selected_date, b.start_time)
+            b_end_dt = datetime.combine(selected_date, b.end_time)
+
+            is_past = now > b_end_dt if selected_date == date.today() else (selected_date < date.today())
+            status_text = "Placed" if placed else ("Missed" if is_past else "Pending")
+
+            day_logs.append({
+                "batch_id": b.id,
+                "batch_name": b.name or f"Batch ({b.start_time.strftime('%I:%M %p')} - {b.end_time.strftime('%I:%M %p')})",
+                "start_time": b.start_time.strftime("%I:%M %p"),
+                "end_time": b.end_time.strftime("%I:%M %p"),
+                "placed": placed,
+                "status": status_text,
+                "verified_at": log.verified_at.strftime("%I:%M:%S %p") if (log and log.verified_at) else None,
+                "finger_name": log.finger_name if log else "",
+            })
+
+        # Fetch distinct historical dates where student had logs
+        distinct_dates = list(
+            BioSecureAttendanceLog.objects.filter(student=user)
+            .values_list('date', flat=True)
+            .distinct()
+            .order_by('-date')[:30]
+        )
+        if selected_date not in distinct_dates:
+            distinct_dates.insert(0, selected_date)
+
+        return Response({
+            "group_name": group.name,
+            "selected_date": selected_date.isoformat(),
+            "logs": day_logs,
+            "available_dates": [d.isoformat() for d in distinct_dates],
+        }, status=status.HTTP_200_OK)

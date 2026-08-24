@@ -29,20 +29,35 @@ class FingerprintEnrollmentAdmin(admin.ModelAdmin):
     template_preview.short_description = "Template Raw Bytes"
 
 
-@admin.register(BiometricFingerprintData)
-class BiometricFingerprintDataAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "user",
-        "reg_no",
-        "staff_id",
-        "finger_name",
-        "slot_id",
-        "quality_score",
-        "device_type",
-        "is_active",
-        "created_at",
-    )
-    list_filter = ("device_type", "is_active", "finger_name")
-    search_fields = ("reg_no", "staff_id", "user__username", "user__first_name", "user__last_name")
-    readonly_fields = ("created_at", "updated_at")
+from .models import (
+    FingerprintEnrollment,
+    BiometricFingerprintData,
+    BioSecureClassGroup,
+    BioSecureBatch,
+    BioSecureAttendanceLog,
+)
+
+
+@admin.register(BioSecureClassGroup)
+class BioSecureClassGroupAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "is_active", "created_at")
+    filter_horizontal = ("sections",)
+    search_fields = ("name",)
+
+
+class BioSecureBatchInline(admin.TabularInline):
+    model = BioSecureBatch
+    extra = 1
+
+
+@admin.register(BioSecureBatch)
+class BioSecureBatchAdmin(admin.ModelAdmin):
+    list_display = ("id", "group", "name", "start_time", "end_time", "days", "is_active")
+    list_filter = ("group", "is_active")
+
+
+@admin.register(BioSecureAttendanceLog)
+class BioSecureAttendanceLogAdmin(admin.ModelAdmin):
+    list_display = ("id", "student", "group", "batch", "date", "placed", "verified_at")
+    list_filter = ("placed", "date", "group")
+    search_fields = ("student__username", "student__first_name", "student__last_name")

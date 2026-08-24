@@ -195,6 +195,8 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
     )
     quality_score = serializers.IntegerField(required=False, min_value=0, max_value=100)
     device_type = serializers.CharField(required=False, allow_blank=True, default="")
+    slot_id = serializers.IntegerField(required=False, allow_null=True)
+    slot = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_template_b64(self, value: str) -> bytes:
         try:
@@ -332,7 +334,7 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
                 t_hash = hashlib.sha256(template_bytes).hexdigest()
 
                 raw_init = getattr(self, 'initial_data', {}) or {}
-                slot_val = raw_init.get('slot_id') or raw_init.get('slot')
+                slot_val = validated_data.get('slot_id') or validated_data.get('slot') or raw_init.get('slot_id') or raw_init.get('slot')
                 if slot_val is not None:
                     try:
                         slot_val = int(slot_val)
@@ -340,15 +342,16 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
                         slot_val = None
                 sensor_out = ""
 
-                # Try 1: JSON parse the template bytes (ESP32 format)
-                try:
-                    p = json.loads(template_bytes.decode('utf-8', errors='ignore'))
-                    if isinstance(p, dict):
-                        slot_val = p.get('slot')
-                        sensor_out = str(p.get('output', ''))
-                        _log.info('Slot from template JSON: %s', slot_val)
-                except Exception:
-                    pass
+                # Try 1: JSON parse template bytes only if slot_val is missing
+                if not slot_val:
+                    try:
+                        p = json.loads(template_bytes.decode('utf-8', errors='ignore'))
+                        if isinstance(p, dict) and p.get('slot'):
+                            slot_val = int(p.get('slot'))
+                            sensor_out = str(p.get('output', ''))
+                            _log.info('Slot from template JSON: %s', slot_val)
+                    except Exception:
+                        pass
 
                 # Try 2: Get slot from the just-saved enrollment record
                 if not slot_val:
@@ -383,9 +386,18 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
 
                 _log.info('Saving BiometricFingerprintData: reg_no=%s finger=%s slot_id=%s', reg_no, finger, slot_val)
 
+                # Extract sample index if finger name is like R_INDEX_1, R_INDEX_2...
+                sample_idx = 1
+                finger_str = str(finger).strip()
+                if '_' in finger_str:
+                    parts = finger_str.rsplit('_', 1)
+                    if parts[1].isdigit():
+                        sample_idx = int(parts[1])
+
                 BiometricFingerprintData.objects.update_or_create(
                     user=user,
-                    finger_name=str(finger),
+                    finger_name=finger_str,
+                    sample_index=sample_idx,
                     defaults={
                         "reg_no": reg_no,
                         "staff_id": staff_id_val,
