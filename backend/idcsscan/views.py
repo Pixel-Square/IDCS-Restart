@@ -3190,8 +3190,17 @@ class FingerprintStatusView(APIView):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        active = FingerprintEnrollment.objects.filter(user=user, is_active=True)
-        fingers = list(active.values_list("finger", flat=True).distinct())
+        from idcsscan.models import BiometricFingerprintData
+
+        active_fe = FingerprintEnrollment.objects.filter(user=user, is_active=True)
+        active_bio = BiometricFingerprintData.objects.filter(user=user, is_active=True)
+
+        fingers_set = set(active_fe.values_list("finger", flat=True).distinct())
+        for fn in active_bio.values_list("finger_name", flat=True).distinct():
+            if fn:
+                fingers_set.add(fn)
+
+        fingers = sorted(list(fingers_set))
 
         # Build user details
         user_name = user.get_full_name() or user.username
@@ -3273,18 +3282,25 @@ class FingerprintResetAllView(APIView):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        from idcsscan.models import BiometricFingerprintData
+
         updated = FingerprintEnrollment.objects.filter(
             user=user, is_active=True,
         ).update(is_active=False, deactivated_at=timezone.now())
 
-        if updated == 0:
+        updated_bio = BiometricFingerprintData.objects.filter(
+            user=user, is_active=True,
+        ).update(is_active=False)
+
+        total_updated = max(updated, updated_bio)
+        if total_updated == 0:
             return Response(
                 {"detail": "No active enrollments to reset."},
                 status=status.HTTP_200_OK,
             )
 
         return Response(
-            {"detail": f"{updated} fingerprint(s) deactivated.", "count": updated},
+            {"detail": f"{total_updated} fingerprint(s) deactivated.", "count": total_updated},
             status=status.HTTP_200_OK,
         )
 
@@ -3482,6 +3498,36 @@ class FingerprintIdentifyView(APIView):
                 payload['match_source'] = 'request_identifier_hint'
                 return Response(payload, status=status.HTTP_200_OK)
 
+        # ── Step 0: Hardware slot lookup from ESP32 R305 onboard search
+        req_slot = data.get('slot')
+        if req_slot is None:
+            req_slot = data.get('slot_id')
+
+        matched_slot_num = None
+        if req_slot is not None and str(req_slot).strip() not in ('0', '', 'None', '-1'):
+            try:
+                matched_slot_num = int(str(req_slot).strip())
+            except Exception:
+                matched_slot_num = None
+
+        req_device = (data.get('device_id') or data.get('device_type') or '').strip()
+
+        if matched_slot_num and matched_slot_num > 0:
+            qs = BiometricFingerprintData.objects.filter(slot_id=matched_slot_num, is_active=True)
+            if req_device:
+                # If device specified, prioritize device match
+                dev_qs = qs.filter(Q(device_type__icontains=req_device) | Q(device_type='esp32_bridge') | Q(device_type='esp32_r307'))
+                bio_by_slot = dev_qs.select_related('user').first() or qs.select_related('user').first()
+            else:
+                bio_by_slot = qs.select_related('user').first()
+
+            if bio_by_slot:
+                payload = self._build_user_payload(bio_by_slot.user, None)
+                payload['finger'] = bio_by_slot.finger_name
+                payload['slot'] = matched_slot_num
+                payload['match_source'] = 'hardware_slot_direct'
+                return Response(payload, status=status.HTTP_200_OK)
+
         raw_hash = hashlib.sha256(raw).hexdigest()
 
         # Search new BiometricFingerprintData table first
@@ -3670,20 +3716,7 @@ class FingerprintIdentifyView(APIView):
                     data['slot'] = slot
                     return Response(data, status=status.HTTP_200_OK)
 
-            # ── Step 5: Full merged_slot_map scan — try all slots in map
-            for slot_str, uid_str in merged_slot_map.items():
-                if not uid_str or uid_str.lower() in {'verify', 'scan', 'monitor', 'capture', 'test'}:
-                    continue
-                bio_by_uid = BiometricFingerprintData.objects.filter(
-                    Q(reg_no=uid_str) | Q(staff_id=uid_str),
-                    is_active=True
-                ).select_related('user').first()
-                if bio_by_uid:
-                    fp_log.info('Matched user %s via full slot_map scan slot=%s uid=%s', bio_by_uid.user_id, slot_str, uid_str)
-                    data = self._build_user_payload(bio_by_uid.user, None)
-                    data['finger'] = bio_by_uid.finger_name
-                    data['match_source'] = 'slot_map_full_scan'
-                    return Response(data, status=status.HTTP_200_OK)
+            # (End of ESP32 bridge lookup)
 
         import logging
         logging.getLogger('fp_identify').warning('No match found for payload: %s', str(payload)[:500] if payload else 'None')

@@ -85,7 +85,7 @@ const SCANNER_LABELS: Record<ScannerType, string> = {
 async function captureFromScanner(
   type: ResolvedScannerType,
   url: string,
-  opts?: { userId?: string; mode?: 'C' | 'M' },
+  opts?: { userId?: string; mode?: 'C' | 'M'; slot?: number },
 ): Promise<CaptureResult> {
   /* ── Demo mode ─────────────────────────────────────────────── */
   if (type === 'demo') {
@@ -139,13 +139,11 @@ async function captureFromScanner(
     const text = await res.text();
     const doc = new DOMParser().parseFromString(text, 'text/xml');
     const resp = doc.querySelector('Resp');
-    const errCode = resp?.getAttribute('errCode') || '1';
-    if (errCode !== '0')
-      throw new Error(
-        `Mantra error: ${resp?.getAttribute('errInfo') || 'Unknown'}`,
-      );
-    const dataEl = doc.querySelector('Data');
-    const template = dataEl?.textContent || '';
+    if (resp?.getAttribute('errCode') !== '0') {
+      throw new Error(resp?.getAttribute('errInfo') || 'Mantra capture failed.');
+    }
+    const pidData = doc.querySelector('Data');
+    const template = pidData?.textContent?.trim();
     if (!template) {
       throw new Error('Scanner returned no template data.');
     }
@@ -194,6 +192,7 @@ async function captureFromScanner(
       body: JSON.stringify({
         user_id: String(opts?.userId || 'capture'),
         mode: opts?.mode,
+        slot: opts?.slot,
       }),
     });
     const captureData = await captureRes.json().catch(() => ({}));
@@ -295,6 +294,7 @@ interface FingerSlot {
   status: FingerStatus;
   template_b64: string | null;
   quality_score: number | null;
+  slot?: number | null;
   errorMsg: string | null;
 }
 
@@ -850,12 +850,13 @@ export default function FingerprintEnrollPage() {
     };
   }, [searchQuery, apiBase]);
 
-  const selectUserForRegistration = useCallback((u: any) => {
+  const selectUserForRegistration = useCallback(async (u: any) => {
     setSelectedUserForEnroll(u);
-    setIdType(u.user_type === 'staff' ? 'staff_id' : 'reg_no');
+    const resolvedType = u.user_type === 'staff' ? 'staff_id' : 'reg_no';
+    setIdType(resolvedType);
     setIdValue(u.identifier);
 
-    // Populate user info card and reset finger slots
+    // Initial state
     setUserInfo({
       user_id: u.user_id || u.id,
       user_type: u.user_type,
@@ -870,7 +871,32 @@ export default function FingerprintEnrollPage() {
 
     setSlots(emptySlots());
     setMessage(null);
-  }, []);
+
+    // Immediately fetch enrolled fingers status from backend
+    try {
+      const param =
+        resolvedType === 'reg_no'
+          ? `reg_no=${encodeURIComponent(u.identifier)}`
+          : `staff_id=${encodeURIComponent(u.identifier)}`;
+      const res = await fetch(
+        `${apiBase}/api/idscan/fingerprint/status/?${param}`,
+        { headers: { Authorization: `Bearer ${token()}` } },
+      );
+      if (res.ok) {
+        const data: UserInfo = await res.json();
+        setUserInfo(data);
+        const enrolledFingers = data.fingers || [];
+        setSlots((prev) =>
+          prev.map((s) => ({
+            ...s,
+            status: enrolledFingers.includes(s.finger) ? 'enrolled' : 'empty',
+          })),
+        );
+      }
+    } catch (e) {
+      console.warn('Auto status check on select failed:', e);
+    }
+  }, [apiBase]);
 
   /* ── User lookup ─────────────────────────────────────────── */
   const lookupUser = useCallback(async () => {
@@ -914,6 +940,7 @@ export default function FingerprintEnrollPage() {
     fingerKey: FingerKey,
     templateB64: string,
     qualityScore: number,
+    slotNumber?: number | null,
   ): Promise<{ success: boolean; error?: string }> => {
     if (!userInfo) return { success: false, error: 'No user selected' };
     try {
@@ -924,6 +951,10 @@ export default function FingerprintEnrollPage() {
         quality_score: qualityScore,
         device_type: scannerType,
       };
+      if (slotNumber !== undefined && slotNumber !== null) {
+        body.slot_id = slotNumber;
+        body.slot = slotNumber;
+      }
       if (idType === 'reg_no') body.reg_no = idValue.trim();
       else body.staff_id = idValue.trim();
 
@@ -995,6 +1026,7 @@ export default function FingerprintEnrollPage() {
           const result = await captureFromScanner(resolved.type, resolved.url, {
             userId: esp32CaptureUserId,
             mode: resolved.type === 'esp32_bridge' ? 'C' : undefined,
+            slot: i + 1,
           });
 
           if (result.template_b64) {
@@ -1006,6 +1038,7 @@ export default function FingerprintEnrollPage() {
                       status: 'enrolled',
                       template_b64: result.template_b64,
                       quality_score: result.quality_score,
+                      slot: result.slot ?? null,
                       errorMsg: null,
                     }
                   : s,
@@ -1360,6 +1393,7 @@ export default function FingerprintEnrollPage() {
                               slot.finger,
                               slot.template_b64,
                               slot.quality_score || 80,
+                              slot.slot,
                             );
                             if (res.success) {
                               savedCount++;

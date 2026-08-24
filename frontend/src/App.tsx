@@ -100,6 +100,7 @@ import IDCSScanTestPage from './pages/IDCSScan/TestPage';
 import BarScan from './pages/COE/BarScan';
 import BarScanMarkEntry from './pages/COE/BarScanMarkEntry';
 import IDCSScanGatepassPage from './pages/IDCSScan/GatepassPage';
+import FingerprintEnrollPage from './pages/IDCSScan/FingerprintEnrollPage';
 import RFReaderAssignCardsPage from './pages/RFReader/AssignCardsPage';
 import RFReaderCreateGatePage from './pages/RFReader/CreateGatePage';
 import RFReaderTestStudentsPage from './pages/RFReader/TestStudentsPage';
@@ -516,6 +517,10 @@ export default function App() {
                 <Route
                   path="/idscan/bulk-entry"
                   element={<ProtectedRoute user={user} requiredRoles={['LIBRARY', 'SECURITY', 'IQAC', 'ADMIN']} element={<BulkEntryPage />} />}
+                />
+                <Route
+                  path="/idscan/fingerprint"
+                  element={<ProtectedRoute user={user} requiredRoles={['LIBRARY', 'SECURITY', 'IQAC', 'ADMIN']} element={<FingerprintEnrollPage />} />}
                 />
                 <Route
                   path="/idscan/gatepass"

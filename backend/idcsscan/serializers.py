@@ -331,7 +331,13 @@ class FingerprintEnrollmentWriteSerializer(serializers.Serializer):
                 b64_str = base64.b64encode(template_bytes).decode("ascii")
                 t_hash = hashlib.sha256(template_bytes).hexdigest()
 
-                slot_val = None
+                raw_init = getattr(self, 'initial_data', {}) or {}
+                slot_val = raw_init.get('slot_id') or raw_init.get('slot')
+                if slot_val is not None:
+                    try:
+                        slot_val = int(slot_val)
+                    except Exception:
+                        slot_val = None
                 sensor_out = ""
 
                 # Try 1: JSON parse the template bytes (ESP32 format)

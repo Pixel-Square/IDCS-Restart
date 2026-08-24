@@ -1,3 +1,4 @@
+import hashlib
 from django.contrib import admin
 
 from .models import FingerprintEnrollment, BiometricFingerprintData
@@ -17,7 +18,15 @@ class FingerprintEnrollmentAdmin(admin.ModelAdmin):
     )
     list_filter = ("template_format", "device_type", "is_active")
     search_fields = ("user__username", "user__email", "device_type")
-    readonly_fields = ("template", "enrolled_at")
+    readonly_fields = ("template_preview", "enrolled_at")
+    exclude = ("template",)
+
+    def template_preview(self, obj):
+        if not obj or not obj.template:
+            return "(Empty)"
+        raw = bytes(obj.template)
+        return f"{len(raw)} bytes [SHA256: {hashlib.sha256(raw).hexdigest()[:16]}...]"
+    template_preview.short_description = "Template Raw Bytes"
 
 
 @admin.register(BiometricFingerprintData)

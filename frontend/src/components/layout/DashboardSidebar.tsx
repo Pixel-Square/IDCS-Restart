@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, MapPin, Building2 } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, MapPin, Building2, Fingerprint } from 'lucide-react';
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -80,6 +80,7 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_retrival: FileText,
   coe_one_page_report: FileText,
   hall_selection: MapPin,
+  idscan_fingerprint: Fingerprint,
 };
 
 export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
@@ -507,7 +508,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const isSecurity = rolesUpper.includes('SECURITY');
   const isLibrary = rolesUpper.includes('LIBRARY');
   
-  // LIBRARY role: only Profile and Assign Cards
+  // LIBRARY role: only Profile and Assign Cards, Bulk Entry, Cards Data, and Fingerprint Enroll
   if (isLibrary) {
     // Remove all items except Profile that was added via unshift
     const profileItem = items.find(i => i.key === 'profile');
@@ -516,11 +517,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_assign_cards', label: 'Assign Cards', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_bulk_entry', label: 'Bulk RFID Entry', to: '/idscan/bulk-entry' });
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
+    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
   } else if (isSecurity && !items.some((i) => i.key === 'idscan_test')) {
     items.push({ key: 'idscan_test',     label: 'RFID Scanner Test', to: '/idscan/test' });
     items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_bulk_entry', label: 'Bulk RFID Entry', to: '/idscan/bulk-entry' });
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
+    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
     items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
   }
