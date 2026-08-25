@@ -7,13 +7,10 @@ import {
   GraduationCap,
   Award,
   AlertTriangle,
-  FileSpreadsheet,
-  Layers,
   Search,
   Filter,
   CheckCircle2,
   XCircle,
-  HelpCircle,
   Clock,
   ArrowRight,
   BookOpen,
@@ -22,12 +19,9 @@ import {
   ChevronRight,
   UserCheck,
   Building2,
-  Sparkles,
   Lock,
   RefreshCw,
-  Eye,
   Sliders,
-  Maximize2,
   X,
   BarChart2
 } from 'lucide-react';
@@ -59,7 +53,6 @@ import {
   fetchStudentCurriculumMarks,
   fetchStudentAnalysisCharts,
   PerformanceAnalyticsResponse,
-  WeakStudentRow,
   StudentProgressReportResponse,
   FacultyWiseRow,
   ClassAdvisorDeepDiveResponse,
@@ -74,17 +67,6 @@ import {
   GlobalDashboardFilters,
   queryDashboardVisualData
 } from '../../services/academicVisuals';
-
-const DEPARTMENTS = [
-  { code: '', name: 'All Departments' },
-  { code: 'CSE', name: 'Computer Science & Engineering' },
-  { code: 'AI', name: 'Artificial Intelligence & Data Science' },
-  { code: 'ECE', name: 'Electronics & Communication' },
-  { code: 'EEE', name: 'Electrical & Electronics' },
-  { code: 'MECH', name: 'Mechanical Engineering' },
-  { code: 'CIVIL', name: 'Civil Engineering' },
-  { code: 'IT', name: 'Information Technology' },
-];
 
 const EXAM_TYPES = [
   { code: '', name: 'All Exam Types' },
@@ -109,7 +91,7 @@ export default function AcademicPerformancePage() {
   const [multiSems, setMultiSems] = useState<string[]>([]);
   const [multiSections, setMultiSections] = useState<string[]>([]);
   const [multiSubjects, setMultiSubjects] = useState<string[]>([]);
-  const [multiExams, setMultiExams] = useState<string[]>(['CIA 1', 'CIA 2', 'Model Exam', 'ESE']);
+  const [multiExams, setMultiExams] = useState<string[]>(['CIA 1', 'CIA 2', 'Model Exam', 'Semester Exam']);
 
   const [comparisonResponse, setComparisonResponse] = useState<ComparisonAnalyticsResponse | null>(null);
   const [compLoading, setCompLoading] = useState<boolean>(false);
@@ -155,6 +137,7 @@ export default function AcademicPerformancePage() {
   const [selectedYear, setSelectedYear] = useState<string>('');
   const [selectedSem, setSelectedSem] = useState<string>('');
   const [selectedDept, setSelectedDept] = useState<string>('');
+  const [selectedDeptName, setSelectedDeptName] = useState<string>('');
   const [selectedSection, setSelectedSection] = useState<string>('');
   const [selectedExamType, setSelectedExamType] = useState<string>('');
 
@@ -168,7 +151,6 @@ export default function AcademicPerformancePage() {
   }, [selectedYear]);
 
   // Search & Progress Report Modal
-  const [weakSearch, setWeakSearch] = useState<string>('');
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [studentReport, setStudentReport] = useState<StudentProgressReportResponse | null>(null);
   const [reportLoading, setReportLoading] = useState<boolean>(false);
@@ -260,6 +242,32 @@ export default function AcademicPerformancePage() {
   useEffect(() => {
     loadInitialData();
   }, [selectedYear, selectedSem, selectedDept, selectedSection, selectedExamType]);
+
+  // Dynamic section options come straight from the backend response (department/batch/sem aware)
+  const sectionOptions: string[] = data?.filter_options?.sections || [];
+
+    // Reset all college-level filters back to default and restore the College view.
+  const handleResetFilters = () => {
+    setSelectedYear('');
+    setSelectedSem('');
+    setSelectedDept('');
+    setSelectedDeptName('');
+    setSelectedSection('');
+    setSelectedExamType('');
+    // Always return to the pure College-level view (KPI cards + Department-wise table),
+    // regardless of role — never back into a Department/Faculty drill-down.
+    setActiveTab('');
+    setActiveDashboardId('overall_overview');
+  };
+
+  // Navigate to the College-level overview (used by breadcrumb + reset).
+  const goCollegeOverview = () => {
+    setSelectedDept('');
+    setSelectedDeptName('');
+    setSelectedSection('');
+    setActiveTab('');
+    setActiveDashboardId('overall_overview');
+  };
 
   // Load Faculty Wise when tab is switched
   useEffect(() => {
@@ -402,12 +410,7 @@ export default function AcademicPerformancePage() {
     }
   };
 
-  const filteredWeakStudents = (data?.weak_students || []).filter(
-    (s) =>
-      s.name.toLowerCase().includes(weakSearch.toLowerCase()) ||
-      s.reg_no.toLowerCase().includes(weakSearch.toLowerCase()) ||
-      s.dept.toLowerCase().includes(weakSearch.toLowerCase())
-  );
+
 
   const sortedDepts = [...(data?.dept_comparison || [])].sort((a, b) => b.pass_rate_pct - a.pass_rate_pct);
   const topDepts = sortedDepts.slice(0, 3);
@@ -455,6 +458,64 @@ export default function AcademicPerformancePage() {
           </div>
         </div>
       </div>
+      {/* Interactive Hierarchy Breadcrumb Navigation */}
+      <div className="bg-slate-900/90 text-slate-300 py-2.5 px-6 border-t border-blue-500/20 text-xs font-semibold">
+        <div className="max-w-7xl mx-auto flex items-center gap-2 overflow-x-auto">
+                    <button 
+            onClick={goCollegeOverview}
+            className="hover:text-white transition-colors flex items-center gap-1.5 text-blue-400 font-bold"
+          >
+            <Building2 className="w-3.5 h-3.5" /> College
+          </button>
+          {selectedDept && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <button 
+                onClick={() => {
+                  setSelectedSection('');
+                  setActiveTab('hod');
+                  setActiveDashboardId('overall_overview');
+                }}
+                className={`hover:text-white transition-colors ${activeTab === 'hod' ? 'text-white font-bold' : 'text-slate-300'}`}
+              >
+                {selectedDeptName || selectedDept}
+              </button>
+            </>
+          )}
+          {(activeTab === 'faculty' || activeTab === 'hod') && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-white font-bold">Faculty Analysis</span>
+            </>
+          )}
+          {activeTab === 'advisor' && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-white font-bold">Advisor / Section Deep-Dive</span>
+            </>
+          )}
+          {activeTab === 'student' && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-white font-bold">Student Analysis</span>
+            </>
+          )}
+          {activeTab === 'range' && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-white font-bold">Performance Range Analysis</span>
+            </>
+          )}
+          {activeTab === 'custom_dash' && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-white font-bold">
+                {publishedDashboards.find(d => d.id === activeDashboardId)?.name || 'Custom Dashboard'}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Sticky Global Context Filter Bar */}
       <div className="sticky top-16 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm py-3.5 px-6">
@@ -496,7 +557,10 @@ export default function AcademicPerformancePage() {
               <select
                 value={selectedDept}
                 disabled={data?.user_context?.lock_department}
-                onChange={(e) => setSelectedDept(e.target.value)}
+                onChange={(e) => {
+                  setSelectedDept(e.target.value);
+                  setSelectedSection('');
+                }}
                 className={`px-3 py-1.5 text-xs font-semibold border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none ${
                   data?.user_context?.lock_department
                     ? 'bg-slate-100 border-slate-300 text-slate-500 font-medium cursor-not-allowed pr-8'
@@ -515,16 +579,18 @@ export default function AcademicPerformancePage() {
               )}
             </div>
 
-            {/* Section Filter */}
+            {/* Section Filter — options are dynamic per department from the backend */}
             <select
               value={selectedSection}
               onChange={(e) => setSelectedSection(e.target.value)}
               className="px-3 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
               <option value="">All Sections</option>
-              <option value="A">Section A</option>
-              <option value="B">Section B</option>
-              <option value="C">Section C</option>
+              {(sectionOptions || []).map((sec) => (
+                <option key={sec} value={sec}>
+                  Section {sec}
+                </option>
+              ))}
             </select>
 
             {/* Exam Type Filter */}
@@ -539,6 +605,16 @@ export default function AcademicPerformancePage() {
                 </option>
               ))}
             </select>
+
+            {/* Reset Filters */}
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 rounded-lg transition-colors ml-1"
+              title="Clear all filters and return to the College overview"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Reset Filters
+            </button>
           </div>
 
           {/* Dashboard Switcher Button Row */}
@@ -633,14 +709,21 @@ export default function AcademicPerformancePage() {
       </div>
 
       <main className="max-w-7xl mx-auto px-6 pt-6 space-y-6">
-        {/* Metric Cards Row */}
-        {activeDashboardId === 'overall_overview' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in-50">
+                {activeDashboardId === 'overall_overview' && (activeTab === '' || activeTab === 'principal') && !loading && data?.metrics && data.metrics.total_exams_taken === 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 text-sm text-amber-800 flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            No academic data available for the selected filters.
+          </div>
+        )}
+                {/* Metric Cards Row - College Level (Exact 5 Primary KPI Cards) */}
+        {(activeTab === '' || activeTab === 'principal') && activeDashboardId === 'overall_overview' && !loading && data?.metrics && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 animate-in fade-in-50">
+            {/* 1. Total No. of Students */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Active Students</p>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total No. of Students</p>
                 <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.total_students ? data.metrics.total_students.toLocaleString() : '2,850'}
+                  {data?.metrics?.total_students !== undefined ? data.metrics.total_students.toLocaleString() : '—'}
                 </h3>
                 <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
                   <TrendingUp className="w-3.5 h-3.5" /> Live Enrollment
@@ -651,29 +734,15 @@ export default function AcademicPerformancePage() {
               </div>
             </div>
 
+            {/* 2. Overall Pass Percentage */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Academic Average</p>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Pass Percentage</p>
                 <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.overall_marks_pct || 68.5}%
-                </h3>
-                <p className="text-xs text-blue-600 font-semibold mt-1 flex items-center gap-1">
-                  <Award className="w-3.5 h-3.5" /> Target: &gt; 58%
-                </p>
-              </div>
-              <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
-                <GraduationCap className="w-6 h-6" />
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pass Rate Percentage</p>
-                <h3 className="text-2xl font-black text-slate-900 mt-1">
-                  {data?.metrics?.overall_pass_pct || 82.4}%
+                  {data?.metrics?.overall_pass_pct !== undefined ? `${data.metrics.overall_pass_pct}%` : '—'}
                 </h3>
                 <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> &gt; 50% Threshold
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Pass Rate
                 </p>
               </div>
               <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-100">
@@ -681,18 +750,53 @@ export default function AcademicPerformancePage() {
               </div>
             </div>
 
+            {/* 3. Overall Average Marks */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Students Needing Support</p>
-                <h3 className="text-2xl font-black text-amber-600 mt-1">
-                  {data?.total_weak_students || 30}
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Average Marks</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">
+                  {data?.metrics?.overall_marks_pct !== undefined ? `${data.metrics.overall_marks_pct}%` : '—'}
                 </h3>
-                <p className="text-xs text-amber-700 font-semibold mt-1 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" /> Requires Mentorship
+                <p className="text-xs text-indigo-600 font-semibold mt-1 flex items-center gap-1">
+                  <GraduationCap className="w-3.5 h-3.5" /> Institutional Avg
                 </p>
               </div>
-              <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 border border-amber-100">
-                <AlertTriangle className="w-6 h-6" />
+              <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+            </div>
+
+            {/* 4. Overall Attendance */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Attendance</p>
+                <h3 className="text-2xl font-black text-slate-900 mt-1">
+                  {data?.metrics?.overall_attendance !== undefined ? `${data.metrics.overall_attendance}%` : '—'}
+                </h3>
+                <p className="text-xs text-blue-600 font-semibold mt-1 flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5" /> Present / OD Rate
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-sky-50 flex items-center justify-center text-sky-600 border border-sky-100">
+                <Clock className="w-6 h-6" />
+              </div>
+            </div>
+
+            {/* 5. Overall Pass / Fail Count */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Overall Pass / Fail Count</p>
+                <h3 className="text-xl font-black text-slate-900 mt-1">
+                  <span className="text-emerald-600">{data?.metrics?.overall_pass_count !== undefined ? data.metrics.overall_pass_count : '—'}</span>
+                  <span className="text-slate-400 font-normal mx-1">/</span>
+                  <span className="text-rose-600">{data?.metrics?.overall_fail_count !== undefined ? data.metrics.overall_fail_count : '—'}</span>
+                </h3>
+                <p className="text-xs text-slate-500 font-semibold mt-1 flex items-center gap-1">
+                  Unique Students
+                </p>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 border border-purple-100">
+                <Users className="w-6 h-6" />
               </div>
             </div>
           </div>
@@ -763,51 +867,6 @@ export default function AcademicPerformancePage() {
         {/* View Mode: Principal / HOD Overview */}
         {(activeTab === 'principal' || activeTab === 'hod') && (
           <div className="space-y-6 animate-in fade-in-50">
-            {/* Top / Needs Improvement Departments */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                <div className="flex items-center gap-2 mb-4">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                  <h3 className="text-base font-bold text-slate-900">Top Performing Departments</h3>
-                </div>
-                <div className="space-y-3">
-                  {topDepts.map((d, i) => (
-                    <div key={d.dept_code} className="flex items-center justify-between p-3.5 bg-emerald-50/50 rounded-xl border border-emerald-100">
-                      <div>
-                        <span className="text-xs font-bold text-emerald-800">{d.dept_name}</span>
-                        <p className="text-xs text-emerald-600 font-semibold">{d.total_records} Active Students</p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-black text-emerald-700">{d.pass_rate_pct}%</span>
-                        <p className="text-[11px] text-emerald-600">Pass Rate</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                <div className="flex items-center gap-2 mb-4">
-                  <AlertTriangle className="w-5 h-5 text-amber-600" />
-                  <h3 className="text-base font-bold text-slate-900">Departments Requiring Attention</h3>
-                </div>
-                <div className="space-y-3">
-                  {needsImpDepts.map((d, i) => (
-                    <div key={d.dept_code} className="flex items-center justify-between p-3.5 bg-amber-50/50 rounded-xl border border-amber-100">
-                      <div>
-                        <span className="text-xs font-bold text-amber-800">{d.dept_name}</span>
-                        <p className="text-xs text-amber-600 font-semibold">{d.total_records} Active Students</p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-sm font-black text-amber-700">{d.pass_rate_pct}%</span>
-                        <p className="text-[11px] text-amber-600">Pass Rate</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
             {/* Department Comparison Chart */}
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
               <h3 className="text-base font-bold text-slate-900 mb-4">Department-Wise Academic Performance Comparison</h3>
@@ -826,61 +885,58 @@ export default function AcademicPerformancePage() {
               </div>
             </div>
 
-            {/* Weak Students Mentorship Focus Table */}
+            {/* Department-wise Academic Performance Table */}
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+              <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Students Requiring Academic Mentorship</h3>
-                  <p className="text-xs text-slate-500">Students with overall average &lt; 58% requiring direct intervention</p>
-                </div>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    placeholder="Search by name or Reg No..."
-                    value={weakSearch}
-                    onChange={(e) => setWeakSearch(e.target.value)}
-                    className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-                  />
+                  <h3 className="text-base font-bold text-slate-900">Department-wise Academic Performance</h3>
+                  <p className="text-xs text-slate-500">Click any department row to drill down into detailed Department Analysis</p>
                 </div>
               </div>
-
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200 uppercase tracking-wider">
                     <tr>
-                      <th className="py-3 px-4">Student</th>
-                      <th className="py-3 px-4">Dept / Sec</th>
-                      <th className="py-3 px-4">Sem</th>
-                      <th className="py-3 px-4">Avg Score</th>
-                      <th className="py-3 px-4">Failed Exams</th>
-                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Department</th>
+                      <th className="py-3 px-4 text-center">Total Students</th>
+                      <th className="py-3 px-4 text-center">Pass %</th>
+                      <th className="py-3 px-4 text-center">Average Marks %</th>
+                      <th className="py-3 px-4 text-center">Attendance %</th>
                       <th className="py-3 px-4 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredWeakStudents.slice(0, 10).map((s) => (
-                      <tr key={s.student_id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3 px-4 font-bold text-slate-900">
-                          {s.name}
-                          <span className="block text-[11px] text-slate-400 font-normal">{s.reg_no}</span>
+                    {(data?.dept_comparison || []).map((d) => (
+                      <tr 
+                        key={d.dept_code} 
+                                                onClick={() => {
+                          setSelectedDept(d.dept_code);
+                          setSelectedDeptName(d.dept_name);
+                          setSelectedSection('');
+                          setActiveTab('hod');
+                          setActiveDashboardId('overall_overview');
+                        }}
+                        className="hover:bg-blue-50/50 cursor-pointer transition-colors group"
+                      >
+                        <td className="py-3.5 px-4 font-bold text-slate-900 group-hover:text-blue-600">
+                          {d.dept_name} ({d.dept_code})
                         </td>
-                        <td className="py-3 px-4 font-semibold text-slate-700">{s.dept} - {s.section}</td>
-                        <td className="py-3 px-4 font-semibold text-slate-700">Sem {s.sem}</td>
-                        <td className="py-3 px-4 font-bold text-amber-700">{s.avg_score_pct}%</td>
-                        <td className="py-3 px-4 font-semibold text-rose-600">{s.failed_exams} / {s.total_exams}</td>
-                        <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            {s.status}
+                        <td className="py-3.5 px-4 text-center font-semibold text-slate-700">
+                          {d.total_students ?? d.total_records ?? '—'}
+                        </td>
+                        <td className="py-3.5 px-4 text-center font-bold text-emerald-600">
+                          {d.pass_rate_pct}%
+                        </td>
+                        <td className="py-3.5 px-4 text-center font-bold text-blue-600">
+                          {d.avg_marks_pct}%
+                        </td>
+                        <td className="py-3.5 px-4 text-center font-bold text-slate-700">
+                          {d.attendance_pct ?? data?.metrics?.overall_attendance ?? '—'}%
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 group-hover:translate-x-1 transition-transform">
+                            Drill Down <ChevronRight className="w-3.5 h-3.5" />
                           </span>
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() => handleOpenReport(s.student_id)}
-                            className="inline-flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-bold transition-all"
-                          >
-                            <Eye className="w-3.5 h-3.5" /> View Report
-                          </button>
                         </td>
                       </tr>
                     ))}
@@ -888,11 +944,13 @@ export default function AcademicPerformancePage() {
                 </table>
               </div>
             </div>
+
           </div>
         )}
 
+                        
         {/* View Mode: Faculty-Wise (Handled Subjects & Mentees) */}
-        {activeTab === 'faculty' && (
+        {(activeTab === 'faculty' || activeTab === 'hod') && (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6">
@@ -925,11 +983,18 @@ export default function AcademicPerformancePage() {
 
                       {/* Handled Subjects */}
                       <div>
-                        <h5 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Handled Courses</h5>
+                        <h5 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Handled Courses (Click to open Subject Analysis)</h5>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                           {fac.handled_subjects.map((sub) => (
-                            <div key={sub.id} className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs">
-                              <span className="text-xs font-bold text-slate-900 block truncate">{sub.subject_name}</span>
+                            <div 
+                              key={sub.id} 
+                              onClick={() => {
+                                setSelectedRangeSubject(sub.subject_code);
+                                setActiveTab('range');
+                              }}
+                              className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs hover:border-blue-500 hover:shadow-md cursor-pointer transition-all group"
+                            >
+                              <span className="text-xs font-bold text-slate-900 block truncate group-hover:text-blue-600">{sub.subject_name}</span>
                               <p className="text-[11px] text-slate-500">{sub.subject_code} • Section {sub.section}</p>
                               <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-100 text-xs">
                                 <span className="font-semibold text-emerald-600">Pass: {sub.pass_percentage}%</span>

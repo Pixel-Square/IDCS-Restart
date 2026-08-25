@@ -1672,20 +1672,72 @@ export default function FingerprintEnrollPage() {
             </button>
 
             <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="http://192.168.29.159"
-                value={scannerUrl}
-                onChange={(e) => setScannerUrl(e.target.value)}
-                className="border border-gray-300 rounded-2xl px-4 py-2.5 text-xs font-mono w-60 focus:ring-2 focus:ring-indigo-500 focus:outline-none shadow-xs"
-              />
               <button
                 type="button"
-                onClick={() => runScannerDetection('esp32_bridge', scannerUrl || 'http://192.168.29.159')}
+                onClick={async () => {
+                  try {
+                    setDeviceConnecting(true);
+                    setUsbError(null);
+                    const isEnrolledActive = scannerOnline && scannerDetectedType === 'esp32_bridge';
+                    const nextMode = isEnrolledActive ? 'ATTENDANCE' : 'ENROLL';
+
+                    const res = await fetch(`${apiBase}/api/idscan/biosecure/device/mode/`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token()}`,
+                      },
+                      body: JSON.stringify({
+                        mode: nextMode,
+                        target_slot: 1,
+                        user_id: userInfo?.user_id || selectedUserForEnroll?.user_id || null,
+                        reg_no: userInfo?.identifier || selectedUserForEnroll?.identifier || null,
+                        finger: 'Right Index',
+                      }),
+                    });
+
+                    if (res.ok) {
+                      if (nextMode === 'ENROLL') {
+                        setScannerOnline(true);
+                        setScannerDetectedType('esp32_bridge');
+                        setScannerType('esp32_bridge');
+                        setMessage({
+                          type: 'success',
+                          text: 'ESP32 Wi-Fi connected! Mode set to Enrollment Priority. Place finger on sensor.',
+                        });
+                      } else {
+                        setScannerOnline(false);
+                        setScannerDetectedType(null);
+                        setMessage({
+                          type: 'info',
+                          text: 'ESP32 Wi-Fi shifted back to Live Attendance Input Mode.',
+                        });
+                      }
+                    } else {
+                      const err = await res.json().catch(() => ({}));
+                      throw new Error(err.detail || 'Could not update ESP32 mode');
+                    }
+                  } catch (e: any) {
+                    setUsbError('Failed to connect ESP32 over Wi-Fi: ' + (e.message || String(e)));
+                  } finally {
+                    setDeviceConnecting(false);
+                  }
+                }}
                 disabled={deviceConnecting}
-                className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl px-4 py-2.5 text-xs font-semibold border border-gray-300 transition shadow-xs"
+                className={`inline-flex items-center gap-2 rounded-2xl px-5 py-2.5 text-xs font-semibold shadow-xs transition ${
+                  scannerOnline && scannerDetectedType === 'esp32_bridge'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
               >
-                Connect WiFi ESP32
+                {deviceConnecting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Fingerprint className="w-4 h-4" />
+                )}
+                {scannerOnline && scannerDetectedType === 'esp32_bridge'
+                  ? 'Stop ESP32 Enrollment'
+                  : 'Connect WiFi ESP32'}
               </button>
             </div>
           </div>

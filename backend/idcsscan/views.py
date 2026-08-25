@@ -3521,8 +3521,45 @@ class FingerprintIdentifyView(APIView):
     def post(self, request):
         data = request.data or {}
         b64 = (data.get("template_b64") or "").strip()
+
+        # ── Step 0: Hardware slot lookup from ESP32 R305 onboard search
+        req_slot = data.get('slot')
+        if req_slot is None:
+            req_slot = data.get('slot_id')
+
+        matched_slot_num = None
+        if req_slot is not None and str(req_slot).strip() not in ('0', '', 'None', '-1'):
+            try:
+                matched_slot_num = int(str(req_slot).strip())
+            except Exception:
+                matched_slot_num = None
+
+        req_device = (data.get('device_id') or data.get('device_type') or '').strip()
+
+        if matched_slot_num and matched_slot_num > 0:
+            qs = BiometricFingerprintData.objects.filter(slot_id=matched_slot_num, is_active=True)
+            if req_device:
+                dev_qs = qs.filter(Q(device_type__icontains=req_device) | Q(device_type='esp32_bridge') | Q(device_type='esp32_r307'))
+                bio_by_slot = dev_qs.select_related('user').first() or qs.select_related('user').first()
+            else:
+                bio_by_slot = qs.select_related('user').first()
+
+            if bio_by_slot:
+                payload = self._build_user_payload(bio_by_slot.user, None)
+                payload['finger'] = bio_by_slot.finger_name
+                payload['slot'] = matched_slot_num
+                payload['match_source'] = 'hardware_slot_direct'
+
+                # Auto-record BioSecure attendance for student if they belong to an active batch today
+                try:
+                    self._record_biosecure_log(bio_by_slot.user, bio_by_slot.finger_name, matched_slot_num)
+                except Exception as bse:
+                    logging.getLogger('fp_identify').warning('BioSecure attendance log error: %s', bse)
+
+                return Response(payload, status=status.HTTP_200_OK)
+
         if not b64:
-            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "template_b64 or valid slot is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         import base64
         import hashlib
@@ -4010,4 +4047,112 @@ class BioSecureStudentLogsView(APIView):
             "selected_date": selected_date.isoformat(),
             "logs": day_logs,
             "available_dates": [d.isoformat() for d in distinct_dates],
+        }, status=status.HTTP_200_OK)
+
+
+class BioSecureDeviceModeView(APIView):
+    """
+    GET, POST /api/idscan/biosecure/device/mode/
+
+    Session queue for ESP32 and Web Portal:
+    - Default state: ATTENDANCE (Live student input scan)
+    - If web clicks Connect: ENROLL (Priority mode with target slot)
+    """
+    from rest_framework.permissions import AllowAny
+    permission_classes = [AllowAny]
+
+    DEVICE_STATE = {
+        "mode": "ATTENDANCE",
+        "target_slot": None,
+        "user_id": None,
+        "reg_no": None,
+        "finger": "Right Index",
+        "timestamp": 0
+    }
+
+    def get(self, request):
+        return Response(self.DEVICE_STATE, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        mode = (request.data.get("mode") or "ATTENDANCE").upper()
+        if mode == "ENROLL":
+            slot = request.data.get("slot") or request.data.get("target_slot") or request.data.get("slot_id")
+            self.DEVICE_STATE["mode"] = "ENROLL"
+            self.DEVICE_STATE["target_slot"] = int(slot) if slot else 1
+            self.DEVICE_STATE["user_id"] = request.data.get("user_id")
+            self.DEVICE_STATE["reg_no"] = request.data.get("reg_no")
+            self.DEVICE_STATE["finger"] = request.data.get("finger", "Right Index")
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+        else:
+            self.DEVICE_STATE["mode"] = "ATTENDANCE"
+            self.DEVICE_STATE["target_slot"] = None
+            self.DEVICE_STATE["user_id"] = None
+            self.DEVICE_STATE["reg_no"] = None
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+
+        return Response({"status": "OK", "state": self.DEVICE_STATE}, status=status.HTTP_200_OK)
+
+
+class BioSecureAdminLogsView(APIView):
+    """
+    GET /api/idscan/biosecure/admin/logs/?date=YYYY-MM-DD
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from idcsscan.models import BioSecureClassGroup, BioSecureAttendanceLog
+        from academics.models import StudentProfile
+        from django.core.paginator import Paginator
+
+        raw_date = (request.query_params.get('date') or '').strip()
+        target_date = datetime.strptime(raw_date, '%Y-%m-%d').date() if raw_date else date.today()
+
+        group_id = request.query_params.get('group_id')
+        groups = BioSecureClassGroup.objects.filter(is_active=True)
+        if group_id:
+            try:
+                groups = groups.filter(pk=int(group_id))
+            except Exception:
+                pass
+
+        if not groups.exists():
+            return Response({"results": [], "count": 0, "total_pages": 1, "current_page": 1}, status=status.HTTP_200_OK)
+
+        target_group = groups.first()
+        mapped_sections = target_group.sections.all()
+
+        cohort_students = StudentProfile.objects.filter(
+            section__in=mapped_sections
+        ).select_related('user', 'section', 'section__batch', 'section__batch__course', 'home_department').order_by('reg_no')
+
+        placed_map = {}
+        for log in BioSecureAttendanceLog.objects.filter(group=target_group, date=target_date, placed=True):
+            placed_map[log.student_id] = log
+
+        records = []
+        for sp in cohort_students:
+            user = sp.user
+            is_placed = user.id in placed_map
+            log_entry = placed_map.get(user.id)
+            records.append({
+                "student_id": user.id,
+                "reg_no": sp.reg_no,
+                "name": user.get_full_name() or user.username,
+                "section": sp.section.name if sp.section else "",
+                "status": "PLACED" if is_placed else "MISSED",
+                "verified_at": log_entry.verified_at.strftime('%I:%M:%S %p') if log_entry and log_entry.verified_at else None,
+                "finger": log_entry.finger_name if log_entry else "",
+                "slot": log_entry.slot_id if log_entry else None,
+            })
+
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 25))
+        paginator = Paginator(records, page_size)
+        cur_page = paginator.get_page(page)
+
+        return Response({
+            "results": cur_page.object_list,
+            "count": paginator.count,
+            "total_pages": paginator.num_pages,
+            "current_page": page,
         }, status=status.HTTP_200_OK)

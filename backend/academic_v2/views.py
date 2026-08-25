@@ -3900,12 +3900,8 @@ def faculty_course_info(request, ta_id):
         'total_internal_marks': float(acv2_ct.total_internal_marks) if acv2_ct else 40,
     }
 
-    # Count students in this section
-    student_count = 0
-    if sec:
-        student_count = StudentSectionAssignment.objects.filter(
-            section=sec, end_date__isnull=True
-        ).count()
+    # Count students in this section / teaching assignment
+    student_count = len(_get_active_students_for_teaching_assignment(ta))
 
     # Build exam list from AcV2ExamAssignment records linked to this TA via AcV2Section
     exams = []
@@ -5235,6 +5231,147 @@ def faculty_exam_request_edit(request, exam_id):
 # FACULTY EXAM MARKS (GET + POST for MarkEntryPage)
 # ============================================================================
 
+def _get_active_students_for_teaching_assignment(ta):
+    """
+    Retrieve all enrolled/assigned students for a TeachingAssignment.
+    Handles:
+      1. Active StudentSectionAssignment for the academic section.
+      2. Legacy StudentProfile.section fallback (for deployments where StudentSectionAssignment was bypassed).
+      3. Elective subjects (ElectiveChoice mapping when ta.section is missing).
+      4. StudentSubjectBatch filtering if the staff has batch assignments.
+    Returns a list of StudentProfile instances sorted by reg_no.
+    """
+    from academics.models import StudentSectionAssignment, StudentProfile
+    students_by_id = {}
+
+    sec = getattr(ta, 'section', None)
+    elective_id = getattr(ta, 'elective_subject_id', None)
+
+    # 1. Elective TA rosters without a section
+    if not sec and elective_id:
+        try:
+            from curriculum.models import ElectiveChoice
+            eqs = (
+                ElectiveChoice.objects.filter(is_active=True, elective_subject_id=int(elective_id))
+                .exclude(student__isnull=True)
+                .select_related('student__user', 'student__home_department')
+            )
+            if getattr(ta, 'academic_year_id', None):
+                eqs_ay = eqs.filter(academic_year_id=ta.academic_year_id)
+                if eqs_ay.exists():
+                    eqs = eqs_ay
+            for c in eqs:
+                sp = getattr(c, 'student', None)
+                if sp and sp.id:
+                    students_by_id[sp.id] = sp
+        except Exception:
+            pass
+
+    # 2. Section-based student assignments (StudentSectionAssignment)
+    if sec:
+        try:
+            ssa_qs = (
+                StudentSectionAssignment.objects
+                .filter(section=sec, end_date__isnull=True)
+                .exclude(student__status__in=['INACTIVE', 'DEBAR'])
+                .select_related('student__user', 'student__home_department')
+            )
+            for sa in ssa_qs:
+                sp = getattr(sa, 'student', None)
+                if sp and sp.id:
+                    students_by_id[sp.id] = sp
+        except Exception:
+            pass
+
+        # 3. Legacy StudentProfile.section entries
+        try:
+            sp_qs = (
+                StudentProfile.objects
+                .filter(section=sec)
+                .exclude(status__in=['INACTIVE', 'DEBAR'])
+                .select_related('user', 'home_department')
+            )
+            for sp in sp_qs:
+                if sp and sp.id and sp.id not in students_by_id:
+                    students_by_id[sp.id] = sp
+        except Exception:
+            pass
+
+        # 4. Fallback for Year-1 department-core sections:
+        # In Year 1, students have their primary section under S&H (e.g. S&H - 2025 / A),
+        # but department subjects are taught under their department section (e.g. EEE - 2025 / A).
+        # If no students were found via direct section links, resolve students belonging to this department
+        # for this batch.
+        if not students_by_id and sec.batch:
+            try:
+                from academics.models import Section
+                dept = getattr(getattr(sec.batch, 'course', None), 'department', None) or getattr(sec, 'managing_department', None)
+                start_year = getattr(sec.batch, 'start_year', None)
+                if dept and start_year:
+                    sibling_sections = list(Section.objects.filter(batch=sec.batch).order_by('name'))
+                    if not sibling_sections:
+                        sibling_sections = [sec]
+
+                    dept_students = list(
+                        StudentProfile.objects.filter(
+                            home_department=dept,
+                            section__batch__start_year=start_year,
+                        )
+                        .exclude(status__in=['INACTIVE', 'DEBAR'])
+                        .select_related('user', 'home_department')
+                        .order_by('reg_no')
+                    )
+
+                    if dept_students:
+                        if len(sibling_sections) == 1:
+                            for sp in dept_students:
+                                students_by_id[sp.id] = sp
+                        else:
+                            sec_ids = [s.id for s in sibling_sections]
+                            if sec.id in sec_ids:
+                                sec_idx = sec_ids.index(sec.id)
+                                n_sec = len(sibling_sections)
+                                total = len(dept_students)
+                                chunk_size = (total + n_sec - 1) // n_sec
+                                start = sec_idx * chunk_size
+                                end = min(start + chunk_size, total)
+                                for sp in dept_students[start:end]:
+                                    students_by_id[sp.id] = sp
+            except Exception:
+                pass
+
+    # 4. Batch-based filtering if configured for this staff & subject
+    try:
+        from academics.models import StudentSubjectBatch as _SSB
+        batch_filter_qs = _SSB.objects.filter(
+            staff_id=ta.staff_id,
+            is_active=True,
+        )
+        if getattr(ta, 'academic_year_id', None):
+            batch_filter_qs = batch_filter_qs.filter(academic_year_id=ta.academic_year_id)
+        if getattr(ta, 'curriculum_row_id', None):
+            batch_filter_qs = batch_filter_qs.filter(curriculum_row_id=ta.curriculum_row_id)
+        else:
+            batch_filter_qs = batch_filter_qs.filter(curriculum_row__isnull=True)
+
+        user_batches = list(batch_filter_qs)
+        if user_batches:
+            batch_student_ids = set()
+            for ub in user_batches:
+                try:
+                    batch_student_ids.update(ub.students.values_list('id', flat=True))
+                except Exception:
+                    pass
+            if batch_student_ids:
+                students_by_id = {sid: sp for sid, sp in students_by_id.items() if sid in batch_student_ids}
+    except Exception:
+        pass
+
+    student_list = list(students_by_id.values())
+    student_list.sort(key=lambda s: str(getattr(s, 'reg_no', '') or '').lower())
+    return student_list
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def faculty_exam_marks(request, exam_id):
@@ -5273,13 +5410,8 @@ def faculty_exam_marks(request, exam_id):
             # Do not block faculty mark entry if live sync fails.
             pass
 
-        # Get all active students in the section
-        assignments = (
-            StudentSectionAssignment.objects
-            .filter(section=acad_sec, end_date__isnull=True)
-            .select_related('student__user', 'student__home_department')
-            .order_by('student__reg_no')
-        )
+        # Get all active students enrolled/assigned to this teaching assignment
+        active_student_profiles = _get_active_students_for_teaching_assignment(ta)
 
         # Load existing marks for this exam
         existing = {
@@ -5305,8 +5437,7 @@ def faculty_exam_marks(request, exam_id):
             active_snapshot = published_marks_map if ea.status in ('PUBLISHED', 'LOCKED') else draft_marks_map
 
         students = []
-        for sa in assignments:
-            sp = sa.student
+        for sp in active_student_profiles:
             sm = existing.get(str(sp.id))
             dm = draft_existing.get(str(sp.id))
             snapshot = active_snapshot.get(str(sp.id)) or draft_marks_map.get(str(sp.id)) or published_marks_map.get(str(sp.id))
@@ -6514,13 +6645,8 @@ def faculty_course_co_summary(request, ta_id):
     # merged per-CO on publish, and co_numbers now represents the union of all published
     # CQI COs. Wiping all entries based on a single CQI's CO-set is incorrect.
 
-    # Get all active students in the academic section
-    student_assignments = (
-        StudentSectionAssignment.objects
-        .filter(section=sec, end_date__isnull=True)
-        .select_related('student__user')
-        .order_by('student__reg_no')
-    )
+    # Get all active students enrolled/assigned to this teaching assignment
+    active_student_profiles = _get_active_students_for_teaching_assignment(ta)
 
     # Get all student marks across all exams at once
     all_marks = AcV2StudentMark.objects.filter(
@@ -6537,8 +6663,7 @@ def faculty_course_co_summary(request, ta_id):
         mark_lookup[sid][eid] = sm
 
     students_data = []
-    for sa in student_assignments:
-        sp = sa.student
+    for sp in active_student_profiles:
         sid = str(sp.id)
         student_entry = {
             'student_id': sid,
@@ -7483,12 +7608,7 @@ def faculty_exam_export_template(request, exam_id):
             })
 
     # Students
-    assignments = (
-        StudentSectionAssignment.objects
-        .filter(section=acad_sec, end_date__isnull=True)
-        .select_related('student__user')
-        .order_by('student__reg_no')
-    )
+    active_student_profiles = _get_active_students_for_teaching_assignment(ta)
     existing = {
         str(sm.student_id): sm
         for sm in AcV2StudentMark.objects.filter(exam_assignment=ea)
@@ -7549,8 +7669,7 @@ def faculty_exam_export_template(request, exam_id):
 
     # Data rows
     row_num = 4
-    for idx, sa in enumerate(assignments):
-        sp = sa.student
+    for idx, sp in enumerate(active_student_profiles):
         sm = existing.get(str(sp.id))
         reg_no = sp.reg_no or ''
         name = str(sp.user) if sp.user else reg_no
@@ -8351,17 +8470,12 @@ def faculty_exam_import_marks(request, exam_id):
 
     # Get students in section, build reg_no -> student map
     ta = ea.section.teaching_assignment
-    acad_sec = ta.section
-    assignments = (
-        StudentSectionAssignment.objects
-        .filter(section=acad_sec, end_date__isnull=True)
-        .select_related('student__user')
-    )
+    active_student_profiles = _get_active_students_for_teaching_assignment(ta)
     reg_to_student = {}
-    for sa in assignments:
-        rn = (sa.student.reg_no or '').strip().upper()
+    for sp in active_student_profiles:
+        rn = (sp.reg_no or '').strip().upper()
         if rn:
-            reg_to_student[rn] = sa.student
+            reg_to_student[rn] = sp
 
     # Read data rows (skip header and any sub-header row right after)
     start_row = header_row + 1

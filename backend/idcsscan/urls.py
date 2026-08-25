@@ -30,6 +30,8 @@ from idcsscan.views import (
     BioSecureSectionsListView,
     BioSecureStudentStatusView,
     BioSecureStudentLogsView,
+    BioSecureAdminLogsView,
+    BioSecureDeviceModeView,
 )
 
 urlpatterns = [
@@ -79,4 +81,6 @@ urlpatterns = [
     path('biosecure/sections/',      BioSecureSectionsListView.as_view(), name='idscan-biosecure-sections'),
     path('biosecure/student/status/', BioSecureStudentStatusView.as_view(), name='idscan-biosecure-student-status'),
     path('biosecure/student/logs/',  BioSecureStudentLogsView.as_view(),  name='idscan-biosecure-student-logs'),
+    path('biosecure/admin/logs/',    BioSecureAdminLogsView.as_view(),    name='idscan-biosecure-admin-logs'),
+    path('biosecure/device/mode/',   BioSecureDeviceModeView.as_view(),   name='idscan-biosecure-device-mode'),
 ]

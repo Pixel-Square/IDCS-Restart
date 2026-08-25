@@ -9,6 +9,9 @@ export interface PerformanceMetrics {
   total_exams_taken: number;
   overall_pass_pct: number;
   overall_marks_pct: number;
+  overall_attendance?: number;
+  overall_pass_count?: number;
+  overall_fail_count?: number;
 }
 
 export interface UserContext {
@@ -49,6 +52,8 @@ export interface DeptComparisonRow {
   pass_rate_pct: number;
   avg_marks_pct: number;
   total_records: number;
+  total_students?: number;
+  attendance_pct?: number;
 }
 
 export interface SubjectPerformanceRow {
@@ -90,6 +95,10 @@ export interface PerformanceAnalyticsResponse {
   pass_fail_trends: PassFailTrendRow[];
   weak_students: WeakStudentRow[];
   total_weak_students: number;
+  filter_options?: {
+    sections?: string[];
+    exam_types?: string[];
+  };
 }
 
 export interface StudentProgressReportResponse {
