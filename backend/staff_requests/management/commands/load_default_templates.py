@@ -145,20 +145,10 @@ class Command(BaseCommand):
                 "required": True
             },
             {
-                "name": "shift",
-                "type": "select",
-                "label": "Shift",
-                "required": True,
-                "options": ["FN", "AN"],
-                "help_text": "FN for forenoon, AN for afternoon"
-            },
-            {
-                "name": "late_duration",
-                "type": "select",
-                "label": "Late Duration",
-                "required": True,
-                "options": ["10 mins", "1 hr"],
-                "help_text": "10 mins is FN-only and auto-approves"
+                "name": "in_time",
+                "type": "time",
+                "label": "In Time",
+                "required": True
             }
         ]
         

@@ -5,7 +5,8 @@
   }
   ,
   "scripts": {
-    "parse-docx": "node parse_docx_mammoth.js"
+    "parse-docx": "node parse_docx_mammoth.js",
+    "push": "git add . && git commit -m \"updates\" && git push"
   }
 }
 

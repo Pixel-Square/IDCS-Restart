@@ -1709,10 +1709,10 @@ class SpecialCourseAssessmentEditRequestAdmin(admin.ModelAdmin):
 
 @admin.register(ExtStaffProfile)
 class ExtStaffProfileAdmin(admin.ModelAdmin):
-    list_display = ('ext_uid', 'get_username', 'get_full_name', 'designation', 'department', 'mobile', 'is_active')
-    search_fields = ('ext_uid', 'user__username', 'user__email', 'user__first_name', 'user__last_name', 'designation', 'department', 'mobile')
+    list_display = ('external_id', 'get_username', 'get_full_name', 'designation', 'department', 'mobile', 'is_active')
+    search_fields = ('external_id', 'user__username', 'user__email', 'user__first_name', 'user__last_name', 'designation', 'department', 'mobile')
     list_filter = ('is_active', 'department')
-    readonly_fields = ('ext_uid', 'created_at', 'updated_at')
+    readonly_fields = ('external_id', 'created_at', 'updated_at')
 
     def get_username(self, obj):
         return obj.user.username if obj.user else '-'

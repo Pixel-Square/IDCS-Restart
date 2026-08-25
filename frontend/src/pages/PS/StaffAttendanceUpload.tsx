@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, AlertCircle, CheckCircle, Clock, Calendar, Trash2, Plus, RefreshCw } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Clock, Calendar, Trash2, Plus } from 'lucide-react';
 import { getApiBase } from '../../services/apiBase';
 import { apiClient } from '../../services/auth';
 
@@ -42,7 +42,6 @@ interface Holiday {
   date: string;
   name: string;
   notes: string;
-  is_removable?: boolean;
   created_by_name: string;
   created_at: string;
   department_ids: number[];
@@ -54,13 +53,12 @@ interface Department {
   code: string;
   name: string;
   short_name: string;
-  is_teaching?: boolean;
 }
 
 interface StaffOption {
   user_id: number;
   username: string;
-  full_name: string | null;
+  full_name: string;
   staff_id: string | null;
   department: { id: number; code: string; short_name: string; name: string } | null;
 }
@@ -71,7 +69,7 @@ interface StaffTimeLimitOverride {
   user_info: {
     id: number;
     username: string;
-    full_name: string | null;
+    full_name: string;
     staff_id: string | null;
     department: { id: number; code: string; short_name: string; name: string } | null;
   };
@@ -82,61 +80,6 @@ interface StaffTimeLimitOverride {
   lunch_to: string | null;
   apply_time_based_absence: boolean;
   enabled: boolean;
-}
-
-interface EsslDeviceInfo {
-  label: string;
-  ip: string;
-  port: number;
-  reachable: boolean;
-  is_active: boolean;
-  probe_error?: string | null;
-  last_punch_at?: string | null;
-  last_seen_minutes?: number | null;
-  last_staff_id?: string;
-  last_direction?: string;
-  source?: string;
-}
-
-interface EsslRetrieveResponse {
-  success: boolean;
-  message?: string;
-  summary?: {
-    total_logs_checked: number;
-    matched_logs: number;
-    created_logs: number;
-    attendance_updates: number;
-    mapped_staff_total: number;
-    start_date?: string;
-    end_date?: string;
-  };
-  processed_from_date?: string | null;
-  processed_to_date?: string | null;
-  next_start_date?: string | null;
-  has_more?: boolean;
-  devices?: Array<{
-    label: string;
-    ip: string;
-    port: number;
-    connected: boolean;
-    logs_checked: number;
-    matched_logs: number;
-    created_logs: number;
-    attendance_updates: number;
-    error?: string | null;
-  }>;
-}
-
-interface EsslRunningSummary {
-  total_logs_checked: number;
-  matched_logs: number;
-  created_logs: number;
-  attendance_updates: number;
-  mapped_staff_total: number;
-  requested_start_date: string;
-  requested_end_date: string;
-  processed_from_date: string;
-  processed_to_date: string;
 }
 
 const StaffAttendanceUpload: React.FC = () => {
@@ -184,16 +127,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const [lunchToLimit, setLunchToLimit] = useState('');
   const [esslSkippingTime, setEsslSkippingTime] = useState(30);
   const [applyTimeLimits, setApplyTimeLimits] = useState(true);
-  const [attendanceSettingsId, setAttendanceSettingsId] = useState<number>(1);
   const [loadingSettings, setLoadingSettings] = useState(false);
-  const [esslDevices, setEsslDevices] = useState<EsslDeviceInfo[]>([]);
-  const [loadingEsslDevices, setLoadingEsslDevices] = useState(false);
-  const [retrievingEssl, setRetrievingEssl] = useState(false);
-  const [retrieveYear, setRetrieveYear] = useState(now.getFullYear());
-  const [retrieveMonth, setRetrieveMonth] = useState(now.getMonth() + 1);
-  const [retrieveDate, setRetrieveDate] = useState('');
-  const [esslRetrieveResult, setEsslRetrieveResult] = useState<EsslRetrieveResponse | null>(null);
-  const [esslRunningSummary, setEsslRunningSummary] = useState<EsslRunningSummary | null>(null);
 
   // Department-specific settings states
   const [deptSettings, setDeptSettings] = useState<any[]>([]);
@@ -229,14 +163,6 @@ const StaffAttendanceUpload: React.FC = () => {
   const [staffOverrides, setStaffOverrides] = useState<StaffTimeLimitOverride[]>([]);
   const [loadingStaffOverrides, setLoadingStaffOverrides] = useState(false);
 
-  const resolveDisplayName = (fullName?: string | null, username?: string | null, staffId?: string | null) => {
-    const cleaned = (fullName || '').trim();
-    if (cleaned) return cleaned;
-    if (username && username.trim()) return username.trim();
-    if (staffId && staffId.trim()) return staffId.trim();
-    return 'Unknown Staff';
-  };
-
   // Fetch holidays on component mount
   useEffect(() => {
     fetchHolidays();
@@ -244,7 +170,6 @@ const StaffAttendanceUpload: React.FC = () => {
     fetchDepartmentSettings();
     fetchDepartments();
     fetchStaffOverrides('');
-    fetchEsslSettings();
   }, []);
 
   useEffect(() => {
@@ -463,9 +388,6 @@ const StaffAttendanceUpload: React.FC = () => {
     try {
       const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/settings/current/`);
       const settings = response.data;
-
-      const resolvedSettingsId = Number(settings.global_settings_id ?? settings.id ?? 1);
-      setAttendanceSettingsId(Number.isNaN(resolvedSettingsId) ? 1 : resolvedSettingsId);
       
       // Convert time format from "HH:MM:SS" to "HH:MM"
       setInTimeLimit(settings.attendance_in_time_limit.substring(0, 5));
@@ -478,89 +400,6 @@ const StaffAttendanceUpload: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to fetch attendance settings:', err);
     }
-  };
-
-  const fetchEsslSettings = async () => {
-    try {
-      setLoadingEsslDevices(true);
-      const response = await apiClient.get(`${getApiBase()}/api/staff-attendance/csv-upload/essl_settings/`);
-      setEsslDevices(response.data?.devices || []);
-    } catch (err: any) {
-      console.error('Failed to fetch eSSL settings:', err);
-      setEsslDevices([]);
-    } finally {
-      setLoadingEsslDevices(false);
-    }
-  };
-
-  const mergeEsslState = (data: EsslRetrieveResponse) => {
-    setEsslRetrieveResult(data);
-    if (data.summary) {
-      setEsslRunningSummary((prev) => {
-        const requestedStartDate = data.summary?.start_date || prev?.requested_start_date || data.processed_from_date || '';
-        const requestedEndDate = data.summary?.end_date || prev?.requested_end_date || data.processed_to_date || '';
-        return {
-          total_logs_checked: data.summary?.total_logs_checked ?? prev?.total_logs_checked ?? 0,
-          matched_logs: data.summary?.matched_logs ?? prev?.matched_logs ?? 0,
-          created_logs: data.summary?.created_logs ?? prev?.created_logs ?? 0,
-          attendance_updates: data.summary?.attendance_updates ?? prev?.attendance_updates ?? 0,
-          mapped_staff_total: data.summary?.mapped_staff_total ?? prev?.mapped_staff_total ?? 0,
-          requested_start_date: requestedStartDate,
-          requested_end_date: requestedEndDate,
-          processed_from_date: data.processed_from_date || prev?.processed_from_date || requestedStartDate,
-          processed_to_date: data.processed_to_date || prev?.processed_to_date || requestedEndDate,
-        };
-      });
-    }
-  };
-
-  const handleRetrieveEsslData = async (startDate?: string) => {
-    try {
-      setRetrievingEssl(true);
-      if (!startDate) {
-        setEsslRetrieveResult(null);
-        setEsslRunningSummary(null);
-      }
-
-      const payload: Record<string, any> = {};
-      if (retrieveDate) {
-        payload.date = retrieveDate;
-      } else {
-        payload.year = retrieveYear;
-        payload.month = retrieveMonth;
-        payload.batch_days = 1;
-        if (startDate) {
-          payload.start_date = startDate;
-        }
-      }
-
-      const response = await apiClient.post(
-        `${getApiBase()}/api/staff-attendance/csv-upload/retrieve_essl_data/`,
-        payload,
-        { timeout: 600000 }
-      );
-
-      const data: EsslRetrieveResponse = response.data;
-      mergeEsslState(data);
-      await fetchEsslSettings();
-    } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Failed to retrieve eSSL data';
-      alert(msg);
-    } finally {
-      setRetrievingEssl(false);
-    }
-  };
-
-  const handleContinueEsslData = async () => {
-    if (!esslRetrieveResult?.next_start_date) {
-      return;
-    }
-    await handleRetrieveEsslData(esslRetrieveResult.next_start_date);
-  };
-
-  const handleStopEsslData = async () => {
-    setEsslRetrieveResult((current) => current ? { ...current, has_more: false } : current);
-    setRetrievingEssl(false);
   };
 
   const fetchDepartmentSettings = async () => {
@@ -668,7 +507,7 @@ const StaffAttendanceUpload: React.FC = () => {
   const handleSaveSettings = async () => {
     setLoadingSettings(true);
     try {
-      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/${attendanceSettingsId}/`, {
+      await apiClient.patch(`${getApiBase()}/api/staff-attendance/settings/1/`, {
         attendance_in_time_limit: `${inTimeLimit}:00`,
         attendance_out_time_limit: `${outTimeLimit}:00`,
         lunch_from: lunchFromLimit ? `${lunchFromLimit}:00` : null,
@@ -678,7 +517,6 @@ const StaffAttendanceUpload: React.FC = () => {
       });
       
       alert('Attendance settings saved successfully!');
-      await fetchAttendanceSettings();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save settings');
     } finally {
@@ -1545,7 +1383,7 @@ const StaffAttendanceUpload: React.FC = () => {
               <option value="">Select a staff</option>
               {staffOptions.map((s) => (
                 <option key={s.user_id} value={s.user_id}>
-                  {(s.staff_id || s.username)} — {resolveDisplayName(s.full_name, s.username, s.staff_id)}
+                  {(s.staff_id || s.username)} — {s.full_name}
                 </option>
               ))}
             </select>
@@ -1655,7 +1493,7 @@ const StaffAttendanceUpload: React.FC = () => {
                   >
                     <div className="flex-1">
                       <div className="text-sm font-semibold text-gray-900">
-                        {(o.user_info.staff_id || o.user_info.username)} — {resolveDisplayName(o.user_info.full_name, o.user_info.username, o.user_info.staff_id)}
+                        {(o.user_info.staff_id || o.user_info.username)} — {o.user_info.full_name}
                       </div>
                       <div className="text-xs text-gray-600 mt-0.5">
                         Dept: {o.user_info.department?.short_name || o.user_info.department?.code || '-'}
@@ -1815,165 +1653,6 @@ const StaffAttendanceUpload: React.FC = () => {
               <strong> only if</strong> their department doesn't have a specific configuration. Departments with specific 
               Type configurations will use those limits instead.
             </p>
-          </div>
-        </div>
-      </div>
-
-      {/* eSSL Settings and Retrieval Section */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
-        <div className="px-6 py-4 border-b border-gray-200 bg-cyan-50">
-          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <RefreshCw className="h-5 w-5 text-cyan-700" />
-            eSSL Settings
-          </h2>
-          <p className="text-sm text-gray-600 mt-1">
-            Connected eSSL devices and manual retrieval trigger for monthly/date-wise attendance pull.
-          </p>
-        </div>
-
-        <div className="p-6 space-y-6">
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={fetchEsslSettings}
-              disabled={loadingEsslDevices}
-              className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-cyan-300 text-cyan-700 bg-white hover:bg-cyan-50 disabled:opacity-60"
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loadingEsslDevices ? 'animate-spin' : ''}`} />
-              Refresh Device Status
-            </button>
-          </div>
-
-          {loadingEsslDevices ? (
-            <div className="text-sm text-gray-500">Loading eSSL devices...</div>
-          ) : esslDevices.length === 0 ? (
-            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
-              No eSSL devices configured.
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {esslDevices.map((dev) => (
-                <div key={dev.label} className="border rounded-lg p-3 flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">{dev.label}</div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      IP: {dev.ip} | Port: {dev.port}
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      Last Punch: {dev.last_punch_at ? new Date(dev.last_punch_at).toLocaleString() : '-'}
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">
-                      Last Staff: {dev.last_staff_id || '-'} | Direction: {dev.last_direction || '-'}
-                    </div>
-                    {dev.probe_error && (
-                      <div className="text-xs text-red-600 mt-1">Connection: {dev.probe_error}</div>
-                    )}
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full font-semibold ${dev.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
-                  >
-                    {dev.is_active ? 'ACTIVE' : 'INACTIVE'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="border-t pt-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Retrieval Section</h3>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Year</label>
-                <input
-                  type="number"
-                  min="2000"
-                  max="2100"
-                  value={retrieveYear}
-                  onChange={(e) => setRetrieveYear(parseInt(e.target.value || String(now.getFullYear()), 10))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                  disabled={Boolean(retrieveDate)}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Month</label>
-                <select
-                  value={retrieveMonth}
-                  onChange={(e) => setRetrieveMonth(parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                  disabled={Boolean(retrieveDate)}
-                >
-                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map((month, i) => (
-                    <option key={i + 1} value={i + 1}>{month}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Date (Optional)</label>
-                <input
-                  type="date"
-                  value={retrieveDate}
-                  onChange={(e) => setRetrieveDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={() => handleRetrieveEsslData()}
-                  disabled={retrievingEssl}
-                  className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-cyan-700 hover:bg-cyan-800 disabled:opacity-60"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${retrievingEssl ? 'animate-spin' : ''}`} />
-                  {retrievingEssl ? 'Retrieving...' : 'Retrieve Data'}
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              If date is selected, retrieval runs only for that date. Otherwise it retrieves for the selected year and month.
-            </p>
-
-            {esslRetrieveResult?.summary && (
-              <div className="mt-3 bg-cyan-50 border border-cyan-200 rounded p-3 text-sm text-cyan-900">
-                <div className="font-semibold mb-1">Retrieval Summary</div>
-                <div>Logs Checked: {esslRunningSummary?.total_logs_checked ?? esslRetrieveResult.summary.total_logs_checked}</div>
-                <div>Matched Logs: {esslRunningSummary?.matched_logs ?? esslRetrieveResult.summary.matched_logs}</div>
-                <div>New Logs Created: {esslRunningSummary?.created_logs ?? esslRetrieveResult.summary.created_logs}</div>
-                <div>Attendance Updated: {esslRunningSummary?.attendance_updates ?? esslRetrieveResult.summary.attendance_updates}</div>
-                <div>Mapped Staff Count: {esslRunningSummary?.mapped_staff_total ?? esslRetrieveResult.summary.mapped_staff_total}</div>
-                <div className="mt-2 text-xs text-cyan-800">
-                  Retrieved Range: {(esslRunningSummary?.processed_from_date || esslRetrieveResult.processed_from_date || esslRetrieveResult.summary.start_date || '-')}
-                  {' '}to{' '}
-                  {(esslRunningSummary?.processed_to_date || esslRetrieveResult.processed_to_date || esslRetrieveResult.summary.end_date || '-')}
-                </div>
-                {esslRetrieveResult.next_start_date && (
-                  <div className="mt-1 text-xs text-cyan-800">
-                    Next Range Starts: {esslRetrieveResult.next_start_date}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {esslRetrieveResult?.has_more && esslRetrieveResult.next_start_date && (
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleContinueEsslData}
-                  disabled={retrievingEssl}
-                  className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md text-white bg-cyan-700 hover:bg-cyan-800 disabled:opacity-60"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-2 ${retrievingEssl ? 'animate-spin' : ''}`} />
-                  Continue
-                </button>
-                <button
-                  type="button"
-                  onClick={handleStopEsslData}
-                  disabled={retrievingEssl}
-                  className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
-                >
-                  Stop
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -2146,57 +1825,24 @@ const StaffAttendanceUpload: React.FC = () => {
                   {allDepartments.length === 0 ? (
                     <p className="text-xs text-gray-400">Loading departments...</p>
                   ) : (
-                    <div className="max-h-52 overflow-y-auto border border-gray-200 rounded-md p-2 bg-white space-y-2">
-                      {/* Teaching departments */}
-                      {allDepartments.some(d => d.is_teaching !== false) && (
-                        <div>
-                          <p className="text-xs font-semibold text-blue-700 mb-1">Teaching Departments</p>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                            {allDepartments.filter(d => d.is_teaching !== false).map((dept) => (
-                              <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                                <input
-                                  type="checkbox"
-                                  checked={holidayDeptIds.includes(dept.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setHolidayDeptIds(prev => [...prev, dept.id]);
-                                    } else {
-                                      setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
-                                    }
-                                  }}
-                                  className="h-4 w-4 text-blue-600 border-gray-300 rounded"
-                                />
-                                <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {/* Non-teaching departments */}
-                      {allDepartments.some(d => d.is_teaching === false) && (
-                        <div>
-                          <p className="text-xs font-semibold text-orange-700 mb-1">Non-Teaching Departments</p>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                            {allDepartments.filter(d => d.is_teaching === false).map((dept) => (
-                              <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
-                                <input
-                                  type="checkbox"
-                                  checked={holidayDeptIds.includes(dept.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setHolidayDeptIds(prev => [...prev, dept.id]);
-                                    } else {
-                                      setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
-                                    }
-                                  }}
-                                  className="h-4 w-4 text-orange-600 border-gray-300 rounded"
-                                />
-                                <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-44 overflow-y-auto border border-gray-200 rounded-md p-2 bg-white">
+                      {allDepartments.map((dept) => (
+                        <label key={dept.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                          <input
+                            type="checkbox"
+                            checked={holidayDeptIds.includes(dept.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setHolidayDeptIds(prev => [...prev, dept.id]);
+                              } else {
+                                setHolidayDeptIds(prev => prev.filter(id => id !== dept.id));
+                              }
+                            }}
+                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                          />
+                          <span className="text-gray-700" title={dept.name}>{dept.short_name || dept.code}</span>
+                        </label>
+                      ))}
                     </div>
                   )}
                   {holidayDeptIds.length > 0 && (
@@ -2252,78 +1898,59 @@ const StaffAttendanceUpload: React.FC = () => {
               <p className="text-sm text-gray-400 mt-1">Add holidays to skip attendance processing for those dates</p>
             </div>
           ) : (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-600">
-                  {holidays.length} holiday{holidays.length !== 1 ? 's' : ''} marked
-                </span>
+            <div className="space-y-2">
+              <div className="text-sm text-gray-600 mb-3">
+                {holidays.length} holiday{holidays.length !== 1 ? 's' : ''} marked
               </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="max-h-80 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
-                      <tr>
-                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 uppercase tracking-wide">Date</th>
-                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 uppercase tracking-wide">Name</th>
-                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 uppercase tracking-wide hidden sm:table-cell">Scope</th>
-                        <th className="text-left px-3 py-2 text-xs font-semibold text-gray-600 uppercase tracking-wide hidden md:table-cell">Added By</th>
-                        <th className="px-3 py-2 w-10"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 bg-white">
-                      {holidays.map((holiday) => (
-                        <tr key={holiday.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <span className="font-mono text-xs bg-blue-50 text-blue-800 px-1.5 py-0.5 rounded">
-                              {new Date(holiday.date).toLocaleDateString('en-IN', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                              })}
+              {holidays.map((holiday) => (
+                <div
+                  key={holiday.id}
+                  className="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-blue-600" />
+                        <span className="font-medium text-gray-900">{holiday.name}</span>
+                      </div>
+                      <div className="mt-1 text-sm text-gray-600">
+                        <span className="font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                          {new Date(holiday.date).toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'short', 
+                            day: 'numeric' 
+                          })}
+                        </span>
+                      </div>
+                      {holiday.notes && (
+                        <p className="mt-2 text-sm text-gray-600">{holiday.notes}</p>
+                      )}
+                      {/* Department scope badge */}
+                      {(holiday.departments_info?.length || 0) > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {holiday.departments_info.map(d => (
+                            <span key={d.id} className="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-0.5 rounded">
+                              {d.short_name || d.code}
                             </span>
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="font-medium text-gray-900">{holiday.name}</div>
-                            {holiday.notes && (
-                              <div className="text-xs text-gray-500 truncate max-w-[160px]" title={holiday.notes}>{holiday.notes}</div>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 hidden sm:table-cell">
-                            {(holiday.departments_info?.length || 0) > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {holiday.departments_info.slice(0, 3).map(d => (
-                                  <span key={d.id} className="inline-block bg-purple-100 text-purple-800 text-xs px-1.5 py-0.5 rounded">
-                                    {d.short_name || d.code}
-                                  </span>
-                                ))}
-                                {holiday.departments_info.length > 3 && (
-                                  <span className="text-xs text-gray-500">+{holiday.departments_info.length - 3}</span>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="inline-block bg-green-100 text-green-800 text-xs px-1.5 py-0.5 rounded">All depts</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-2 hidden md:table-cell">
-                            <span className="text-xs text-gray-500">{holiday.created_by_name}</span>
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            {holiday.is_removable && (
-                              <button
-                                onClick={() => handleDeleteHoliday(holiday.id)}
-                                className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                                title="Delete holiday"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="mt-2 inline-block bg-green-100 text-green-800 text-xs px-2 py-0.5 rounded">All departments</span>
+                      )}
+                      <p className="mt-1 text-xs text-gray-500">
+                        Added by {holiday.created_by_name} on {new Date(holiday.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleDeleteHoliday(holiday.id)}
+                      className="ml-4 p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                      title="Delete holiday"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
           )}
         </div>

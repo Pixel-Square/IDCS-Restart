@@ -1,6 +1,6 @@
 from rest_framework import serializers
-from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping, ElectivePoll, ElectivePollSubject
-from academics.models import Department, Semester, Batch, BatchYear, AcademicYear, StaffProfile
+from .models import CurriculumMaster, CurriculumDepartment, ElectiveSubject, DepartmentGroup, DepartmentGroupMapping
+from academics.models import Department, Semester, Batch, BatchYear, AcademicYear
 
 
 class BatchSmallSerializer(serializers.ModelSerializer):
@@ -116,23 +116,6 @@ class CurriculumDepartmentSerializer(serializers.ModelSerializer):
         # Respect model-level protection; model.save will raise ValidationError if not allowed
         user = self.context['request'].user
         validated_data['created_by'] = instance.created_by or user
-
-        # Auto-populate enabled_assessments when switching to SPECIAL class type
-        # without explicitly providing assessments (prevents validation error).
-        new_ct = str(validated_data.get('class_type', instance.class_type) or '').upper()
-        if new_ct == 'SPECIAL':
-            ea = validated_data.get('enabled_assessments', None)
-            # If not provided in PATCH payload, check existing value on instance
-            if ea is None:
-                ea = instance.enabled_assessments
-            if not ea:
-                # Default to all SPECIAL assessment options
-                from curriculum.models import SPECIAL_ASSESSMENT_CHOICES
-                validated_data['enabled_assessments'] = [k for k, _ in SPECIAL_ASSESSMENT_CHOICES]
-        elif 'class_type' in validated_data and new_ct != 'SPECIAL':
-            # Clear enabled_assessments when switching away from SPECIAL
-            validated_data.setdefault('enabled_assessments', [])
-
         # If a non-IQAC/HAA user edits, mark approval_status as PENDING and clear approver
         request = self.context['request']
         u = request.user
@@ -155,18 +138,14 @@ class DepartmentGroupSmallSerializer(serializers.ModelSerializer):
 class DepartmentGroupSerializer(serializers.ModelSerializer):
     """Full serializer for DepartmentGroup with mapping info."""
     department_count = serializers.SerializerMethodField()
-    department_ids = serializers.SerializerMethodField()
     
     class Meta:
         model = DepartmentGroup
-        fields = ('id', 'code', 'name', 'description', 'is_active', 'department_count', 'department_ids', 'created_at', 'updated_at')
+        fields = ('id', 'code', 'name', 'description', 'is_active', 'department_count', 'created_at', 'updated_at')
         read_only_fields = ('created_at', 'updated_at')
     
     def get_department_count(self, obj):
         return obj.department_mappings.filter(is_active=True).count()
-
-    def get_department_ids(self, obj):
-        return list(obj.department_mappings.filter(is_active=True).values_list('department_id', flat=True))
 
 
 class ElectiveSubjectSerializer(serializers.ModelSerializer):
@@ -202,7 +181,6 @@ class ElectiveSubjectSerializer(serializers.ModelSerializer):
             'total_hours', 'question_paper_type', 'editable', 'overridden',
             'approval_status', 'approved_by', 'approved_at',
             'student_count', 'is_cross_department', 'owner_department_name',
-            'blocked_departments',
             'created_by', 'created_at', 'updated_at'
         ]
         read_only_fields = ('created_by', 'created_at', 'updated_at', 'student_count', 'is_cross_department', 'owner_department_name', 'parent_name', 'parent_is_dept_core', 'parent_department_id')
@@ -342,136 +320,3 @@ class ElectiveChoiceSerializer(serializers.Serializer):
             'username': getattr(user, 'username', None),
             'academic_year': getattr(academic_year, 'name', None),
         }
-
-
-class ElectivePollSubjectSerializer(serializers.ModelSerializer):
-    elective_subject_id = serializers.IntegerField(source='elective_subject.id', read_only=True)
-    staff_id = serializers.PrimaryKeyRelatedField(
-        queryset=StaffProfile.objects.all(), source='staff', write_only=True, required=False, allow_null=True
-    )
-    # Read fields
-    course_code = serializers.CharField(source='elective_subject.course_code', read_only=True)
-    course_name = serializers.CharField(source='elective_subject.course_name', read_only=True)
-    department_name = serializers.CharField(source='elective_subject.department.name', read_only=True, default=None)
-    department_code = serializers.CharField(source='elective_subject.department.short_name', read_only=True, default=None)
-    department_id = serializers.IntegerField(source='elective_subject.department.id', read_only=True, default=None)
-    semester = serializers.IntegerField(source='elective_subject.semester.number', read_only=True, default=None)
-    staff_name = serializers.SerializerMethodField()
-
-    blocked_departments = serializers.PrimaryKeyRelatedField(many=True, read_only=True, source='elective_subject.blocked_departments')
-    
-    class Meta:
-        model = ElectivePollSubject
-        fields = [
-            'id', 'elective_subject_id', 'staff_id',
-            'course_code', 'course_name', 'department_name', 'department_code', 'department_id',
-            'semester', 'seats', 'staff_name', 'blocked_departments', 'is_active'
-        ]
-
-    def get_staff_name(self, obj):
-        if obj.staff:
-            return getattr(obj.staff.user, 'get_full_name', lambda: '')() or obj.staff.user.username
-        return None
-
-
-class ElectivePollSerializer(serializers.ModelSerializer):
-    poll_subjects = ElectivePollSubjectSerializer(many=True, read_only=True)
-    batch_year_name = serializers.CharField(source='batch_year.name', read_only=True, default=None)
-    department_group_name = serializers.CharField(source='department_group.name', read_only=True, default=None)
-    semester = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-    
-    # Nested field for creating subjects
-    subjects = serializers.ListField(
-        child=serializers.DictField(),
-        write_only=True,
-        required=False
-    )
-
-    class Meta:
-        model = ElectivePoll
-        fields = [
-            'id', 'parent_elective_name', 'batch_year', 'batch_year_name',
-            'department_group', 'department_group_name',
-            'is_active', 'created_at', 'updated_at', 'poll_subjects', 'subjects', 'semester'
-        ]
-        read_only_fields = ('created_at', 'updated_at', 'poll_subjects', 'batch_year_name', 'department_group_name')
-
-    def create(self, validated_data):
-        from django.db.models import Q
-        from django.db import transaction, IntegrityError
-        from .models import CurriculumDepartment, ElectiveSubject, ElectivePollSubject
-
-        subjects_data = validated_data.pop('subjects', [])
-        semester_num = validated_data.pop('semester', None)
-        with transaction.atomic():
-            poll = ElectivePoll.objects.create(**validated_data)
-
-            # Attempt to find the parent CurriculumDepartment to create new ElectiveSubjects
-            parent_name = poll.parent_elective_name
-            batch_year = poll.batch_year
-            for sub_data in subjects_data:
-                es_id = sub_data.get('elective_subject_id')
-
-                if not es_id:
-                    dept_id = sub_data.get('dept_id')
-                    code = sub_data.get('code')
-                    name = sub_data.get('name')
-                    if not dept_id:
-                        raise serializers.ValidationError({'subjects': 'Providing department is required for new elective subjects.'})
-                    if not code and not name:
-                        raise serializers.ValidationError({'subjects': 'Each subject needs a code or name.'})
-
-                    parent_qs = CurriculumDepartment.objects.filter(
-                        Q(course_name=parent_name) | Q(course_code=parent_name),
-                        is_elective=True,
-                        department_id=dept_id,
-                    )
-                    if batch_year:
-                        parent_qs = parent_qs.filter(Q(batch=batch_year) | Q(batch__isnull=True))
-                    if semester_num:
-                        parent_qs = parent_qs.filter(semester__number=semester_num)
-                    parent_row = parent_qs.order_by('-semester__number', '-id').first()
-                    if not parent_row:
-                        raise serializers.ValidationError({
-                            'subjects': 'Parent elective not found for the selected department/batch/semester. Provide elective_subject_id or ensure the parent elective exists.'
-                        })
-
-                    # Normalise blank course_code to None so multiple codeless subjects
-                    # under the same parent don't trip the unique_together constraint.
-                    normalised_code = code.strip() if code and code.strip() else None
-
-                    try:
-                        es = ElectiveSubject.objects.create(
-                            parent=parent_row,
-                            department_id=dept_id,
-                            department_group_id=getattr(poll.department_group, 'id', None),
-                            regulation=parent_row.regulation,
-                            semester=parent_row.semester,
-                            batch=batch_year or parent_row.batch,
-                            course_code=normalised_code,
-                            course_name=name,
-                            is_elective=True,
-                            approval_status='APPROVED',
-                            created_by=self.context['request'].user
-                        )
-                    except IntegrityError:
-                        raise serializers.ValidationError({
-                            'subjects': f'A subject with code "{normalised_code or name}" already exists under this parent elective. Use a unique course code.'
-                        })
-
-                    # Set blocked departments if provided
-                    blocked_depts = sub_data.get('blocked_departments', [])
-                    if blocked_depts:
-                        es.blocked_departments.set(blocked_depts)
-
-                    es_id = es.id
-
-                if es_id:
-                    ElectivePollSubject.objects.create(
-                        poll=poll,
-                        elective_subject_id=es_id,
-                        seats=sub_data.get('seats'),
-                        staff_id=sub_data.get('staff_id'),
-                        is_active=False
-                    )
-            return poll

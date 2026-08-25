@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import fetchWithAuth from '../../services/fetchAuth';
 import useDashboard from '../../hooks/useDashboard';
-import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, MapPin, Building2, Fingerprint } from 'lucide-react';
+import { User, BookOpen, Layout, Grid, Home, GraduationCap, Users, Calendar, ClipboardList, Upload, Bell, CalendarClock, MessageSquare, Settings, BarChart2, PartyPopper, FileText, ScanLine, Shield, MessageCircle, ChevronDown, ChevronRight, UserCheck, Wallet, Fingerprint, BarChart3, Link2, PieChart, TrendingUp, Eye } from 'lucide-react';
+
 import { useSidebar } from './SidebarContext';
 import { ApplicationsNavResponse, fetchApplicationsNav } from '../../services/applications';
 import { useAttendanceNotificationCount } from '../../hooks/useAttendanceNotificationCount';
@@ -29,7 +30,6 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   staff_timetable: Calendar,
   student_attendance: ClipboardList,
   student_academics: GraduationCap,
-  student_hall_plan: Building2,
   period_attendance: ClipboardList,
   obe: BookOpen,
   obe_master: BookOpen,
@@ -40,12 +40,13 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   hod_events: PartyPopper,
   iqac_event_approvals: PartyPopper,
   academic_controller: Layout,
-  academic_performance: BookOpen,
-  academic_visuals: BarChart2,
   notifications: Bell,
   academic_calendar: Calendar,
   pbas: ClipboardList,
   pbas_manager: Layout,
+  pbas_admin: ClipboardList,
+  pbas_approvals: UserCheck,
+  pbas_submission: ClipboardList,
   settings: Settings,
   hr_request_templates: FileText,
   hr_manage_gate: Shield,
@@ -58,9 +59,11 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   applications_inbox: ClipboardList,
   applications_home: Layout,
   external_management: Users,
+  lms: BookOpen,
   idscan_test: ScanLine,
   idscan_gatepass: Shield,
   idscan_gatescan: Shield,
+  idscan_fingerprint: Fingerprint,
   rf_reader: Grid,
   feedback: MessageCircle,
   announcements: Bell,
@@ -79,16 +82,16 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   coe_bar_scan_entry: ScanLine,
   coe_retrival: FileText,
   coe_one_page_report: FileText,
-  hall_selection: MapPin,
-  idscan_fingerprint: Fingerprint,
+  // Academic 2.1
+  academic_v2: BookOpen,
   academic_v2_admin: Layout,
-  academic_v2_faculty: BookOpen,
-  academic_v2_student: GraduationCap,
-  biosecure_admin: Shield,
-  student_biosecure: Shield,
+  // Visual Admin & Performance
+  visual_admin_dashboard: BarChart3,
+  academic_visuals: PieChart,
+  academic_performance: TrendingUp,
 };
 
-export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string }) {
+export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
   const { data, loading, error } = useDashboard(baseUrl);
   const loc = useLocation();
 
@@ -329,16 +332,59 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   const entry = data.entry_points || {};
 
-  const items: Array<{ key: string; label: string; to: string; icon?: any }> = [];
-  const permsLower = (data.permissions || []).map(p => (p || '').toString().toLowerCase());
-  const rolesUpper = (data.roles || []).map(r => (r || '').toString().toUpperCase());
-  const emailLower = String((data as any).email || '').toLowerCase().trim();
-  const flags = data.flags || {};
+  const userRoles = (Array.isArray(user?.roles) ? user.roles : []).map((r: any) =>
+    (typeof r === 'string' ? r : r?.name || '').toString().toUpperCase()
+  );
+  const userPerms = (Array.isArray(user?.permissions) ? user.permissions : []).map((p: any) =>
+    (typeof p === 'string' ? p : p?.code || '').toString().toLowerCase()
+  );
+
+  const permsLower = Array.from(
+    new Set([
+      ...(data.permissions || []).map((p) => (p || '').toString().toLowerCase()),
+      ...userPerms,
+    ])
+  );
+  const rolesUpper = Array.from(
+    new Set([
+      ...(data.roles || []).map((r) => (r || '').toString().toUpperCase()),
+      ...userRoles,
+      ...(user?.role ? [String(user.role).toUpperCase()] : []),
+    ])
+  );
+  const emailLower = String((data as any).email || user?.email || '').toLowerCase().trim();
+  const flags = { ...(data.flags || {}), ...(user?.flags || {}) };
   const isIqac = rolesUpper.includes('IQAC');
-  const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || '').trim() === '000000'));
+  const isIqacMain = Boolean((data as any)?.is_iqac_main === true || (isIqac && String((data as any)?.username || user?.username || '').trim() === '000000'));
   const canPbasManage = rolesUpper.some((r) => ['IQAC', 'ADMIN', 'PRINCIPAL', 'PS'].includes(r));
 
-  
+  const items: Array<{ key: string; label: string; to: string; icon?: any }> = [];
+
+  // PBAS Module Navigation Items (Admin, Approvals, Submission)
+  const pbasAdminRoles = ['PBAS_ADMIN', 'PBASADMIN', 'PBAS_MANAGER', 'IQAC', 'ADMIN'];
+  const canAccessPbasAdmin =
+    rolesUpper.some((role) => pbasAdminRoles.includes(role)) ||
+    permsLower.includes('pbas.admin') ||
+    permsLower.includes('pbas.manage');
+
+  if (canAccessPbasAdmin && !items.some((item) => item.key === 'pbas_admin')) {
+    items.push({ key: 'pbas_admin', label: 'PBAS Admin', to: '/pbas/admin' });
+  }
+
+  const pbasApprovalRoles = ['PBAS_APPROVER', 'PBAS_ADMIN', 'PBAS_MANAGER', 'PBASADMIN', 'IQAC', 'ADMIN', 'PRINCIPAL', 'PS'];
+  const canAccessPbasApprovals =
+    rolesUpper.some((role) => pbasApprovalRoles.includes(role)) ||
+    permsLower.includes('pbas.approve') ||
+    permsLower.includes('pbas.approver');
+
+  if (canAccessPbasApprovals && !items.some((item) => item.key === 'pbas_approvals')) {
+    items.push({ key: 'pbas_approvals', label: 'PBAS Approvals', to: '/pbas/approvals' });
+  }
+
+  // PBAS submission for staff and students
+  if ((flags.is_staff || flags.is_student || rolesUpper.includes('STAFF') || rolesUpper.includes('STUDENT')) && !items.some((item) => item.key === 'pbas_submission')) {
+    items.push({ key: 'pbas_submission', label: 'PBAS Submission', to: '/pbas/staff' });
+  }
 
   // Curriculum master/department: require explicit curriculum permissions if present, otherwise rely on entry point
   if (entry.curriculum_master && (permsLower.some(p => p.includes('curriculum')) || entry.curriculum_master)) items.push({ key: 'curriculum_master', label: 'Curriculum Master', to: '/curriculum/master' });
@@ -416,6 +462,23 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'coe_one_page_report', label: 'One Page Report', to: '/coe/one-page-report' });
   }
 
+  // LMS page visibility via lms.page.* permissions
+  if (
+    permsLower.includes('lms.page.student') ||
+    permsLower.includes('lms.page.staff') ||
+    permsLower.includes('lms.page.hod') ||
+    permsLower.includes('lms.page.ahod') ||
+    permsLower.includes('lms.page.iqac') ||
+    rolesUpper.includes('STUDENT') ||
+    rolesUpper.includes('STAFF') ||
+    rolesUpper.includes('FACULTY') ||
+    rolesUpper.includes('HOD') ||
+    rolesUpper.includes('AHOD') ||
+    rolesUpper.includes('IQAC')
+  ) {
+    items.push({ key: 'lms', label: 'LMS', to: '/lms' });
+  }
+
   // Advisor pages: require ADVISOR role or explicit permission
   // Mentor assignment: advisors with assign permission
   if (rolesUpper.includes('ADVISOR') || permsLower.includes('academics.assign_mentor')) items.push({ key: 'mentor_assign', label: 'Mentor Assign', to: '/advisor/mentor' });
@@ -433,10 +496,13 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
 
   // Student: show My Attendance link for students
   if (flags.is_student) {
-    items.push({ key: 'student_academics', label: 'My Marks', to: '/student/academics' });
+    items.push({ key: 'student_academics', label: 'My Marks', to: '/academic-v2/student/dashboard' });
     items.push({ key: 'student_attendance', label: 'My Attendance', to: '/student/attendance' });
-    items.push({ key: 'student_biosecure', label: 'BioSecure Logs', to: '/biosecure/student/logs' });
-    items.push({ key: 'student_hall_plan', label: 'Hall Plan', to: '/student/hall-plan' });
+  }
+
+  // Staff: Academic 2.1 faculty pages
+  if (flags.is_staff && permsLower.includes('academic_v2.page.staff') && !items.some((item) => item.key === 'academic_v2')) {
+    items.push({ key: 'academic_v2', label: 'Academic 2.1', to: '/academic-v2/courses' });
   }
 
   // Staff assigned subjects page
@@ -444,13 +510,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'assigned_subjects', label: 'Assigned Subjects', to: '/staff/assigned-subjects' });
   }
 
-  if (flags.is_staff && !items.some((item) => item.key === 'hall_selection')) {
-    items.push({ key: 'hall_selection', label: 'Hall Selection', to: '/hall-selection' });
-  }
-
-  // PBAS submission for staff
-  if (flags.is_staff) {
-  }
 
   // My Calendar for staff (combined attendance + requests)
   if (flags.is_staff) {
@@ -484,7 +543,10 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   // fallback: always show profile
   items.unshift({ key: 'profile', label: 'Profile', to: '/profile' });
 
-  // Academic Calendar intentionally hidden from sidebar for all users
+  // Academic Calendar (IQAC only)
+  if (isIqac && !items.some((item) => item.key === 'academic_calendar')) {
+    items.push({ key: 'academic_calendar', label: 'Academic Calendar', to: '/iqac/calendar' });
+  }
 
   // Settings (IQAC only) – includes Notification Templates and WhatsApp config
   if (isIqac && !items.some((item) => item.key === 'settings')) {
@@ -502,6 +564,11 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   if (flags.is_staff && !items.some(item => item.key === 'academic')) {
     items.push({ key: 'academic', label: 'Academic', to: '/academic' });
   }
+
+  // Academic 2.1 Admin for IQAC - collapsible group
+  if (isIqac && !items.some(item => item.key === 'academic_v2_admin')) {
+    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 Admin', to: '/academic-v2/admin' });
+  }
   if (isIqac && !items.some((item) => item.key === 'academic_controller')) {
     items.push({ key: 'academic_controller', label: 'Academic Controller', to: '/iqac/academic-controller' });
   }
@@ -514,7 +581,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
   const isSecurity = rolesUpper.includes('SECURITY');
   const isLibrary = rolesUpper.includes('LIBRARY');
   
-  // LIBRARY role: only Profile and Assign Cards, Bulk Entry, Cards Data, and Fingerprint Enroll
+  // LIBRARY role: only Profile and Assign Cards
   if (isLibrary) {
     // Remove all items except Profile that was added via unshift
     const profileItem = items.find(i => i.key === 'profile');
@@ -529,10 +596,9 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'idscan_assign_cards', label: 'RFID Card Assignment', to: '/idscan/assign-cards' });
     items.push({ key: 'idscan_bulk_entry', label: 'Bulk RFID Entry', to: '/idscan/bulk-entry' });
     items.push({ key: 'idscan_cards_data', label: 'Cards Data', to: '/idscan/cards-data' });
-    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
-    items.push({ key: 'biosecure_admin', label: 'BioSecure Batches', to: '/biosecure/admin' });
     items.push({ key: 'idscan_gatepass', label: 'Gatepass Scanner',   to: '/idscan/gatepass' });
     items.push({ key: 'idscan_gatescan', label: 'GateScan', to: '/idscan/gatescan' });
+    items.push({ key: 'idscan_fingerprint', label: 'Fingerprint Enroll', to: '/idscan/fingerprint' });
   }
   if (!isSecurity && applicationsNav?.show_applications && !items.some((item) => item.key === 'applications_home')) {
     items.push({ key: 'applications_home', label: 'My Applications', to: '/applications' });
@@ -542,10 +608,6 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     Boolean(applicationsNav?.show_applications) &&
     ((applicationsNav?.staff_roles?.length || 0) > 0 || (applicationsNav?.override_roles?.length || 0) > 0) &&
     !flags.is_student;
-  if (canPbasManage && !items.some((item) => item.key === 'pbas_manager')) {
-    items.push({ key: 'pbas_manager', label: 'PBAS Manager', to: '/iqac/pbas' });
-  }
-
   // IQAC External Management
   if (isIqac && !items.some((item) => item.key === 'external_management')) {
     items.push({ key: 'external_management', label: 'External Management', to: '/iqac/external-management' });
@@ -610,39 +672,21 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
     items.push({ key: 'academic_performance', label: 'Academic Performance', to: '/academic-performance' });
   }
 
-  // Academic Visuals (accessible to multiple roles)
-  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN');
-  const canSeeAcademicVisuals = isVisualAdmin || rolesUpper.some(r => ['PRINCIPAL', 'IQAC', 'ADMIN', 'SUPER_ADMIN'].includes(r));
-  if (canSeeAcademicVisuals) {
+  // Visual Admin & Academic Visuals entries
+  const isVisualAdmin = rolesUpper.includes('VISUAL_ADMIN') || Boolean((data as any)?.is_superuser);
+  if (isVisualAdmin) {
+    if (!items.some((item) => item.key === 'visual_admin_dashboard')) {
+      items.push({ key: 'visual_admin_dashboard', label: 'Visual Admin', to: '/visual-admin' });
+    }
     if (!items.some((item) => item.key === 'academic_visuals')) {
       items.push({ key: 'academic_visuals', label: 'Academic Visuals', to: '/academic-visuals' });
     }
   }
 
+
+
   // Add Token Raise for all users at the end (no permission check needed)
   items.push({ key: 'queries', label: 'Raise Token ', to: '/queries' });
-
-  // ── Academic 2.1 ────────────────────────────────────────────────────────
-  const canSeeAc2Admin = rolesUpper.includes('ADMIN') || rolesUpper.includes('IQAC') || rolesUpper.includes('SUPER_ADMIN');
-  if (canSeeAc2Admin && !items.some((item) => item.key === 'academic_v2_admin')) {
-    items.push({ key: 'academic_v2_admin', label: 'Academic 2.1 (Admin)', to: '/academic-v2/admin' });
-  }
-
-  if (flags.is_staff && !items.some((item) => item.key === 'academic_v2_faculty')) {
-    items.push({ key: 'academic_v2_faculty', label: 'Academic 2.1 (Faculty)', to: '/academic-v2/courses' });
-  }
-
-  if (flags.is_student && !items.some((item) => item.key === 'academic_v2_student')) {
-    items.push({ key: 'academic_v2_student', label: 'Academic 2.1 (Student)', to: '/academic-v2/student/dashboard' });
-  }
-  // ────────────────────────────────────────────────────────────────────────
-
-  // ── BIOSECURE_ADMIN / Staff BioSecure Access ──────────────────────────────────
-  // If the user has BIOSECURE_ADMIN, IQAC, ADMIN, or SECURITY role, ensure BioSecure Batches is available
-  const canAccessBioSecureAdmin = rolesUpper.includes('BIOSECURE_ADMIN') || rolesUpper.includes('IQAC') || rolesUpper.includes('ADMIN') || permsLower.includes('biosecure.admin_only');
-  if (canAccessBioSecureAdmin && !items.some((item) => item.key === 'biosecure_admin')) {
-    items.push({ key: 'biosecure_admin', label: 'BioSecure Batches', to: '/biosecure/admin' });
-  }
 
   return (
     <>
@@ -655,7 +699,24 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+      <aside className={`fixed top-16 left-0 h-[calc(100vh-4rem)] bg-white shadow-lg transition-all duration-300 z-30 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 hover:scrollbar-thumb-gray-400 ${collapsed ? '-translate-x-full lg:translate-x-0 lg:w-20' : 'w-full lg:w-64'}`}>
+        {/* Custom scrollbar styles */}
+        <style>{`
+          aside::-webkit-scrollbar {
+            width: 8px;
+          }
+          aside::-webkit-scrollbar-track {
+            background: #f3f4f6;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb {
+            background: #d1d5db;
+            border-radius: 4px;
+          }
+          aside::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af;
+          }
+        `}</style>
         {/* Header - Hidden */}
         <div className="hidden" />
 
@@ -941,6 +1002,7 @@ export default function DashboardSidebar({ baseUrl = '' }: { baseUrl?: string })
                       </li>
                     </ul>
                   ) : null}
+
                 </li>
               );
             })}

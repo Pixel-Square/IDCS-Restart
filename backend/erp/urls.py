@@ -37,7 +37,6 @@ urlpatterns = [
     path('api/academic-calendar/', include('academic_calendar.api_urls')),
     path('api/pbas/', include('pbas.urls')),
     path('api/staff-attendance/', include('staff_attendance.urls')),
-    path('api/certificates/', include('certificates.urls')),
     # Staff Requests API (dynamic forms & workflow engine)
     path('api/staff-requests/', include('staff_requests.urls')),
     path('api/staff-salary/', include('staff_salary.urls')),
@@ -80,16 +79,4 @@ if 'runserver' in sys.argv or settings.DEBUG:
     # Admin dashboard data endpoint (counts for models)
     urlpatterns += [
         path('admin/dashboard-data/', admin_views.admin_counts, name='admin-dashboard-data'),
-    ]
-
-# Fallback: if collectstatic wasn't run in production, serve the project-level
-# `static/` directory so admin CSS and project assets are still available.
-try:
-    _static_root_exists = settings.STATIC_ROOT.exists()
-except Exception:
-    _static_root_exists = False
-
-if not settings.DEBUG and not _static_root_exists:
-    urlpatterns += [
-        re_path(r'^static/(?P<path>.*)$', _serve, {'document_root': settings.BASE_DIR / 'static'}),
     ]

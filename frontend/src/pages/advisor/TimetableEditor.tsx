@@ -70,9 +70,6 @@ function CellPopup(props: any) {
     otherDeptStaffList,
     setOtherDeptStaffList,
     subjectStaffList,
-    venues,
-    selectedVenueId,
-    setSelectedVenueId,
   } = props
   const [deptCurriculumError, setDeptCurriculumError] = useState<string | null>(null)
   const [specialSubjectType, setSpecialSubjectType] = useState<'curriculum' | 'custom' | 'otherdept' | 'event'>('curriculum')
@@ -266,8 +263,6 @@ function CellPopup(props: any) {
                               setEditingCurriculumId(crid)
                               setEditingBatchId(existingBatchId)
                               setSelectedStaffId(staffId)
-                              setSelectedVenueId(a.venue?.id || null)
-
                               
                               // Check if it is from another department
                               const isOther = a.curriculum_row.department_id && sectionDepartmentId && (Number(a.curriculum_row.department_id) !== Number(sectionDepartmentId))
@@ -328,8 +323,6 @@ function CellPopup(props: any) {
                               setCustomAssignmentText(a.subject_text || '')
                               setEditingCurriculumId(null)
                               setEditingBatchId(null)
-                              setSelectedVenueId(a.venue?.id || null)
-
                               setSelectedStaffId(staffId)
                               setIsOtherDept(false)
                               setSelectedOtherDept(null)
@@ -369,7 +362,6 @@ function CellPopup(props: any) {
                               }
                             }
                             payload.staff_id = selectedStaffId
-                            payload.venue_id = selectedVenueId
                             await handleUpdateAssignment(a.id, payload)
                           }}
                           className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1"
@@ -809,28 +801,6 @@ function CellPopup(props: any) {
                   </>
                 )}
                 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Venue (optional) <span className="text-xs text-gray-400 font-normal">(lab/hall — only one section may use it per period)</span>
-                  </label>
-                  <select
-                    value={selectedVenueId || ''}
-                    onChange={(e) => setSelectedVenueId(Number(e.target.value) || null)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  >
-                    <option value="">No venue / classroom assigned</option>
-                    {venues.map((v: any) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}{v.venue_type ? ` (${v.venue_type})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {venues.length === 0 && (
-                    <p className="mt-1 text-xs text-amber-600">No venues defined yet. Add lab/hall venues under Venues admin before assigning labs.</p>
-                  )}
-                </div>
-
-
                 <button 
                   onClick={async ()=>{
                     if(isCustomAssignment) {
@@ -1346,8 +1316,6 @@ export default function TimetableEditor(){
   const [departments, setDepartments] = useState<any[]>([])
   const [deptCurriculum, setDeptCurriculum] = useState<any[]>([])
   const [otherDeptStaffList, setOtherDeptStaffList] = useState<any[]>([])
-  const [venues, setVenues] = useState<any[]>([])
-  const [selectedVenueId, setSelectedVenueId] = useState<number | null>(null)
   const [isOtherDept, setIsOtherDept] = useState<boolean>(false)
   const [selectedOtherDept, setSelectedOtherDept] = useState<number | null>(null)
   // Auto-detect current day: 0=Mon, 1=Tue, ..., 6=Sun
@@ -1491,11 +1459,6 @@ export default function TimetableEditor(){
           return r.json()
         }).then(d=> setStaffList(d.results || d || []))
       }
-
-      // fetch available venues (labs/halls) for this section's assignments
-      fetchWithAuth('/api/timetable/venues/?is_active=1&page_size=0')
-        .then(r=> { if(!r.ok) return { results: [] }; return r.json() })
-        .then(d=> setVenues(d.results || d || []))
     }
   },[sectionId, sectionDepartmentId])
 
@@ -1573,8 +1536,6 @@ export default function TimetableEditor(){
       if(selectedElectiveSubjectId) payload.elective_subject_id = selectedElectiveSubjectId
       if(selectedStaffId) payload.staff_id = selectedStaffId
     }
-    // include the venue (lab/hall) for this assignment, if selected
-    if(selectedVenueId) payload.venue_id = selectedVenueId
     // if assigning from Other Dept, include metadata so backend can honor chosen dept/option
     if(isOtherDept && selectedOtherDept) {
       payload.other_department_id = selectedOtherDept
@@ -1600,7 +1561,6 @@ export default function TimetableEditor(){
     setEditingBatchId(null)
     setCustomAssignmentText('')
     setSelectedStaffId(null)
-    setSelectedVenueId(null)
     // reload from server to pick up resolved staff/subject_batch fields
     await loadTimetable()
   }
@@ -1666,14 +1626,6 @@ export default function TimetableEditor(){
                     return asg.staff.name || fullName || asg.staff.username || '—';
                   })()}{asg.subject_batch ? ` • Batch: ${asg.subject_batch.name}` : ''}
                 </div>
-                {asg.venue && (
-                  <div className="text-xs text-indigo-700 mt-0.5 flex items-center gap-1">
-                    <span className="inline-flex items-center gap-1">
-                      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" /></svg>
-                      {asg.venue.name || `Venue #${asg.venue.id}`}
-                    </span>
-                  </div>
-                )}
                 {(() => {
                   const currentSection = sections.find(s => s.id === sectionId);
                   const isMixed = currentSection?.is_mixed_section || !!currentSection?.mixed_section_id;
@@ -2125,9 +2077,6 @@ export default function TimetableEditor(){
           setSelectedStaffId={setSelectedStaffId}
           staffList={staffList}
           subjectStaffList={subjectStaffList}
-          venues={venues}
-          selectedVenueId={selectedVenueId}
-          setSelectedVenueId={setSelectedVenueId}
           sectionId={sectionId}
           shortLabel={shortLabel}
           loadBatchesForCurriculum={loadBatchesForCurriculum}

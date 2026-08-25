@@ -172,7 +172,6 @@ export default function AcademicPerformancePage() {
 
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeData, setRangeData] = useState<RangeAnalysisResponse | null>(null);
-  const [selectedRangeSubject, setSelectedRangeSubject] = useState<string>('');
 
   // Custom Dashboard Query Results (for Published Dashboards from Visual Admin)
   const [customVisualResults, setCustomVisualResults] = useState<Record<string, DashboardQueryResult>>({});
@@ -294,21 +293,10 @@ export default function AcademicPerformancePage() {
 
   // Load Range Analysis when tab is switched
   useEffect(() => {
-    if (activeTab === 'range' && selectedRangeSubject) {
-      setRangeLoading(true);
-      fetchRangeAnalysis({
-        dept: selectedDept,
-        year: selectedYear,
-        sem: selectedSem,
-        exam: selectedExamType,
-        subject_code: selectedRangeSubject
-      })
-        .then(res => setRangeData(res))
-        .finally(() => setRangeLoading(false));
-    } else if (activeTab === 'range' && !selectedRangeSubject) {
-      setRangeData(null);
+    if (activeTab === 'range') {
+      fetchRangeAnalysis().then(res => setRangeData(res));
     }
-  }, [activeTab, selectedDept, selectedYear, selectedSem, selectedExamType, selectedRangeSubject]);
+  }, [activeTab]);
 
   // Load Student Curriculum Marks when tab is switched or filters change
   useEffect(() => {
@@ -1299,44 +1287,10 @@ export default function AcademicPerformancePage() {
         )}
 
         {/* View Mode: Range Analysis */}
-        {activeTab === 'range' && (() => {
-          const rangeSubjects = (dynamicOptions?.subjects || []).filter((sub: any) => {
-            if (selectedDept && sub.department !== selectedDept && (!sub.departments || !sub.departments.includes(selectedDept))) return false;
-            if (selectedSem && String(sub.semester) !== selectedSem && String(sub.semesterNum) !== selectedSem) return false;
-            return true;
-          });
-          
-          return (
+        {activeTab === 'range' && (
           <div className="space-y-6 animate-in fade-in-50">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
-                <h3 className="text-base font-bold text-slate-900">Academic Score Range Distribution</h3>
-                <div className="relative max-w-sm w-full">
-                  <input
-                    type="text"
-                    list="range-subjects-list"
-                    placeholder="Search Subject by Name or Code..."
-                    className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
-                    value={selectedRangeSubject}
-                    onChange={(e) => setSelectedRangeSubject(e.target.value)}
-                  />
-                  <datalist id="range-subjects-list">
-                    {rangeSubjects.map((sub: any) => (
-                      <option key={sub.code} value={sub.code}>{sub.code} - {sub.name}</option>
-                    ))}
-                  </datalist>
-                </div>
-              </div>
-              
-              {rangeLoading ? (
-                <div className="flex items-center justify-center h-72">
-                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-500 border-t-transparent"></div>
-                </div>
-              ) : !selectedRangeSubject ? (
-                <div className="flex items-center justify-center h-72 text-slate-500 text-sm">
-                  Please select a subject to view its range distribution.
-                </div>
-              ) : (
+              <h3 className="text-base font-bold text-slate-900 mb-4">Academic Score Range Distribution</h3>
               <div className="h-72 w-full min-w-0">
                 <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <BarChart data={rangeData?.range_distribution || []}>
@@ -1348,11 +1302,9 @@ export default function AcademicPerformancePage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              )}
             </div>
           </div>
-          );
-        })()}
+        )}
 
         {/* View Mode: Individual Student Analysis */}
         {activeTab === 'student' && (

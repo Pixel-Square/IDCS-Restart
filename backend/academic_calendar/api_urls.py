@@ -14,10 +14,6 @@ urlpatterns = [
     path('events/<uuid:event_id>/poster-callback/', api_views.poster_callback, name='academic_calendar_poster_callback'),
     path('hod-colours/', api_views.hod_colours, name='academic_calendar_hod_colours'),
     path('hod-students/', api_views.hod_students, name='academic_calendar_hod_students'),
-    path('calendar/template/', api_views.calendar_template_download, name='academic_calendar_template_download'),
-    path('calendars/', api_views.calendars, name='academic_calendar_calendars'),
-    path('calendars/<uuid:calendar_id>/', api_views.calendar_detail, name='academic_calendar_calendar_detail'),
-    path('calendars/<uuid:calendar_id>/toggle-active/', api_views.calendar_toggle_active, name='academic_calendar_toggle_active'),
     path('upload/parse/', api_views.upload_parse, name='academic_calendar_upload_parse'),
     path('upload/import/', api_views.upload_import, name='academic_calendar_upload_import'),
 
@@ -34,14 +30,8 @@ urlpatterns = [
     path('proposals/<uuid:proposal_id>/haa-approve/', proposal_views.haa_approve, name='proposal_haa_approve'),
     path('proposals/<uuid:proposal_id>/reject/', proposal_views.proposal_reject, name='proposal_reject'),
 
-    # ── Notifications ─────────────────────────────────────────────────────────
+    # ── Notifications ────────────────────────────────────────────────────────
     path('notifications/', proposal_views.notifications_list, name='notifications_list'),
     path('notifications/unread-count/', proposal_views.notifications_unread_count, name='notifications_unread_count'),
     path('notifications/<int:notification_id>/read/', proposal_views.notification_mark_read, name='notification_mark_read'),
-
-    # ── Calendar Event Labels & Assignments ───────────────────────────────────
-    path('event-labels/', api_views.event_labels, name='event_labels_list_create'),
-    path('event-labels/<uuid:label_id>/', api_views.event_label_detail, name='event_label_detail'),
-    path('event-assignments/', api_views.event_assignments, name='event_assignments_list_create'),
-    path('event-assignments/<uuid:assignment_id>/', api_views.event_assignment_detail, name='event_assignment_detail'),
 ]

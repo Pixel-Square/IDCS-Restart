@@ -3,7 +3,7 @@ import fetchWithAuth from './fetchAuth';
 export interface DashboardVisualConfig {
   id: string;
   title: string;
-  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table' | 'scatter' | 'gauge' | 'matrix';
+  type: 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'kpi' | 'table' | 'scatter' | 'gauge';
   dataset: string;
   xAxisField: string;
   yAxisField: string;
@@ -22,43 +22,26 @@ export interface DashboardVisualConfig {
 export interface DepartmentOption {
   id: string;
   name: string;
-  code?: string;
-  label?: string;
 }
 
 export interface SubjectOption {
   code: string;
   name: string;
   department?: string;
-  departments?: string[];
-  semester?: number | string;
-  semesterNum?: number | string;
-  academicYears?: string[];
-  sections?: string[];
+  semester?: number;
 }
 
 export interface GlobalDashboardFilters {
-  academicYears?: string[];
-  departments?: string[];
-  semesters?: string[];
-  sections?: string[];
-  subjectNames?: string[];
-  subjectCodes?: string[];
-  tests?: string[];
-  courseCategories?: string[];
-  assessmentTypes?: string[];
-  performanceLevels?: string[];
-  
-  academicYear?: string | string[];
-  department?: string | string[];
-  semester?: string | string[] | number | number[];
-  section?: string | string[];
-  subjectName?: string | string[];
-  subjectCode?: string | string[];
-  test?: string | string[];
-  courseCategory?: string | string[];
-  assessmentType?: string | string[];
-  performanceLevel?: string | string[];
+  academicYears: string[];
+  departments: string[];
+  semesters: string[];
+  sections: string[];
+  subjectNames: string[];
+  subjectCodes: string[];
+  tests: string[];
+  courseCategories: string[];
+  assessmentTypes: string[];
+  performanceLevels: string[];
 }
 
 export interface DashboardDefinition {
@@ -86,10 +69,7 @@ export interface DynamicOptionsResponse {
   tests: Array<{ id: string; name: string }>;
   courseCategories: string[];
   assessmentTypes: string[];
-  performanceLevels?: string[];
-  markRanges?: string[];
   dbConnected: boolean;
-  subjectMappings?: Array<{ subjectName: string; subjectCode: string }>;
 }
 
 export interface DashboardQueryResult {
@@ -101,9 +81,9 @@ export interface DashboardQueryResult {
   meta: {
     dataset: string;
     recordCount: number;
+    dbConnected: boolean;
     lastUpdated?: string;
     message?: string;
-    compareBy?: string;
   };
 }
 

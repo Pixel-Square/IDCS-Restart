@@ -314,7 +314,6 @@ class FeedbackFormSerializer(serializers.ModelSerializer):
             'created_by', 'created_by_name', 'questions', 'active',
             'allow_hod_view', 'anonymous', 'form_name',
             'department',
-            'faculty_name', 'section_wise', 'section_staff_assignments',
             'common_comment_enabled',
             'year', 'semester_number', 'section_name', 'regulation_name',
             'years', 'semesters', 'sections',
@@ -705,7 +704,6 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
             'target_type', 'type', 'is_subject_based', 'department', 'status', 'questions',
             'year', 'semester', 'section', 'regulation',
             'years', 'semesters', 'sections',
-            'faculty_name', 'section_wise', 'section_staff_assignments',
             'common_comment_enabled',
             'allow_hod_view',
             'anonymous',
@@ -779,44 +777,7 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                         )
                     })
             data['questions'] = questions
-
-        if data.get('target_type') == 'STUDENT' and data.get('type') == 'OPEN_FEEDBACK':
-            if data.get('section_wise'):
-                sections = data.get('sections') or []
-                assignments = data.get('section_staff_assignments') or []
-                if not sections:
-                    raise serializers.ValidationError({'sections': 'Please select at least one section for section-wise feedback.'})
-                if not isinstance(assignments, list) or len(assignments) == 0:
-                    raise serializers.ValidationError({'section_staff_assignments': 'Please provide staff names for selected sections.'})
-
-                section_ids = set(sections)
-                for idx, assignment in enumerate(assignments):
-                    if not isinstance(assignment, dict):
-                        raise serializers.ValidationError({'section_staff_assignments': 'Each assignment must be an object.'})
-                    section_id = assignment.get('section')
-                    staff_name = str(assignment.get('staff_name', '') or '').strip()
-                    if section_id not in section_ids:
-                        raise serializers.ValidationError({
-                            'section_staff_assignments': f'Assignment for section {section_id} is not in selected sections.'
-                        })
-                    if not staff_name:
-                        raise serializers.ValidationError({
-                            'section_staff_assignments': f'Staff name is required for section {section_id}.'
-                        })
-                # Normalize assignments to only selected sections.
-                data['section_staff_assignments'] = [
-                    {
-                        'section': int(assignment.get('section')),
-                        'staff_name': str(assignment.get('staff_name', '') or '').strip(),
-                    }
-                    for assignment in assignments
-                    if isinstance(assignment, dict) and assignment.get('section') in section_ids
-                ]
-            else:
-                # Faculty name is required for non-section-wise common feedback.
-                faculty_name = str(data.get('faculty_name', '') or '').strip()
-                if not faculty_name:
-                    raise serializers.ValidationError({'faculty_name': 'Faculty Name is required for common feedback.'})
+        
         return data
     
     def create(self, validated_data):
@@ -920,104 +881,6 @@ class FeedbackFormCreateSerializer(serializers.ModelSerializer):
                     created_question.options.all().delete()
         
         return feedback_form
-
-    def update(self, instance, validated_data):
-        """Update feedback form and replace all questions in a transaction."""
-        questions_data = validated_data.pop('questions')
-        common_comment_enabled = bool(validated_data.get('common_comment_enabled', False))
-
-        # Legacy DB compatibility: feedback_forms.comment_mode is NOT NULL in some deployments.
-        validated_data.setdefault('comment_mode', 'common' if common_comment_enabled else 'question_wise')
-
-        # Keep is_subject_based aligned with type if not explicitly provided.
-        if 'is_subject_based' not in validated_data:
-            validated_data['is_subject_based'] = (validated_data.get('type') == 'SUBJECT_FEEDBACK')
-
-        with transaction.atomic():
-            for field, value in validated_data.items():
-                setattr(instance, field, value)
-            instance.save()
-
-            # Replace questions (and options) to keep payload consistent with the create flow.
-            instance.questions.all().delete()
-
-            for idx, question_data in enumerate(questions_data):
-                allow_rating = question_data.get('allow_rating', True)
-                allow_comment = False if common_comment_enabled else question_data.get('allow_comment', True)
-                answer_type = question_data.get('answer_type', 'BOTH')
-
-                if answer_type == 'STAR' and 'allow_rating' not in question_data:
-                    allow_rating = True
-                    allow_comment = False
-                elif answer_type == 'TEXT' and 'allow_comment' not in question_data:
-                    allow_rating = False
-                    allow_comment = True
-                elif answer_type == 'BOTH':
-                    pass
-
-                question_type = (question_data.get('question_type') or 'rating').strip()
-                options = question_data.get('options', []) or []
-
-                if question_type not in {'rating', 'text', 'radio', 'rating_radio_comment'}:
-                    raise serializers.ValidationError({
-                        'questions': f'Invalid question_type: {question_type}'
-                    })
-
-                if question_type == 'text':
-                    allow_rating = False
-                    allow_comment = False if common_comment_enabled else True
-                    answer_type = 'TEXT'
-
-                if question_type == 'radio':
-                    allow_rating = False
-                    allow_comment = False if common_comment_enabled else bool(question_data.get('allow_comment', allow_comment))
-                    answer_type = 'TEXT'
-
-                if question_type in {'radio', 'rating_radio_comment'}:
-                    if not isinstance(options, list) or len(options) < 2:
-                        raise serializers.ValidationError({
-                            'questions': 'At least two options are required for radio questions.'
-                        })
-                    for idx_opt, opt in enumerate(options):
-                        text = ''
-                        if isinstance(opt, dict):
-                            text = str(opt.get('option_text', '')).strip()
-                        if not text:
-                            raise serializers.ValidationError({
-                                'questions': f'Option {idx_opt + 1} cannot be empty.'
-                            })
-
-                if question_type == 'rating_radio_comment':
-                    allow_rating = True
-                    allow_comment = False if common_comment_enabled else bool(question_data.get('allow_comment', allow_comment))
-                    answer_type = 'BOTH'
-
-                created_question = FeedbackQuestion.objects.create(
-                    feedback_form=instance,
-                    order=question_data.get('order', idx + 1),
-                    question=question_data['question'],
-                    question_type=question_type,
-                    answer_type=answer_type,
-                    allow_rating=allow_rating,
-                    allow_comment=allow_comment,
-                    comment_enabled=allow_comment,
-                    is_mandatory=bool(question_data.get('is_mandatory', False)),
-                )
-
-                if question_type in {'radio', 'rating_radio_comment'}:
-                    for opt in options:
-                        text = ''
-                        if isinstance(opt, dict):
-                            text = str(opt.get('option_text', '')).strip()
-                        if text:
-                            FeedbackQuestionOption.objects.create(
-                                question=created_question,
-                                option_text=text,
-                            )
-                else:
-                    created_question.options.all().delete()
-
-        return instance
 
 
 class FeedbackResponseSerializer(serializers.Serializer):

@@ -4,6 +4,17 @@ export type PBASViewer = 'faculty' | 'student'
 export type PBASAudience = 'faculty' | 'student' | 'both'
 export type PBASInputMode = 'upload' | 'link'
 
+export type PBASFormFieldType = 'short_text' | 'long_text' | 'dropdown' | 'checkboxes' | 'file_upload'
+
+export type PBASFormField = {
+  id: string
+  label: string
+  field_type: PBASFormFieldType
+  required?: boolean
+  options?: string[]
+  placeholder?: string
+}
+
 export type PBASCustomDepartment = {
   id: string
   title: string
@@ -20,7 +31,8 @@ export type PBASNode = {
   id: string
   label: string
   audience: PBASAudience
-  input_mode: PBASInputMode
+  input_mode?: PBASInputMode
+  form_schema?: PBASFormField[]
   pbas_credit?: number | null
   link?: string | null
   uploaded_name?: string | null
@@ -51,7 +63,9 @@ export type PBASApprovalItem = {
   }
   leaf_title: string
   parent_path: string
-  submission_type: 'upload' | 'link'
+  submission_type: 'form' | 'upload' | 'link'
+  form_data?: Record<string, any>
+  form_schema?: PBASFormField[]
   link?: string | null
   file_url?: string | null
   file_name?: string | null
@@ -160,8 +174,12 @@ export async function getDepartmentNodes(deptId: string, viewer: PBASViewer): Pr
   return data?.nodes || []
 }
 
-export async function getDepartmentTree(deptId: string): Promise<{ id: string; title: string; nodes: PBASNode[] }> {
-  const res = await fetchWithAuth(`/api/pbas/custom-departments/${encodeURIComponent(deptId)}/tree/`)
+export async function getDepartmentTree(
+  deptId: string,
+  viewer?: PBASViewer,
+): Promise<{ id: string; title: string; nodes: PBASNode[] }> {
+  const query = viewer ? `?viewer=${encodeURIComponent(viewer)}` : ''
+  const res = await fetchWithAuth(`/api/pbas/custom-departments/${encodeURIComponent(deptId)}/tree/${query}`)
   if (!res.ok) throw new Error(await parseError(res))
   return await res.json()
 }
@@ -180,6 +198,29 @@ export async function listColleges(): Promise<College[]> {
   if (!res.ok) throw new Error(await parseError(res))
   const data = await res.json()
   return Array.isArray(data?.results) ? data.results : data
+}
+
+export async function createSubmissionForm(payload: {
+  node: string
+  formData: Record<string, any>
+  file?: File | null
+  college?: number | null
+}): Promise<any> {
+  const fd = new FormData()
+  fd.append('node', payload.node)
+  fd.append('submission_type', 'form')
+  fd.append('form_data', JSON.stringify(payload.formData || {}))
+  if (payload.file) {
+    fd.append('file', payload.file)
+  }
+  if (payload.college != null) fd.append('college', String(payload.college))
+
+  const res = await fetchWithAuth('/api/pbas/submissions/', {
+    method: 'POST',
+    body: fd,
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.json()
 }
 
 export async function createSubmissionLink(payload: {

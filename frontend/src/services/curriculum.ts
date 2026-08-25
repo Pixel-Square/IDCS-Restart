@@ -39,7 +39,6 @@ export type DeptRow = {
   course_code?: string | null;
   course_name?: string | null;
   class_type?: string | null;
-  category?: string;
   // Note: Backend uses different field names for QP type:
   // - CurriculumMaster.qp_type (legacy)
   // - CurriculumDepartment.question_paper_type (current)
@@ -97,26 +96,6 @@ import { getApiBase } from './apiBase';
 
 const API_BASE = getApiBase();
 
-let semesterIdCache: Map<number, number> | null = null;
-
-async function getSemesterIdByNumber(semesterNumber: number | null | undefined): Promise<number | null> {
-  const semNum = Number(semesterNumber);
-  if (!semNum || Number.isNaN(semNum)) return null;
-  if (semesterIdCache && semesterIdCache.has(semNum)) {
-    return semesterIdCache.get(semNum) || null;
-  }
-  const res = await fetchWithAuth('/api/academics/semesters/');
-  if (!res.ok) return null;
-  const data = await res.json();
-  const list = Array.isArray(data) ? data : (data.results || []);
-  semesterIdCache = new Map(
-    list
-      .filter((s: any) => s && typeof s.number === 'number' && typeof s.id === 'number')
-      .map((s: any) => [Number(s.number), Number(s.id)])
-  );
-  return semesterIdCache.get(semNum) || null;
-}
-
 export async function fetchBatchYears(): Promise<BatchYear[]> {
   const res = await fetchWithAuth('/api/academics/batch-years/');
   if (!res.ok) throw new Error('Failed to fetch batch years');
@@ -128,220 +107,6 @@ export async function fetchMasters(): Promise<Master[]> {
   const res = await fetchWithAuth('/api/curriculum/master/');
   if (!res.ok) throw new Error('Failed to fetch masters');
   return res.json();
-}
-
-export type DepartmentGroup = {
-  id: number;
-  name: string;
-  department_ids?: number[];
-};
-
-export async function deleteCurriculumDepartment(id: number) {
-  const res = await fetchWithAuth(`/api/curriculum/department/${id}/`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || 'Failed to delete department curriculum');
-  }
-}
-
-export async function deleteMaster(id: number) {
-  const res = await fetchWithAuth(`/api/curriculum/master/${id}/`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || 'Failed to delete master curriculum');
-  }
-}
-
-export type ElectivePollSubject = {
-  id: number;
-  elective_subject_id: number;
-  staff_id?: number | null;
-  course_code?: string;
-  course_name?: string;
-  department_name?: string;
-  department_code?: string;
-  department_id?: number;
-  semester?: number | null;
-  seats?: number | null;
-  staff_name?: string | null;
-  is_active?: boolean;
-};
-
-export type ElectivePoll = {
-  id: number;
-  parent_elective_name: string;
-  batch_year?: number | null;
-  batch_year_name?: string | null;
-  department_group?: number | null;
-  department_group_name?: string | null;
-  is_active: boolean;
-  poll_subjects: ElectivePollSubject[];
-  created_at: string;
-};
-
-export type ElectivePollSeatCountResponse = {
-  batch_year_id: number;
-  counts: Record<number, number>;
-};
-
-export type HodElectivePollStudent = {
-  student_id: number;
-  reg_no?: string | null;
-  name?: string | null;
-  username?: string | null;
-  section?: string | null;
-  department?: string | null;
-  batch_year?: string | null;
-  chosen: boolean;
-  chosen_subject_name?: string | null;
-  chosen_subject_code?: string | null;
-};
-
-export type HodElectivePollItem = {
-  poll_id: number;
-  parent_elective_name: string;
-  batch_year?: string | null;
-  department_group?: string | null;
-  total_students: number;
-  chosen_count: number;
-  students: HodElectivePollStudent[];
-};
-
-export type HodElectiveDepartmentStatus = {
-  department_id: number;
-  department: string;
-  polls: HodElectivePollItem[];
-};
-
-export type HodElectivePollStatusResponse = {
-  departments: HodElectiveDepartmentStatus[];
-};
-
-export async function fetchElectivePolls(): Promise<ElectivePoll[]> {
-  const res = await fetchWithAuth('/api/curriculum/elective-polls/');
-  if (!res.ok) throw new Error('Failed to fetch elective polls');
-  return res.json();
-}
-
-export async function fetchActiveStudentPolls(): Promise<ElectivePoll[]> {
-  const res = await fetchWithAuth('/api/curriculum/elective-polls/active-for-student/');
-  if (!res.ok) throw new Error('Failed to fetch active student polls');
-  return res.json();
-}
-
-export async function fetchHodElectivePollStatus(): Promise<HodElectivePollStatusResponse> {
-  const res = await fetchWithAuth('/api/curriculum/elective-polls/hod-status/');
-  if (!res.ok) throw new Error('Failed to fetch HOD elective poll status');
-  const data = await res.json();
-  return {
-    departments: Array.isArray(data?.departments) ? data.departments : [],
-  };
-}
-
-export async function submitElectiveChoice(pollId: number | string, pollSubjectId: number | string): Promise<any> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/submit/`, {
-    method: 'POST',
-    body: JSON.stringify({ poll_subject_id: pollSubjectId })
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || 'Failed to submit elective choice');
-  }
-  return res.json();
-}
-
-export async function createElectivePoll(payload: {
-  parent_elective_name: string;
-  batch_year?: number | string | null;
-  semester?: number | string | null;
-  department_group?: number | string | null;
-  subjects: Array<{
-    elective_subject_id: number;
-    seats?: number | string | null;
-    staff_id?: number | string | null;
-  }>;
-}): Promise<ElectivePoll> {
-  const res = await fetchWithAuth('/api/curriculum/elective-polls/', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    const detail = data.detail || data.subjects || 'Failed to create elective poll';
-    throw new Error(detail);
-  }
-  return res.json();
-}
-
-export async function updateElectivePollStatus(id: number, is_active: boolean): Promise<ElectivePoll> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${id}/`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_active }),
-  });
-  if (!res.ok) throw new Error('Failed to update elective poll status');
-  return res.json();
-}
-
-export async function updateElectivePollSubjectStatus(
-  pollId: number | string,
-  subjectId: number | string,
-  is_active: boolean
-): Promise<ElectivePollSubject> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/subjects/${subjectId}/`, {
-    method: 'PATCH',
-    body: JSON.stringify({ is_active }),
-  });
-  if (!res.ok) throw new Error('Failed to update elective poll subject status');
-  return res.json();
-}
-
-export async function updateElectivePollSubjectDetails(
-  pollId: number | string,
-  subjectId: number | string,
-  payload: { course_code?: string; course_name?: string; seats?: string | number | null }
-): Promise<ElectivePollSubject> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/subjects/${subjectId}/`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error('Failed to update elective poll subject details');
-  return res.json();
-}
-
-export async function fetchElectivePollSeatCounts(batchYearId: number | string): Promise<ElectivePollSeatCountResponse> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/seat-counts/?batch_year_id=${batchYearId}`);
-  if (!res.ok) throw new Error('Failed to fetch elective seat counts');
-  return res.json();
-}
-
-export async function downloadElectivePollExport(pollId: number | string): Promise<void> {
-  const res = await fetchWithAuth(`/api/curriculum/elective-polls/${pollId}/export/`);
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || 'Failed to download export');
-  }
-  const blob = await res.blob();
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const header = res.headers.get('content-disposition') || '';
-  const match = /filename="?([^";]+)"?/i.exec(header);
-  link.href = url;
-  link.download = match?.[1] || `elective_poll_${pollId}.xlsx`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
-}
-
-export async function fetchDepartmentGroups(): Promise<DepartmentGroup[]> {
-  const res = await fetchWithAuth('/api/curriculum/department-groups/');
-  if (!res.ok) throw new Error('Failed to fetch department groups');
-  const data = await res.json();
-  return Array.isArray(data) ? data : (data.results || []);
 }
 
 export async function createMaster(payload: Partial<Master>) {
@@ -376,11 +141,11 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
   }
 }
 
-export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number; is_elective?: boolean }): Promise<DeptRow[]> {
+export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }): Promise<DeptRow[]> {
   const qs = new URLSearchParams();
-  if (params?.is_elective !== undefined) qs.set('is_elective', String(params.is_elective));
   if (params?.department_id) qs.set('department_id', String(params.department_id));
   if (params?.regulation) qs.set('regulation', params.regulation);
+  if (params?.semester) qs.set('semester', String(params.semester));
   if (params?.batch_id) qs.set('batch_id', String(params.batch_id));
   qs.set('page_size', '0');
   const url = `/api/curriculum/department/?${qs.toString()}`;
@@ -610,25 +375,16 @@ export async function propagateDeptRow(
   targetBatchIds: number[]
 ): Promise<{ success: number[]; errors: string[] }> {
   const results: { success: number[]; errors: string[] } = { success: [], errors: [] };
-  const semesterId = await getSemesterIdByNumber(row.semester);
-  if (!semesterId) {
-    return {
-      success: [],
-      errors: ['Unable to resolve semester id. Refresh and try again.'],
-    };
-  }
   for (const batchId of targetBatchIds) {
     const payload: Record<string, any> = {
       master: row.master,
       department_id: row.department?.id,
       regulation: row.regulation,
-      semester_id: semesterId,
+      semester: row.semester,
       batch_id: batchId,
       course_code: row.course_code,
       course_name: row.course_name,
-      category: row.category,
       class_type: row.class_type,
-      is_elective: row.is_elective,
       l: row.l, t: row.t, p: row.p, s: row.s, c: row.c,
       internal_mark: row.internal_mark,
       external_mark: row.external_mark,

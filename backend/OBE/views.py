@@ -1341,6 +1341,22 @@ def _resolve_section_name_from_ta(ta) -> str:
         return ''
     sec = getattr(ta, 'section', None)
     if not sec:
+        category = None
+        if getattr(ta, 'elective_subject', None):
+            parent = getattr(ta.elective_subject, 'parent', None)
+            if parent and getattr(parent, 'category', None):
+                category = str(parent.category).lower()
+        elif getattr(ta, 'curriculum_row', None) and getattr(ta.curriculum_row, 'is_elective', False):
+            if getattr(ta.curriculum_row, 'category', None):
+                category = str(ta.curriculum_row.category).lower()
+
+        if category is not None:
+            if 'open elective' in category or 'oe' in category.split():
+                return 'OE'
+            elif 'professional elective' in category or 'pe' in category.split():
+                return 'PE'
+            elif 'emerging' in category:
+                return 'EE'
         return ''
     return str(getattr(sec, 'name', None) or str(sec) or '').strip()
 
@@ -1753,6 +1769,7 @@ def final_internal_marks_by_student(request, student_id: int):
     student_obj = rows.first().student if rows.exists() else None
     student_name = _student_display_name(getattr(student_obj, 'user', None)) if student_obj else None
     reg_no = getattr(student_obj, 'reg_no', None) if student_obj else None
+
     return Response(
         {
             'student': {'id': sid, 'reg_no': reg_no, 'name': student_name},
@@ -1760,36 +1777,6 @@ def final_internal_marks_by_student(request, student_id: int):
         },
         status=status.HTTP_200_OK,
     )
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def final_internal_marks_for_ta(request, subject_id: str):
-    """Return stored final internal marks for a teaching assignment / subject."""
-    subject = _resolve_subject(subject_id)
-    if not subject:
-        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    ta_id = request.query_params.get('teaching_assignment_id')
-    from .models import FinalInternalMark
-
-    qs = FinalInternalMark.objects.filter(subject=subject).select_related('student', 'student__user')
-    if ta_id:
-        try:
-            qs = qs.filter(teaching_assignment_id=int(ta_id))
-        except Exception:
-            pass
-
-    results = []
-    for r in qs:
-        results.append({
-            'student_id': r.student_id,
-            'reg_no': getattr(r.student, 'reg_no', ''),
-            'final_internal_mark': float(r.final_mark) if r.final_mark is not None else None,
-            'max_mark': float(r.max_mark) if r.max_mark is not None else None,
-        })
-    return Response({'results': results})
-
 
 
 def _require_publish_owner(request):
@@ -2231,95 +2218,6 @@ def cqi_publish(request, subject_id: str):
             'published_by': (snapshot or {}).get('publishedBy', getattr(obj, 'published_by', None)),
         }
     )
-
-
-@api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def cqi_reset_page(request, subject_id: str):
-    subject = _resolve_subject(subject_id)
-    if not subject:
-        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    ta_id = request.data.get('teaching_assignment_id') if isinstance(request.data, dict) else request.query_params.get('teaching_assignment_id')
-    ta = None
-    if ta_id:
-        try:
-            from academics.models import TeachingAssignment
-            ta = TeachingAssignment.objects.filter(id=int(ta_id), subject=subject).first()
-        except Exception:
-            ta = None
-
-    body = request.data if isinstance(request.data, dict) else {}
-    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request, body)
-
-    try:
-        draft_qs = ObeCqiDraft.objects.filter(subject=subject)
-        if ta:
-            draft_qs = draft_qs.filter(teaching_assignment=ta)
-        draft_obj = draft_qs.first()
-        if draft_obj and draft_obj.entries:
-            merged, pages = _split_cqi_entries_payload(draft_obj.entries)
-            target_key = page_key or _make_cqi_page_key(assessment_type, requested_co_numbers)
-            if target_key and target_key in pages:
-                del pages[target_key]
-                new_merged, new_nums = _merge_cqi_page_entries(pages)
-                draft_obj.entries = {'_pages': pages, **new_merged}
-                draft_obj.co_numbers = new_nums
-                draft_obj.save()
-    except Exception:
-        pass
-
-    return Response({'status': 'ok'})
-
-
-@api_view(['GET'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def cqi_publication_status(request, subject_id: str):
-    subject = _resolve_subject(subject_id)
-    if not subject:
-        return Response({'detail': 'Subject not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    ta_id = request.query_params.get('teaching_assignment_id')
-    ta = None
-    if ta_id:
-        try:
-            from academics.models import TeachingAssignment
-            ta = TeachingAssignment.objects.filter(id=int(ta_id), subject=subject).first()
-        except Exception:
-            ta = None
-
-    published_qs = ObeCqiPublished.objects.filter(subject=subject)
-    if ta:
-        published_qs = published_qs.filter(teaching_assignment=ta)
-    published_obj = published_qs.first()
-
-    page_key, assessment_type, requested_co_numbers = _resolve_cqi_page_context(request)
-    is_published = False
-    published_at = None
-    published_by = None
-
-    if published_obj and published_obj.entries:
-        merged, pages = _split_cqi_entries_payload(published_obj.entries)
-        target_key = page_key or _make_cqi_page_key(assessment_type, requested_co_numbers)
-        if target_key and target_key in pages:
-            snapshot = pages[target_key]
-            is_published = True
-            published_at = snapshot.get('publishedAt')
-            published_by = snapshot.get('publishedBy')
-        elif not target_key and merged:
-            is_published = True
-            published_at = getattr(published_obj, 'published_at', None)
-            published_by = getattr(published_obj, 'published_by', None)
-
-    return Response({
-        'is_published': is_published,
-        'published_at': published_at,
-        'published_by': published_by,
-    })
-
-
 
 
 @api_view(['POST'])
@@ -2826,49 +2724,10 @@ def iqac_batch_qp_pattern_upsert(request):
     })
 
 
-@api_view(['GET', 'POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def iqac_special_exam_config(request):
-    """Configuration for special exams / assessments."""
-    auth = _require_obe_master_permission(request)
-    if auth:
-        return auth
-    if request.method == 'GET':
-        return Response({'status': 'ok', 'config': {}})
-    return Response({'status': 'ok', 'message': 'Config updated'})
-
-
-
-@api_view(['GET'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def iqac_special_courses_list(request):
-    """List special courses and their assessment settings for IQAC configuration."""
-    from academics.models import SpecialCourseAssessmentSelection, Subject
-    from curriculum.models import CurriculumStructure
-
-    try:
-        curricula = CurriculumStructure.objects.filter(class_type__iexact='SPECIAL').select_related('batch', 'department')
-        results = []
-        for curr in curricula:
-            results.append({
-                'id': curr.id,
-                'code': curr.code if hasattr(curr, 'code') else '',
-                'name': curr.name if hasattr(curr, 'name') else '',
-                'class_type': 'SPECIAL',
-                'department_id': curr.department_id,
-            })
-        return Response({'results': results})
-    except Exception as e:
-        return Response({'results': [], 'error': str(e)})
-
-
 @api_view(['GET'])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def internal_mark_mapping_get(request, subject_id: str):
-
     """Get IQAC-managed internal mark mapping for a subject.
 
     Returns:
@@ -2928,37 +2787,6 @@ def internal_mark_mapping_upsert(request, subject_id: str):
         'updated_at': (obj.updated_at.isoformat() if getattr(obj, 'updated_at', None) else None),
         'updated_by': obj.updated_by,
     })
-
-
-@api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def obe_template_apply(request):
-    """Apply an OBE configuration template across courses."""
-    auth = _require_obe_master_permission(request)
-    if auth:
-        return auth
-    return Response({'status': 'ok', 'message': 'Template applied successfully'})
-
-
-@api_view(['GET'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def iqac_dashboard_analytics(request):
-    """Analytics overview for IQAC Dashboard."""
-    auth = _require_obe_master_permission(request)
-    if auth:
-        return auth
-    return Response({
-        'status': 'ok',
-        'overview': {
-            'total_courses': 0,
-            'completed_assessments': 0,
-            'pending_assessments': 0,
-        }
-    })
-
-
 
 
 @api_view(['POST'])
@@ -3136,15 +2964,6 @@ def iqac_reset_assessment(request, assessment: str, subject_id: str):
             pass
 
     return Response({'status': 'reset', 'assessment': assessment_key, 'subject_code': subject.code, 'deleted': deleted})
-
-
-@api_view(['POST'])
-@authentication_classes([JWTAuthentication])
-@permission_classes([IsAuthenticated])
-def faculty_reset_assessment(request, assessment: str, subject_id: str):
-    """Faculty reset assessment for their own teaching assignment."""
-    return iqac_reset_assessment(request, assessment, subject_id)
-
 
 
 def _parse_due_at(value):
@@ -5306,7 +5125,8 @@ def model_publish_sheet(request, subject_id: str):
     if data is None or not isinstance(data, dict):
         return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    from .models import ModelPublishedSheet
+    from .models import ModelPublishedSheet, ModelExamMark, ModelExamCOMark
+    from .services.exam_mark_persistence import persist_model_exam_marks
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
 
@@ -5316,6 +5136,58 @@ def model_publish_sheet(request, subject_id: str):
         teaching_assignment=ta,
         defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
     )
+
+    if not isinstance(body.get('coMarks'), list) or len(body.get('coMarks', [])) == 0:
+        persist_model_exam_marks(subject=subject, teaching_assignment=ta, data=data)
+    else:
+        co_marks_array = body.get('coMarks', [])
+        with transaction.atomic():
+            for student_item in co_marks_array:
+                try:
+                    sid = int(student_item.get('studentId'))
+                except (ValueError, TypeError):
+                    continue
+
+                student = StudentProfile.objects.filter(id=sid).first()
+                if not student:
+                    continue
+
+                total_mark = student_item.get('total')
+                total_dec = _coerce_decimal_or_none(total_mark)
+
+                if total_dec is None:
+                    mark_parent = ModelExamMark.objects.filter(subject=subject, student=student, teaching_assignment=ta).first()
+                    if mark_parent:
+                        mark_parent.delete()
+                    continue
+
+                mark_parent, _ = ModelExamMark.objects.update_or_create(
+                    subject=subject,
+                    student=student,
+                    teaching_assignment=ta,
+                    defaults={'total_mark': total_dec}
+                )
+
+                co_breakdown = student_item.get('coBreakdown', {})
+                if isinstance(co_breakdown, dict):
+                    co_keys = sorted(co_breakdown.keys())
+                    ModelExamCOMark.objects.filter(model_exam_mark=mark_parent).delete()
+                    for c_k in co_keys:
+                        c_num_str = c_k.replace('co', '')
+                        try:
+                            c_num = int(c_num_str)
+                            c_data = co_breakdown[c_k]
+                            c_val = _coerce_decimal_or_none(c_data.get('mark'))
+                            c_pct = _coerce_decimal_or_none(c_data.get('percentage'))
+
+                            ModelExamCOMark.objects.create(
+                                model_exam_mark=mark_parent,
+                                co_num=c_num,
+                                mark=c_val,
+                                percentage=c_pct
+                            )
+                        except (ValueError, TypeError, KeyError):
+                            pass
 
     try:
         _touch_lock_after_publish(
@@ -6331,6 +6203,7 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
         return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
     from .models import LabPublishedSheet
+    from .services.exam_mark_persistence import persist_lab_exam_marks
 
     ta = _resolve_staff_teaching_assignment(request, subject_code=subject.code, teaching_assignment_id=ta_id)
 
@@ -6341,6 +6214,8 @@ def lab_publish_sheet(request, assessment: str, subject_id: str):
         assessment=assessment,
         defaults={'data': data, 'updated_by': getattr(request.user, 'id', None)},
     )
+
+    persist_lab_exam_marks(subject=subject, teaching_assignment=ta, assessment=assessment, data=data)
 
     try:
         _touch_lock_after_publish(
@@ -7108,6 +6983,91 @@ def list_uploads(request):
         files_list = []
 
     return Response({'files': files_list})
+
+
+def _normalize_cdap_template_key(raw_key: str, name: str) -> str:
+    candidate = str(raw_key or '').strip()
+    if candidate:
+        return re.sub(r'[^a-z0-9]+', '-', candidate.lower()).strip('-')
+    fallback = str(name or '').strip().lower()
+    return re.sub(r'[^a-z0-9]+', '-', fallback).strip('-') or 'cdap-template'
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cdap_templates(request):
+    if request.method == 'GET':
+        auth = _require_permissions(request, {'obe.view'})
+        if auth:
+            return auth
+
+        templates = CdapTemplate.objects.all().order_by('-is_active', '-updated_at')
+        serializer = CdapTemplateSerializer(templates, many=True)
+        return Response(serializer.data)
+
+    auth = _require_permissions(request, {'obe.master.manage'})
+    if auth:
+        return auth
+
+    incoming = request.data or {}
+    if not incoming or not str(incoming.get('name', '')).strip():
+        return Response({'detail': 'Template name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    name = str(incoming.get('name', '')).strip()
+    key = _normalize_cdap_template_key(str(incoming.get('key', '')), name)
+
+    if bool(incoming.get('is_active')):
+        CdapTemplate.objects.exclude(key=key).update(is_active=False)
+
+    template = CdapTemplate.objects.create(
+        key=key,
+        name=name,
+        header_row_line=int(incoming.get('header_row_line', 12) or 12),
+        sheet_number=int(incoming.get('sheet_number', 1) or 1),
+        field_definitions=incoming.get('field_definitions') or [],
+        is_active=bool(incoming.get('is_active')),
+        created_by=getattr(request.user, 'id', None),
+        updated_by=getattr(request.user, 'id', None),
+    )
+    serializer = CdapTemplateSerializer(template)
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'PUT'])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def cdap_template_detail(request, template_id):
+    template = get_object_or_404(CdapTemplate, id=template_id)
+
+    if request.method == 'GET':
+        auth = _require_permissions(request, {'obe.view'})
+        if auth:
+            return auth
+        serializer = CdapTemplateSerializer(template)
+        return Response(serializer.data)
+
+    auth = _require_permissions(request, {'obe.master.manage'})
+    if auth:
+        return auth
+
+    incoming = request.data or {}
+    if not incoming or not str(incoming.get('name', '')).strip():
+        return Response({'detail': 'Template name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if bool(incoming.get('is_active')):
+        CdapTemplate.objects.exclude(id=template.id).update(is_active=False)
+
+    template.key = str(incoming.get('key', template.key)).strip() or template.key
+    template.name = str(incoming.get('name', template.name)).strip()
+    template.header_row_line = int(incoming.get('header_row_line', template.header_row_line) or template.header_row_line)
+    template.sheet_number = int(incoming.get('sheet_number', template.sheet_number) or template.sheet_number)
+    template.field_definitions = incoming.get('field_definitions') or template.field_definitions
+    template.is_active = bool(incoming.get('is_active', template.is_active))
+    template.updated_by = getattr(request.user, 'id', None)
+    template.save()
+    serializer = CdapTemplateSerializer(template)
+    return Response(serializer.data)
 
 
 @api_view(['GET', 'PUT'])

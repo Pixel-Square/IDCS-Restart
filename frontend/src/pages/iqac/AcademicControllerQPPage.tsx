@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   fetchIqacBatchQpPattern,
   fetchAcademicYears,
@@ -6,16 +6,13 @@ import {
   fetchIqacQpPattern,
   upsertIqacBatchQpPattern,
   upsertIqacQpPattern,
-  fetchSpecialExamConfig,
-  addSpecialExam,
-  removeSpecialExam,
   type AcademicYearItem,
   type CustomExamBatch,
 } from '../../services/obe';
 import { fetchAssessmentMasterConfig, saveAssessmentMasterConfig } from '../../services/cdapDb';
 import { fetchQpTypes, type QuestionPaperTypeItem } from '../../services/curriculum';
 
-type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB' | 'SPECIAL' | 'ENGLISH' | 'TAMIL' | 'FOREIGN_LANG';
+type ClassType = 'THEORY' | 'TCPR' | 'TCPL' | 'LAB';
 
 export default function AcademicControllerQPPage(): JSX.Element {
   const [tab, setTab] = useState<'qp' | 'custom'>('qp');
@@ -52,161 +49,17 @@ export default function AcademicControllerQPPage(): JSX.Element {
     };
   }, []);
 
-  // Auto-select appropriate QP type when class type changes
-  useEffect(() => {
-    if (qpTypes.length === 0) return;
-    if (selectedClassType === 'SPECIAL') {
-      // For SPECIAL, auto-select CSD
-      const csd = qpTypes.find((qp) => qp.code === 'CSD');
-      setSelectedQpType(csd ? csd.code : null);
-    } else if (selectedClassType === 'ENGLISH') {
-      // For ENGLISH, auto-select ELECTIVE1 if available
-      const e1 = qpTypes.find((qp) => qp.code === 'ELECTIVE1');
-      setSelectedQpType(e1 ? e1.code : 'ELECTIVE1');
-    } else if (selectedClassType === 'TAMIL') {
-      // For TAMIL, auto-select TAM_THEORY if available
-      const tam = qpTypes.find((qp) => qp.code === 'TAM_THEORY');
-      setSelectedQpType(tam ? tam.code : 'TAM_THEORY');
-    } else if (selectedClassType === 'FOREIGN_LANG') {
-      // For FOREIGN_LANG, auto-select FLC_QP if available
-      const flc = qpTypes.find((qp) => qp.code === 'FLC_QP');
-      setSelectedQpType(flc ? flc.code : 'FLC_QP');
-    } else if (selectedClassType === 'THEORY') {
-      // For THEORY, select first non-CSD type
-      const nonCsd = qpTypes.filter((qp) => qp.code !== 'CSD');
-      if (nonCsd.length > 0 && (!selectedQpType || selectedQpType === 'CSD')) {
-        setSelectedQpType(nonCsd[0].code);
-      }
-    } else {
-      setSelectedQpType(null);
-    }
-  }, [selectedClassType, qpTypes]);
-
   const classTypeOptions: Array<{ key: ClassType; label: string }> = useMemo(
     () => [
       { key: 'THEORY', label: 'Theory' },
       { key: 'TCPR', label: 'TCPR' },
       { key: 'TCPL', label: 'TCPL' },
       { key: 'LAB', label: 'LAB' },
-      { key: 'SPECIAL', label: 'Special' },
-      { key: 'ENGLISH', label: 'English' },
-      { key: 'TAMIL', label: 'Tamil' },
-      { key: 'FOREIGN_LANG', label: 'Foreign Language' },
     ],
     []
   );
 
   const [selectedExam, setSelectedExam] = useState<'SSA1' | 'SSA2' | 'FORMATIVE1' | 'FORMATIVE2' | 'CIA1' | 'CIA2' | 'MODEL'>('SSA1');
-
-  // ── SPECIAL: dynamic exam config ──
-  const [specialExams, setSpecialExams] = useState<string[]>([]);
-  const [specialExamsLoading, setSpecialExamsLoading] = useState(false);
-  const [specialExamMsg, setSpecialExamMsg] = useState<string | null>(null);
-
-  const isSpecialClassType = selectedClassType === 'SPECIAL';
-
-  // Cycle definitions for the Add buttons
-  const examGroups = useMemo(() => [
-    { group: 'SSA', label: 'SSA', cycle: ['SSA1', 'SSA2'] },
-    { group: 'CIA', label: 'CIA', cycle: ['CIA1', 'CIA2'] },
-    { group: 'FA', label: 'FA', cycle: ['FORMATIVE1', 'FORMATIVE2'] },
-    { group: 'MODEL', label: 'MODEL', cycle: ['MODEL'] },
-  ], []);
-
-  // Which groups still have capacity to add
-  const canAddGroup = useMemo(() => {
-    const set = new Set(specialExams);
-    const result: Record<string, boolean> = {};
-    for (const g of examGroups) {
-      result[g.group] = g.cycle.some((ex) => !set.has(ex));
-    }
-    return result;
-  }, [specialExams, examGroups]);
-
-  // Which groups have any exams to remove
-  const canRemoveGroup = useMemo(() => {
-    const set = new Set(specialExams);
-    const result: Record<string, boolean> = {};
-    for (const g of examGroups) {
-      result[g.group] = g.cycle.some((ex) => set.has(ex));
-    }
-    return result;
-  }, [specialExams, examGroups]);
-
-  // Load special exam config when SPECIAL is selected
-  useEffect(() => {
-    if (!isSpecialClassType) {
-      setSpecialExams([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      setSpecialExamsLoading(true);
-      try {
-        const exams = await fetchSpecialExamConfig(selectedQpType || undefined);
-        if (!cancelled) setSpecialExams(exams);
-      } catch (e) {
-        console.error('Failed to load special exam config:', e);
-        if (!cancelled) setSpecialExams([]);
-      } finally {
-        if (!cancelled) setSpecialExamsLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isSpecialClassType, selectedQpType]);
-
-  // When specialExams loads and selectedExam is not in the list, auto-select the first one
-  useEffect(() => {
-    if (!isSpecialClassType || specialExams.length === 0) return;
-    if (!specialExams.includes(selectedExam)) {
-      setSelectedExam(specialExams[0] as typeof selectedExam);
-    }
-  }, [isSpecialClassType, specialExams, selectedExam]);
-
-  const handleAddExam = useCallback(async (group: string) => {
-    setSpecialExamMsg(null);
-    try {
-      const result = await addSpecialExam(group, selectedQpType || undefined);
-      setSpecialExams(result.exams);
-      if (result.added) {
-        setSelectedExam(result.added as typeof selectedExam);
-        setSpecialExamMsg(`Added ${result.added}`);
-      }
-    } catch (e: any) {
-      setSpecialExamMsg(e?.message || 'Failed to add exam');
-    }
-  }, [selectedQpType]);
-
-  const handleRemoveExam = useCallback(async (group: string) => {
-    setSpecialExamMsg(null);
-    try {
-      const result = await removeSpecialExam(group, selectedQpType || undefined);
-      setSpecialExams(result.exams);
-      if (result.removed) {
-        setSpecialExamMsg(`Removed ${result.removed}`);
-        // If we removed the currently selected exam, switch to first available
-        if (result.removed === selectedExam && result.exams.length > 0) {
-          setSelectedExam(result.exams[0] as typeof selectedExam);
-        }
-      }
-    } catch (e: any) {
-      setSpecialExamMsg(e?.message || 'Failed to remove exam');
-    }
-  }, [selectedQpType, selectedExam]);
-
-  // Exam label helper
-  const examLabel = (k: string): string => {
-    switch (k) {
-      case 'SSA1': return 'SSA 1';
-      case 'SSA2': return 'SSA 2';
-      case 'FORMATIVE1': return 'FA 1';
-      case 'FORMATIVE2': return 'FA 2';
-      case 'CIA1': return 'CIA 1';
-      case 'CIA2': return 'CIA 2';
-      case 'MODEL': return 'MODEL';
-      default: return k;
-    }
-  };
 
   const isReviewCfgClass = selectedClassType === 'TCPR' || selectedClassType === 'TCPL';
   const [selectedReviewExam, setSelectedReviewExam] = useState<'review1' | 'review2'>('review1');
@@ -279,15 +132,10 @@ export default function AcademicControllerQPPage(): JSX.Element {
   const visibleCosForExam = useMemo((): number[] => {
     const exam = tab === 'custom' ? selectedCustomExam : selectedExam;
     if (!isCoWisePattern) return [1, 2, 3, 4, 5];
-    // QP1FINAL (THEORY) and TAM_THEORY (TAMIL) both use [2,3] CO range for Cycle-2 exams.
-    const qpCode = (selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL')
+    const qpCode = selectedClassType === 'THEORY'
       ? (selectedQpType || '').toUpperCase().replace(/\s+/g, '')
-      : (selectedClassType === 'TAMIL')
-        ? (selectedQpType || '').toUpperCase().replace(/\s+/g, '')
-        : '';
-    const isQp1Final =
-      qpCode === 'QP1FINAL' || qpCode === 'QP1FINALYEAR' ||
-      (selectedClassType === 'TAMIL' && qpCode === 'TAM_THEORY');
+      : '';
+    const isQp1Final = qpCode === 'QP1FINAL' || qpCode === 'QP1FINALYEAR';
     if (exam === 'SSA1' || exam === 'FORMATIVE1') return [1, 2];
     if (exam === 'SSA2' || exam === 'FORMATIVE2') return isQp1Final ? [2, 3] : [3, 4];
     return [1, 2, 3, 4, 5];
@@ -295,8 +143,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
   const backendKey = useMemo(() => {
     const class_type = selectedClassType;
-    const qpTypeClasses: ClassType[] = ['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'];
-    const question_paper_type = qpTypeClasses.includes(selectedClassType) ? selectedQpType : null;
+    const question_paper_type = selectedClassType === 'THEORY' ? selectedQpType : null;
     return {
       class_type,
       question_paper_type,
@@ -306,8 +153,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
 
   const customBackendKey = useMemo(() => {
     const class_type = selectedClassType;
-    const qpTypeClasses: ClassType[] = ['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'];
-    const question_paper_type = qpTypeClasses.includes(selectedClassType) ? selectedQpType : null;
+    const question_paper_type = selectedClassType === 'THEORY' ? selectedQpType : null;
     return {
       batch_id: selectedBatchId,
       class_type,
@@ -364,7 +210,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
             if (upper === 'BOTH') {
               return backendKey.exam === 'CIA2' ? '3&4' : '1&2';
             }
-            if (upper === '1&2' || upper === '3&4' || upper === '1&2&3&4&5') return upper;
+            if (upper === '1&2' || upper === '3&4') return upper;
             return s;
           };
 
@@ -511,7 +357,7 @@ export default function AcademicControllerQPPage(): JSX.Element {
             }
             const upper = s.toUpperCase();
             if (upper === 'BOTH') return 'both';
-            if (upper === '1&2' || upper === '3&4' || upper === 'BOTH' || upper === '1&2&3&4&5') return upper;
+            if (upper === '1&2' || upper === '3&4' || upper === 'BOTH') return upper;
             return s;
           };
 
@@ -737,7 +583,6 @@ export default function AcademicControllerQPPage(): JSX.Element {
           if (s === 'both') return 'both';
           if (s === '1&2') return 12;
           if (s === '3&4') return 34;
-          if (s === '1&2&3&4&5') return '1&2&3&4&5';
           const n = Number(s);
           if (!Number.isFinite(n)) return '';
           return Math.trunc(n);
@@ -840,27 +685,15 @@ export default function AcademicControllerQPPage(): JSX.Element {
         })}
       </div>
 
-      {(['THEORY', 'SPECIAL', 'TAMIL', 'ENGLISH', 'FOREIGN_LANG'] as ClassType[]).includes(selectedClassType) && (() => {
-        // For SPECIAL: show only CSD; for TAMIL: show only TAM_THEORY; for ENGLISH: show only ELECTIVE1;
-        // for FOREIGN_LANG: show only FLC_QP; for THEORY: show all except special-use codes
-        const filteredQpTypes = selectedClassType === 'SPECIAL'
-          ? qpTypes.filter((qp) => qp.code === 'CSD')
-          : selectedClassType === 'TAMIL'
-          ? qpTypes.filter((qp) => qp.code === 'TAM_THEORY')
-          : selectedClassType === 'ENGLISH'
-          ? qpTypes.filter((qp) => qp.code === 'ELECTIVE1')
-          : selectedClassType === 'FOREIGN_LANG'
-          ? qpTypes.filter((qp) => qp.code === 'FLC_QP')
-          : qpTypes.filter((qp) => qp.code !== 'CSD' && qp.code !== 'TAM_THEORY');
-        return (
+      {selectedClassType === 'THEORY' && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
           <div style={{ fontSize: 13, color: '#6b7280', fontWeight: 800, marginRight: 8 }}>Question Paper Type:</div>
           {qpTypesLoading ? (
             <div style={{ fontSize: 13, color: '#6b7280', padding: '8px 0' }}>Loading...</div>
-          ) : filteredQpTypes.length === 0 ? (
+          ) : qpTypes.length === 0 ? (
             <div style={{ fontSize: 13, color: '#6b7280', padding: '8px 0' }}>No QP types available</div>
           ) : (
-            filteredQpTypes.map((qp) => {
+            qpTypes.map((qp) => {
               const active = qp.code === selectedQpType;
               return (
                 <button
@@ -875,119 +708,31 @@ export default function AcademicControllerQPPage(): JSX.Element {
             })
           )}
         </div>
-        );
-      })()}
+      )}
 
       {tab === 'qp' ? (
-        isSpecialClassType ? (
-          /* ── SPECIAL: dynamic exam tabs with add/remove ── */
-          <div style={{ marginBottom: 12 }}>
-            {specialExamsLoading ? (
-              <div style={{ fontSize: 13, color: '#6b7280', padding: '8px 0' }}>Loading exam configuration…</div>
-            ) : (
-              <>
-                {/* Current exam tabs */}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
-                  {specialExams.length === 0 ? (
-                    <div style={{ fontSize: 13, color: '#6b7280' }}>No exams configured yet. Use the buttons below to add assessments.</div>
-                  ) : (
-                    specialExams.map((k) => {
-                      const active = selectedExam === k;
-                      return (
-                        <button
-                          key={k}
-                          onClick={() => setSelectedExam(k as typeof selectedExam)}
-                          className={active ? 'obe-btn obe-btn-primary' : 'obe-btn obe-btn-secondary'}
-                          type="button"
-                        >
-                          {examLabel(k)}
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* Add / Remove exam group buttons */}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
-                  <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 700, marginRight: 4 }}>Add:</span>
-                  {examGroups.map((g) => (
-                    <button
-                      key={`add-${g.group}`}
-                      type="button"
-                      disabled={!canAddGroup[g.group]}
-                      onClick={() => handleAddExam(g.group)}
-                      style={{
-                        fontSize: 12,
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        border: '1px solid #d1d5db',
-                        background: canAddGroup[g.group] ? '#ecfdf5' : '#f3f4f6',
-                        color: canAddGroup[g.group] ? '#065f46' : '#9ca3af',
-                        cursor: canAddGroup[g.group] ? 'pointer' : 'not-allowed',
-                        fontWeight: 600,
-                      }}
-                    >
-                      + {g.label}
-                    </button>
-                  ))}
-
-                  <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 700, marginLeft: 12, marginRight: 4 }}>Remove:</span>
-                  {examGroups.map((g) => (
-                    <button
-                      key={`rm-${g.group}`}
-                      type="button"
-                      disabled={!canRemoveGroup[g.group]}
-                      onClick={() => handleRemoveExam(g.group)}
-                      style={{
-                        fontSize: 12,
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        border: '1px solid #d1d5db',
-                        background: canRemoveGroup[g.group] ? '#fef2f2' : '#f3f4f6',
-                        color: canRemoveGroup[g.group] ? '#991b1b' : '#9ca3af',
-                        cursor: canRemoveGroup[g.group] ? 'pointer' : 'not-allowed',
-                        fontWeight: 600,
-                      }}
-                    >
-                      − {g.label}
-                    </button>
-                  ))}
-                </div>
-
-                {specialExamMsg && (
-                  <div style={{
-                    marginTop: 8,
-                    fontSize: 12,
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    background: specialExamMsg.startsWith('Failed') || specialExamMsg.startsWith('All ') ? '#fef2f2' : '#ecfdf5',
-                    color: specialExamMsg.startsWith('Failed') || specialExamMsg.startsWith('All ') ? '#991b1b' : '#065f46',
-                    border: `1px solid ${specialExamMsg.startsWith('Failed') || specialExamMsg.startsWith('All ') ? '#ef444433' : '#10b98133'}`,
-                  }}>
-                    {specialExamMsg}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        ) : (
-          /* ── Non-SPECIAL: static exam tabs ── */
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-            {(['SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL'] as const).map((k) => {
-              const active = selectedExam === k;
-              return (
-                <button
-                  key={k}
-                  onClick={() => setSelectedExam(k)}
-                  className={active ? 'obe-btn obe-btn-primary' : 'obe-btn obe-btn-secondary'}
-                  type="button"
-                >
-                  {examLabel(k)}
-                </button>
-              );
-            })}
-          </div>
-        )
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          {(['SSA1', 'SSA2', 'FORMATIVE1', 'FORMATIVE2', 'CIA1', 'CIA2', 'MODEL'] as const).map((k) => {
+            const active = selectedExam === k;
+            const label = k === 'SSA1' ? 'SSA 1' 
+              : k === 'SSA2' ? 'SSA 2'
+              : k === 'FORMATIVE1' ? 'FA 1'
+              : k === 'FORMATIVE2' ? 'FA 2'
+              : k === 'CIA1' ? 'CIA 1' 
+              : k === 'CIA2' ? 'CIA 2' 
+              : 'MODEL';
+            return (
+              <button
+                key={k}
+                onClick={() => setSelectedExam(k)}
+                className={active ? 'obe-btn obe-btn-primary' : 'obe-btn obe-btn-secondary'}
+                type="button"
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       ) : (
         <div className="obe-card" style={{ padding: 12, marginBottom: 12 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
@@ -1058,18 +803,26 @@ export default function AcademicControllerQPPage(): JSX.Element {
         <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 800, marginBottom: 6 }}>Selected</div>
         <div style={{ fontWeight: 900, color: '#111827' }}>
           {classTypeOptions.find((ct) => ct.key === selectedClassType)?.label || selectedClassType}
-          {(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && selectedQpType ? ` - ${qpTypes.find((qp) => qp.code === selectedQpType)?.label || selectedQpType}` : ''}
+          {selectedClassType === 'THEORY' && selectedQpType ? ` - ${qpTypes.find((qp) => qp.code === selectedQpType)?.label || selectedQpType}` : ''}
         </div>
         <div style={{ marginTop: 6, fontSize: 13, color: '#374151' }}>
           Class type: <strong>{selectedClassType}</strong>
-          {(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && selectedQpType ? (
+          {selectedClassType === 'THEORY' && selectedQpType ? (
             <>
               {' '}• QP: <strong>{selectedQpType}</strong>
             </>
           ) : null}
           {tab === 'qp' && (
             <>
-              {' '}• Exam: <strong>{examLabel(selectedExam)}</strong>
+              {' '}• Exam: <strong>{
+                selectedExam === 'SSA1' ? 'SSA 1'
+                : selectedExam === 'SSA2' ? 'SSA 2'
+                : selectedExam === 'FORMATIVE1' ? 'FA 1'
+                : selectedExam === 'FORMATIVE2' ? 'FA 2'
+                : selectedExam === 'CIA1' ? 'CIA 1' 
+                : selectedExam === 'CIA2' ? 'CIA 2' 
+                : 'MODEL'
+              }</strong>
             </>
           )}
         </div>
@@ -1080,15 +833,22 @@ export default function AcademicControllerQPPage(): JSX.Element {
         ) : null}
       </div>
 
-      {/* CIA / MODEL pattern table — hide when SPECIAL has no exams */}
-      {(!isSpecialClassType || specialExams.includes(selectedExam)) && (
+      {/* CIA / MODEL pattern table */}
       <div className="obe-card" style={{ padding: 12, marginTop: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 10 }}>
           <div style={{ fontWeight: 900, color: '#111827' }}>QP Pattern</div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>
             {tab === 'qp'
-              ? `${examLabel(selectedExam)} • ${selectedClassType}${(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && selectedQpType ? ` ${selectedQpType}` : ''}`
-              : `${customExamKeys.find((k) => k.key === selectedCustomExam)?.label || selectedCustomExam} • ${selectedClassType}${(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && selectedQpType ? ` ${selectedQpType}` : ''}${selectedBatch ? ` • ${selectedBatch.name}` : ''}`}
+              ? `${
+                  selectedExam === 'SSA1' ? 'SSA 1'
+                  : selectedExam === 'SSA2' ? 'SSA 2'
+                  : selectedExam === 'FORMATIVE1' ? 'FA 1'
+                  : selectedExam === 'FORMATIVE2' ? 'FA 2'
+                  : selectedExam === 'CIA1' ? 'CIA 1' 
+                  : selectedExam === 'CIA2' ? 'CIA 2' 
+                  : 'MODEL'
+                } • ${selectedClassType}${selectedClassType === 'THEORY' && selectedQpType ? ` ${selectedQpType}` : ''}`
+              : `${customExamKeys.find((k) => k.key === selectedCustomExam)?.label || selectedCustomExam} • ${selectedClassType}${selectedClassType === 'THEORY' && selectedQpType ? ` ${selectedQpType}` : ''}${selectedBatch ? ` • ${selectedBatch.name}` : ''}`}
           </div>
         </div>
 
@@ -1209,9 +969,6 @@ export default function AcademicControllerQPPage(): JSX.Element {
                           <option value="4">4</option>
                           <option value="3&4">3&4</option>
                           <option value="5">5</option>
-                          {(selectedClassType === 'THEORY' || selectedClassType === 'SPECIAL') && selectedQpType === 'QP2' && (
-                            <option value="1&2&3&4&5">All (1-5)</option>
-                          )}
                         </select>
                       </td>
                       <td style={{ padding: '8px 6px', borderBottom: '1px solid #f3f4f6' }}>
@@ -1251,7 +1008,6 @@ export default function AcademicControllerQPPage(): JSX.Element {
           </button>
         </div>
       </div>
-      )}
 
       {/* TCPR/TCPL Review configuration */}
       {isReviewCfgClass ? (

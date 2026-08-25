@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getMe, requestMobileOtp, verifyMobileOtp, removeMobileNumber, changePassword, getCachedMe } from '../../services/auth';
-import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Home, Users, GraduationCap, BookOpen } from 'lucide-react';
+import { User, Mail, Shield, Building, Briefcase, School, Phone, CheckCircle2, Trash2, Key, Eye, EyeOff, Edit2, Save, X, Camera, CreditCard, XCircle, Award } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import { ModalPortal } from '../../components/ModalPortal';
 import logo from '../../assets/idcs-logo.png';
@@ -81,41 +81,6 @@ function getDisplayName(me: Me | null | undefined): string {
   return String(`${first} ${last}`).trim();
 }
 
-function formatDateOfJoin(value: unknown): string {
-  const raw = String(value || '').trim();
-  if (!raw) return '—';
-  const dt = new Date(raw);
-  if (Number.isNaN(dt.getTime())) return '—';
-  return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function getExperienceText(value: unknown): string {
-  const raw = String(value || '').trim();
-  if (!raw) return '—';
-  const doj = new Date(raw);
-  if (Number.isNaN(doj.getTime())) return '—';
-
-  const now = new Date();
-  if (doj > now) return '0 months';
-
-  let years = now.getFullYear() - doj.getFullYear();
-  let months = now.getMonth() - doj.getMonth();
-
-  if (now.getDate() < doj.getDate()) {
-    months -= 1;
-  }
-  if (months < 0) {
-    years -= 1;
-    months += 12;
-  }
-
-  if (years <= 0) {
-    return `${Math.max(months, 0)} month${months === 1 ? '' : 's'}`;
-  }
-
-  return `${years} year${years === 1 ? '' : 's'} ${months} month${months === 1 ? '' : 's'}`;
-}
-
 export default function ProfilePage({ user: initialUser }: { user?: Me | null }) {
   const [user, setUser] = useState<Me | null | undefined>(initialUser === undefined ? null : initialUser);
   const [loading, setLoading] = useState(initialUser ? false : true);
@@ -167,37 +132,14 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
   const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
   const [changePasswordSuccess, setChangePasswordSuccess] = useState(false);
 
-  // Student details edit states
-  const [studentDetailsModalOpen, setStudentDetailsModalOpen] = useState(false);
-  const [studentDetailsDraft, setStudentDetailsDraft] = useState({
-    father_name: '',
-    father_phone: '',
-    mother_name: '',
-    mother_phone: '',
-    address: '',
-  });
-  const [studentDetailsSaving, setStudentDetailsSaving] = useState(false);
-  const [studentDetailsError, setStudentDetailsError] = useState<string | null>(null);
-  const [studentDetailsSuccess, setStudentDetailsSuccess] = useState(false);
-
   // One-time edit state for name using a single source of truth for UI sync.
   const [isEditingName, setIsEditingName] = useState(false);
-  const [profile, setProfile] = useState({
-    name: '',
-    first_name: '',
-    last_name: '',
-    professional_email: '',
-    personal_email: '',
-    nameEdited: false,
-  });
+  const [profile, setProfile] = useState({ name: '', first_name: '', last_name: '', email: '', nameEdited: false });
   const [nameEmailEditError, setNameEmailEditError] = useState<string | null>(null);
   const [nameEmailSaving, setNameEmailSaving] = useState(false);
-  const [professionalEmailEditing, setProfessionalEmailEditing] = useState(false);
-  const [professionalEmailSaving, setProfessionalEmailSaving] = useState(false);
-  const [professionalEmailError, setProfessionalEmailError] = useState<string | null>(null);
-  const [personalEmailEditing, setPersonalEmailEditing] = useState(false);
-  const [personalEmailSaving, setPersonalEmailSaving] = useState(false);
-  const [personalEmailError, setPersonalEmailError] = useState<string | null>(null);
+  const [emailEditing, setEmailEditing] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailEditError, setEmailEditError] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarCandidateIndex, setAvatarCandidateIndex] = useState(0);
@@ -355,8 +297,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       name: getDisplayName(user),
       first_name: String(user?.first_name || ''),
       last_name: String(user?.last_name || ''),
-      professional_email: String(user?.email || ''),
-      personal_email: String((user as any)?.profile?.personal_email || ''),
+      email: String(user?.email || ''),
       nameEdited: edited,
     });
     if (edited) setIsEditingName(false);
@@ -684,50 +625,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
-  async function handleSaveStudentDetails() {
-    setStudentDetailsError(null);
-    setStudentDetailsSuccess(false);
-    try {
-      setStudentDetailsSaving(true);
-      const response = await fetchWithAuth('/api/accounts/profile/update/', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(studentDetailsDraft),
-      });
-      const resData = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(resData.detail || 'Failed to update student details');
-      }
-      const updated = resData.user ? resData.user : await getMe();
-      applyUserUpdate(updated);
-      try {
-        localStorage.setItem('me', JSON.stringify(updated));
-      } catch (_) {}
-      setStudentDetailsSuccess(true);
-      setTimeout(() => {
-        setStudentDetailsModalOpen(false);
-        setStudentDetailsSuccess(false);
-      }, 1200);
-    } catch (e: any) {
-      setStudentDetailsError(String(e?.message || e || 'Failed to update student details'));
-    } finally {
-      setStudentDetailsSaving(false);
-    }
-  }
-
-  function openStudentDetailsModal() {
-    setStudentDetailsDraft({
-      father_name: String((user as any)?.profile?.father_name || ''),
-      father_phone: String((user as any)?.profile?.father_phone || ''),
-      mother_name: String((user as any)?.profile?.mother_name || ''),
-      mother_phone: String((user as any)?.profile?.mother_phone || ''),
-      address: String((user as any)?.profile?.address || ''),
-    });
-    setStudentDetailsError(null);
-    setStudentDetailsSuccess(false);
-    setStudentDetailsModalOpen(true);
-  }
-
   async function handleSaveName() {
     setNameEmailEditError(null);
     const firstName = String(profile.first_name || '').trim();
@@ -766,8 +663,7 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         name: getDisplayName(normalized),
         first_name: String(normalized.first_name || ''),
         last_name: String(normalized.last_name || ''),
-        professional_email: String(normalized.email || ''),
-        personal_email: String((normalized as any)?.profile?.personal_email || ''),
+        email: String(normalized.email || ''),
         nameEdited: Boolean((normalized as any)?.profileEdited ?? (normalized as any)?.name_email_edited),
       });
       setIsEditingName(false);
@@ -778,21 +674,22 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     }
   }
 
-  async function handleSaveProfessionalEmail() {
-    setProfessionalEmailError(null);
-    const next = String((profile.professional_email || '')).trim().toLowerCase();
+  async function handleSaveEmail() {
+    setEmailEditError(null);
+    const next = String((profile.email || '')).trim().toLowerCase();
     if (!next) {
-      setProfessionalEmailError('Professional email cannot be empty.');
+      setEmailEditError('Email cannot be empty.');
       return;
     }
+    // simple validation
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRe.test(next)) {
-      setProfessionalEmailError('Enter a valid professional email address.');
+      setEmailEditError('Enter a valid email address.');
       return;
     }
 
     try {
-      setProfessionalEmailSaving(true);
+      setEmailSaving(true);
       const response = await fetchWithAuth('/api/accounts/profile/update/', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -800,49 +697,16 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to update professional email');
+        throw new Error(data.detail || 'Failed to update email');
       }
       const updated = await getMe();
       applyUserUpdate(updated);
-      setProfile((p) => ({ ...p, professional_email: String(updated.email || '') }));
-      setProfessionalEmailEditing(false);
+      setProfile((p) => ({ ...p, email: String(updated.email || '') }));
+      setEmailEditing(false);
     } catch (e: any) {
-      setProfessionalEmailError(String(e?.message || e || 'Failed to update professional email'));
+      setEmailEditError(String(e?.message || e || 'Failed to update email'));
     } finally {
-      setProfessionalEmailSaving(false);
-    }
-  }
-
-  async function handleSavePersonalEmail() {
-    setPersonalEmailError(null);
-    const next = String((profile.personal_email || '')).trim().toLowerCase();
-    if (next) {
-      const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRe.test(next)) {
-        setPersonalEmailError('Enter a valid personal email address.');
-        return;
-      }
-    }
-
-    try {
-      setPersonalEmailSaving(true);
-      const response = await fetchWithAuth('/api/accounts/profile/update/', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personal_email: next }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to update personal email');
-      }
-      const updated = await getMe();
-      applyUserUpdate(updated);
-      setProfile((p) => ({ ...p, personal_email: String((updated as any)?.profile?.personal_email || '') }));
-      setPersonalEmailEditing(false);
-    } catch (e: any) {
-      setPersonalEmailError(String(e?.message || e || 'Failed to update personal email'));
-    } finally {
-      setPersonalEmailSaving(false);
+      setEmailSaving(false);
     }
   }
 
@@ -859,16 +723,10 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
     setNameEmailEditError(null);
   }
 
-  function cancelEditingProfessionalEmail() {
-    setProfile((prev) => ({ ...prev, professional_email: String(user?.email || '') }));
-    setProfessionalEmailEditing(false);
-    setProfessionalEmailError(null);
-  }
-
-  function cancelEditingPersonalEmail() {
-    setProfile((prev) => ({ ...prev, personal_email: String((user as any)?.profile?.personal_email || '') }));
-    setPersonalEmailEditing(false);
-    setPersonalEmailError(null);
+  function cancelEditingEmail() {
+    setProfile((prev) => ({ ...prev, email: String(user?.email || '') }));
+    setEmailEditing(false);
+    setEmailEditError(null);
   }
 
   function handleAvatarEditClick() {
@@ -1171,6 +1029,12 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   </div>
                 </div>
               )}
+              <div className="bg-gradient-to-r from-amber-500 to-indigo-600 rounded-lg px-4 py-2 shadow-sm text-white flex flex-col justify-center shrink-0">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-200">PBAS Score</div>
+                <div className="font-black text-xl leading-tight">
+                  {(user as any)?.pbas_credit ?? (user as any)?.profile?.pbas_credit ?? 0} Points
+                </div>
+              </div>
               <div className="bg-white rounded-lg px-4 py-2 shadow-sm border border-gray-100">
                 <div className="text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Profile Type</div>
                 <div className="font-bold text-gray-900">{user.profile_type || '—'}</div>
@@ -1183,6 +1047,21 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
         <div>
           <h3 className="text-xl font-bold text-gray-900 mb-4">Details</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* PBAS Score Card */}
+            <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow border-l-4 border-amber-500">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <Award className="w-5 h-5 text-amber-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-500 mb-1">PBAS Score</div>
+                  <div className="text-2xl font-black text-amber-700">
+                    {(user as any)?.pbas_credit ?? (user as any)?.profile?.pbas_credit ?? 0}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Staff/Student ID Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
               <div className="flex items-start gap-3">
@@ -1297,94 +1176,47 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                   <Mail className="w-5 h-5 text-emerald-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-gray-500 mb-3">Email</div>
-
-                  <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-gray-500 mb-1">Email</div>
                     <div>
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs font-semibold text-gray-500">Professional Mail</div>
-                        <button
-                          onClick={() => { setProfessionalEmailEditing(true); setProfessionalEmailError(null); }}
-                          className="text-xs text-blue-600 hover:text-blue-700"
-                        >
-                          Edit
-                        </button>
-                      </div>
-
-                      {professionalEmailEditing ? (
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="email"
-                            value={profile.professional_email || ''}
-                            onChange={(e) => setProfile((p) => ({ ...p, professional_email: e.target.value }))}
-                            className="w-full px-3 py-2 border rounded text-sm"
-                            disabled={professionalEmailSaving}
-                          />
-                          <button
-                            onClick={handleSaveProfessionalEmail}
-                            disabled={professionalEmailSaving}
-                            className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
-                          >
-                            {professionalEmailSaving ? 'Saving...' : 'Save'}
-                          </button>
-                          <button
-                            onClick={cancelEditingProfessionalEmail}
-                            disabled={professionalEmailSaving}
-                            className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="text-gray-900 font-medium truncate mt-2">{profile.professional_email || '—'}</div>
-                      )}
-
-                      {professionalEmailError && <div className="text-xs text-red-600 mt-2">{professionalEmailError}</div>}
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs font-semibold text-gray-500">Personal Mail</div>
-                        <button
-                          onClick={() => { setPersonalEmailEditing(true); setPersonalEmailError(null); }}
-                          className="text-xs text-blue-600 hover:text-blue-700"
-                        >
-                          Edit
-                        </button>
-                      </div>
-
-                      {personalEmailEditing ? (
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="email"
-                            value={profile.personal_email || ''}
-                            onChange={(e) => setProfile((p) => ({ ...p, personal_email: e.target.value }))}
-                            className="w-full px-3 py-2 border rounded text-sm"
-                            disabled={personalEmailSaving}
-                            placeholder="Optional"
-                          />
-                          <button
-                            onClick={handleSavePersonalEmail}
-                            disabled={personalEmailSaving}
-                            className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
-                          >
-                            {personalEmailSaving ? 'Saving...' : 'Save'}
-                          </button>
-                          <button
-                            onClick={cancelEditingPersonalEmail}
-                            disabled={personalEmailSaving}
-                            className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="text-gray-900 font-medium truncate mt-2">{profile.personal_email || '—'}</div>
-                      )}
-
-                      {personalEmailError && <div className="text-xs text-red-600 mt-2">{personalEmailError}</div>}
+                      <button
+                        onClick={() => { setEmailEditing(true); setEmailEditError(null); }}
+                        className="text-xs text-blue-600 hover:text-blue-700"
+                      >
+                        Edit
+                      </button>
                     </div>
                   </div>
+
+                  {emailEditing ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        type="email"
+                        value={profile.email || ''}
+                        onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+                        className="w-full px-3 py-2 border rounded text-sm"
+                        disabled={emailSaving}
+                      />
+                      <button
+                        onClick={handleSaveEmail}
+                        disabled={emailSaving}
+                        className="px-3 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                      >
+                        {emailSaving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={cancelEditingEmail}
+                        disabled={emailSaving}
+                        className="px-3 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-gray-900 font-medium truncate mt-2">{profile.email || '—'}</div>
+                  )}
+
+                  {emailEditError && <div className="text-xs text-red-600 mt-2">{emailEditError}</div>}
                 </div>
               </div>
             </div>
@@ -1431,40 +1263,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
                 </div>
               </div>
             </div>
-
-            {/* Date Of Join Card — Staff only */}
-            {user.profile_type === 'STAFF' && (
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-cyan-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <CreditCard className="w-5 h-5 text-cyan-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Date of Join</div>
-                    <div className="text-gray-900 font-medium truncate">
-                      {formatDateOfJoin(user.profile?.date_of_join)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Experience Card — Staff only */}
-            {user.profile_type === 'STAFF' && (
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Briefcase className="w-5 h-5 text-green-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Experience</div>
-                    <div className="text-gray-900 font-medium truncate">
-                      {getExperienceText(user.profile?.date_of_join)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* College Card */}
             <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-3">
@@ -1612,266 +1410,6 @@ export default function ProfilePage({ user: initialUser }: { user?: Me | null })
 
           </div>
         </div>
-
-        {/* Student Personal & Parent Details Section */}
-        {user.profile_type === 'STUDENT' && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900">Student Details</h3>
-              <button
-                onClick={openStudentDetailsModal}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
-              >
-                <Edit2 className="w-4 h-4" />
-                Edit Details
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
-              {/* Batch Card */}
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <GraduationCap className="w-5 h-5 text-indigo-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Batch</div>
-                    <div className="text-gray-900 font-medium">{user.profile?.batch || '—'}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Section Card */}
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <BookOpen className="w-5 h-5 text-blue-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Section</div>
-                    <div className="text-gray-900 font-medium">{user.profile?.section || '—'}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Father's Details Card */}
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Users className="w-5 h-5 text-amber-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-2">Father's Details</div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-500 w-12">Name:</span>
-                        <span className="text-gray-900 font-medium">{user.profile?.father_name || '—'}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-500 w-12">Phone:</span>
-                        <span className="text-gray-900 font-medium">{user.profile?.father_phone || '—'}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Mother's Details Card */}
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-pink-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Users className="w-5 h-5 text-pink-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-2">Mother's Details</div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-500 w-12">Name:</span>
-                        <span className="text-gray-900 font-medium">{user.profile?.mother_name || '—'}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-500 w-12">Phone:</span>
-                        <span className="text-gray-900 font-medium">{user.profile?.mother_phone || '—'}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Address Card */}
-              <div className="bg-white rounded-lg p-5 shadow-md hover:shadow-lg transition-shadow lg:col-span-2">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Home className="w-5 h-5 text-teal-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-gray-500 mb-1">Address</div>
-                    <div className="text-gray-900 font-medium whitespace-pre-line leading-relaxed">
-                      {user.profile?.address || '—'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          </div>
-        )}
-
-        {/* Student Details Edit Modal */}
-        {studentDetailsModalOpen && (
-          <ModalPortal>
-            <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-              <div
-                className="absolute inset-0 bg-black opacity-40"
-                onClick={() => { if (!studentDetailsSaving) setStudentDetailsModalOpen(false); }}
-              />
-              <div className="bg-white rounded-2xl shadow-2xl z-10 w-full max-w-lg overflow-hidden">
-                {/* Modal Header */}
-                <div className="bg-gradient-to-r from-indigo-600 to-blue-500 px-6 py-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 bg-white/20 rounded-lg flex items-center justify-center">
-                      <Users className="w-5 h-5 text-white" />
-                    </div>
-                    <h3 className="text-lg font-semibold text-white">Edit Student Details</h3>
-                  </div>
-                  <button
-                    onClick={() => { if (!studentDetailsSaving) setStudentDetailsModalOpen(false); }}
-                    className="text-white/80 hover:text-white transition-colors"
-                    disabled={studentDetailsSaving}
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                {/* Modal Body */}
-                <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
-                  {studentDetailsSuccess && (
-                    <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                      <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                      <span className="text-sm text-emerald-800 font-medium">Details updated successfully!</span>
-                    </div>
-                  )}
-                  {studentDetailsError && (
-                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg p-3">
-                      <XCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-                      <span className="text-sm text-red-700">{studentDetailsError}</span>
-                    </div>
-                  )}
-
-                  {/* Father Details */}
-                  <div className="bg-amber-50 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-7 h-7 bg-amber-100 rounded-lg flex items-center justify-center">
-                        <Users className="w-4 h-4 text-amber-600" />
-                      </div>
-                      <span className="text-sm font-semibold text-amber-800">Father's Details</span>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Father's Name</label>
-                      <input
-                        type="text"
-                        value={studentDetailsDraft.father_name}
-                        onChange={(e) => setStudentDetailsDraft(d => ({ ...d, father_name: e.target.value }))}
-                        placeholder="Enter father's full name"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        disabled={studentDetailsSaving}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Father's Phone Number</label>
-                      <input
-                        type="tel"
-                        value={studentDetailsDraft.father_phone}
-                        onChange={(e) => setStudentDetailsDraft(d => ({ ...d, father_phone: e.target.value }))}
-                        placeholder="e.g. 9876543210"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        disabled={studentDetailsSaving}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Mother Details */}
-                  <div className="bg-pink-50 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-7 h-7 bg-pink-100 rounded-lg flex items-center justify-center">
-                        <Users className="w-4 h-4 text-pink-600" />
-                      </div>
-                      <span className="text-sm font-semibold text-pink-800">Mother's Details</span>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Mother's Name</label>
-                      <input
-                        type="text"
-                        value={studentDetailsDraft.mother_name}
-                        onChange={(e) => setStudentDetailsDraft(d => ({ ...d, mother_name: e.target.value }))}
-                        placeholder="Enter mother's full name"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        disabled={studentDetailsSaving}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Mother's Phone Number</label>
-                      <input
-                        type="tel"
-                        value={studentDetailsDraft.mother_phone}
-                        onChange={(e) => setStudentDetailsDraft(d => ({ ...d, mother_phone: e.target.value }))}
-                        placeholder="e.g. 9876543210"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                        disabled={studentDetailsSaving}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Address */}
-                  <div className="bg-teal-50 rounded-xl p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="w-7 h-7 bg-teal-100 rounded-lg flex items-center justify-center">
-                        <Home className="w-4 h-4 text-teal-600" />
-                      </div>
-                      <span className="text-sm font-semibold text-teal-800">Residential Address</span>
-                    </div>
-                    <textarea
-                      value={studentDetailsDraft.address}
-                      onChange={(e) => setStudentDetailsDraft(d => ({ ...d, address: e.target.value }))}
-                      placeholder="Enter your permanent residential address"
-                      rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                      disabled={studentDetailsSaving}
-                    />
-                  </div>
-                </div>
-
-                {/* Modal Footer */}
-                <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-3">
-                  <button
-                    onClick={() => setStudentDetailsModalOpen(false)}
-                    disabled={studentDetailsSaving}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSaveStudentDetails}
-                    disabled={studentDetailsSaving}
-                    className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-60"
-                  >
-                    {studentDetailsSaving ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4" />
-                        Save Changes
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </ModalPortal>
-        )}
 
         {/* Change Password Modal */}
         {changePasswordModalOpen && (

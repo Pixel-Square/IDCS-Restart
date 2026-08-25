@@ -72,6 +72,9 @@ class PBASNode(models.Model):
     audience = models.CharField(max_length=16, choices=Audience.choices, default=Audience.BOTH)
     input_mode = models.CharField(max_length=16, choices=InputMode.choices, default=InputMode.UPLOAD)
 
+    # Dynamic Form Schema (list of field objects like google forms)
+    form_schema = models.JSONField(default=list, blank=True)
+
     # optional informational fields for the node definition
     link = models.URLField(null=True, blank=True)
     uploaded_name = models.CharField(max_length=255, null=True, blank=True)
@@ -130,6 +133,7 @@ class PBASNodeApproverHistory(models.Model):
 
 class PBASSubmission(models.Model):
     class SubmissionType(models.TextChoices):
+        FORM = 'form', 'Form'
         UPLOAD = 'upload', 'Upload'
         LINK = 'link', 'Link'
 
@@ -142,7 +146,8 @@ class PBASSubmission(models.Model):
     node = models.ForeignKey(PBASNode, on_delete=models.CASCADE, related_name='submissions')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pbas_submissions')
 
-    submission_type = models.CharField(max_length=16, choices=SubmissionType.choices)
+    submission_type = models.CharField(max_length=16, choices=SubmissionType.choices, default=SubmissionType.FORM)
+    form_data = models.JSONField(default=dict, blank=True)
     link = models.URLField(null=True, blank=True)
     file = models.FileField(null=True, blank=True, upload_to=upload_to_pbas_submission)
     file_name = models.CharField(max_length=255, null=True, blank=True)
@@ -172,6 +177,8 @@ class PBASSubmission(models.Model):
                 raise ValidationError({'file': 'File is required for upload submissions.'})
             if self.link:
                 raise ValidationError({'link': 'Link must be empty for upload submissions.'})
+        elif self.submission_type == self.SubmissionType.FORM:
+            pass
 
         if getattr(self, 'node', None) and getattr(self.node, 'college_required', False):
             if not self.college:

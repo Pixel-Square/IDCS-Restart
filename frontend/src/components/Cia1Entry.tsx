@@ -10,8 +10,6 @@ import {
   formatApiErrorMessage,
   formatEditRequestSentMessage,
   publishCiaSheet,
-  resetAssessmentMarks,
-  saveCiaMarks,
   saveDraft,
   fetchIqacQpPattern,
 } from '../services/obe';
@@ -172,7 +170,6 @@ function parseCo(raw: unknown): CoValue {
 }
 
 type CoPair = { a: number; b: number };
-type CoList = number[];
 
 function coPairForAssessment(assessmentKey: AssessmentKey): CoPair {
   return assessmentKey === 'cia2' ? { a: 3, b: 4 } : { a: 1, b: 2 };
@@ -185,53 +182,26 @@ function isSplitCo(co: CoValue): boolean {
 function coWeights(co: CoValue, pair: CoPair): { a: number; b: number } {
   if (isSplitCo(co)) return { a: 0.5, b: 0.5 };
 
+  // For the default CIA2 pair {a:3, b:4}, allow legacy configs that still tag
+  // questions as CO1/CO2 instead of CO3/CO4.
   const isDefaultCia2Pair = pair.a === 3 && pair.b === 4;
   const mapsToA = co === pair.a || (isDefaultCia2Pair && co === 1);
   const mapsToB = co === pair.b || (isDefaultCia2Pair && co === 2);
   if (mapsToA) return { a: 1, b: 0 };
   if (mapsToB) return { a: 0, b: 1 };
+
+  // Any other CO is not represented in CIA's 2-CO attainment panel.
+  // Treat as "no contribution" rather than mis-attributing it.
   return { a: 0, b: 0 };
 }
 
 function effectiveCoWeightsForQuestion(questions: QuestionDef[], idx: number, pair: CoPair): { a: number; b: number } {
   const q = questions[idx];
   if (!q) return { a: 0, b: 0 };
+  // Primary: explicit split configured.
   if (isSplitCo(q.co)) return { a: 0.5, b: 0.5 };
+
   return coWeights(q.co, pair);
-}
-
-/** Compute per-CO weights for a question using a dynamic CO list (supports N COs). */
-function coWeightsArr(co: CoValue, list: CoList): Record<number, number> {
-  const result: Record<number, number> = {};
-  for (const c of list) result[c] = 0;
-  if (isSplitCo(co)) {
-    // Split 50/50 between first two COs in list (backward compat for THEORY)
-    if (list.length >= 2) { result[list[0]] = 0.5; result[list[1]] = 0.5; }
-    else if (list.length === 1) result[list[0]] = 1;
-    return result;
-  }
-  const isDefaultCia2List = list.length === 2 && list[0] === 3 && list[1] === 4;
-  const coNum = typeof co === 'number' ? co : null;
-  if (coNum != null) {
-    if (list.includes(coNum)) { result[coNum] = 1; }
-    else if (isDefaultCia2List && coNum === 1) { result[3] = 1; }
-    else if (isDefaultCia2List && coNum === 2) { result[4] = 1; }
-  }
-  return result;
-}
-
-function effectiveCoWeightsArr(questions: QuestionDef[], idx: number, list: CoList): Record<number, number> {
-  const empty: Record<number, number> = {};
-  for (const c of list) empty[c] = 0;
-  const q = questions[idx];
-  if (!q) return empty;
-  if (isSplitCo(q.co)) {
-    const r: Record<number, number> = { ...empty };
-    if (list.length >= 2) { r[list[0]] = 0.5; r[list[1]] = 0.5; }
-    else if (list.length === 1) r[list[0]] = 1;
-    return r;
-  }
-  return coWeightsArr(q.co, list);
 }
 
 type Cia1RowState = {
@@ -315,12 +285,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const assessmentKey: AssessmentKey = assessmentKeyProp || 'cia1';
   const assessmentLabel = assessmentKey === 'cia2' ? 'CIA 2' : 'CIA 1';
   const coPair = useMemo(() => coPairForAssessment(assessmentKey), [assessmentKey]);
-  const coList = useMemo((): CoList => assessmentKey === 'cia2' ? [3, 4] : [1, 2], [assessmentKey]);
-  const showMarkLimitPopup = (input: HTMLInputElement, message: string, student?: { name?: string; reg_no?: string }) => {
-    const who = student ? `${student.name || 'Student'} (${student.reg_no || ''}) — ` : '';
-    setLimitDialog({ title: 'Mark Limit Exceeded', message: `${who}${message}` });
-    input.setCustomValidity('');
-  };
 
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [masterCfgWarning, setMasterCfgWarning] = useState<string | null>(null);
@@ -442,8 +406,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             key: `q${idx + 1}`,
             label: `Q${idx + 1}`,
             max: Number(max) || 0,
-            co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coList[0] as any))) as CoValue,
-            btl: (fallback?.btl ?? 1) as 1 | 2 | 3 | 4 | 5 | 6,
+            co: (coRaw != null ? parseCo(coRaw) : (fallback?.co ?? (coPair.a as any))) as CoValue,
+            btl: (btlRaw != null && Number(btlRaw) >= 1 && Number(btlRaw) <= 6 ? Number(btlRaw) : (fallback?.btl ?? 1)) as 1 | 2 | 3 | 4 | 5 | 6,
           };
         })
         .filter((q) => Boolean(q.key));
@@ -452,23 +416,22 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     }
 
     return qpTypeKey === 'QP2' ? normalizeQuestionsForQp2(baseFromMaster) : baseFromMaster;
-  }, [masterCfg, assessmentKey, iqacPattern, coList, qpTypeKey, customQuestionsProp]);
+  }, [masterCfg, assessmentKey, iqacPattern, coPair.a, qpTypeKey, customQuestionsProp]);
 
-  // Derive the actual display CO list from the loaded pattern questions.
-  // For THEORY/SPECIAL this is typically [1,2] or [3,4]; for ENGLISH it may be [1,2,3,4,5].
+  // Derive the actual display CO pair from the loaded pattern questions.
+  // e.g. QP1 FINAL YEAR CIA2 may assign CO2 & CO3 instead of the default CO3 & CO4.
   // Must be declared AFTER questions (which depends on iqacPattern) to avoid TDZ.
-  const effectiveCos = useMemo((): CoList => {
+  const effectiveCoPair = useMemo((): CoPair => {
     const coNums: number[] = [];
     for (const q of questions) {
       const co = q.co;
       if (typeof co === 'number' && co >= 1 && co <= 5 && !coNums.includes(co)) coNums.push(co);
     }
     coNums.sort((x, y) => x - y);
-    if (coNums.length >= 1) return coNums;
-    return coList;
-  }, [questions, coList]);
-  // Keep effectiveCoPair as {a,b} alias for any legacy code
-  const effectiveCoPair = useMemo((): CoPair => ({ a: effectiveCos[0] ?? coList[0], b: effectiveCos[1] ?? effectiveCos[0] ?? coList[1] }), [effectiveCos, coList]);
+    if (coNums.length >= 2) return { a: coNums[0], b: coNums[1] };
+    if (coNums.length === 1) return { a: coNums[0], b: coNums[0] };
+    return coPair;
+  }, [questions, coPair]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -498,18 +461,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
-
-  // Filter / sort popup state
-  const [filterPopupOpen, setFilterPopupOpen] = useState(false);
-  type SortMode = 'default' | 'nameAsc' | 'nameDesc' | 'regAsc' | 'regDesc' | 'regRange';
-  const [sortMode, setSortMode] = useState<SortMode>('default');
-  const [regRangeEnabled, setRegRangeEnabled] = useState(false);
-  const [regRangeFrom, setRegRangeFrom] = useState(1);
-  const [regRangeTo, setRegRangeTo] = useState(3);
-  const [regRangeValMin, setRegRangeValMin] = useState('');
-  const [regRangeValMax, setRegRangeValMax] = useState('');
-  const [showDeptColumn, setShowDeptColumn] = useState(false);
-  const [taDeptName, setTaDeptName] = useState<string>('');
 
   const {
     data: publishWindow,
@@ -971,8 +922,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             try {
               const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
               data = { students: taResp.students || [], marks: {} };
-              const d = taResp.teaching_assignment?.department;
-              if (d) setTaDeptName(d.short_name || d.code || d.name || '');
             } catch {
               console.warn('TA roster fallback failed');
             }
@@ -988,8 +937,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             try {
               const taResp = await fetchTeachingAssignmentRoster(teachingAssignmentId);
               data = { ...(data as any), students: taResp.students || [] };
-              const d = taResp.teaching_assignment?.department;
-              if (d) setTaDeptName(d.short_name || d.code || d.name || '');
             } catch (err) {
               console.warn('CIA marks roster was empty and TA roster fallback failed:', err);
             }
@@ -1004,11 +951,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
         setStudents(roster);
         setSubjectPayload((data as any)?.subject || null);
-        // Extract department name from TA data if available
-        const taDept = (data as any)?.teaching_assignment?.department || (data as any)?.department;
-        if (taDept) {
-          setTaDeptName(taDept.short_name || taDept.code || taDept.name || '');
-        }
         const apiMarks = data.marks || {};
         const totals: Record<number, number | null> = {};
         for (const [k, v] of Object.entries(apiMarks)) {
@@ -1325,37 +1267,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
     };
   }, [masterCfg, questionCoMax, assessmentKey, effectiveCoPair, iqacPattern]);
 
-  /** Per-CO max marks for all COs in effectiveCos (supports N COs for ENGLISH etc.) */
-  const effectiveCoMaxArr = useMemo((): Record<number, number> => {
-    const hasIqacCoMapping = (() => {
-      const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : [];
-      const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : [];
-      return marks.length > 0 && cos.length === marks.length;
-    })();
-    const sums: Record<number, number> = {};
-    for (const c of effectiveCos) sums[c] = 0;
-    if (hasIqacCoMapping) {
-      for (let i = 0; i < questions.length; i++) {
-        const q = questions[i];
-        const w = effectiveCoWeightsArr(questions, i, effectiveCos);
-        for (const c of effectiveCos) sums[c] = (sums[c] || 0) + q.max * (w[c] || 0);
-      }
-      return sums;
-    }
-    const cfg = ((masterCfg as any)?.assessments?.[assessmentKey]?.coMax ?? (masterCfg as any)?.assessments?.cia1?.coMax) as any;
-    for (const c of effectiveCos) {
-      const rawVal = Number(cfg?.[`co${c}`]);
-      // fallback: sum from questions
-      let fallback = 0;
-      for (let i = 0; i < questions.length; i++) {
-        const w = effectiveCoWeightsArr(questions, i, effectiveCos);
-        fallback += questions[i].max * (w[c] || 0);
-      }
-      sums[c] = Number.isFinite(rawVal) ? Math.max(0, rawVal) : fallback;
-    }
-    return sums;
-  }, [masterCfg, assessmentKey, effectiveCos, questions, iqacPattern]);
-
   const visibleBtls = useMemo(() => {
     const set = new Set<number>();
     for (const q of questions) {
@@ -1617,10 +1528,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
 
   const resetAllMarks = async () => {
     if (!subjectId) return;
-    if (typeof teachingAssignmentId !== 'number') {
-      setError('Teaching assignment is required to reset marks.');
-      return;
-    }
     // Only show this action while publish window is open (per requirement).
     if (!publishAllowed || globalLocked) return;
     if (tableBlocked || publishedEditLocked) return;
@@ -1652,47 +1559,19 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         batchLabel: String(subjectId),
         rowsByStudentId: clearedRows,
       };
-
-      let usedSoftFallback = false;
-      try {
-        await resetAssessmentMarks(assessmentKey, String(subjectId), teachingAssignmentId);
-      } catch (e: any) {
-        const status = Number((e as any)?.status || 0);
-        const msg = String(e?.message || '');
-        const routeMissing = status === 404 || /\b404\b|not\s*found/i.test(msg);
-        if (!routeMissing) throw e;
-
-        usedSoftFallback = true;
-        const emptyMarks: Record<number, number | null> = {};
-        for (const s of students) emptyMarks[s.id] = null;
-        await saveCiaMarks(assessmentKey, String(subjectId), emptyMarks, teachingAssignmentId);
-
-        const draft: Cia1DraftPayload = {
-          termLabel: nextSheet.termLabel,
-          batchLabel: String(subjectId),
-          questionBtl: nextSheet.questionBtl,
-          rowsByStudentId: nextSheet.rowsByStudentId,
-          markManagerLocked: nextSheet.markManagerLocked,
-          markManagerSnapshot: nextSheet.markManagerSnapshot,
-          markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
-        };
-        await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
-      }
-
       setSheet(nextSheet);
-      setServerTotals((prev) => {
-        const next = { ...prev };
-        for (const s of students) next[s.id] = null;
-        return next;
-      });
-      setPublishedAt(null);
-      setSavedAt(new Date().toLocaleString());
-      refreshPublishedSheet(true);
-      refreshMarkLock({ silent: true });
 
-      if (usedSoftFallback) {
-        setError('');
-      }
+      const draft: Cia1DraftPayload = {
+        termLabel: nextSheet.termLabel,
+        batchLabel: String(subjectId),
+        questionBtl: nextSheet.questionBtl,
+        rowsByStudentId: nextSheet.rowsByStudentId,
+        markManagerLocked: nextSheet.markManagerLocked,
+        markManagerSnapshot: nextSheet.markManagerSnapshot,
+        markManagerApprovalUntil: nextSheet.markManagerApprovalUntil,
+      };
+      await saveDraft(assessmentKey, String(subjectId), draft, teachingAssignmentId);
+      setSavedAt(new Date().toLocaleString());
     } catch (e: any) {
       setError(e?.message || 'Failed to reset marks');
     } finally {
@@ -1844,12 +1723,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           absentKind: effectiveAbsentKind,
           ...emptyQ,
           total: 'ABSENT',
-          ...Object.fromEntries(
-            effectiveCos.flatMap((c) => [
-              [`co${c}_mark`, ''],
-              [`co${c}_pct`, ''],
-            ]),
-          ),
+          [`co${effectiveCoPair.a}_mark`]: '',
+          [`co${effectiveCoPair.a}_pct`]: '',
+          [`co${effectiveCoPair.b}_mark`]: '',
+          [`co${effectiveCoPair.b}_pct`]: '',
           ...Object.fromEntries(
             visibleBtls.flatMap((n) => [
               [`btl${n}_mark`, ''],
@@ -1868,13 +1745,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
       );
       const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-      const coMarksExport: Record<number, number> = {};
-      for (const c of effectiveCos) coMarksExport[c] = 0;
+      let co1 = 0;
+      let co2 = 0;
       for (let qi = 0; qi < questions.length; qi++) {
         const q = questions[qi];
-        const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
+        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
         const m = Number(qMarks[q.key] || 0);
-        for (const c of effectiveCos) coMarksExport[c] = (coMarksExport[c] || 0) + m * (w[c] || 0);
+        co1 += m * w.a;
+        co2 += m * w.b;
       }
 
       const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -1891,12 +1769,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
         absentKind: exportAbsentKind,
         ...qMarks,
         total,
-        ...Object.fromEntries(
-          effectiveCos.flatMap((c) => [
-            [`co${c}_mark`, coMarksExport[c] ?? 0],
-            [`co${c}_pct`, pct(coMarksExport[c] ?? 0, effectiveCoMaxArr[c] ?? 0)],
-          ]),
-        ),
+        [`co${effectiveCoPair.a}_mark`]: co1,
+        [`co${effectiveCoPair.a}_pct`]: pct(co1, effectiveCoMax.a),
+        [`co${effectiveCoPair.b}_mark`]: co2,
+        [`co${effectiveCoPair.b}_pct`]: pct(co2, effectiveCoMax.b),
         ...Object.fromEntries(
           visibleBtls.flatMap((n) => [
             [`btl${n}_mark`, btl[n as 1 | 2 | 3 | 4 | 5 | 6]],
@@ -2213,64 +2089,13 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
   );
 
   const hasAbsentees = students.some((s) => Boolean(sheet.rowsByStudentId[String(s.id)]?.absent));
-
-  // Extract a sub-string from reg_no using digit positions counted from the RIGHT (1-based, inclusive).
-  // e.g. from=1, to=3  → last 3 digits (slice(-3))
-  // e.g. from=5, to=8  → chars 5–8 from the end (slice(-8, -4))
-  const extractRegSlice = (reg: string, from: number, to: number): number => {
-    const s = String(reg || '');
-    const lo = Math.max(1, Math.min(from, to));
-    const hi = Math.max(from, to);
-    const sub = s.slice(Math.max(0, s.length - hi), s.length - lo + 1);
-    const v = parseInt(sub, 10);
-    return isNaN(v) ? 9999 : v;
-  };
-
-  const visibleStudents = (() => {
-    // Step 1: absentees filter
-    let arr = showAbsenteesOnly
-      ? students.filter((s) => {
-          if (absenteesSnapshot && absenteesSnapshot.length) return absenteesSnapshot.includes(s.id);
-          return Boolean(sheet.rowsByStudentId[String(s.id)]?.absent);
-        })
-      : [...students];
-
-    // Step 2: reg no range filter (numeric sub-range)
-    if (regRangeEnabled) {
-      const lo = Math.max(1, Math.min(regRangeFrom, regRangeTo));
-      const hi = Math.max(regRangeFrom, regRangeTo);
-      const minVal = regRangeValMin !== '' ? parseInt(regRangeValMin, 10) : null;
-      const maxVal = regRangeValMax !== '' ? parseInt(regRangeValMax, 10) : null;
-      if (minVal !== null || maxVal !== null) {
-        arr = arr.filter((s) => {
-          const v = extractRegSlice(String(s.reg_no || ''), lo, hi);
-          if (v === 9999) return true; // non-numeric → don't exclude
-          if (minVal !== null && v < minVal) return false;
-          if (maxVal !== null && v > maxVal) return false;
-          return true;
-        });
-      }
-    }
-
-    // Step 3: sort
-    arr = [...arr].sort((a, b) => {
-      if (sortMode === 'nameAsc') return (a.name || '').localeCompare(b.name || '');
-      if (sortMode === 'nameDesc') return (b.name || '').localeCompare(a.name || '');
-      if (sortMode === 'regAsc') return (a.reg_no || '').localeCompare(b.reg_no || '');
-      if (sortMode === 'regDesc') return (b.reg_no || '').localeCompare(a.reg_no || '');
-      if (sortMode === 'regRange') {
-        const lo = Math.max(1, Math.min(regRangeFrom, regRangeTo));
-        const hi = Math.max(regRangeFrom, regRangeTo);
-        return extractRegSlice(String(a.reg_no || ''), lo, hi) - extractRegSlice(String(b.reg_no || ''), lo, hi);
-      }
-      // default: last 3 digits
-      const aLast3 = parseInt(String(a?.reg_no || '').slice(-3), 10);
-      const bLast3 = parseInt(String(b?.reg_no || '').slice(-3), 10);
-      return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
-    });
-
-    return arr;
-  })();
+  const visibleStudents = showAbsenteesOnly
+    ? students.filter((s) => {
+        // When the user opens the absentees list, keep the list stable while they edit.
+        if (absenteesSnapshot && absenteesSnapshot.length) return absenteesSnapshot.includes(s.id);
+        return Boolean(sheet.rowsByStudentId[String(s.id)]?.absent);
+      })
+    : students;
 
   const cellTh: React.CSSProperties = {
     border: '1px solid #111',
@@ -2432,18 +2257,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           <button onClick={exportSheetExcel} className="obe-btn obe-btn-secondary" disabled={students.length === 0}>
             Export Excel
           </button>
-          <button
-            className="obe-btn obe-btn-secondary"
-            onClick={() => setFilterPopupOpen(true)}
-            style={
-              sortMode !== 'default' || regRangeEnabled || showDeptColumn
-                ? { background: 'linear-gradient(180deg, #1d4ed8, #3b82f6)', color: '#fff', borderColor: 'rgba(29,78,216,0.3)' }
-                : undefined
-            }
-            title="Sort &amp; filter the student table"
-          >
-            ⊟ Filter / Sort
-          </button>
           <button onClick={triggerFileUpload} className="obe-btn obe-btn-secondary" disabled={importing || students.length === 0 || tableBlocked || globalLocked}>
             {importing ? 'Importing…' : 'Import Excel'}
           </button>
@@ -2459,33 +2272,16 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               {saving ? 'Saving…' : 'Save Draft'}
             </button>
           ) : null}
-          <button
-            onClick={resetAllMarks}
-            className="obe-btn obe-btn-danger"
-            disabled={
-              resettingMarks ||
-              students.length === 0 ||
-              tableBlocked ||
-              publishedEditLocked ||
-              globalLocked ||
-              !publishAllowed ||
-              !subjectId ||
-              typeof teachingAssignmentId !== 'number'
-            }
-            title={
-              globalLocked
-                ? 'Reset is blocked: publishing is locked by IQAC'
-                : !publishAllowed
-                  ? 'Reset is blocked: publish window is closed'
-                  : publishedEditLocked
-                    ? 'Reset is blocked: published table is locked; request edit first'
-                    : typeof teachingAssignmentId !== 'number'
-                      ? 'Reset is unavailable: teaching assignment is not selected'
-                      : 'Clears marks from draft and database for this teaching assignment'
-            }
-          >
-            {resettingMarks ? 'Resetting…' : 'Reset Marks'}
-          </button>
+          {!isPublished && publishAllowed && !globalLocked ? (
+            <button
+              onClick={resetAllMarks}
+              className="obe-btn obe-btn-danger"
+              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
+              title="Clears the saved draft marks"
+            >
+              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             disabled={editRequestsBlocked || (publishButtonIsRequestEdit ? markEntryReqPending : publishing || students.length === 0 || !publishAllowed || tableBlocked || globalLocked)}
@@ -2574,7 +2370,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
             <div style={{ marginLeft: 8, padding: 6, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 160 }}>{sheet.batchLabel}</div>
           </label>
           <div style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
-            Total max: {totalsMax} | Questions: {questions.length} | COs: {effectiveCos.join(',')} | BTLs: 1–6
+            Total max: {totalsMax} | Questions: {questions.length} | COs: {effectiveCoPair.a}–{effectiveCoPair.b} | BTLs: 1–6
           </div>
         </div>
       </div>
@@ -2607,9 +2403,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
                     className="obe-btn obe-btn-success"
-                    disabled={!subjectId || markManagerBusy}
+                    disabled={!subjectId || markManagerBusy || (markManagerLocked && !editRequestsEnabled)}
                     onClick={() => {
-                      setMarkManagerModal({ mode: markManagerLocked && markManagerEditRequestsEnabled ? 'request' : 'confirm' });
+                      if (markManagerLocked && !editRequestsEnabled) return;
+                      setMarkManagerModal({ mode: markManagerLocked ? 'request' : 'confirm' });
                     }}
                   >
                     {markManagerLocked ? 'Edit' : 'Save'}
@@ -2682,7 +2479,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', tableLayout: 'auto', borderCollapse: 'collapse' }}>
                   <thead>
               <tr>
-                <th style={cellTh} colSpan={(showDeptColumn ? 5 : 4) + questions.length + 1 + effectiveCos.length * 2 + visibleBtls.length * 2}>
+                <th style={cellTh} colSpan={4 + questions.length + 1 + 4 + visibleBtls.length * 2}>
                   {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel}
                 </th>
               </tr>
@@ -2696,11 +2493,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                   Name of the Students
                 </th>
-                {showDeptColumn ? (
-                  <th style={{ ...cellTh, minWidth: 80, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
-                    Dept
-                  </th>
-                ) : null}
                 <th style={{ ...cellTh, minWidth: 88 }} rowSpan={3}>
                   AB
                 </th>
@@ -2711,7 +2503,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <th style={cellTh} rowSpan={3}>
                   Total
                 </th>
-                <th style={cellTh} colSpan={effectiveCos.length * 2}>
+                <th style={cellTh} colSpan={4}>
                   CO ATTAINMENT
                 </th>
                 {visibleBtls.length ? (
@@ -2726,11 +2518,12 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     {q.label}
                   </th>
                 ))}
-                {effectiveCos.map((c) => (
-                  <th key={`co-head-${c}`} style={cellTh} colSpan={2}>
-                    CO-{c}
-                  </th>
-                ))}
+                <th style={cellTh} colSpan={2}>
+                  CO-{effectiveCoPair.a}
+                </th>
+                <th style={cellTh} colSpan={2}>
+                  CO-{effectiveCoPair.b}
+                </th>
                 {visibleBtls.map((n) => (
                   <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                     BTL-{n}
@@ -2744,7 +2537,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     <div style={{ fontSize: '0.7em', color: '#6b7280' }}>B{q.btl}</div>
                   </th>
                 ))}
-                {Array.from({ length: effectiveCos.length + visibleBtls.length }).flatMap((_, i) => (
+                {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                   <React.Fragment key={i}>
                     <th style={cellTh}>
                       <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
@@ -2758,7 +2551,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
               <tbody>
               <tr>
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3} />
-                {showDeptColumn ? <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} /> : null}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>BTL</td>
                 {questions.map((q) => (
                   <td key={`btl-select-${q.key}`} style={{ ...cellTd, textAlign: 'center' }}>
@@ -2813,7 +2605,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                   </td>
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
-                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={effectiveCos.length * 2} />
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={4} />
                 {visibleBtls.map((n) => (
                   <React.Fragment key={`btl-pad-${n}`}>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} />
@@ -2826,7 +2618,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} colSpan={3}>
                   Name / Max Marks
                 </td>
-                {showDeptColumn ? <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }} /> : null}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>-</td>
 
                 {questions.map((q) => (
@@ -2836,12 +2627,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 ))}
                 <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{totalsMax}</td>
 
-                {effectiveCos.map((c) => (
-                  <React.Fragment key={`co-max-${c}`}>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMaxArr[c] ?? 0}</td>
-                    <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
-                  </React.Fragment>
-                ))}
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.a}</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveCoMax.b}</td>
+                <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>%</td>
                 {visibleBtls.map((n) => (
                   <React.Fragment key={`btl-max-${n}`}>
                     <td style={{ ...cellTd, fontWeight: 700, textAlign: 'center' }}>{effectiveBtlMax[n as 1 | 2 | 3 | 4 | 5 | 6]}</td>
@@ -2865,13 +2654,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 >;
                 const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                const coMarks: Record<number, number> = {};
-                for (const c of effectiveCos) coMarks[c] = 0;
+                let co1 = 0;
+                let co2 = 0;
                 for (let qi = 0; qi < questions.length; qi++) {
                   const q = questions[qi];
-                  const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
+                  const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
                   const m = Number(qMarks[q.key] || 0);
-                  for (const c of effectiveCos) coMarks[c] = (coMarks[c] || 0) + m * (w[c] || 0);
+                  co1 += m * w.a;
+                  co2 += m * w.b;
                 }
 
                 const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -2894,11 +2684,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                     <td style={{ ...cellTd, textAlign: 'center', width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH, paddingLeft: 2, paddingRight: 2 }}>{i + 1}</td>
                     <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no)}</td>
                     <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
-                    {showDeptColumn ? (
-                      <td style={{ ...cellTd, minWidth: 80, textAlign: 'center', fontSize: 11 }}>
-                        {taDeptName || '—'}
-                      </td>
-                    ) : null}
                     <td style={{ ...cellTd, textAlign: 'center', minWidth: 88 }}>
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                         <input type="checkbox" checked={row.absent} disabled={lockedInputs} onChange={(e) => setAbsent(s.id, e.target.checked)} />
@@ -2924,10 +2709,11 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <td key={q.key} style={{ ...cellTd, textAlign: 'center', width: 46, minWidth: 46 }}>
                         <input
                           style={{ ...inputStyle, textAlign: 'center' }}
-                          type="text"
-                          inputMode="decimal"
+                          type="number"
+                          min={0}
+                          max={q.max}
                           disabled={lockedInputs || (row.absent && !canEditAbsent)}
-                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : String(row.q?.[q.key])}
+                          value={row.q?.[q.key] === '' || row.q?.[q.key] == null ? '' : Number(row.q?.[q.key] || 0)}
                           onChange={(e) => {
                             const raw = e.target.value;
                             if (raw === '') {
@@ -2936,25 +2722,17 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                             }
 
                             const next = Number(raw);
-                            if (!Number.isFinite(next) || next < 0) return;
+                            if (!Number.isFinite(next)) return;
 
                             if (next > q.max) {
-                              showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                              setQuestionMark(s.id, q.key, '');
+                              e.currentTarget.setCustomValidity(`Max mark is ${q.max}`);
+                              e.currentTarget.reportValidity();
+                              window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                               return;
                             }
 
                             e.currentTarget.setCustomValidity('');
                             setQuestionMark(s.id, q.key, next);
-                          }}
-                          onBlur={(e) => {
-                            const raw = e.target.value;
-                            if (raw === '') return;
-                            const next = Number(raw);
-                            if (!Number.isFinite(next) || next < 0 || next > q.max) {
-                              showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                              setQuestionMark(s.id, q.key, '');
-                            }
                           }}
                         />
                       </td>
@@ -2964,14 +2742,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       {total}
                     </td>
 
-                    {effectiveCos.map((c) => (
-                      <React.Fragment key={`co-cell-${s.id}-${c}`}>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>{coMarks[c] ?? 0}</td>
-                        <td style={{ ...cellTd, textAlign: 'center' }}>
-                          <span className="obe-pct-badge">{pct(coMarks[c] ?? 0, effectiveCoMaxArr[c] ?? 0)}</span>
-                        </td>
-                      </React.Fragment>
-                    ))}
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{co1}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
+                      <span className="obe-pct-badge">{pct(co1, effectiveCoMax.a)}</span>
+                    </td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>{co2}</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>
+                      <span className="obe-pct-badge">{pct(co2, effectiveCoMax.b)}</span>
+                    </td>
 
                     {visibleBtls.map((n) => (
                       <React.Fragment key={`btl-row-${s.id}-${n}`}>
@@ -2991,191 +2769,6 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
           </PublishLockOverlay>
         </div>
       )}
-
-      {filterPopupOpen ? (
-        <ModalPortal>
-          <div
-            role="dialog"
-            aria-modal="true"
-            style={{
-              position: 'fixed',
-              inset: 0,
-              background: 'rgba(15,23,42,0.45)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 16,
-              zIndex: 9999,
-            }}
-            onClick={() => setFilterPopupOpen(false)}
-          >
-            <div
-              style={{
-                width: 'min(480px, 100%)',
-                background: '#fff',
-                borderRadius: 14,
-                border: '1px solid #e5e7eb',
-                boxShadow: '0 20px 60px rgba(2,6,23,0.22)',
-                padding: 20,
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <div style={{ fontWeight: 800, fontSize: 15, color: '#111827' }}>Filter &amp; Sort</div>
-                <button
-                  onClick={() => setFilterPopupOpen(false)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: '#6b7280', lineHeight: 1, padding: 2 }}
-                  aria-label="Close filter popup"
-                >
-                  ×
-                </button>
-              </div>
-
-              {/* Sort Options */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, letterSpacing: 0.4 }}>SORT ORDER</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {(
-                    [
-                      ['default', 'Default (Reg No — last 3 digits)'],
-                      ['nameAsc', 'Name A → Z'],
-                      ['nameDesc', 'Name Z → A'],
-                      ['regAsc', 'Reg No A → Z'],
-                      ['regDesc', 'Reg No Z → A'],
-                      ['regRange', 'Reg No — custom digit range'],
-                    ] as Array<[SortMode, string]>
-                  ).map(([mode, label]) => (
-                    <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
-                      <input
-                        type="radio"
-                        name="cia-sort-mode"
-                        checked={sortMode === mode}
-                        onChange={() => setSortMode(mode)}
-                        style={{ accentColor: '#2563eb' }}
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Custom Reg No Range */}
-              <div
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 10,
-                  padding: 12,
-                  marginBottom: 16,
-                }}
-              >
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={regRangeEnabled}
-                    onChange={(e) => setRegRangeEnabled(e.target.checked)}
-                    style={{ accentColor: '#2563eb' }}
-                  />
-                  Filter by Reg No digit range
-                </label>
-                <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 10 }}>
-                  Specify which digit positions to extract (counting from the <strong>right</strong>, 1 = last digit).
-                  E.g. From 1 To 3 extracts the last 3 digits; From 5 To 8 extracts positions 5–8 from the end.
-                </div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10, opacity: regRangeEnabled ? 1 : 0.45 }}>
-                  <label style={{ fontSize: 12, color: '#374151' }}>
-                    From (right-position)
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={regRangeFrom}
-                      disabled={!regRangeEnabled}
-                      onChange={(e) => setRegRangeFrom(Math.max(1, Number(e.target.value) || 1))}
-                      style={{ display: 'block', marginTop: 4, width: 80, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
-                    />
-                  </label>
-                  <label style={{ fontSize: 12, color: '#374151' }}>
-                    To (right-position)
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={regRangeTo}
-                      disabled={!regRangeEnabled}
-                      onChange={(e) => setRegRangeTo(Math.max(1, Number(e.target.value) || 1))}
-                      style={{ display: 'block', marginTop: 4, width: 80, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
-                    />
-                  </label>
-                </div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6, opacity: regRangeEnabled ? 1 : 0.45 }}>
-                  Value range filter (optional — leave blank to disable)
-                </div>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', opacity: regRangeEnabled ? 1 : 0.45 }}>
-                  <label style={{ fontSize: 12, color: '#374151' }}>
-                    Min value
-                    <input
-                      type="number"
-                      value={regRangeValMin}
-                      disabled={!regRangeEnabled}
-                      placeholder="e.g. 1"
-                      onChange={(e) => setRegRangeValMin(e.target.value)}
-                      style={{ display: 'block', marginTop: 4, width: 90, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
-                    />
-                  </label>
-                  <label style={{ fontSize: 12, color: '#374151' }}>
-                    Max value
-                    <input
-                      type="number"
-                      value={regRangeValMax}
-                      disabled={!regRangeEnabled}
-                      placeholder="e.g. 050"
-                      onChange={(e) => setRegRangeValMax(e.target.value)}
-                      style={{ display: 'block', marginTop: 4, width: 90, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* Show Department Column */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, letterSpacing: 0.4 }}>COLUMNS</div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
-                  <input
-                    type="checkbox"
-                    checked={showDeptColumn}
-                    onChange={(e) => setShowDeptColumn(e.target.checked)}
-                    style={{ accentColor: '#2563eb' }}
-                  />
-                  Show Department column
-                  {taDeptName ? <span style={{ marginLeft: 4, fontSize: 11, color: '#6b7280' }}>({taDeptName})</span> : null}
-                </label>
-              </div>
-
-              {/* Actions */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                <button
-                  className="obe-btn obe-btn-secondary"
-                  onClick={() => {
-                    setSortMode('default');
-                    setRegRangeEnabled(false);
-                    setRegRangeFrom(1);
-                    setRegRangeTo(3);
-                    setRegRangeValMin('');
-                    setRegRangeValMax('');
-                    setShowDeptColumn(false);
-                  }}
-                >
-                  Reset
-                </button>
-                <button className="obe-btn obe-btn-primary" onClick={() => setFilterPopupOpen(false)}>
-                  Apply &amp; Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </ModalPortal>
-      ) : null}
 
       {markManagerModal ? (
         <ModalPortal>
@@ -3324,7 +2917,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                 <table className="obe-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
-                      <th style={cellTh} colSpan={4 + effectiveCos.length * 2 + visibleBtls.length * 2}>
+                      <th style={cellTh} colSpan={6 + visibleBtls.length * 2}>
                         {sheet.termLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {sheet.batchLabel} &nbsp;&nbsp;|&nbsp;&nbsp; {assessmentLabel} (PUBLISHED)
                       </th>
                     </tr>
@@ -3333,9 +2926,8 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>R.No</th>
                       <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>Name of the Students</th>
                       <th style={cellTh}>Total</th>
-                      {effectiveCos.map((c) => (
-                        <th key={`pv-co-head-${c}`} style={cellTh} colSpan={2}>CO-{c}</th>
-                      ))}
+                      <th style={cellTh} colSpan={2}>CO-{coPair.a}</th>
+                      <th style={cellTh} colSpan={2}>CO-{coPair.b}</th>
                       {visibleBtls.map((n) => (
                         <th key={`pv_btl_${n}`} style={cellTh} colSpan={2}>
                           BTL-{n}
@@ -3347,7 +2939,7 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       <th style={cellTh} />
                       <th style={cellTh} />
                       <th style={cellTh} />
-                      {Array.from({ length: effectiveCos.length + visibleBtls.length }).flatMap((_, i) => (
+                      {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={`pv_hdr_${i}`}>
                           <th style={cellTh}>Mark</th>
                           <th style={cellTh}>%</th>
@@ -3363,13 +2955,14 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                       const qMarks = Object.fromEntries(questions.map((q) => [q.key, clamp(Number(qObj?.[q.key] || 0), 0, q.max)])) as Record<string, number>;
                       const total = questions.reduce((sum, q) => sum + Number(qMarks[q.key] || 0), 0);
 
-                      const coMarksArr: Record<number, number> = {};
-                      for (const c of effectiveCos) coMarksArr[c] = 0;
+                      let coA = 0;
+                      let coB = 0;
                       for (let qi = 0; qi < questions.length; qi++) {
                         const q = questions[qi];
-                        const w = effectiveCoWeightsArr(questions, qi, effectiveCos);
+                        const w = effectiveCoWeightsForQuestion(questions, qi, effectiveCoPair);
                         const m = Number(qMarks[q.key] || 0);
-                        for (const c of effectiveCos) coMarksArr[c] = (coMarksArr[c] || 0) + m * (w[c] || 0);
+                        coA += m * w.a;
+                        coB += m * w.b;
                       }
 
                       const btl: Record<1 | 2 | 3 | 4 | 5 | 6, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
@@ -3387,12 +2980,10 @@ export default function Cia1Entry({ subjectId, teachingAssignmentId, assessmentK
                           <td style={{ ...cellTd, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }}>{shortenRegisterNo(row.reg_no || sheet.rowsByStudentId[String(s.id)]?.reg_no || '')}</td>
                           <td style={{ ...cellTd, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }}>{s.name}</td>
                           <td style={{ ...cellTd, textAlign: 'center', fontWeight: 900 }}>{total}</td>
-                          {effectiveCos.map((c) => (
-                            <React.Fragment key={`pv-co-cell-${s.id}-${c}`}>
-                              <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coMarksArr[c] ?? 0)}</td>
-                              <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coMarksArr[c] ?? 0, effectiveCoMaxArr[c] ?? 0)}</span></td>
-                            </React.Fragment>
-                          ))}
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coA)}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coA, effectiveCoMax.a)}</span></td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(coB)}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{pct(coB, effectiveCoMax.b)}</span></td>
                           {visibleBtls.map((n) => (
                             <React.Fragment key={`pv_btl_${s.id}_${n}`}>
                               <td style={{ ...cellTd, textAlign: 'center' }}>{Math.round(btl[n as 1 | 2 | 3 | 4 | 5 | 6])}</td>

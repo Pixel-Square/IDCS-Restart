@@ -101,6 +101,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
 
     return {
         'profile_type': profile_type,
+        'is_superuser': bool(getattr(user, 'is_superuser', False)),
         'roles': role_names,
         'permissions': perm_codes,
         'profile_status': profile_status,

@@ -138,10 +138,6 @@ class AcV2QpTypeAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
     fields = ['name', 'code', 'description', 'college', 'is_active', 'updated_by', 'created_at', 'updated_at']
 
-    def get_queryset(self, request):
-        AcV2QpType.objects.filter(is_active=False).delete()
-        return super().get_queryset(request)
-
 
 @admin.register(AcV2CourseOutcome)
 class AcV2CourseOutcomeAdmin(admin.ModelAdmin):

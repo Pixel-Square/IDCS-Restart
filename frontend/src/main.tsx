@@ -1,11 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { SidebarProvider } from './components/layout/SidebarContext';
-import AppDialog from './components/AppDialog';
-import Login from "./pages/auth/Login";
-import ForgotPassword from "./pages/auth/ForgotPassword";
 import "./index.css";
 import "./styles/obe-theme.css";
 
@@ -57,14 +54,9 @@ import "./styles/obe-theme.css";
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <BrowserRouter>
       <SidebarProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/*" element={<App />} />
-        </Routes>
-        <AppDialog />
+        <App />
       </SidebarProvider>
     </BrowserRouter>
   </React.StrictMode>,
