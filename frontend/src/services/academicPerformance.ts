@@ -232,8 +232,11 @@ export async function fetchPerformanceAnalytics(filters: {
   return response.json();
 }
 
-export async function fetchStudentProgressReport(studentId: string): Promise<StudentProgressReportResponse> {
-  const url = `${API_BASE}/api/academic-v2/performance/student/${encodeURIComponent(studentId)}/`;
+export async function fetchStudentProgressReport(studentId: string, examType?: string): Promise<StudentProgressReportResponse> {
+  let url = `${API_BASE}/api/academic-v2/performance/student/${encodeURIComponent(studentId)}/`;
+  if (examType) {
+    url += `?exam_type=${encodeURIComponent(examType)}`;
+  }
   const response = await fetchWithAuth(url);
   if (!response.ok) {
     throw new Error('Failed to fetch student progress report');
@@ -335,6 +338,61 @@ export async function fetchComparisonAnalytics(params: ComparisonAnalyticsParams
   const response = await fetch(`/api/academic-v2/performance/comparison-analytics/?${query.toString()}`);
   if (!response.ok) {
     throw new Error('Failed to fetch comparison analytics data');
+  }
+  return response.json();
+}
+
+export interface StudentCurriculumMarksResponse {
+  subjects: Array<{ id: string; code: string; name: string }>;
+  students: Array<{
+    student_id: string;
+    reg_no: string;
+    name: string;
+    department: string;
+    section: string;
+    marks: Record<string, number>;
+    attendance: number;
+  }>;
+  exam_type: string;
+}
+
+export async function fetchStudentCurriculumMarks(filters: {
+  year?: string;
+  sem?: string;
+  dept?: string;
+  exam?: string;
+  q?: string;
+}): Promise<StudentCurriculumMarksResponse> {
+  const queryParams = new URLSearchParams();
+  if (filters.year) queryParams.set('year', filters.year);
+  if (filters.sem) queryParams.set('sem', filters.sem);
+  if (filters.dept) queryParams.set('dept', filters.dept);
+  if (filters.exam) queryParams.set('exam', filters.exam);
+  if (filters.q) queryParams.set('q', filters.q);
+
+  const url = `${API_BASE}/api/academic-v2/performance/student-curriculum-marks/?${queryParams.toString()}`;
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error('Failed to fetch student curriculum marks');
+  }
+  return response.json();
+}
+
+export interface StudentAnalysisChartsResponse {
+  student_name: string;
+  reg_no: string;
+  marks_data: Array<{ subject_code: string; subject_name: string; score: number }>;
+  attendance_series: Array<{ week: string; attendance: number }>;
+}
+
+export async function fetchStudentAnalysisCharts(studentId: string, exam: string): Promise<StudentAnalysisChartsResponse> {
+  const queryParams = new URLSearchParams();
+  if (exam) queryParams.set('exam', exam);
+  
+  const url = `${API_BASE}/api/academic-v2/performance/student-analysis-charts/${encodeURIComponent(studentId)}/?${queryParams.toString()}`;
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error('Failed to fetch student analysis charts');
   }
   return response.json();
 }
