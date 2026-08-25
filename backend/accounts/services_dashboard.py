@@ -50,7 +50,6 @@ def resolve_dashboard_capabilities(user) -> Dict:
             'student_curriculum_view': False,
             'hod_obe_requests': False,
             'obe_master_requests': False,
-            'academic_calendar_admin': False,
         }
         return {
             'username': '',
@@ -79,27 +78,13 @@ def resolve_dashboard_capabilities(user) -> Dict:
         staff_profile = getattr(user, 'staff_profile', None)
         if staff_profile is not None:
             from academics.models import DepartmentRole
-            from academics.models import StudentMentorMap, SectionAdvisor
 
             dept_roles = DepartmentRole.objects.filter(staff=staff_profile, is_active=True).values_list('role', flat=True)
             for r in dept_roles:
                 if r:
                     dept_role_names.add(str(r).upper())
-
-            has_active_mentor_mentees = StudentMentorMap.objects.filter(mentor=staff_profile, is_active=True).exists()
-            has_active_advisee_sections = SectionAdvisor.objects.filter(advisor=staff_profile, is_active=True).exists()
-
-            if has_active_mentor_mentees:
-                dept_role_names.add('MENTOR')
-            if has_active_advisee_sections:
-                dept_role_names.add('ADVISOR')
-        else:
-            has_active_mentor_mentees = False
-            has_active_advisee_sections = False
     except Exception:
         dept_role_names = set()
-        has_active_mentor_mentees = False
-        has_active_advisee_sections = False
 
     for r in sorted(dept_role_names):
         if r not in {str(x).upper() for x in role_names}:
@@ -176,19 +161,6 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'can_create_feedback': 'feedback.create' in lower_perms,
         'can_reply_feedback': 'feedback.reply' in lower_perms,
         'can_access_coe_portal': ('coe.portal.access' in lower_perms) or str(getattr(user, 'email', '') or '').strip().lower() == 'coe@krct.ac.in',
-        'can_manage_academic_calendar': 'academic_calendar.admin' in lower_perms,
-        'can_manage_elective_poll': 'curriculum.manage_elective_poll' in lower_perms,
-        'can_choose_elective': 'curriculum.choose_elective' in lower_perms,
-        'can_hod_elective_manage': 'curriculum.hod_elective_manage' in lower_perms,
-        'can_upload_certificates': profile_type == 'STUDENT',
-        'can_review_certificates': bool(has_active_mentor_mentees or ('MENTOR' in {str(r).upper() for r in role_names}) or ('certificates.review' in lower_perms)),
-        'can_view_certificate_achievements': bool(
-            'MENTOR' in {str(r).upper() for r in role_names}
-            or 'ADVISOR' in {str(r).upper() for r in role_names}
-            or 'HOD' in {str(r).upper() for r in role_names}
-            or 'IQAC' in {str(r).upper() for r in role_names}
-        ),
-        'can_view_achievement_reports': 'IQAC' in {str(r).upper() for r in role_names},
     }
 
     # `hod_role_present` should reflect explicit `accounts.Role` membership only.
@@ -202,22 +174,16 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'curriculum_master': bool(flags.get('can_edit_curriculum_master') or flags.get('can_view_curriculum_master')),
         'department_curriculum': bool(flags.get('can_fill_department_curriculum') or flags.get('can_approve_department_curriculum')),
         'student_curriculum_view': bool(flags.get('is_student')),
-        'certificates_upload': bool(flags.get('can_upload_certificates')),
-        'certificates_review': bool(flags.get('can_review_certificates')),
-        'certificates_review': bool(flags.get('can_review_certificates')),
-        'certificates_achievements': bool(flags.get('can_view_certificate_achievements')),
-        'certificates_reports': bool(flags.get('can_view_achievement_reports')),
         'timetable_templates': bool(flags.get('can_manage_timetable_templates') or user.is_staff),
         'timetable_assignments': bool(flags.get('can_assign_timetable') or any(str(r).upper() == 'HOD' for r in role_names)),
         'hod_advisors': bool(flags.get('can_assign_advisor') or hod_role_present),
         'hod_teaching': bool(flags.get('can_assign_teaching') or hod_role_present),
         'staff_students': bool('students.view_students' in lower_perms),
+        # Show HOD OBE Requests if the user's roles grant the canonical permission.
         'hod_obe_requests': ('obe.hod_obe_requests' in lower_perms),
         'obe_master_requests': ('obe.master_obe_requests' in lower_perms),
         'feedback_page': bool(flags.get('can_view_feedback_page')),
         'coe_portal': bool(flags.get('can_access_coe_portal')),
-        'academic_calendar_admin': bool(flags.get('can_manage_academic_calendar')),
-        'elective_poll': bool(flags.get('can_manage_elective_poll') or flags.get('can_choose_elective') or flags.get('can_hod_elective_manage')),
     }
 
     return {

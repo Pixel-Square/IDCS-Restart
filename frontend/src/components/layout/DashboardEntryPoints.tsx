@@ -97,7 +97,7 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
   const upperRoles = rawRoles.map((r: any) => (typeof r === 'string' ? r : r?.name || '').toUpperCase());
   const profileTypeUpper = String(user?.profile_type || '').toUpperCase();
   const isStaff = profileTypeUpper === 'STAFF' || upperRoles.includes('STAFF') || Boolean(user?.is_staff);
-  const isStudent = profileTypeUpper === 'STUDENT' || upperRoles.includes('STUDENT') || Boolean(user?.is_student) || (!isStaff && Boolean(user?.student_profile));
+  const isStudent = profileTypeUpper === 'STUDENT' || upperRoles.includes('STUDENT') || Boolean(user?.is_student) || (!isStaff && Boolean((user as any)?.student_profile || (user as any)?.profile?.reg_no));
 
   // BioSecure State
   const [biosecureStatus, setBiosecureStatus] = useState<any>(null);

@@ -5,13 +5,12 @@ from django.http import HttpResponse
 from django.db.utils import ProgrammingError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
-
 from rest_framework_simplejwt.authentication import JWTAuthentication
+
 from .authentication import ReportingApiKeyAuthentication
 from .permissions import (
     CanViewCourseDashboardOrApiKey,
     CanViewPowerBIDataOrApiKey,
-    HasReportingApiKey,
     can_access_reporting,
     is_reporting_api_key_auth,
 )
@@ -105,22 +104,22 @@ def _mark_response(request, format_key: str, default_filename: str):
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication])
-@permission_classes([HasReportingApiKey])
+@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
+@permission_classes([CanViewPowerBIDataOrApiKey])
 def theory_marks(request):
-    return _mark_response(request, 'theory', 'marks_theory.csv')
+    return _mark_response(request, 'theory', 'powerbi_theory_marks.csv')
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication])
-@permission_classes([HasReportingApiKey])
+@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
+@permission_classes([CanViewPowerBIDataOrApiKey])
 def tcpr_tcpl_marks(request):
-    return _mark_response(request, 'tcpr-tcpl', 'marks_tcpr_tcpl.csv')
+    return _mark_response(request, 'tcpr-tcpl', 'powerbi_tcpr_tcpl_marks.csv')
 
 
 @api_view(['GET'])
-@authentication_classes([ReportingApiKeyAuthentication])
-@permission_classes([HasReportingApiKey])
+@authentication_classes([ReportingApiKeyAuthentication, JWTAuthentication])
+@permission_classes([CanViewPowerBIDataOrApiKey])
 def project_lab_marks(request):
     return _mark_response(request, 'project-lab', 'powerbi_project_lab_marks.csv')
 

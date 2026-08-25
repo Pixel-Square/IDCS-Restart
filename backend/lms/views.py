@@ -7,7 +7,7 @@ from urllib.parse import quote
 from django.http import FileResponse
 from django.core import signing
 from django.urls import reverse
-from django.db.models import Sum, Q
+from django.db.models import Sum
 from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -57,60 +57,6 @@ def _can_access_material(user, material: StudyMaterial) -> bool:
 
     student_profile = getattr(user, 'student_profile', None)
     if student_profile is not None:
-        # Prefer strict roster scoping when material is tied to a teaching assignment.
-        # This ensures a student can see only materials uploaded for their assigned class.
-        ta = getattr(material, 'teaching_assignment', None)
-        if ta is None and getattr(material, 'teaching_assignment_id', None):
-            try:
-                from academics.models import TeachingAssignment
-
-                ta = TeachingAssignment.objects.filter(pk=material.teaching_assignment_id).select_related(
-                    'section',
-                    'academic_year',
-                ).first()
-            except Exception:
-                ta = None
-
-        if ta is not None:
-            roster_ids = set()
-            try:
-                if getattr(ta, 'section_id', None):
-                    from academics.models import StudentProfile, StudentSectionAssignment
-
-                    roster_ids.update(
-                        StudentSectionAssignment.objects.filter(
-                            section_id=ta.section_id,
-                            end_date__isnull=True,
-                        )
-                        .exclude(student__status__in=['INACTIVE', 'DEBAR'])
-                        .values_list('student_id', flat=True)
-                    )
-
-                    # Keep legacy section linkage as a fallback source.
-                    roster_ids.update(
-                        StudentProfile.objects.filter(section_id=ta.section_id)
-                        .exclude(status__in=['INACTIVE', 'DEBAR'])
-                        .values_list('id', flat=True)
-                    )
-                elif getattr(ta, 'elective_subject_id', None):
-                    from curriculum.models import ElectiveChoice
-
-                    eqs = (
-                        ElectiveChoice.objects.filter(
-                            elective_subject_id=ta.elective_subject_id,
-                            is_active=True,
-                        )
-                        .exclude(student__isnull=True)
-                    )
-                    if getattr(ta, 'academic_year_id', None) and eqs.filter(academic_year_id=ta.academic_year_id).exists():
-                        eqs = eqs.filter(academic_year_id=ta.academic_year_id)
-                    roster_ids.update(eqs.values_list('student_id', flat=True))
-            except Exception:
-                roster_ids = set()
-
-            if roster_ids:
-                return int(student_profile.id) in {int(i) for i in roster_ids}
-
         enrolled_ids = set(
             StudentCourseEnrollment.objects.filter(student=student_profile).values_list('course_id', flat=True)
         )
@@ -133,17 +79,14 @@ def _group_materials_by_course(materials_qs, *, serializer_context):
     grouped = OrderedDict()
     for item in data:
         cid = item.get('course')
-        subj_code = item.get('subject_code') or ''
-        subj_name = item.get('subject_name') or ''
-        group_key = f"{cid}::{subj_code}::{subj_name}"
-        if group_key not in grouped:
-            grouped[group_key] = {
+        if cid not in grouped:
+            grouped[cid] = {
                 'course_id': cid,
                 'course_name': item.get('course_name'),
                 'department_code': item.get('department_code'),
                 'materials': [],
             }
-        grouped[group_key]['materials'].append(item)
+        grouped[cid]['materials'].append(item)
     return list(grouped.values())
 
 
@@ -212,37 +155,40 @@ class StaffUploadOptionsView(APIView):
         from curriculum.models import ElectiveChoice
         from timetable.models import TimetableAssignment
 
-        base_qs = TeachingAssignment.objects.select_related(
+        base_qs = TeachingAssignment.objects.filter(
+            staff=staff_profile,
+        ).select_related(
             'subject__course',
             'section__batch__course',
             'curriculum_row',
             'elective_subject',
             'academic_year',
         ).order_by('id')
-        qs = base_qs.filter(staff__user=request.user, is_active=True)
-        if not qs.exists():
-            qs = base_qs.filter(staff=staff_profile, is_active=True)
-        if not qs.exists():
-            qs = base_qs.filter(staff__user=request.user, academic_year__is_active=True)
 
-        # Keep LMS assignment sourcing aligned with academics/my-teaching-assignments.
+        qs = base_qs.filter(
+            staff=staff_profile,
+            is_active=True,
+        )
+
         try:
-            from academics.views import _ensure_teaching_assignments_from_subject_batches
-
-            _ensure_teaching_assignments_from_subject_batches(staff_profile)
+            if qs.filter(academic_year__is_active=True).exists():
+                qs = qs.filter(academic_year__is_active=True)
         except Exception:
             pass
 
         if not qs.exists():
-            qs = base_qs.filter(staff__user=request.user, is_active=True)
-            if not qs.exists():
-                qs = base_qs.filter(staff=staff_profile, is_active=True)
+            try:
+                from academics.views import _ensure_teaching_assignments_from_subject_batches
 
-        # Final fallback: do not hide assignments due to inconsistent flags.
-        if not qs.exists():
-            qs = base_qs.filter(staff__user=request.user)
-            if not qs.exists():
-                qs = base_qs.filter(staff=staff_profile)
+                _ensure_teaching_assignments_from_subject_batches(staff_profile)
+                qs = base_qs.filter(is_active=True)
+                try:
+                    if qs.filter(academic_year__is_active=True).exists():
+                        qs = qs.filter(academic_year__is_active=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
         # Fallback path for users who are assigned only via subject batches.
         # Create or reuse minimal teaching assignments so upload can proceed.
@@ -279,18 +225,17 @@ class StaffUploadOptionsView(APIView):
                 continue
 
         # Reload after fallback creation so dropdown includes batch-derived options.
-        refreshed = base_qs.filter(staff__user=request.user, is_active=True)
-        if not refreshed.exists():
-            refreshed = base_qs.filter(staff=staff_profile, is_active=True)
-        if refreshed.exists():
-            qs = refreshed
+        qs = base_qs.filter(is_active=True)
+        try:
+            if qs.filter(academic_year__is_active=True).exists():
+                qs = qs.filter(academic_year__is_active=True)
+        except Exception:
+            pass
 
         # Final fallback: align with academics page behavior and do not hide all
         # options when flags are inconsistent.
         if not qs.exists():
-            qs = base_qs.filter(staff__user=request.user)
-            if not qs.exists():
-                qs = base_qs.filter(staff=staff_profile)
+            qs = base_qs
 
         # Preload relevant subject batches to infer course where TA has no section/subject course.
         sb_qs = StudentSubjectBatch.objects.filter(
@@ -428,61 +373,7 @@ class StaffUploadOptionsView(APIView):
                     }
                 )
 
-        # Merge same subject across multiple class/department assignments into one option.
-        merged = OrderedDict()
-        for item in rows:
-            subject_code_val = str(item.get('subject_code') or '').strip()
-            subject_name_val = str(item.get('subject_name') or '').strip()
-
-            if subject_code_val or subject_name_val:
-                merge_key = f"subj::{subject_code_val.lower()}::{subject_name_val.lower()}"
-            else:
-                merge_key = f"ta::{item['teaching_assignment_id']}"
-
-            if merge_key not in merged:
-                merged[merge_key] = {
-                    'teaching_assignment_id': item['teaching_assignment_id'],
-                    'course_id': item['course_id'],
-                    'course_name': subject_name_val or subject_code_val or item['course_name'],
-                    'subject_code': subject_code_val or None,
-                    'subject_name': subject_name_val or None,
-                    'assignment_ids': [],
-                    'course_ids': [],
-                    'class_names': [],
-                    'targets': [],
-                }
-
-            row = merged[merge_key]
-
-            ta_id = int(item['teaching_assignment_id'])
-            course_id = int(item['course_id'])
-            class_name = str(item['course_name'] or '').strip()
-
-            if ta_id not in row['assignment_ids']:
-                row['assignment_ids'].append(ta_id)
-            if course_id not in row['course_ids']:
-                row['course_ids'].append(course_id)
-            if class_name and class_name not in row['class_names']:
-                row['class_names'].append(class_name)
-
-            target_key = (ta_id, course_id)
-            existing_target_keys = {(t['teaching_assignment_id'], t['course_id']) for t in row['targets']}
-            if target_key not in existing_target_keys:
-                row['targets'].append(
-                    {
-                        'teaching_assignment_id': ta_id,
-                        'course_id': course_id,
-                        'class_name': class_name,
-                    }
-                )
-
-        results = list(merged.values())
-        for r in results:
-            r['class_names'] = sorted(r['class_names'])
-            r['assignment_ids'] = sorted(r['assignment_ids'])
-            r['course_ids'] = sorted(r['course_ids'])
-
-        return Response({'results': results})
+        return Response({'results': rows})
 
 
 class StaffUploadMetadataView(APIView):
@@ -716,9 +607,7 @@ class StudentCourseWiseMaterialsView(APIView):
 
         qs = StudyMaterial.objects.none()
         if enrolled_ids:
-            qs = StudyMaterial.objects.filter(
-                Q(course_id__in=enrolled_ids) | Q(shared_courses__in=enrolled_ids)
-            ).distinct().select_related(
+            qs = StudyMaterial.objects.filter(course_id__in=enrolled_ids).select_related(
                 'uploaded_by__user',
                 'course__department',
                 'curriculum_row',
@@ -726,38 +615,10 @@ class StudentCourseWiseMaterialsView(APIView):
                 'teaching_assignment__subject',
                 'teaching_assignment__curriculum_row',
                 'teaching_assignment__elective_subject',
-            ).prefetch_related('shared_courses__department')
+            )
 
-        data = StudyMaterialSerializer(qs.order_by('course__name', '-created_at'), many=True, context={'request': request}).data
-
-        if enrolled_ids:
-            materials_dict = {m.id: m for m in qs}
-            for item in data:
-                m = materials_dict.get(item['id'])
-                if m and m.course_id not in enrolled_ids:
-                    for sc in m.shared_courses.all():
-                        if sc.id in enrolled_ids:
-                            item['course'] = sc.id
-                            item['course_name'] = sc.name
-                            item['department_code'] = sc.department.code if sc.department else None
-                            break
-
-        grouped = OrderedDict()
-        for item in data:
-            cid = item.get('course')
-            subj_code = item.get('subject_code') or ''
-            subj_name = item.get('subject_name') or ''
-            group_key = f"{cid}::{subj_code}::{subj_name}"
-            if group_key not in grouped:
-                grouped[group_key] = {
-                    'course_id': cid,
-                    'course_name': item.get('course_name'),
-                    'department_code': item.get('department_code'),
-                    'materials': [],
-                }
-            grouped[group_key]['materials'].append(item)
-            
-        return Response({'results': list(grouped.values())})
+        grouped = _group_materials_by_course(qs.order_by('course__name', '-created_at'), serializer_context={'request': request})
+        return Response({'results': grouped})
 
 
 class HODCourseWiseMaterialsView(APIView):

@@ -18,25 +18,15 @@ type TeachingAssignment = {
   staff_details?: { id: number; user: string | { username?: string; first_name?: string; last_name?: string }; staff_id: string }
 }
 
-const normalizeId = (value: any): number | null => {
-  const num = Number(value)
-  return Number.isFinite(num) && num > 0 ? num : null
-}
-
-const isSharedSection = (sec: any) => {
-  if (!sec) return false;
-  const code = sec.department_short_name || sec.department_code || sec.department?.code;
-  return sec.department_id === null || code === 'S&H';
+const isSharedSection = (s: any) => {
+  if (!s) return false;
+  const code = s.department_code || s.department_short_name || s.department?.code;
+  return s.department_id === null || code === 'S&H';
 };
 
-const normalizeText = (value: any): string => String(value || '').trim().toLowerCase()
-
-const extractCourseCodeFromSubject = (subjectText: any): string => {
-  const raw = String(subjectText || '').trim()
-  if (!raw) return ''
-  const first = raw.split('-')[0]?.trim() || ''
-  return normalizeText(first)
-}
+const isMultiFacultyAllowed = (section: any, subject?: any) => {
+  return true;
+};
 
 // Cache key and expiry time (5 minutes)
 const CACHE_KEY_PREFIX = 'teaching_assignments_cache'
@@ -841,18 +831,8 @@ export default function TeachingAssignmentsPage(){
         if (id > 0) curriculumRowIds.add(id);
       });
       
-      // Return only curriculum rows that have assignments, AND whose semester matches the current section semester
-      return curriculum.filter(c => {
-        if (!curriculumRowIds.has(c.id)) return false;
-        
-        const cSem = Number(c.semester);
-        const sSem = Number(String(section.semester || '').replace('Sem ', '').trim());
-        if (!isNaN(cSem) && cSem > 0 && !isNaN(sSem) && sSem > 0) {
-          if (cSem !== sSem) return false;
-        }
-        
-        return true;
-      });
+      // Return only curriculum rows that have assignments
+      return curriculum.filter(c => curriculumRowIds.has(c.id));
     }
     
     const sectionRows = sharedSectionCurriculum[section.id]
@@ -909,93 +889,68 @@ export default function TeachingAssignmentsPage(){
     )
   }
 
-  const findExistingAssignment = (sectionId: number, curricularRow: number | CurriculumRow | any) => {
-    const targetSectionId = normalizeId(sectionId)
-    const targetRowId = normalizeId(typeof curricularRow === 'number' ? curricularRow : curricularRow?.id)
-    const targetCode = normalizeText(typeof curricularRow === 'number' ? '' : curricularRow?.course_code)
-    const targetName = normalizeText(typeof curricularRow === 'number' ? '' : curricularRow?.course_name)
-
-    return assignments.find(a => {
-      const assignmentSectionId =
-        normalizeId((a as any).section_details?.id) ??
-        normalizeId((a as any).section_id) ??
-        normalizeId((a as any).section)
-
-      if (!targetSectionId || assignmentSectionId !== targetSectionId) {
-        return false
-      }
+  const findExistingAssignments = (sectionId: number, curricularRowId: number) => {
+    return assignments.filter(a => {
+      // Normalize section ID from various possible sources
+      const aSectionId = Number(
+        a.section_details?.id || 
+        (a as any).section_details?.id || 
+        a.section || 
+        (a as any).section_id || 
+        0
+      );
       
-      const assignmentRowId =
-        normalizeId((a as any).curriculum_row_details?.id) ??
-        normalizeId((a as any).curriculum_row?.id) ??
-        normalizeId((a as any).curriculum_row_id)
-
-      if (targetRowId && assignmentRowId && assignmentRowId === targetRowId) {
-        return true
-      }
-
-      const assignmentCode =
-        normalizeText((a as any).curriculum_row_details?.course_code) ||
-        normalizeText((a as any).curriculum_row?.course_code) ||
-        extractCourseCodeFromSubject((a as any).subject)
-      const assignmentName =
-        normalizeText((a as any).curriculum_row_details?.course_name) ||
-        normalizeText((a as any).curriculum_row?.course_name)
-
-      if (targetCode && assignmentCode && targetCode === assignmentCode) {
-        return true
-      }
-      if (targetName && assignmentName && targetName === assignmentName) {
-        return true
-      }
-
-      return false
+      // Normalize curriculum row ID from various possible sources
+      const aCurriculumRowId = Number(
+        a.curriculum_row_details?.id ||
+        (a as any).curriculum_row_details?.id ||
+        (a.curriculum_row && typeof a.curriculum_row === 'object' ? a.curriculum_row.id : a.curriculum_row) ||
+        (a as any).curriculum_row_id ||
+        0
+      );
+      
+      return aSectionId === Number(sectionId) && aCurriculumRowId === Number(curricularRowId);
     });
   }
 
-  // Returns ALL assignments for a section + curriculum-row pair (used for multi-faculty delete/save loops)
-  const findExistingAssignments = (sectionId: number, curricularRowId: number | any): any[] => {
-    const targetSectionId = normalizeId(sectionId)
-    const targetRowId = normalizeId(typeof curricularRowId === 'number' ? curricularRowId : curricularRowId?.id)
-
+  const findExistingElectiveAssignments = (electiveId: number) => {
     return assignments.filter(a => {
-      const assignmentSectionId =
-        normalizeId((a as any).section_details?.id) ??
-        normalizeId((a as any).section_id) ??
-        normalizeId((a as any).section)
-
-      if (!targetSectionId || assignmentSectionId !== targetSectionId) {
-        return false
-      }
-
-      const assignmentRowId =
-        normalizeId((a as any).curriculum_row_details?.id) ??
-        normalizeId((a as any).curriculum_row?.id) ??
-        normalizeId((a as any).curriculum_row_id)
-
-      if (targetRowId && assignmentRowId && assignmentRowId === targetRowId) {
-        return true
-      }
-
-      return false
-    })
+      const aElectiveId = Number(
+        (a as any).elective_subject_id ||
+        ((a as any).elective_subject && typeof (a as any).elective_subject === 'object' ? (a as any).elective_subject.id : (a as any).elective_subject) ||
+        ((a as any).elective_subject_details && (a as any).elective_subject_details.id) ||
+        0
+      );
+      return aElectiveId === Number(electiveId);
+    });
   }
 
-  const getAssignmentStaffDisplay = (assignment: TeachingAssignment | any) => {
-    const details = assignment?.staff_details
-    if (details) {
-      const label = `${details?.staff_id || ''} - ${getAssignmentStaffName(details)}`.trim()
-      return label.replace(/^\s*-\s*/, '') || 'Not assigned'
-    }
-
-    const candidateId = normalizeId(assignment?.staff) ?? normalizeId(assignment?.staff_id)
-    if (candidateId) {
-      const staffRow = [...(staff || []), ...(electiveStaff || [])].find((s) => normalizeId(s.id) === candidateId)
-      if (staffRow) {
-        return `${staffRow.staff_id} - ${getStaffDisplayName(staffRow)}`
-      }
-    }
-    return 'Not assigned'
+  const findExistingAssignment = (sectionId: number, curricularRowId: number) => {
+    return assignments.find(a => {
+      // Normalize section ID from various possible sources
+      const aSectionId = Number(
+        a.section_details?.id || 
+        (a as any).section_details?.id || 
+        a.section || 
+        (a as any).section_id || 
+        0
+      );
+      
+      // Normalize curriculum row ID from various possible sources
+      const aCurriculumRowId = Number(
+        a.curriculum_row_details?.id ||
+        (a as any).curriculum_row_details?.id ||
+        (a.curriculum_row && typeof a.curriculum_row === 'object' ? a.curriculum_row.id : a.curriculum_row) ||
+        (a as any).curriculum_row_id ||
+        0
+      );
+      
+      // Use strict equality after normalization
+      const sectionMatches = aSectionId === Number(sectionId);
+      const curriculumMatches = aCurriculumRowId === Number(curricularRowId);
+      
+      return sectionMatches && curriculumMatches;
+    });
   }
 
   const getAssignmentKey = (sectionId: number, subjectId: number) => `${sectionId}-${subjectId}`
@@ -1050,19 +1005,6 @@ export default function TeachingAssignmentsPage(){
   const findExistingElectiveAssignment = (electiveId: number) => {
     // Normalize elective_subject ID from various possible sources
     return assignments.find(a => {
-      const aElectiveId = Number(
-        (a as any).elective_subject_id ||
-        ((a as any).elective_subject && typeof (a as any).elective_subject === 'object' ? (a as any).elective_subject.id : (a as any).elective_subject) ||
-        ((a as any).elective_subject_details && (a as any).elective_subject_details.id) ||
-        0
-      );
-      return aElectiveId === Number(electiveId);
-    });
-  }
-
-  // Returns ALL assignments for an elective (used for multi-faculty support)
-  const findExistingElectiveAssignments = (electiveId: number): any[] => {
-    return assignments.filter(a => {
       const aElectiveId = Number(
         (a as any).elective_subject_id ||
         ((a as any).elective_subject && typeof (a as any).elective_subject === 'object' ? (a as any).elective_subject.id : (a as any).elective_subject) ||
@@ -1480,8 +1422,8 @@ export default function TeachingAssignmentsPage(){
                           </thead>
                           <tbody className="divide-y divide-gray-100">
                             {sectionSubjects.map(subject => {
-                              const existingAssignment = findExistingAssignment(section.id, subject);
                               const existingAssignments = findExistingAssignments(section.id, subject.id);
+                              const existingAssignment = existingAssignments[0];
                               const editing = isEditing(section.id, subject.id);
                               
                               return (
@@ -1513,19 +1455,22 @@ export default function TeachingAssignmentsPage(){
                                     {editing ? (
                                       <SearchableStaffSelect 
                                         id={`staff-${section.id}-${subject.id}`}
-                                        defaultValue={existingAssignment?.staff_details?.id || existingAssignment?.staff || ''}
-                                        className="w-full p-2 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      >
-                                        <option value="">-- select staff --</option>
-                                        {getFilteredStaffForDeptCore().map(st => (
-                                          <option key={st.id} value={st.id}>
-                                            {st.staff_id} - {getStaffDisplayName(st)}
-                                          </option>
-                                        ))}
-                                      </SearchableStaffSelect>
-                                    ) : existingAssignment ? (
-                                      <div className="text-sm text-gray-900 font-medium">
-                                        {getAssignmentStaffDisplay(existingAssignment)}
+                                        initialValue={isMultiFacultyAllowed(section, subject) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
+                                        staffList={getFilteredStaffForDeptCore(subject)}
+                                        isMulti={isMultiFacultyAllowed(section, subject)}
+                                      />
+                                    ) : existingAssignments.length > 0 ? (
+                                      <div className="flex flex-col gap-1">
+                                        {existingAssignments.map(a => {
+                                          const assignedStaff = getAssignedStaffInfo(a);
+                                          return (
+                                            <div key={a.id} className="text-sm text-gray-900 font-medium">
+                                              {assignedStaff.staffId && assignedStaff.name 
+                                                ? `${assignedStaff.staffId} - ${assignedStaff.name}`
+                                                : (assignedStaff.name || '—')}
+                                            </div>
+                                          );
+                                        })}
                                       </div>
                                     ) : (
                                       <div className="text-sm text-gray-500 italic">
@@ -1769,8 +1714,8 @@ export default function TeachingAssignmentsPage(){
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {relevantSections.map(sec => {
-                            const existingAssignment = findExistingAssignment(sec.id, parent);
                             const existingAssignments = findExistingAssignments(sec.id, parent.id);
+                            const existingAssignment = existingAssignments[0] || null;
                             const editing = isEditing(sec.id, parent.id);
                             return (
                               <tr key={sec.id} className="hover:bg-white/60">
@@ -1781,18 +1726,23 @@ export default function TeachingAssignmentsPage(){
                                   {editing ? (
                                     <SearchableStaffSelect 
                                       id={`staff-${sec.id}-${parent.id}`}
-                                      defaultValue={existingAssignment?.staff_details?.id ?? (existingAssignment?.staff as any) ?? ''}
-                                      className="w-full px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                                    >
-                                      <option value="">-- select staff --</option>
-                                      {getFilteredStaffForDeptCore().map(st => (
-                                        <option key={st.id} value={st.id}>{st.staff_id} - {getStaffDisplayName(st)}</option>
-                                      ))}
-                                    </SearchableStaffSelect>
-                                  ) : existingAssignment ? (
-                                    <span className="text-sm text-gray-900 font-medium">
-                                      {getAssignmentStaffDisplay(existingAssignment)}
-                                    </span>
+                                      initialValue={isMultiFacultyAllowed(sec, parent) ? existingAssignments.map(a => a.staff_details?.id || a.staff) : (existingAssignment?.staff_details?.id || existingAssignment?.staff || '')}
+                                      staffList={getFilteredStaffForDeptCore(parent)}
+                                      isMulti={isMultiFacultyAllowed(sec, parent)}
+                                    />
+                                  ) : existingAssignments.length > 0 ? (
+                                    <div className="flex flex-col gap-1">
+                                      {existingAssignments.map(a => {
+                                        const assignedStaff = getAssignedStaffInfo(a);
+                                        return (
+                                          <span key={a.id} className="text-sm text-gray-900 font-medium">
+                                            {assignedStaff.staffId && assignedStaff.name 
+                                              ? `${assignedStaff.staffId} - ${assignedStaff.name}`
+                                              : (assignedStaff.name || '—')}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
                                   ) : (
                                     <span className="text-sm text-gray-400 italic">Not assigned</span>
                                   )}

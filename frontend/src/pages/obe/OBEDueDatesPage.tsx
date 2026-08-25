@@ -21,15 +21,14 @@ type SemesterRow = { id: number; number: number | null };
 
 const SEMESTER_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 
-type ClassTypeKey = 'THEORY' | 'LAB' | 'LAB_2' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PRBL' | 'PROJECT' | 'AUDIT' | 'SPECIAL' | 'TAMIL';
+type ClassTypeKey = 'THEORY' | 'LAB' | 'TCPL' | 'TCPR' | 'PRACTICAL' | 'PRBL' | 'PROJECT' | 'AUDIT' | 'SPECIAL';
 
 // Mirrored from backend: curriculum.models.CLASS_TYPE_CHOICES
-const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'LAB_2', 'TCPL', 'TCPR', 'PRACTICAL', 'PRBL', 'PROJECT', 'AUDIT', 'SPECIAL', 'TAMIL'];
+const CLASS_TYPE_ORDER: ClassTypeKey[] = ['THEORY', 'LAB', 'TCPL', 'TCPR', 'PRACTICAL', 'PRBL', 'PROJECT', 'AUDIT', 'SPECIAL'];
 
 const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   THEORY: 'Theory',
   LAB: 'Lab',
-  LAB_2: 'Lab 2',
   TCPL: 'TCPL',
   TCPR: 'TCPR',
   PRACTICAL: 'Practical',
@@ -37,14 +36,12 @@ const CLASS_TYPE_LABEL: Record<ClassTypeKey, string> = {
   PROJECT: 'Project',
   AUDIT: 'Audit',
   SPECIAL: 'Special',
-  TAMIL: 'Tamil',
 };
 
 // Assessment mapping MUST match what faculty sees in Mark Entry tabs (see MarkEntryTabs.getVisibleTabs).
 const THEORY_DEFAULT_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'formative1', 'cia1', 'ssa2', 'formative2', 'cia2', 'model'];
 const TCPR_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'review1', 'cia1', 'ssa2', 'review2', 'cia2', 'model'];
 const LAB_ASSESSMENTS: DueAssessmentKey[] = ['cia1', 'cia2', 'model'];
-const LAB_2_ASSESSMENTS: DueAssessmentKey[] = ['cia1', 'cia2'];
 const PRACTICAL_ASSESSMENTS: DueAssessmentKey[] = ['cia1', 'cia2', 'model'];
 const PRBL_ASSESSMENTS: DueAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'model'];
 const PROJECT_ASSESSMENTS: DueAssessmentKey[] = ['review1', 'review2'];
@@ -93,7 +90,6 @@ function computePublishMode(params: {
 
 function expectedAssessmentsForClassType(classType: ClassTypeKey, subjectsForLeaf: DueScheduleSubject[]): DueAssessmentKey[] {
   if (classType === 'LAB') return LAB_ASSESSMENTS;
-  if (classType === 'LAB_2') return LAB_2_ASSESSMENTS;
   if (classType === 'TCPR') return TCPR_ASSESSMENTS;
   if (classType === 'PRACTICAL') return PRACTICAL_ASSESSMENTS;
   if (classType === 'PRBL') return PRBL_ASSESSMENTS;
@@ -121,7 +117,6 @@ function expectedAssessmentsForClassType(classType: ClassTypeKey, subjectsForLea
   }
 
   // TCPL uses formative keys as LAB 1/LAB 2; assessments remain the same keys.
-  // TAMIL uses the same 3-cycle flow as THEORY (SSA1+FA1+CIA1 / SSA2+FA2+CIA2 / Model).
   // THEORY/AUDIT/default follow the full theory flow.
   return THEORY_DEFAULT_ASSESSMENTS;
 }
@@ -135,10 +130,6 @@ function assessmentDisplayLabel(classType: ClassTypeKey, assessment: DueAssessme
     if (assessment === 'cia1') return 'CIA 1 LAB';
     if (assessment === 'cia2') return 'CIA 2 LAB';
     if (assessment === 'model') return 'MODEL LAB';
-  }
-  if (classType === 'LAB_2') {
-    if (assessment === 'cia1') return 'Cycle 1 LAB';
-    if (assessment === 'cia2') return 'Cycle 2 LAB';
   }
   if (classType === 'PRACTICAL') {
     if (assessment === 'cia1') return 'CIA 1 Review';
@@ -164,7 +155,6 @@ function normalizeClassType(v: any): ClassTypeKey {
   if (compactRaw === 'PRBL' || compactRaw.includes('PRBL')) return 'PRBL';
 
   const k = normalizeObeClassType(v);
-  if (k === 'LAB2') return 'LAB_2';
   if (k === 'LAB') return 'LAB';
   if (k === 'TCPL') return 'TCPL';
   if (k === 'TCPR') return 'TCPR';
@@ -172,7 +162,6 @@ function normalizeClassType(v: any): ClassTypeKey {
   if (k === 'PROJECT') return 'PROJECT';
   if (k === 'AUDIT') return 'AUDIT';
   if (k === 'SPECIAL') return 'SPECIAL';
-  if (k === 'TAMIL') return 'TAMIL';
   return 'THEORY';
 }
 

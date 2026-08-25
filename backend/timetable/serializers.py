@@ -1,13 +1,6 @@
 from rest_framework import serializers
-from .models import TimetableTemplate, TimetableSlot, TimetableAssignment, Venue
+from .models import TimetableTemplate, TimetableSlot, TimetableAssignment
 from .models import SpecialTimetable, SpecialTimetableEntry, PeriodSwapRequest
-
-
-class VenueSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Venue
-        fields = ('id', 'name', 'code', 'venue_type', 'capacity', 'location', 'description', 'is_active', 'created_at', 'updated_at')
-        read_only_fields = ('created_at', 'updated_at')
 
 
 class PeriodDefinitionSerializer(serializers.ModelSerializer):
@@ -199,31 +192,14 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
     # accept a numeric subject_batch id in payload; resolve to object in validate to avoid import-time cycles
     subject_batch_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     staff_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-    venue_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-    venue = serializers.SerializerMethodField(read_only=True)
     staff = serializers.SerializerMethodField(read_only=True)
     effective_staff = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = TimetableAssignment
-        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text', 'venue', 'venue_id')
+        fields = ('id', 'period', 'period_id', 'day', 'section', 'section_id', 'staff', 'effective_staff', 'staff_id', 'curriculum_row', 'subject_batch', 'subject_batch_id', 'subject_text')
         read_only_fields = ('period', 'section')
     
-    def get_venue(self, obj):
-        try:
-            v = getattr(obj, 'venue', None)
-            if not v:
-                return None
-            return {
-                'id': v.id,
-                'name': getattr(v, 'name', None),
-                'code': getattr(v, 'code', None),
-                'venue_type': getattr(v, 'venue_type', None),
-                'capacity': getattr(v, 'capacity', 0),
-            }
-        except Exception:
-            return None
-
     def get_staff(self, obj):
         """Return the actual staff who teaches the subject.
         
@@ -381,47 +357,6 @@ class TimetableAssignmentSerializer(serializers.ModelSerializer):
                     attrs['staff'] = staff
                 except Exception:
                     pass
-
-        # resolve venue if provided as id in initial_data (handling null/empty)
-        venue = None
-        if 'venue_id' in self.initial_data:
-            val = self.initial_data.get('venue_id')
-            if val is None or val == '' or val == 'null':
-                attrs['venue'] = None
-                venue = None
-            else:
-                try:
-                    from timetable.models import Venue
-                    v = Venue.objects.filter(pk=int(val), is_active=True).first()
-                    attrs['venue'] = v
-                    venue = v
-                except Exception:
-                    venue = None
-        else:
-            venue = attrs.get('venue')
-
-        # A physical venue (lab/hall) can only host ONE class at a time. Two different
-        # sections may not use the same venue on the same day+period simultaneously.
-        attrs_day = attrs.get('day')
-        if venue and period and attrs_day and section:
-            from timetable.models import TimetableAssignment as _TTA
-            qs = _TTA.objects.filter(
-                venue=venue,
-                day=attrs_day,
-                period=period,
-            ).exclude(section__isnull=True).exclude(section=section)
-            if getattr(self, 'instance', None) is not None:
-                qs = qs.exclude(pk=self.instance.pk)
-            conflict = qs.first()
-            if conflict:
-                other_section = getattr(conflict, 'section', None)
-                other_name = getattr(other_section, 'name', None)
-                raise serializers.ValidationError(
-                    f"Venue '{venue.name}' is already booked for {conflict.get_day_display()} period "
-                    f"{getattr(conflict.period, 'index', '?')} by section {other_name or getattr(conflict, 'section_id', None)}. "
-                    f"A venue can only host one section at a time."
-                )
-
 
         curriculum_row = attrs.get('curriculum_row')
         if curriculum_row and section:

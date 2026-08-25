@@ -47,8 +47,6 @@ from .views import (
     BatchListView,
     IqacInternalMarksBulkExportView,
     IqacInternalMarksCourseExportView,
-    IqacMarksSemesterZipExportView,
-    IqacMarksExportPreviewView,
     StudentProfileUpdateView,
 )
 from .analytics_views import AttendanceAnalyticsView, AnalyticsFiltersView, ClassAttendanceReportView, TodayPeriodAttendanceView, PeriodAttendanceReportView, OverallSectionView, MyClassStudentsView, DailyAttendanceView, DailyAttendanceLockView, DailyAttendanceUnlockView, MyClassAttendanceAnalyticsView, DailyAttendanceSessionDetailView, SectionStudentAttendanceDayView, DailyAttendanceRevertAssignmentView, DailyAttendanceUnlockRequestView, PeriodAttendanceUnlockRequestView, HODUnlockRequestsView, PeriodAttendanceSwapView, PeriodAttendanceRevertAssignmentView, AttendanceAssignmentRequestView, AttendanceAssignmentRequestActionView, AttendanceNotificationCountView, BulkAttendanceSectionsView, BulkAttendanceDownloadView, BulkAttendanceImportView, BulkAttendanceLockedSessionsView, BulkDailyAttendanceUnlockRequestView, OverallDailyAttendanceReportView
@@ -125,8 +123,6 @@ urlpatterns = [
     path('iqac/course-teaching/<str:course_code>/', IQACCourseTeachingMapView.as_view()),
     path('iqac/internal-marks/export/', IqacInternalMarksBulkExportView.as_view()),
     path('iqac/internal-marks/course-export/', IqacInternalMarksCourseExportView.as_view()),
-    path('iqac/marks/export-semesters-zip/', IqacMarksSemesterZipExportView.as_view()),
-    path('iqac/marks/export-preview/', IqacMarksExportPreviewView.as_view()),
 
     # SPECIAL course helpers
     path('special-courses/<str:course_code>/enabled_assessments/', SpecialCourseEnabledAssessmentsView.as_view()),

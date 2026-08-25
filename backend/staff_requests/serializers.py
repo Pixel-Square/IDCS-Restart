@@ -1,10 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import (
-    RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog,
-    EventAttendingForm, EventAttendingFile, EventAttendingApprovalLog,
-    EventAttendingApprovalWorkflow, StaffEventDeclaration, EventBudgetCondition,
-)
+from .models import RequestTemplate, ApprovalStep, StaffRequest, ApprovalLog
 
 User = get_user_model()
 
@@ -138,22 +134,14 @@ class RequestTemplateDetailSerializer(RequestTemplateSerializer):
 
 class ApplicantSerializer(serializers.ModelSerializer):
     """Minimal user serializer for applicant info"""
-    name = serializers.SerializerMethodField()
     full_name = serializers.SerializerMethodField()
     staff_id = serializers.SerializerMethodField()
-    department = serializers.SerializerMethodField()
-    date_of_join = serializers.SerializerMethodField()
+    profile_image = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = [
-            'id', 'username', 'email', 'name', 'full_name',
-            'first_name', 'last_name', 'staff_id', 'department', 'date_of_join',
-        ]
+        fields = ['id', 'username', 'email', 'full_name', 'first_name', 'last_name', 'staff_id', 'profile_image']
         read_only_fields = fields
-
-    def get_name(self, obj):
-        return obj.get_full_name() or obj.username
     
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
@@ -166,23 +154,36 @@ class ApplicantSerializer(serializers.ModelSerializer):
         except Exception:
             return obj.username
 
-    def get_department(self, obj):
-        try:
-            profile = getattr(obj, 'staff_profile', None)
-            if profile and profile.department:
-                return profile.department.name or profile.department.short_name or ''
-        except Exception:
-            pass
-        return ''
+    def get_profile_image(self, obj):
+        value = ''
 
-    def get_date_of_join(self, obj):
         try:
-            profile = getattr(obj, 'staff_profile', None)
-            if profile and profile.date_of_join:
-                return profile.date_of_join
+            student_profile = getattr(obj, 'student_profile', None)
+            if student_profile is not None and getattr(student_profile, 'profile_image', None):
+                value = str(student_profile.profile_image)
         except Exception:
-            pass
-        return None
+            value = ''
+
+        if not value:
+            try:
+                staff_profile = getattr(obj, 'staff_profile', None)
+                if staff_profile is not None and getattr(staff_profile, 'profile_image', None):
+                    value = str(staff_profile.profile_image)
+            except Exception:
+                value = ''
+
+        if not value:
+            value = str(getattr(obj, 'profile_image', '') or '')
+
+        value = value.strip()
+        if not value:
+            return ''
+
+        if value.startswith('http://') or value.startswith('https://'):
+            return value
+
+        cleaned = value.lstrip('/')
+        return f'/media/{cleaned}'
 
 
 class ApproverSerializer(serializers.ModelSerializer):
@@ -195,13 +196,6 @@ class ApproverSerializer(serializers.ModelSerializer):
         read_only_fields = fields
     
     def get_full_name(self, obj):
-        try:
-            profile = getattr(obj, 'staff_profile', None)
-            if profile:
-                name = obj.get_full_name() or obj.username
-                return name
-        except Exception:
-            pass
         return obj.get_full_name() or obj.username
 
 
@@ -397,280 +391,3 @@ class ApprovalStepCreateSerializer(serializers.ModelSerializer):
             })
         
         return attrs
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Event Attending Serializers
-# ══════════════════════════════════════════════════════════════════════
-
-class EventAttendingFileSerializer(serializers.ModelSerializer):
-    file_url = serializers.SerializerMethodField()
-
-    class Meta:
-        model = EventAttendingFile
-        fields = ['id', 'expense_type', 'expense_index', 'file', 'file_url', 'original_filename', 'orientation', 'uploaded_at']
-        read_only_fields = ['id', 'uploaded_at']
-
-    def get_file_url(self, obj):
-        request = self.context.get('request')
-        if obj.file and request:
-            return request.build_absolute_uri(obj.file.url)
-        return None
-
-
-class EventAttendingApprovalLogSerializer(serializers.ModelSerializer):
-    approver = ApproverSerializer(read_only=True)
-
-    class Meta:
-        model = EventAttendingApprovalLog
-        fields = ['id', 'step_order', 'action', 'comments', 'approver', 'action_date']
-        read_only_fields = fields
-
-
-class EventAttendingFormListSerializer(serializers.ModelSerializer):
-    applicant = ApplicantSerializer(source='staff', read_only=True)
-    on_duty_form_data = serializers.SerializerMethodField()
-    travel_total = serializers.FloatField(read_only=True)
-    food_total = serializers.FloatField(read_only=True)
-    other_total = serializers.FloatField(read_only=True)
-    grand_total = serializers.FloatField(read_only=True)
-    balance = serializers.FloatField(read_only=True)
-
-    class Meta:
-        model = EventAttendingForm
-        fields = [
-            'id', 'applicant', 'status', 'current_step',
-            'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
-            'on_duty_form_data', 'created_at', 'updated_at',
-        ]
-        read_only_fields = fields
-
-    def get_on_duty_form_data(self, obj):
-        data = {}
-        if obj.on_duty_request and obj.on_duty_request.form_data:
-            data.update(obj.on_duty_request.form_data)
-        if obj.custom_event_details:
-            data.update(obj.custom_event_details)
-        return data
-
-
-class EventAttendingFormDetailSerializer(serializers.ModelSerializer):
-    applicant = ApplicantSerializer(source='staff', read_only=True)
-    on_duty_form_data = serializers.SerializerMethodField()
-    on_duty_template_name = serializers.CharField(source='on_duty_request.template.name', read_only=True)
-    files = EventAttendingFileSerializer(many=True, read_only=True)
-    approval_logs = EventAttendingApprovalLogSerializer(many=True, read_only=True)
-    travel_total = serializers.FloatField(read_only=True)
-    food_total = serializers.FloatField(read_only=True)
-    other_total = serializers.FloatField(read_only=True)
-    grand_total = serializers.FloatField(read_only=True)
-    balance = serializers.FloatField(read_only=True)
-    workflow_progress = serializers.SerializerMethodField()
-    full_workflow = serializers.SerializerMethodField()
-    current_approver_role = serializers.SerializerMethodField()
-    budget_details = serializers.SerializerMethodField()
-
-    class Meta:
-        model = EventAttendingForm
-        fields = [
-            'id', 'applicant', 'on_duty_request_id', 'on_duty_form_data', 'on_duty_template_name',
-            'custom_event_details', 'event_proof',
-            'travel_expenses', 'food_expenses', 'other_expenses',
-            'total_fees_spend', 'advance_amount_received', 'advance_date',
-            'travel_total', 'food_total', 'other_total', 'grand_total', 'balance',
-            'status', 'current_step', 'current_approver_role',
-            'files', 'approval_logs', 'workflow_progress', 'full_workflow',
-            'created_at', 'updated_at', 'budget_details'
-        ]
-        read_only_fields = fields
-
-    def get_budget_details(self, obj):
-        from .models import StaffEventDeclaration, EventAttendingForm
-        try:
-            decl = StaffEventDeclaration.objects.get(staff=obj.staff)
-        except StaffEventDeclaration.DoesNotExist:
-            return None
-            
-        nature = ''
-        if obj.on_duty_request:
-            nature = (obj.on_duty_request.form_data or {}).get('nature_of_event', '')
-        else:
-            nature = (obj.custom_event_details or {}).get('nature_of_event', '')
-        is_conf = str(nature).strip().lower() == 'conference'
-        
-        forms = EventAttendingForm.objects.filter(staff=obj.staff, status='approved').select_related('on_duty_request')
-        used = 0
-        for f in forms:
-            f_nature = ''
-            if f.on_duty_request:
-                f_nature = (f.on_duty_request.form_data or {}).get('nature_of_event', '')
-            else:
-                f_nature = (f.custom_event_details or {}).get('nature_of_event', '')
-            f_is_conf = str(f_nature).strip().lower() == 'conference'
-            if f_is_conf == is_conf:
-                used += float(f.grand_total)
-                
-        if is_conf:
-            available = float(decl.conference_budget)
-            allocated = available + used
-        else:
-            available = float(decl.normal_events_budget)
-            allocated = available + used
-            
-        return {
-            'is_conference': is_conf,
-            'allocated': allocated,
-            'used': used,
-            'available': available,
-        }
-
-    def get_on_duty_form_data(self, obj):
-        data = {}
-        if obj.on_duty_request and obj.on_duty_request.form_data:
-            data.update(obj.on_duty_request.form_data)
-        if obj.custom_event_details:
-            data.update(obj.custom_event_details)
-        return data
-
-    def get_current_approver_role(self, obj):
-        step = obj.get_current_approval_step()
-        return step.approver_role if step else None
-
-    def get_workflow_progress(self, obj):
-        steps = obj.get_applicable_workflow_steps()
-        logs = list(obj.approval_logs.all().order_by('id'))
-        
-        def could_be_role(user, role_name):
-            if role_name == 'HOD':
-                from academics.models import DepartmentRole
-                if hasattr(user, 'staff_profile'):
-                    return DepartmentRole.objects.filter(staff=user.staff_profile, role__in=['HOD', 'AHOD']).exists()
-                return False
-            return hasattr(user, 'user_roles') and user.user_roles.filter(role__name__iexact=role_name).exists()
-
-        result = []
-        for step in steps:
-            matched_log = None
-            
-            # 1. Try to match by the approver's actual role
-            for log in logs:
-                if could_be_role(log.approver, step.approver_role):
-                    matched_log = log
-                    break
-                    
-            # 2. Fallback to step_order
-            if not matched_log:
-                for log in logs:
-                    if log.step_order == step.step_order:
-                        matched_log = log
-                        break
-
-            info = {
-                'step_order': step.step_order,
-                'approver_role': step.approver_role,
-                'is_current': step.step_order == obj.current_step and obj.status == 'pending',
-                'is_completed': matched_log is not None,
-                'status': None,
-                'approver': None,
-                'comments': None,
-                'action_date': None,
-            }
-            if matched_log:
-                info.update({
-                    'status': matched_log.action,
-                    'approver': ApproverSerializer(matched_log.approver).data,
-                    'comments': matched_log.comments,
-                    'action_date': matched_log.action_date,
-                })
-                logs.remove(matched_log)
-                
-            result.append(info)
-            
-        return result
-
-    def get_full_workflow(self, obj):
-        from .models import _resolve_staff_primary_role, EventAttendingApprovalWorkflow
-        role = _resolve_staff_primary_role(obj.staff)
-        steps = EventAttendingApprovalWorkflow.objects.filter(
-            applicant_role__iexact=role
-        ).order_by('step_order')
-        return [
-            {
-                'step_order': step.step_order,
-                'approver_role': step.approver_role,
-                'is_active': step.is_active,
-            }
-            for step in steps
-        ]
-
-
-class EventAttendingApprovalWorkflowSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EventAttendingApprovalWorkflow
-        fields = ['id', 'applicant_role', 'step_order', 'approver_role', 'is_active']
-        read_only_fields = ['id']
-
-
-class StaffEventDeclarationSerializer(serializers.ModelSerializer):
-    staff_id_display = serializers.SerializerMethodField()
-    staff_name = serializers.SerializerMethodField()
-    department_name = serializers.SerializerMethodField()
-    designation = serializers.SerializerMethodField()
-    experience_years = serializers.SerializerMethodField()
-    user_id = serializers.IntegerField(source='staff.id', read_only=True)
-
-    class Meta:
-        model = StaffEventDeclaration
-        fields = [
-            'id', 'user_id', 'staff_id_display', 'staff_name', 'department_name', 'designation',
-            'experience_years', 'normal_events_budget', 'conference_budget', 'updated_at',
-        ]
-        read_only_fields = ['id', 'user_id', 'staff_id_display', 'staff_name', 'department_name', 'designation', 'experience_years', 'updated_at']
-
-    def get_staff_id_display(self, obj):
-        try:
-            return obj.staff.staff_profile.staff_id
-        except Exception:
-            return obj.staff.username
-
-    def get_staff_name(self, obj):
-        return obj.staff.get_full_name() or obj.staff.username
-
-    def get_department_name(self, obj):
-        try:
-            return obj.staff.staff_profile.department.name or ''
-        except Exception:
-            return ''
-
-    def get_designation(self, obj):
-        try:
-            return obj.staff.staff_profile.designation or ''
-        except Exception:
-            return ''
-
-    def get_experience_years(self, obj):
-        try:
-            from django.utils import timezone
-            doj = obj.staff.staff_profile.date_of_join
-            if not doj:
-                return 0
-            today = timezone.localdate()
-            diff = today - doj
-            return round(diff.days / 365.25, 1)
-        except Exception:
-            return 0
-
-
-class EventBudgetConditionSerializer(serializers.ModelSerializer):
-    """Serializer for IQAC-defined event budget conditions."""
-
-    class Meta:
-        model = EventBudgetCondition
-        fields = [
-            'id', 'event_type', 'designation',
-            'exp_from', 'exp_condition', 'exp_value',
-            'amount', 'from_date', 'to_date',
-            'is_active', 'created_at', 'updated_at',
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-

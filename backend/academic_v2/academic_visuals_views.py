@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
-from academics.models import Department, AcademicYear, BatchYear, Semester, Section, Subject, TeachingAssignment
+from academics.models import Department, AcademicYear, Semester, Section, Subject, TeachingAssignment
 from OBE.models import (
     Cia1Mark, Cia2Mark, Ssa1Mark, Ssa2Mark, Formative1Mark, Formative2Mark,
     ModelExamMark, LabExamMark, FinalInternalMark
@@ -191,18 +191,6 @@ class AcademicVisualDynamicOptionsView(APIView):
             # Default current academic year
             if not academic_years:
                 academic_years = ["2026-27", "2025-26", "2024-25"]
-            # Batches from Database
-            batch_qs = BatchYear.objects.all().order_by('-name')
-            batches = []
-            seen_batches = set()
-            for by in batch_qs:
-                by_name = str(by.name or '').strip()
-                if by_name and by_name not in seen_batches:
-                    seen_batches.add(by_name)
-                    batches.append(by_name)
-            if not batches:
-                batches = ["2023-2027", "2024-2028"]
-
 
             # 3. Canonical Subjects with TA Linkages & Metadata
             sub_qs = Subject.objects.all().order_by('name', 'code')
@@ -293,7 +281,6 @@ class AcademicVisualDynamicOptionsView(APIView):
         return Response({
             "departments": departments,
             "academicYears": academic_years,
-            "batches": batches,
             "semesters": semesters,
             "sections": sections,
             "subjects": subjects,
@@ -367,13 +354,7 @@ class AcademicDashboardQueryView(APIView):
             all_possible_tests = [
                 (Cia1Mark, "CIA 1", "mark"),
                 (Cia2Mark, "CIA 2", "mark"),
-                (Ssa1Mark, "SSA 1", "mark"),
-                (Ssa2Mark, "SSA 2", "mark"),
-                (Formative1Mark, "FA 1 (Formative 1)", "total"),
-                (Formative2Mark, "FA 2 (Formative 2)", "total"),
-                (ModelExamMark, "Model Exam", "total_mark"),
-                (LabExamMark, "Lab Exam", "total_mark"),
-                (FinalInternalMark, "Final Internal", "final_mark")
+                (ModelExamMark, "Model Exam", "total_mark")
             ]
 
             models_to_query = []
@@ -428,9 +409,9 @@ class AcademicDashboardQueryView(APIView):
                     except:
                         sub_sem_num = 5
                     
-                    sec_name = getattr(st_profile.section, 'name', "A") if st_profile and st_profile.section else "A"
-                    dept_code = str(getattr(st_profile.home_department, 'code', 'CSE')).strip() if st_profile and st_profile.home_department else "CSE"
-                    dept_display = str(getattr(st_profile.home_department, 'short_name', dept_code)).strip() if st_profile and st_profile.home_department else "CSE"
+                    sec_name = "A"
+                    dept_code = "CSE"
+                    dept_display = "CSE"
                     acad_yr = "2026-27"
 
                     if item.teaching_assignment:
@@ -441,7 +422,7 @@ class AcademicDashboardQueryView(APIView):
                         
                         if item.teaching_assignment.staff and item.teaching_assignment.staff.department:
                             d_obj = item.teaching_assignment.staff.department
-                            dept_code = str(d_obj.code or dept_code).strip()
+                            dept_code = str(d_obj.code or 'CSE').strip()
                             dept_display = str(d_obj.short_name or d_obj.name or dept_code).strip()
 
                     # Department filter match against both code & short name

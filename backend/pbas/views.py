@@ -414,11 +414,30 @@ class PBASCustomDepartmentTreeView(APIView):
         else:
             dept = PBASCustomDepartment.objects.filter(pk=dept_id).first() or _get_or_create_master_dept()
 
-        roots = PBASNode.objects.filter(department=dept, parent__isnull=True).order_by('position', 'created_at')
+        # Check if audience filter should apply based on query param or user role
+        viewer_param = request.query_params.get('viewer')
+        viewer = viewer_param or resolve_viewer_from_user(request.user)
+        # If user is PBAS admin or IQAC manager inspecting tree in admin, let them see all unless viewer is specified
+        if not viewer_param and _is_iqac_manager(request.user):
+            audience_filter = None
+        elif viewer:
+            audience_filter = allowed_audiences_for_viewer(viewer)
+        else:
+            audience_filter = None
+
+        roots_qs = PBASNode.objects.filter(department=dept, parent__isnull=True)
+        if audience_filter:
+            roots_qs = roots_qs.filter(audience__in=audience_filter)
+        roots = roots_qs.order_by('position', 'created_at')
+
+        context = {'request': request}
+        if audience_filter:
+            context['audience_filter'] = audience_filter
+
         data = {
             'id': str(dept.id),
             'title': dept.title,
-            'nodes': PBASNodeTreeSerializer(roots, many=True).data,
+            'nodes': PBASNodeTreeSerializer(roots, many=True, context=context).data,
         }
         return Response(data)
 
@@ -448,6 +467,7 @@ class PBASCustomDepartmentTreeView(APIView):
                     label=raw.get('label') or '',
                     audience=(raw.get('audience') or 'both'),
                     input_mode=(raw.get('input_mode') or 'upload'),
+                    form_schema=(raw.get('form_schema') or []),
                     link=raw.get('link') or None,
                     uploaded_name=raw.get('uploaded_name') or None,
                     limit=raw.get('limit') if raw.get('limit') not in ('', None) else None,
@@ -763,6 +783,8 @@ class PBASApprovalsListView(APIView):
                 'leaf_title': sub.node.label,
                 'parent_path': _get_node_parent_path(sub.node),
                 'submission_type': sub.submission_type,
+                'form_data': sub.form_data or {},
+                'form_schema': sub.node.form_schema or [],
                 'link': sub.link,
                 'file_url': file_url,
                 'file_name': sub.file_name or (sub.file.name if sub.file else None),

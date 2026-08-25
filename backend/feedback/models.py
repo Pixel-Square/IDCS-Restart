@@ -97,21 +97,6 @@ class FeedbackForm(models.Model):
         blank=True,
         help_text='List of section IDs for multi-class feedback'
     )
-    faculty_name = models.CharField(
-        max_length=255,
-        blank=True,
-        default='',
-        help_text='Faculty name for open/common feedback'
-    )
-    section_wise = models.BooleanField(
-        default=False,
-        help_text='If True, feedback will collect section-wise staff mappings'
-    )
-    section_staff_assignments = models.JSONField(
-        default=list,
-        blank=True,
-        help_text='Section-wise staff name mappings for feedback forms'
-    )
     
     all_classes = models.BooleanField(
         default=False,

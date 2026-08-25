@@ -1734,7 +1734,8 @@ def _compute_students_entered_weight_pct(student_ids, exam_ids):
                 except Exception:
                     co_count = 5
                 co_numbers = list(range(1, co_count + 1))
-                covered_cos = ex.covered_cos if isinstance(ex.covered_cos, list) else co_numbers
+                covered_cos_val = getattr(ex, 'covered_cos', None)
+                covered_cos = covered_cos_val if isinstance(covered_cos_val, list) else co_numbers
                 if not covered_cos:
                     covered_cos = co_numbers
 
@@ -1968,42 +1969,23 @@ def admin_secure_delete(request):
         return Response({'detail': 'object_type and id are required'}, status=400)
 
     if object_type == 'qp_type':
-        # Accept UUID primary key, code, or name
-        obj = None
-        try:
-            obj = AcV2QpType.objects.filter(pk=object_id).first()
-        except Exception:
-            pass
-        if not obj:
-            obj = AcV2QpType.objects.filter(models.Q(code__iexact=object_id) | models.Q(name__iexact=object_id)).first()
-
-        if not obj:
-            try:
-                from curriculum.models import QuestionPaperType
-                qpt = QuestionPaperType.objects.filter(models.Q(code__iexact=object_id) | models.Q(label__iexact=object_id)).first()
-                if qpt:
-                    qpt.delete()
-                    return Response({'success': True}, status=200)
-            except Exception:
-                pass
-            return Response({'detail': f'QP Type "{object_id}" not found'}, status=404)
-
+        obj = get_object_or_404(AcV2QpType, pk=object_id)
         with transaction.atomic():
-            code = obj.code
-            AcV2QpAssignment.objects.filter(qp_type=obj).delete()
-            AcV2QpAssignment.objects.filter(qp_type_code__iexact=code).delete()
-            AcV2QpPattern.objects.filter(qp_type__iexact=code).delete()
-            obj.delete()
-            AcV2QpType.objects.filter(models.Q(code__iexact=code) | models.Q(is_active=False)).delete()
+            obj.is_active = False
+            obj.updated_by = request.user
+            obj.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+            # Deactivate any assignments using this QP type.
+            AcV2QpAssignment.objects.filter(qp_type=obj, is_active=True).update(is_active=False, updated_by=request.user)
         return Response({'success': True}, status=200)
 
     if object_type == 'qp_pattern':
         obj = get_object_or_404(AcV2QpPattern, pk=object_id)
-        # Permanently delete any QP assignment rows that point at this pattern before deleting,
-        # then perform permanent delete of the pattern.
         with transaction.atomic():
-            AcV2QpAssignment.objects.filter(exam_assignment=obj).delete()
-            obj.delete()
+            obj.is_active = False
+            obj.updated_by = request.user
+            obj.save(update_fields=['is_active', 'updated_by', 'updated_at'])
+            # Deactivate any QP assignment rows that point at this pattern.
+            AcV2QpAssignment.objects.filter(exam_assignment=obj, is_active=True).update(is_active=False, updated_by=request.user)
         return Response({'success': True}, status=200)
 
     return Response({'detail': 'Unsupported object_type'}, status=400)
@@ -2408,7 +2390,7 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
                     defaults=defaults,
                 )
 
-            # Delete CQI exams that were removed or disabled in the JSON config
+            # Deactivate CQI exams that were removed or disabled in the JSON config
             existing = AcV2CqiExam.objects.filter(class_type=instance)
             for row in existing:
                 qp_key = str(getattr(row, 'qp_type_code', '') or '').strip().lower()
@@ -2416,17 +2398,23 @@ class AcV2ClassTypeViewSet(viewsets.ModelViewSet):
                 allowed = active_codes_by_qp.get(qp_key)
                 if allowed is None:
                     # No CQI configured for this qp_type anymore
-                    row.delete()
+                    if row.is_active:
+                        row.is_active = False
+                        row.updated_by = self.request.user
+                        row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
                     continue
-                if code and code not in allowed:
-                    row.delete()
+                if code and code not in allowed and row.is_active:
+                    row.is_active = False
+                    row.updated_by = self.request.user
+                    row.save(update_fields=['is_active', 'updated_by', 'updated_at'])
         except Exception:
             # Never block saving class types due to CQI sync problems.
             pass
     
     def perform_destroy(self, instance):
-        # Permanent delete — remove from DB
-        instance.delete()
+        # Soft delete
+        instance.is_active = False
+        instance.save()
 
 
 # ============================================================================
@@ -2564,51 +2552,22 @@ class AcV2QpTypeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        # Permanently purge any stale soft-deleted QP types from DB
-        AcV2QpType.objects.filter(is_active=False).delete()
         qs = super().get_queryset()
         college_id = self.request.query_params.get('college')
         if college_id:
             qs = qs.filter(college_id=college_id)
         return qs.order_by('name')
     
-    def create(self, request, *args, **kwargs):
-        name = str(request.data.get('name', '') or '').strip()
-        code = str(request.data.get('code', '') or '').strip()
-        class_type_id = request.data.get('class_type')
-
-        # Check if an existing record (active or inactive) with same name or code exists
-        existing = AcV2QpType.objects.filter(
-            models.Q(name__iexact=name) | models.Q(code__iexact=code)
-        ).first()
-
-        if existing:
-            existing.name = name
-            existing.code = code
-            if class_type_id:
-                existing.class_type_id = class_type_id
-            existing.description = request.data.get('description', '') or ''
-            existing.is_active = True
-            existing.updated_by = request.user
-            existing.save()
-            serializer = self.get_serializer(existing)
-            return Response(serializer.data, status=200)
-
-        return super().create(request, *args, **kwargs)
-
     def perform_create(self, serializer):
-        serializer.save(updated_by=self.request.user, is_active=True)
+        serializer.save(updated_by=self.request.user)
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
     
     def perform_destroy(self, instance):
-        # Permanent delete (remove from DB) along with related assignments and patterns
-        with transaction.atomic():
-            AcV2QpAssignment.objects.filter(qp_type=instance).delete()
-            AcV2QpAssignment.objects.filter(qp_type_code__iexact=instance.code).delete()
-            AcV2QpPattern.objects.filter(qp_type__iexact=instance.code).delete()
-            instance.delete()
+        # Soft delete
+        instance.is_active = False
+        instance.save()
 
 
 class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
@@ -2634,8 +2593,9 @@ class AcV2CourseOutcomeViewSet(viewsets.ModelViewSet):
         serializer.save(updated_by=self.request.user)
 
     def perform_destroy(self, instance):
-        # Permanent delete (remove from DB)
-        instance.delete()
+        # Soft delete
+        instance.is_active = False
+        instance.save(update_fields=['is_active', 'updated_at'])
 
 
 # ============================================================================
@@ -2652,8 +2612,6 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):
-        # Permanently purge any stale soft-deleted QP patterns from DB
-        AcV2QpPattern.objects.filter(is_active=False).delete()
         qs = super().get_queryset()
         qp_type = self.request.query_params.get('qp_type')
         class_type_id = self.request.query_params.get('class_type')
@@ -2667,12 +2625,6 @@ class AcV2QpPatternViewSet(viewsets.ModelViewSet):
             qs = qs.filter(batch_id=batch_id)
         
         return qs.select_related('class_type', 'batch')
-
-    def perform_destroy(self, instance):
-        # Permanent delete (remove pattern & related assignments from DB)
-        with transaction.atomic():
-            AcV2QpAssignment.objects.filter(exam_assignment=instance).delete()
-            instance.delete()
     
     def perform_create(self, serializer):
         qp_pattern = serializer.save(updated_by=self.request.user)
@@ -3805,26 +3757,19 @@ def get_pattern_for_exam(request, course_id, exam_type):
     # (Need to determine batch from course/semester - simplified here)
     
     # 3. Global pattern
-    ct = course.class_type
+    pattern = AcV2QpPattern.objects.filter(
+        qp_type=exam_type,
+        class_type=course.class_type,
+        is_active=True
+    ).first()
     
-    base_qs = AcV2QpPattern.objects.filter(qp_type=exam_type, is_active=True)
-    pattern = None
-    
-    if ct is not None:
-        scoped = base_qs.filter(class_type=ct)
-        if not scoped.exists():
-            scoped = base_qs.filter(class_type__name__iexact=ct.name) | base_qs.filter(class_type__short_code__iexact=ct.short_code)
-            
-        if ct.short_code == 'TH':
-            scoped = scoped | base_qs.filter(class_type__name__iexact='THEORY') | base_qs.filter(class_type__short_code__iexact='TH')
-        elif ct.short_code == 'PR':
-            scoped = scoped | base_qs.filter(class_type__name__iexact='PRACTICAL') | base_qs.filter(class_type__short_code__iexact='PR')
-            
-        pattern = scoped.order_by('-updated_at').first()
-        
     if not pattern:
         # Fallback to global without class type
-        pattern = base_qs.filter(class_type__isnull=True).order_by('-updated_at').first()
+        pattern = AcV2QpPattern.objects.filter(
+            qp_type=exam_type,
+            class_type__isnull=True,
+            is_active=True
+        ).first()
     
     if pattern:
         return Response({
@@ -4755,38 +4700,14 @@ def faculty_exam_info(request, exam_id):
         except Exception:
             ct = None
 
-        ct_name = None
-        try:
-            ct_name = ea.section.course.class_type_name
-        except Exception:
-            ct_name = None
-
         base_qs = AcV2QpPattern.objects.filter(qp_type=qp_type, is_active=True)
         matched_pattern = None
 
-        scoped = base_qs.none()
+        # 1) Class Type + QP Type + Exam name match
         if ct is not None:
             scoped = base_qs.filter(class_type=ct)
-            if not scoped.exists():
-                scoped = base_qs.filter(class_type__name__iexact=ct.name) | base_qs.filter(class_type__short_code__iexact=ct.short_code)
-        elif ct_name:
-            scoped = base_qs.filter(class_type__name__iexact=ct_name) | base_qs.filter(class_type__short_code__iexact=ct_name)
-        
-        # Also include generic TH/THEORY aliases just in case
-        if (ct and ct.short_code == 'TH') or (ct_name and ct_name.upper() in ['TH', 'THEORY']):
-            scoped = scoped | base_qs.filter(class_type__name__iexact='THEORY') | base_qs.filter(class_type__short_code__iexact='TH')
-        elif (ct and ct.short_code == 'PR') or (ct_name and ct_name.upper() in ['PR', 'PRACTICAL']):
-            scoped = scoped | base_qs.filter(class_type__name__iexact='PRACTICAL') | base_qs.filter(class_type__short_code__iexact='PR')
-
-        if scoped.exists():
             if exam_key:
                 matched_pattern = scoped.filter(name__iexact=exam_key).order_by('-updated_at').first()
-                if not matched_pattern:
-                    exam_key_nospace = exam_key.replace(' ', '').lower()
-                    for p in scoped.order_by('-updated_at'):
-                        if p.name and p.name.replace(' ', '').lower() == exam_key_nospace:
-                            matched_pattern = p
-                            break
             else:
                 matched_pattern = scoped.order_by('-updated_at').first()
 
@@ -4795,12 +4716,6 @@ def faculty_exam_info(request, exam_id):
             global_qs = base_qs.filter(class_type__isnull=True)
             if exam_key:
                 matched_pattern = global_qs.filter(name__iexact=exam_key).order_by('-updated_at').first()
-                if not matched_pattern:
-                    exam_key_nospace = exam_key.replace(' ', '').lower()
-                    for p in global_qs.order_by('-updated_at'):
-                        if p.name and p.name.replace(' ', '').lower() == exam_key_nospace:
-                            matched_pattern = p
-                            break
             else:
                 matched_pattern = global_qs.order_by('-updated_at').first()
 

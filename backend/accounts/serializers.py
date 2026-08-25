@@ -327,8 +327,6 @@ class MeSerializer(serializers.Serializer):
         if st is not None:
             return {
                 'staff_id': st.staff_id,
-                'date_of_join': st.date_of_join.isoformat() if getattr(st, 'date_of_join', None) else None,
-                'personal_email': getattr(st, 'personal_email', '') or '',
                 'profile_image': profile_image_url,
                 'profile_image_updated': self.get_profile_image_updated(obj),
                 'rfid_uid': getattr(st, 'rfid_uid', ''),
@@ -573,20 +571,9 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
         invalid_msg = 'Unable to log in with provided credentials.'
 
         if user is None:
-            # Log the failed identifier resolution for diagnostics (no sensitive data)
-            try:
-                import logging
-                logging.getLogger(__name__).warning('Login failed: identifier not found (%s)', identifier)
-            except Exception:
-                pass
             raise serializers.ValidationError(invalid_msg)
 
         if not user.check_password(password):
-            try:
-                import logging
-                logging.getLogger(__name__).warning('Login failed: wrong password for user id=%s identifier=%s', getattr(user, 'id', None), identifier)
-            except Exception:
-                pass
             raise serializers.ValidationError(invalid_msg)
 
         if not getattr(user, 'is_active', True):
@@ -607,22 +594,6 @@ class IdentifierTokenObtainPairSerializer(serializers.Serializer):
                 raise serializers.ValidationError('Your student account is inactive. Please contact administration.')
             if student_status == 'DEBAR':
                 raise serializers.ValidationError('Your student account has been debarred. Please contact administration.')
-
-        # --- Login Lockdown check ---
-        # If login_lockdown is enabled, only superusers may authenticate directly.
-        # The superuser impersonation endpoint uses a separate serializer and is unaffected.
-        if not getattr(user, 'is_superuser', False):
-            try:
-                from .models import SiteConfiguration
-                cfg = SiteConfiguration.get()
-                if getattr(cfg, 'login_lockdown', False):
-                    raise serializers.ValidationError(
-                        'Login is temporarily disabled for maintenance. Please try again later.'
-                    )
-            except serializers.ValidationError:
-                raise
-            except Exception:
-                pass  # If SiteConfiguration lookup fails, don't block login
 
         # Build tokens
         refresh = RefreshToken.for_user(user)

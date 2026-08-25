@@ -31,7 +31,6 @@ from applications.views.admin_views import (
     ApplicationsAdminRoleHierarchyStagesView,
     ApplicationsAdminUserSearchView,
     ApplicationsAdminSubmissionListView,
-    ApplicationsAdminNotificationSettingsView,
 )
 
 urlpatterns = [
@@ -64,7 +63,6 @@ urlpatterns = [
     path('admin/types/<int:type_id>/role-permissions/', ApplicationsAdminRolePermissionsView.as_view(), name='applications-admin-role-permissions'),
     path('admin/types/<int:type_id>/role-hierarchy/', ApplicationsAdminRoleHierarchyView.as_view(), name='applications-admin-role-hierarchy'),
     path('admin/types/<int:type_id>/role-hierarchy-stages/', ApplicationsAdminRoleHierarchyStagesView.as_view(), name='applications-admin-role-hierarchy-stages'),
-    path('admin/types/<int:type_id>/notification-settings/', ApplicationsAdminNotificationSettingsView.as_view(), name='applications-admin-notification-settings'),
     path('admin/users/search/', ApplicationsAdminUserSearchView.as_view(), name='applications-admin-user-search'),
     path('admin/submissions/', ApplicationsAdminSubmissionListView.as_view(), name='applications-admin-submissions'),
 ]

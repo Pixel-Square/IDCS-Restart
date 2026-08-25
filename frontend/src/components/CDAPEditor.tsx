@@ -86,7 +86,6 @@ export default function CDAPEditor({
   subjectId,
   imported,
   onLockChange,
-  isIqac,
 }: {
   subjectId?: string;
   imported?: {
@@ -97,8 +96,6 @@ export default function CDAPEditor({
     articulationExtras?: Record<string, any>;
   };
   onLockChange?: (locked: boolean) => void;
-  /** When true (IQAC role), the published lock is bypassed and editing is always allowed. */
-  isIqac?: boolean;
 }) {
   const teachingAssignmentId = useMemo(() => {
     if (!subjectId) return undefined;
@@ -173,8 +170,7 @@ export default function CDAPEditor({
 
   const isPublishedByServer = Boolean(isLockedAfterSave);
   const hasEditApproval = Boolean(editWindow?.allowed_by_approval);
-  // IQAC can always edit regardless of published state
-  const isReadOnly = Boolean(isPublishedByServer && !hasEditApproval && !isIqac);
+  const isReadOnly = Boolean(isPublishedByServer && !hasEditApproval);
 
   // If the authoritative lock table says CDAP is published, force the editor into the
   // same read-only behavior used by other assessments (Request Edit required).

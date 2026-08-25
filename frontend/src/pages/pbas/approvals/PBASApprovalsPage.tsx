@@ -294,10 +294,43 @@ export default function PBASApprovalsPage({ user }: Props) {
                   </div>
                 </div>
 
+                {/* Dynamic Form Responses */}
+                {selectedSub.form_data && typeof selectedSub.form_data === 'object' && Object.keys(selectedSub.form_data).length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      Questionnaire Responses
+                    </span>
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                      {selectedSub.form_schema && selectedSub.form_schema.length > 0 ? (
+                        selectedSub.form_schema.map((field) => {
+                          const val = selectedSub.form_data?.[field.id]
+                          return (
+                            <div key={field.id} className="text-xs space-y-0.5 border-b border-slate-200/60 pb-2 last:border-0 last:pb-0">
+                              <div className="font-bold text-slate-700">{field.label}:</div>
+                              <div className="text-slate-900 font-medium pl-1">
+                                {Array.isArray(val) ? val.join(', ') : val ? String(val) : <span className="text-slate-400 italic">Not provided</span>}
+                              </div>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        Object.entries(selectedSub.form_data).map(([k, v]) => (
+                          <div key={k} className="text-xs space-y-0.5">
+                            <div className="font-bold text-slate-700">{k}:</div>
+                            <div className="text-slate-900 font-medium pl-1">
+                              {Array.isArray(v) ? v.join(', ') : String(v)}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Evidence File or Link */}
                 <div className="space-y-1">
                   <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submitted Evidence</span>
-                  {selectedSub.submission_type === 'link' ? (
+                  {selectedSub.submission_type === 'link' || selectedSub.link ? (
                     <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between">
                       <span className="text-xs font-medium text-indigo-900 truncate max-w-xs">{selectedSub.link}</span>
                       <a

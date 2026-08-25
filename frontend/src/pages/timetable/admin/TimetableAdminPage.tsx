@@ -5,7 +5,6 @@ import TimetableCreator from './TimetableCreator';
 import TimetableGenerator from './TimetableGenerator';
 import GroupAllocationModal from './GroupAllocationModal';
 import CreditBasedAllocationModal from './CreditBasedAllocationModal';
-import VenueAllocationModal from './VenueAllocationModal';
 
 interface TimetableTemplate {
   id: string;
@@ -72,7 +71,6 @@ export default function TimetableAdminPage() {
   const [semesterTemplates, setSemesterTemplates] = useState<SemesterTemplate[]>([]);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
-  const [showVenueModal, setShowVenueModal] = useState(false);
 
   // Load templates from API on component mount
   useEffect(() => {
@@ -195,6 +193,18 @@ export default function TimetableAdminPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
           <h1 className="text-3xl font-bold text-gray-900">Timetable Administration - IQAC</h1>
           <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
+            <button
+              onClick={() => setShowGroupModal(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+            >
+              🏢 Group Allocation
+            </button>
+            <button
+              onClick={() => setShowCreditModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
+            >
+              🎯 Credit Allocations
+            </button>
           </div>
         </div>
 
@@ -251,12 +261,6 @@ export default function TimetableAdminPage() {
         <CreditBasedAllocationModal
           isOpen={showCreditModal}
           onClose={() => setShowCreditModal(false)}
-        />
-
-        {/* Venue Allocation Modal */}
-        <VenueAllocationModal
-          isOpen={showVenueModal}
-          onClose={() => setShowVenueModal(false)}
         />
       </div>
     </div>

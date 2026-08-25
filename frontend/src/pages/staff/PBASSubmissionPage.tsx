@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { ModalPortal } from '../../components/ModalPortal'
 import fetchWithAuth from '../../services/fetchAuth'
 import {
+  PBASFormField,
   PBASNode,
-  PBASSubmissionReport,
   PBASViewer,
+  createSubmissionForm,
   createSubmissionLink,
   createSubmissionUpload,
   getDepartmentTree,
-  getSubmissionReport,
 } from '../../services/pbas'
 
 type Props = {
@@ -61,9 +61,11 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
   const [activeLeafNode, setActiveLeafNode] = useState<PBASNode | null>(null)
   const [isLeafModalOpen, setIsLeafModalOpen] = useState(false)
 
-  // Submission Form Fields
-  const [link, setLink] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  // Dynamic Form Values & File State
+  const [formResponses, setFormResponses] = useState<Record<string, any>>({})
+  const [formFiles, setFormFiles] = useState<Record<string, File>>({})
+  const [fallbackFile, setFallbackFile] = useState<File | null>(null)
+  const [fallbackLink, setFallbackLink] = useState('')
   const [collegeId, setCollegeId] = useState<string>('')
 
   const [busy, setBusy] = useState(false)
@@ -72,11 +74,11 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
 
   const [successOpen, setSuccessOpen] = useState(false)
 
-  // Load master tree directly from Database on mount
+  // Load master tree directly from Database on mount with viewer query
   const loadMasterTree = async () => {
     setLoading(true)
     try {
-      const res = await getDepartmentTree(MASTER_DEPT_ID)
+      const res = await getDepartmentTree(MASTER_DEPT_ID, viewer)
       setAdminTree(res?.nodes || [])
     } catch {
       setAdminTree([])
@@ -106,7 +108,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
     const handleUpdate = () => loadMasterTree()
     window.addEventListener('idcs:pbas-tree-updated', handleUpdate)
     return () => window.removeEventListener('idcs:pbas-tree-updated', handleUpdate)
-  }, [])
+  }, [viewer])
 
   useEffect(() => {
     if (activeTab === 'logs') {
@@ -122,16 +124,26 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
     }))
   }
 
-  // Click handler for Leaf Node -> Opens Popup Modal
+  // Click handler for Leaf Node -> Opens Form Popup Modal
   const handleLeafClick = (node: PBASNode) => {
     setActiveLeafNode(node)
-    setLink('')
-    setFile(null)
+    setFormResponses({})
+    setFormFiles({})
+    setFallbackFile(null)
+    setFallbackLink('')
     setError('')
     setIsLeafModalOpen(true)
   }
 
-  // Handle Evidence Submission from Leaf Node Popup Modal
+  const handleCheckboxToggle = (fieldId: string, opt: string) => {
+    const current = (formResponses[fieldId] || []) as string[]
+    const next = current.includes(opt)
+      ? current.filter((x) => x !== opt)
+      : [...current, opt]
+    setFormResponses((prev) => ({ ...prev, [fieldId]: next }))
+  }
+
+  // Handle Form Submission from Leaf Node Popup Modal
   const handleSubmitEvidence = async () => {
     if (!activeLeafNode) return
     setError('')
@@ -143,36 +155,84 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
       return
     }
 
-    setBusy(true)
-    try {
-      let created: any = null
-      const inputMode = activeLeafNode.input_mode || 'upload'
+    const schema = activeLeafNode.form_schema || []
 
-      if (inputMode === 'link') {
-        if (!link.trim()) {
-          setError('Please enter a valid evidence link.')
-          setBusy(false)
-          return
+    // If custom dynamic form schema is defined on leaf node:
+    if (schema.length > 0) {
+      // Validate required fields
+      for (const field of schema) {
+        const val = formResponses[field.id]
+        if (field.required) {
+          if (field.field_type === 'file_upload') {
+            if (!formFiles[field.id]) {
+              setError(`Please upload a file for "${field.label}".`)
+              return
+            }
+          } else if (field.field_type === 'checkboxes') {
+            if (!Array.isArray(val) || val.length === 0) {
+              setError(`Please select at least one option for "${field.label}".`)
+              return
+            }
+          } else if (!val || String(val).trim() === '') {
+            setError(`Please fill out the required field: "${field.label}".`)
+            return
+          }
         }
-        created = await createSubmissionLink({ node: activeLeafNode.id, link: link.trim(), college })
-      } else {
-        const fileErr = validateEvidenceFile(file)
-        if (fileErr) {
-          setError(fileErr)
-          setBusy(false)
-          return
-        }
-        created = await createSubmissionUpload({ node: activeLeafNode.id, file: file!, college })
       }
 
-      setIsLeafModalOpen(false)
-      setSuccess(`Submission for "${activeLeafNode.label}" completed successfully!`)
-      setSuccessOpen(true)
-      loadMyLogs()
-    } catch (e: any) {
-      setError(e?.message || 'Submission failed')
-    } finally {
-      setBusy(false)
+      setBusy(true)
+      try {
+        // Collect primary file if uploaded in form
+        const firstFileKey = Object.keys(formFiles)[0]
+        const mainFile = firstFileKey ? formFiles[firstFileKey] : null
+
+        await createSubmissionForm({
+          node: activeLeafNode.id,
+          formData: formResponses,
+          file: mainFile,
+          college,
+        })
+
+        setIsLeafModalOpen(false)
+        setSuccess(`Submission for "${activeLeafNode.label}" completed successfully!`)
+        setSuccessOpen(true)
+        loadMyLogs()
+      } catch (e: any) {
+        setError(e?.message || 'Submission failed')
+      } finally {
+        setBusy(false)
+      }
+    } else {
+      // Fallback simple submission if no fields were configured
+      setBusy(true)
+      try {
+        if (fallbackFile) {
+          const fileErr = validateEvidenceFile(fallbackFile)
+          if (fileErr) {
+            setError(fileErr)
+            setBusy(false)
+            return
+          }
+          await createSubmissionUpload({ node: activeLeafNode.id, file: fallbackFile, college })
+        } else if (fallbackLink.trim()) {
+          await createSubmissionLink({ node: activeLeafNode.id, link: fallbackLink.trim(), college })
+        } else {
+          await createSubmissionForm({
+            node: activeLeafNode.id,
+            formData: { submitted: true },
+            college,
+          })
+        }
+
+        setIsLeafModalOpen(false)
+        setSuccess(`Submission for "${activeLeafNode.label}" completed successfully!`)
+        setSuccessOpen(true)
+        loadMyLogs()
+      } catch (e: any) {
+        setError(e?.message || 'Submission failed')
+      } finally {
+        setBusy(false)
+      }
     }
   }
 
@@ -186,7 +246,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
           </span>
           <h1 className="text-2xl font-bold text-slate-900 mt-2">{pageTitle}</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Click on parent groups to expand subcategories, click leaf nodes to submit evidence, and track review status in Logs.
+            Click on parent groups to expand subcategories, click any leaf node to complete the form, and track review status in Logs.
           </p>
         </div>
       </div>
@@ -244,7 +304,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
               PBAS Activity Categories & Subgroups
             </h2>
             <span className="text-xs text-slate-400">
-              Expand nodes to view items • Click leaf nodes to submit
+              Expand nodes to view items • Click leaf nodes to fill form & submit
             </span>
           </div>
 
@@ -254,8 +314,8 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
             </div>
           ) : adminTree.length === 0 ? (
             <div className="py-12 text-center border-2 border-dashed border-slate-200 rounded-xl bg-slate-50">
-              <p className="text-slate-600 font-medium">No PBAS tree configured.</p>
-              <p className="text-xs text-slate-400 mt-1">Please log in to PBAS Admin to set up tree groups.</p>
+              <p className="text-slate-600 font-medium">No PBAS activities configured for this category.</p>
+              <p className="text-xs text-slate-400 mt-1">Please contact IQAC or PBAS Administrator.</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -325,11 +385,24 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
                     <div className="text-[11px] text-slate-400">
                       Submitted: {log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A'}
                     </div>
+
+                    {/* Show form answers summary if available */}
+                    {log.form_data && typeof log.form_data === 'object' && Object.keys(log.form_data).length > 0 && (
+                      <div className="mt-2 text-xs bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
+                        <span className="font-bold text-slate-600 text-[11px] uppercase tracking-wide">Form Responses:</span>
+                        {Object.entries(log.form_data).map(([k, v]) => (
+                          <div key={k} className="text-slate-700">
+                            <span className="font-medium text-slate-500">{k}:</span>{' '}
+                            <span className="font-semibold">{Array.isArray(v) ? v.join(', ') : String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Center: Submission Mode & File / Link */}
+                  {/* Center: Evidence File / Link / Credit */}
                   <div className="flex items-center gap-3">
-                    {log.submission_type === 'link' && log.link ? (
+                    {log.link ? (
                       <a
                         href={log.link}
                         target="_blank"
@@ -349,7 +422,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
                       </a>
                     ) : null}
 
-                    <div className="px-3 py-1 bg-amber-50 border border-amber-200 rounded-xl text-center">
+                    <div className="px-3 py-1 bg-amber-50 border border-amber-200 rounded-xl text-center shrink-0">
                       <div className="text-[9px] font-bold text-amber-600 uppercase">Credit</div>
                       <div className="text-sm font-black text-amber-800">{log.pbas_credit ?? 0}</div>
                     </div>
@@ -381,19 +454,19 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
         </div>
       )}
 
-      {/* LEAF NODE SUBMISSION POPUP MODAL */}
+      {/* LEAF NODE FORM SUBMISSION POPUP MODAL */}
       {isLeafModalOpen && activeLeafNode && (
         <ModalPortal>
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden transform transition-all">
-              {/* Header with Title on Left and Animated Big Credit on Right */}
-              <div className="px-6 py-5 bg-slate-900 text-white flex items-center justify-between gap-4 border-b border-slate-800">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-xl overflow-hidden flex flex-col max-h-[88vh]">
+              {/* Header: Complete the <name of the leaf> and Animated Big Credit on Right */}
+              <div className="px-6 py-5 bg-slate-900 text-white flex items-center justify-between gap-4 border-b border-slate-800 shrink-0">
                 <div className="flex-1 min-w-0">
                   <div className="text-[11px] font-bold text-indigo-400 uppercase tracking-widest">
-                    PBAS Leaf Node Item
+                    PBAS Submission Form
                   </div>
                   <h3 className="text-lg font-bold text-white truncate mt-0.5" title={activeLeafNode.label}>
-                    {activeLeafNode.label}
+                    Complete the {activeLeafNode.label}
                   </h3>
                 </div>
 
@@ -411,72 +484,163 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
                 </div>
               </div>
 
-              {/* Modal Body */}
-              <div className="p-6 space-y-5">
+              {/* Modal Body: Google Form Questions */}
+              <div className="p-6 space-y-5 overflow-y-auto flex-1 bg-slate-50/50">
                 {error && (
                   <div className="p-3 text-xs font-medium text-red-700 bg-red-50 rounded-lg border border-red-200">
                     {error}
                   </div>
                 )}
 
-                {/* Type Indicator */}
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-100/80 p-2.5 rounded-xl">
-                  <span className="text-slate-400">Submission Mode:</span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-600 text-white uppercase tracking-wider font-bold">
-                    {(activeLeafNode.input_mode || 'upload').toUpperCase()}
-                  </span>
-                </div>
+                {/* If custom form_schema questions are configured */}
+                {activeLeafNode.form_schema && activeLeafNode.form_schema.length > 0 ? (
+                  <div className="space-y-4">
+                    {activeLeafNode.form_schema.map((field, idx) => (
+                      <div key={field.id} className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-2">
+                        <label className="block text-xs font-bold text-slate-800">
+                          <span>{idx + 1}. {field.label}</span>
+                          {field.required && <span className="text-red-500 ml-1">*</span>}
+                        </label>
 
-                {/* Dynamic Input: Link vs Upload */}
-                {activeLeafNode.input_mode === 'link' ? (
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Evidence Link URL</span>
-                    <input
-                      type="url"
-                      placeholder="https://example.com/evidence-document"
-                      value={link}
-                      onChange={(e) => setLink(e.target.value)}
-                      className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                      disabled={busy}
-                      autoFocus
-                    />
-                    <span className="text-[11px] text-slate-400">Enter a public or institutional document link.</span>
-                  </label>
+                        {/* Short Text */}
+                        {field.field_type === 'short_text' && (
+                          <input
+                            type="text"
+                            value={formResponses[field.id] || ''}
+                            onChange={(e) => setFormResponses({ ...formResponses, [field.id]: e.target.value })}
+                            placeholder="Your answer"
+                            className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50/50"
+                            disabled={busy}
+                          />
+                        )}
+
+                        {/* Long Text */}
+                        {field.field_type === 'long_text' && (
+                          <textarea
+                            rows={3}
+                            value={formResponses[field.id] || ''}
+                            onChange={(e) => setFormResponses({ ...formResponses, [field.id]: e.target.value })}
+                            placeholder="Your detailed response"
+                            className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50/50"
+                            disabled={busy}
+                          />
+                        )}
+
+                        {/* Dropdown */}
+                        {field.field_type === 'dropdown' && (
+                          <select
+                            value={formResponses[field.id] || ''}
+                            onChange={(e) => setFormResponses({ ...formResponses, [field.id]: e.target.value })}
+                            className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none bg-white font-medium"
+                            disabled={busy}
+                          >
+                            <option value="">-- Choose an option --</option>
+                            {(field.options || []).map((opt, oIdx) => (
+                              <option key={oIdx} value={opt}>
+                                {opt}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+
+                        {/* Checkboxes */}
+                        {field.field_type === 'checkboxes' && (
+                          <div className="space-y-1.5 pt-1">
+                            {(field.options || []).map((opt, oIdx) => {
+                              const checked = ((formResponses[field.id] || []) as string[]).includes(opt)
+                              return (
+                                <label key={oIdx} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-1.5 hover:bg-slate-50 rounded-lg">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => handleCheckboxToggle(field.id, opt)}
+                                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                                    disabled={busy}
+                                  />
+                                  <span>{opt}</span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+
+                        {/* File Upload */}
+                        {field.field_type === 'file_upload' && (
+                          <div className="mt-1 flex flex-col items-center justify-center p-4 border-2 border-slate-300 border-dashed rounded-xl bg-slate-50 hover:bg-indigo-50/20 transition-colors">
+                            <label className="cursor-pointer text-center">
+                              <span className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm inline-block">
+                                📎 Browse & Upload File
+                              </span>
+                              <input
+                                type="file"
+                                accept=".pdf,image/*"
+                                onChange={(e) => {
+                                  const f = e.target.files?.[0]
+                                  if (f) setFormFiles({ ...formFiles, [field.id]: f })
+                                }}
+                                className="sr-only"
+                                disabled={busy}
+                              />
+                            </label>
+                            <p className="text-[11px] text-slate-400 mt-1.5">PDF or Images up to 10MB</p>
+                            {formFiles[field.id] && (
+                              <div className="mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 py-1 px-3 rounded-full">
+                                Selected: {formFiles[field.id].name}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Upload Evidence Document</span>
-                    <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 border-dashed rounded-xl hover:border-indigo-500 transition-colors bg-slate-50">
-                      <div className="space-y-1 text-center">
-                        <svg className="mx-auto h-10 w-10 text-slate-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <div className="flex text-sm text-slate-600">
-                          <span className="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500">
-                            <span>Select a file</span>
-                            <input
-                              type="file"
-                              accept=".pdf,image/*"
-                              onChange={(e) => setFile(e.target.files?.[0] || null)}
-                              className="sr-only"
-                              disabled={busy}
-                            />
+                  /* Fallback default questionnaire when no custom form fields configured */
+                  <div className="space-y-4">
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-2">
+                      <label className="block text-xs font-bold text-slate-800">
+                        Upload Evidence Document
+                      </label>
+                      <div className="flex flex-col items-center justify-center p-4 border-2 border-slate-300 border-dashed rounded-xl bg-slate-50">
+                        <label className="cursor-pointer text-center">
+                          <span className="text-xs font-bold text-indigo-600 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm inline-block">
+                            Select File
                           </span>
-                          <p className="pl-1">or drag and drop</p>
-                        </div>
-                        <p className="text-xs text-slate-500">PDF, PNG, JPG up to 10MB</p>
-                        {file && (
-                          <div className="mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 py-1 px-3 rounded-full inline-block">
-                            Selected: {file.name}
+                          <input
+                            type="file"
+                            accept=".pdf,image/*"
+                            onChange={(e) => setFallbackFile(e.target.files?.[0] || null)}
+                            className="sr-only"
+                            disabled={busy}
+                          />
+                        </label>
+                        <p className="text-[11px] text-slate-400 mt-1.5">PDF or Images up to 10MB</p>
+                        {fallbackFile && (
+                          <div className="mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 py-1 px-3 rounded-full">
+                            Selected: {fallbackFile.name}
                           </div>
                         )}
                       </div>
                     </div>
-                  </label>
+
+                    <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-2">
+                      <label className="block text-xs font-bold text-slate-800">
+                        Evidence URL / Link (Optional)
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://example.com/evidence"
+                        value={fallbackLink}
+                        onChange={(e) => setFallbackLink(e.target.value)}
+                        className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                        disabled={busy}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
 
               {/* Modal Footer */}
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsLeafModalOpen(false)}
@@ -491,7 +655,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
                   className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all active:scale-95 disabled:opacity-60"
                   disabled={busy}
                 >
-                  {busy ? 'Submitting…' : 'Submit Evidence'}
+                  {busy ? 'Submitting…' : 'Submit Form'}
                 </button>
               </div>
             </div>
@@ -508,7 +672,7 @@ export default function PBASSubmissionPage({ viewer = 'faculty' }: Props) {
                 ✓
               </div>
               <h3 className="text-xl font-bold text-slate-900">Submission Received</h3>
-              <p className="text-sm text-slate-600">Your PBAS evidence was submitted successfully.</p>
+              <p className="text-sm text-slate-600">Your PBAS form and evidence were submitted successfully.</p>
               <div className="flex gap-2">
                 <button
                   className="w-full py-2.5 bg-slate-100 text-slate-700 font-medium rounded-xl hover:bg-slate-200 transition-all text-xs"
@@ -574,7 +738,7 @@ function SubmissionTreeNodeItem({
             </span>
           ) : (
             <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold shrink-0">
-              📄
+              📋
             </span>
           )}
 
@@ -599,7 +763,7 @@ function SubmissionTreeNodeItem({
                 Credit: {node.pbas_credit != null ? node.pbas_credit : 'N/A'}
               </span>
               <span className="text-xs font-bold text-white px-2.5 py-1 rounded-full bg-indigo-600 shadow-sm">
-                Click to Submit
+                Fill Form
               </span>
             </div>
           )}

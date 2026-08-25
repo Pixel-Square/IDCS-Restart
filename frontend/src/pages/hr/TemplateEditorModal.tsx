@@ -1,13 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, GripVertical, RefreshCw } from 'lucide-react';
-import { createTemplate, updateTemplate, resetTemplateAllotment } from '../../services/staffRequests';
-import type {
-  RequestTemplate,
-  FormField,
-  ApprovalStep,
-  LeavePolicy,
-  AttendanceAction,
-} from '../../types/staffRequests';
+import { X, Plus, Trash2, GripVertical } from 'lucide-react';
+import { createTemplate, updateTemplate } from '../../services/staffRequests';
+import type { RequestTemplate, FormField, ApprovalStep, LeavePolicy, AttendanceAction } from '../../types/staffRequests';
 import { fetchRoles } from '../../services/accounts';
 
 interface Props {
@@ -39,23 +33,12 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
   const [approvalSteps, setApprovalSteps] = useState<Partial<ApprovalStep>[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [resettingAllotment, setResettingAllotment] = useState(false);
   const [activeTab, setActiveTab] = useState<'details' | 'fields' | 'workflow' | 'attendance'>('details');
   const [roles, setRoles] = useState<string[]>([]);
   const [rolesLoading, setRolesLoading] = useState(false);
   const [rolesError, setRolesError] = useState<string | null>(null);
   const [leavePolicy, setLeavePolicy] = useState<LeavePolicy>({});
   const [attendanceAction, setAttendanceAction] = useState<AttendanceAction>({});
-
-  const normalizedTemplateName = String(name || '').trim().toLowerCase();
-  const isLateEntryTemplateName =
-    normalizedTemplateName === 'late entry permission' ||
-    normalizedTemplateName === 'late entry permission - spl';
-  const isVacationTemplateName =
-    normalizedTemplateName === 'vacation application' ||
-    normalizedTemplateName === 'vacation application - spl' ||
-    normalizedTemplateName === 'vacation cancellation form' ||
-    normalizedTemplateName === 'vacation cancellation form - spl';
 
   useEffect(() => {
     if (template) {
@@ -96,7 +79,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     load();
     return () => { mounted = false };
   }, []);
-
 
   const handleAddField = () => {
     setFormFields([
@@ -190,24 +172,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     for (const step of approvalSteps) {
       if (!step.approver_role) return 'All approval steps must have a role assigned';
     }
-
-    if (leavePolicy.action === 'deduct' || leavePolicy.action === 'earn') {
-      if (!leavePolicy.from_date || !leavePolicy.to_date) {
-        return 'From date and to date are required for this action type';
-      }
-    }
-
-    if (leavePolicy.action === 'neutral') {
-      if (isLateEntryTemplateName) {
-        if (!leavePolicy.reset_period) {
-          return 'Reset period is required for late entry templates';
-        }
-      } else if (!isVacationTemplateName) {
-        if (!leavePolicy.from_date || !leavePolicy.to_date) {
-          return 'From date and to date are required for neutral forms';
-        }
-      }
-    }
     
     return null;
   };
@@ -223,20 +187,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
     setError(null);
 
     try {
-      const normalizedLeavePolicy: LeavePolicy = { ...leavePolicy };
-      if (normalizedLeavePolicy.action === 'neutral') {
-        if (isLateEntryTemplateName || isVacationTemplateName) {
-          delete normalizedLeavePolicy.from_date;
-          delete normalizedLeavePolicy.to_date;
-          delete normalizedLeavePolicy.split_date;
-          delete normalizedLeavePolicy.reset_period;
-          delete normalizedLeavePolicy.reset_duration;
-        } else {
-          delete normalizedLeavePolicy.reset_period;
-          delete normalizedLeavePolicy.reset_duration;
-        }
-      }
-
       const payload: Partial<RequestTemplate> = {
         name,
         description,
@@ -245,9 +195,7 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
         form_schema: formFields,
         allowed_roles: allowedRoles.length > 0 ? allowedRoles : [],
         approval_steps: approvalSteps as ApprovalStep[],
-        leave_policy: (normalizedLeavePolicy.action || normalizedLeavePolicy.allotment_per_role || normalizedLeavePolicy.attendance_status)
-          ? normalizedLeavePolicy
-          : {}
+        leave_policy: (leavePolicy.action || leavePolicy.allotment_per_role || leavePolicy.attendance_status) ? leavePolicy : {}
       };
 
       if (template?.id) {
@@ -261,27 +209,6 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
       setError(err?.response?.data?.detail || err?.response?.data?.error || 'Failed to save template');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleResetAllotment = async () => {
-    if (!template?.id) return;
-
-    const ok = window.confirm(
-      'Reset allotment for all staff for this template? This will overwrite current balances.'
-    );
-    if (!ok) return;
-
-    setResettingAllotment(true);
-    try {
-      const res = await resetTemplateAllotment(template.id);
-      alert(
-        `Allotment reset completed. Updated: ${res?.updated ?? 0}, Created: ${res?.created ?? 0}`
-      );
-    } catch (err: any) {
-      alert(err?.response?.data?.error || 'Failed to reset allotment');
-    } finally {
-      setResettingAllotment(false);
     }
   };
 
@@ -504,22 +431,9 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                           </div>
 
                           <div>
-                            <div className="flex items-center justify-between gap-3">
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Reset Period <span className="text-red-500">*</span>
-                              </label>
-                              {template?.id && (
-                                <button
-                                  type="button"
-                                  onClick={handleResetAllotment}
-                                  disabled={resettingAllotment}
-                                  className="mb-2 inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  <RefreshCw size={14} />
-                                  {resettingAllotment ? 'Resetting...' : 'Reset Allotment'}
-                                </button>
-                              )}
-                            </div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Reset Period <span className="text-red-500">*</span>
+                            </label>
                             <p className="text-xs text-gray-500 mb-2">
                               Define the date range for leave balance reset (e.g., Academic Year: June 1 - May 31).
                               When this period ends, balances will be reset automatically.
@@ -702,71 +616,31 @@ export default function TemplateEditorModal({ template, onClose, onSaved }: Prop
                             </div>
                           </div>
 
-                          {isLateEntryTemplateName ? (
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Reset Period <span className="text-red-500">*</span>
-                              </label>
-                              <p className="text-xs text-gray-500 mb-2">
-                                Late Entry forms use frequency-based monthly reset behavior.
-                              </p>
-                              <select
-                                value={leavePolicy.reset_period || ''}
-                                onChange={(e) => handleLeavePolicyChange({ reset_period: e.target.value as 'monthly' | 'half_yearly' | 'yearly' })}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                required
-                              >
-                                <option value="">-- Select Reset Frequency --</option>
-                                <option value="monthly">Monthly</option>
-                                <option value="half_yearly">Half Yearly (Every 6 months)</option>
-                                <option value="yearly">Yearly</option>
-                              </select>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              Reset Period <span className="text-red-500">*</span>
+                            </label>
+                            <p className="text-xs text-gray-500 mb-2">
+                              Define when the balance should reset for all staff.
+                            </p>
+                            <select
+                              value={leavePolicy.reset_period || ''}
+                              onChange={(e) => handleLeavePolicyChange({ reset_period: e.target.value as 'monthly' | 'half_yearly' | 'yearly' })}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              required
+                            >
+                              <option value="">-- Select Reset Frequency --</option>
+                              <option value="monthly">Monthly</option>
+                              <option value="half_yearly">Half Yearly (Every 6 months)</option>
+                              <option value="yearly">Yearly</option>
+                            </select>
+                            <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                              <strong>Reset Behavior:</strong> Balances will automatically reset at the frequency you select.
+                              <br />• <strong>Monthly:</strong> Reset on 1st of each month
+                              <br />• <strong>Half Yearly:</strong> Reset every 6 months
+                              <br />• <strong>Yearly:</strong> Reset annually
                             </div>
-                          ) : (
-                            <div>
-                              <div className="flex items-center justify-between gap-3">
-                                <label className="block text-sm font-medium text-gray-700 mb-2">
-                                  Reset Period <span className="text-red-500">*</span>
-                                </label>
-                                {template?.id && (
-                                  <button
-                                    type="button"
-                                    onClick={handleResetAllotment}
-                                    disabled={resettingAllotment}
-                                    className="mb-2 inline-flex items-center gap-1 rounded-lg border border-blue-200 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    <RefreshCw size={14} />
-                                    {resettingAllotment ? 'Resetting...' : 'Reset Allotment'}
-                                  </button>
-                                )}
-                              </div>
-                              <p className="text-xs text-gray-500 mb-2">
-                                Define semester date range for neutral forms. Balance resets after to date.
-                              </p>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <label className="block text-xs text-gray-600 mb-1">From Date</label>
-                                  <input
-                                    type="date"
-                                    value={leavePolicy.from_date || ''}
-                                    onChange={(e) => handleLeavePolicyChange({ from_date: e.target.value })}
-                                    required
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="block text-xs text-gray-600 mb-1">To Date</label>
-                                  <input
-                                    type="date"
-                                    value={leavePolicy.to_date || ''}
-                                    onChange={(e) => handleLeavePolicyChange({ to_date: e.target.value })}
-                                    required
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          )}
+                          </div>
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">

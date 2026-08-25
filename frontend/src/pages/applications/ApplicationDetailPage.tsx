@@ -354,34 +354,12 @@ export default function ApplicationDetailPage(): JSX.Element {
     const outDone = !!detail.gatepass_scanned_at
     const inDone = !!detail.gatepass_in_scanned_at
 
-    const hasInTimeApplied = detail.dynamic_fields.some(f => {
-      const type = (f as any)?.field_type
-      const value = (f as any)?.value
-      if (!value || typeof value !== 'object') return false
-      const v = value as any
-      const inTime = v?.in_time ?? v?.inTime ?? v?.IN ?? v?.in
-      return !!inTime
-    })
-
-    const hardExpiryMs = (() => {
-      if (detail.gatepass_window_start || detail.gatepass_window_end) {
-         const baseStr = detail.gatepass_window_start || detail.gatepass_window_end
-         const baseD = new Date(baseStr!)
-         baseD.setDate(baseD.getDate() + 1)
-         baseD.setHours(0, 0, 0, 0)
-         return baseD.getTime()
-      }
-      return null
-    })()
-
-    const nowMs = Date.now()
-
     const outEntry: TimelineEntryUI = {
       ...security,
       step_role: 'SECURITY (OUT)',
       is_final: false,
       status: outDone ? 'APPROVED' : 'PENDING',
-      label_override: outDone ? 'OUT Scanned' : 'Awaiting',
+      label_override: outDone ? 'OUT ACCEPTED' : 'OUT PENDING',
       acted_at: outDone ? detail.gatepass_scanned_at ?? null : null,
       acted_by: outDone ? security.acted_by : null,
       remarks: outDone ? 'Scanned OUT' : null,
@@ -393,56 +371,19 @@ export default function ApplicationDetailPage(): JSX.Element {
       connector: 'bg-red-200',
     }
 
-    const showInStep = hasInTimeApplied || inDone
-
-    let inStatus: ApprovalTimelineEntry['status'] = 'PENDING'
-    let inLabel = 'Awaiting'
-    let inStyle: Partial<StepStyle> | undefined = undefined
-
-    if (showInStep) {
-      if (!inDone) {
-         if (hardExpiryMs && nowMs >= hardExpiryMs) {
-            inStatus = 'REJECTED'
-            inLabel = 'Not Returned'
-            inStyle = lateStyle
-         } else {
-            inStatus = 'PENDING'
-            inLabel = 'Awaiting'
-         }
-      } else {
-         const inScannedAtMs = new Date(detail.gatepass_in_scanned_at!).getTime()
-         if (hardExpiryMs && inScannedAtMs >= hardExpiryMs) {
-            inStatus = 'APPROVED'
-            inLabel = 'NEW IN'
-            // Using standard approved style for NEW IN as it was a valid scan, just late.
-         } else if (hasInTimeApplied && gateIsLate) {
-            inStatus = 'REJECTED'
-            inLabel = 'Late'
-            inStyle = lateStyle
-         } else {
-            inStatus = 'APPROVED'
-            inLabel = 'IN Scanned'
-         }
-      }
-    }
-
-    const inEntry: TimelineEntryUI | null = showInStep ? {
+    const inEntry: TimelineEntryUI = {
       ...security,
       step_role: 'SECURITY (IN)',
       is_final: true,
-      status: inStatus,
-      label_override: inLabel,
-      style_override: inStyle,
+      status: inDone ? (gateIsLate ? 'PENDING' : 'APPROVED') : 'PENDING',
+      label_override: inDone ? (gateIsLate ? 'LATE' : 'IN ACCEPTED') : 'IN PENDING',
+      style_override: inDone && gateIsLate ? lateStyle : undefined,
       acted_at: inDone ? detail.gatepass_in_scanned_at ?? null : null,
       acted_by: inDone ? security.acted_by : null,
       remarks: inDone ? 'Scanned IN' : null,
-    } : null
+    }
 
-    const newSteps = [...timeline.slice(0, idx), outEntry]
-    if (inEntry) newSteps.push(inEntry)
-    newSteps.push(...timeline.slice(idx + 1))
-    
-    return newSteps
+    return [...timeline.slice(0, idx), outEntry, inEntry, ...timeline.slice(idx + 1)]
   })()
   const displayState = (() => {
     const base = (detail?.current_state || '').toUpperCase()

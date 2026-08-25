@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { lsGet, lsSet } from '../utils/localStorage';
-import { normalizeObeClassType, isEnglishOrForeignLangClassType } from '../constants/classTypes';
+import { normalizeObeClassType } from '../constants/classTypes';
 import { fetchTeachingAssignmentRoster, TeachingAssignmentRosterStudent } from '../services/roster';
 import * as OBE from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
@@ -35,7 +35,6 @@ type TcplRowEntry = {
   absentKind?: AbsenceKind;
   lab?: CellNumber;
   q?: Record<string, CellNumber>;
-  recordMarksCo5?: (number | '')[];
 };
 
 type TcplSheetState = Record<string, TcplRowEntry>;
@@ -102,7 +101,7 @@ function normalizeHeaderCell(v: any): string {
 }
 
 export default function ModelEntry({ subjectId, classType, teachingAssignmentId, questionPaperType, customQuestions: customQuestionsProp }: Props) {
-  
+  const visibleBtls = useMemo(() => [1, 2, 3, 4, 5, 6] as const, []);
 
   const normalizeAbsenceKind = (value: unknown): AbsenceKind => {
     const s = String(value ?? 'AL')
@@ -111,12 +110,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     if (s === 'ML' || s === 'MALPRACTICE') return 'ML';
     if (s === 'SKL' || s === 'SICK' || s === 'SICKLEAVE' || s === 'SL') return 'SKL';
     return 'AL';
-  };
-
-  const showMarkLimitPopup = (input: HTMLInputElement, message: string, student?: { name?: string; reg_no?: string }) => {
-    const who = student ? `${student.name || 'Student'} (${student.reg_no || ''}) — ` : '';
-    setLimitDialog({ title: 'Mark Limit Exceeded', message: `${who}${message}` });
-    input.setCustomValidity('');
   };
 
   const cellTh: React.CSSProperties = {
@@ -143,13 +136,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const SNO_COL_WIDTH = 32;
 
-  const normalizeRegDigits = (value: string): string => String(value || '').replace(/\D/g, '');
-  const compareByRegLast3 = (aRaw: unknown, bRaw: unknown) => {
-    const aLast3 = parseInt(String(aRaw || '').slice(-3), 10);
-    const bLast3 = parseInt(String(bRaw || '').slice(-3), 10);
-    return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
-  };
-
   const [students, setStudents] = useState<TeachingAssignmentRosterStudent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,16 +160,9 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
   const suppressAutosaveRef = useRef(false);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshotKeys, setAbsenteesSnapshotKeys] = useState<string[] | null>(null);
-  const [alphaOrderEnabled, setAlphaOrderEnabled] = useState(false);
-  const [digitFilterEnabled, setDigitFilterEnabled] = useState(false);
-  const [digitFilterLength, setDigitFilterLength] = useState<3 | 8>(3);
-  const [digitFilterValue, setDigitFilterValue] = useState('');
   const [limitDialog, setLimitDialog] = useState<{ title: string; message: string } | null>(null);
   const [tcplSheet, setTcplSheet] = useState<TcplSheetState>({});
   const [theorySheet, setTheorySheet] = useState<TcplSheetState>({});
-  const [tcplModelRecordEnabled, setTcplModelRecordEnabled] = useState(false);
-  const [tcplModelRecordExpCount, setTcplModelRecordExpCount] = useState(3);
-  const [tcplModelRecordMaxPerExp, setTcplModelRecordMaxPerExp] = useState(10);
   const [iqacPattern, setIqacPattern] = useState<{ marks: number[]; cos?: Array<number | string> } | null>(null);
   const [iqacPatternLoading, setIqacPatternLoading] = useState(false);
   const [iqacPatternError, setIqacPatternError] = useState<string | null>(null);
@@ -202,9 +181,6 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
 
   const normalizedClassType = useMemo(() => normalizeObeClassType(classType), [classType]);
   const isTheory = normalizedClassType === 'THEORY';
-  const isSpecial = normalizedClassType === 'SPECIAL';
-  const isTamil = normalizedClassType === 'TAMIL';
-  const isEnglishLike = isEnglishOrForeignLangClassType(normalizedClassType);
 
   const {
     data: publishWindow,
@@ -339,7 +315,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
       // Pass through any non-empty QP code so DB-managed types work.
       // Use empty string only for null/non-THEORY contexts (qpForApi null-coalesces it).
       const qpKey = String(normalizedQpType || '').trim();
-      const qpForApi = (classKey === 'THEORY' || classKey === 'TAMIL') ? (qpKey ? qpKey : null) : null;
+      const qpForApi = classKey === 'THEORY' ? (qpKey ? qpKey : null) : null;
 
       setIqacPatternLoading(true);
       setIqacPatternError(null);
@@ -388,93 +364,7 @@ export default function ModelEntry({ subjectId, classType, teachingAssignmentId,
     return DEFAULT_MODEL_QUESTIONS;
   }, [iqacPattern, customQuestionsProp]);
 
-  /** Unique CO numbers derived from iqacPattern.cos for the blank template (ENGLISH etc.) */
-  const blankTemplateCos = useMemo((): number[] => {
-    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-    if (!cos || !cos.length) return [1, 2];
-    const unique: number[] = [];
-    for (const c of cos) {
-      const n = Number(c);
-      if (n >= 1 && n <= 6 && !unique.includes(n)) unique.push(n);
-    }
-    unique.sort((a, b) => a - b);
-    return unique.length ? unique : [1, 2];
-  }, [iqacPattern]);
-
-  /** Per-CO max marks for blank template (ENGLISH etc.) */
-
-  const blankTemplateQuestionBtlStorageKey = useMemo(() => `model_blank_questionBtl_${subjectId}_${String(teachingAssignmentId ?? 'none')}`, [subjectId, teachingAssignmentId]);
-  const defaultBlankTemplateQuestionBtl = useMemo(() => {
-    return Object.fromEntries(
-      questions.map((q) => [q.key, '' as BtlValue])
-    ) as Record<string, BtlValue>;
-  }, [questions]);
-
-  const [blankTemplateQuestionBtl, setBlankTemplateQuestionBtl] = useState<Record<string, BtlValue>>(defaultBlankTemplateQuestionBtl);
-
-  useEffect(() => {
-    if (!isSpecial && !isEnglishLike) return; // blank template (SPECIAL / ENGLISH / FOREIGN_LANG)
-    const stored = lsGet<Record<string, BtlValue>>(blankTemplateQuestionBtlStorageKey);
-    if (stored && typeof stored === 'object') {
-      setBlankTemplateQuestionBtl({
-        ...defaultBlankTemplateQuestionBtl,
-        ...stored,
-      });
-    } else {
-      setBlankTemplateQuestionBtl(defaultBlankTemplateQuestionBtl);
-    }
-  }, [isSpecial, isEnglishLike, blankTemplateQuestionBtlStorageKey, defaultBlankTemplateQuestionBtl]);
-
-  const setBlankTemplateBtl = (qKey: string, value: BtlValue) => {
-    setBlankTemplateQuestionBtl((prev) => {
-      const next = { ...(prev || {}), [qKey]: value };
-      lsSet(blankTemplateQuestionBtlStorageKey, next);
-      return next;
-    });
-  };
-
-  const blankTemplateBtlRow = useMemo(() => {
-    return questions.map((q) => {
-      const v = (blankTemplateQuestionBtl || ({} as any))[q.key];
-      if (v === '' || v === 1 || v === 2 || v === 3 || v === 4 || v === 5 || v === 6) return v;
-      return '' as BtlValue;
-    });
-  }, [questions, blankTemplateQuestionBtl]);
-
-  const blankTemplateBtlMaxRow = useMemo(() => {
-    const btlMax: number[] = [0, 0, 0, 0, 0, 0];
-    questions.forEach((q, i) => {
-      const b = blankTemplateBtlRow[i];
-      if (typeof b === 'number' && b >= 1 && b <= 6) btlMax[b - 1] += q.max;
-    });
-    return btlMax;
-  }, [questions, blankTemplateBtlRow]);
-
-  const visibleBtls = useMemo(() => {
-    const set = new Set<number>();
-    questions.forEach((q) => {
-      const b = (blankTemplateQuestionBtl || ({} as any))[q.key] ?? '';
-      if (b === 1 || b === 2 || b === 3 || b === 4 || b === 5 || b === 6) set.add(b);
-    });
-    if (set.size === 0) return [1, 2, 3, 4, 5, 6] as const;
-    return [1, 2, 3, 4, 5, 6].filter((n) => set.has(n)) as Array<1 | 2 | 3 | 4 | 5 | 6>;
-  }, [questions, blankTemplateQuestionBtl]);
-
-
-const blankTemplateCoMax = useMemo((): Record<number, number> => {
-    const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-    const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
-    const sums: Record<number, number> = {};
-    for (const c of blankTemplateCos) sums[c] = 0;
-    if (!cos || !marks) return sums;
-    for (let i = 0; i < Math.min(cos.length, marks.length, questions.length); i++) {
-      const c = Number(cos[i]);
-      if (c >= 1 && c <= 6 && sums[c] != null) sums[c] += Number(marks[i] || 0);
-    }
-    return sums;
-  }, [iqacPattern, blankTemplateCos, questions.length]);
-
-  const colSpan = 4 + questions.length + 1 + blankTemplateCos.length * 2 + visibleBtls.length * 2;
+  const colSpan = 4 + questions.length + 1 + 4 + visibleBtls.length * 2;
 
   const activeSheet: TcplSheetState = isTcplLike ? (tcplSheet || {}) : (theorySheet || {});
 
@@ -523,11 +413,9 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     classType: string;
     tcplLikeKind: 'TCPR' | 'TCPL';
     theoryQuestionBtl: Record<string, BtlValue>;
-    blankTemplateQuestionBtl?: Record<string, BtlValue>;
     tcplQuestionBtl: Record<string, BtlValue>;
     theorySheet: TcplSheetState;
     tcplSheet: TcplSheetState;
-    recordMarksForCo5?: { enabled: boolean; expCount: number; maxPerExp: number } | null;
   };
 
   const buildPayload = (): ModelDraftPayload => {
@@ -537,13 +425,9 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       classType: String(normalizedClassType ?? ''),
       tcplLikeKind,
       theoryQuestionBtl: (theoryQuestionBtl || {}) as Record<string, BtlValue>,
-      blankTemplateQuestionBtl: (blankTemplateQuestionBtl || {}) as Record<string, BtlValue>,
       tcplQuestionBtl: (tcplQuestionBtl || {}) as Record<string, BtlValue>,
       theorySheet: (theorySheet || {}) as TcplSheetState,
       tcplSheet: (tcplSheet || {}) as TcplSheetState,
-      recordMarksForCo5: isTcplLike && !tcplReviewIsCo5
-        ? { enabled: tcplModelRecordEnabled, expCount: tcplModelRecordExpCount, maxPerExp: tcplModelRecordMaxPerExp }
-        : null,
     };
   };
 
@@ -578,19 +462,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       } catch {
         // ignore
       }
-    }
-
-    if (raw.blankTemplateQuestionBtl && typeof raw.blankTemplateQuestionBtl === 'object') {
-      setBlankTemplateQuestionBtl({
-        ...defaultBlankTemplateQuestionBtl,
-        ...(raw.blankTemplateQuestionBtl as Record<string, BtlValue>),
-      });
-      try {
-        lsSet(blankTemplateQuestionBtlStorageKey, {
-          ...defaultBlankTemplateQuestionBtl,
-          ...(raw.blankTemplateQuestionBtl as Record<string, BtlValue>),
-        });
-      } catch {}
     }
 
     if (raw.theoryQuestionBtl && typeof raw.theoryQuestionBtl === 'object') {
@@ -630,14 +501,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       } catch {
         // ignore
       }
-    }
-
-    if (raw.recordMarksForCo5 && typeof raw.recordMarksForCo5 === 'object') {
-      setTcplModelRecordEnabled(Boolean((raw.recordMarksForCo5 as any).enabled));
-      const ec = Number((raw.recordMarksForCo5 as any).expCount);
-      setTcplModelRecordExpCount(Number.isFinite(ec) && ec >= 1 ? Math.floor(ec) : 3);
-      const mpe = Number((raw.recordMarksForCo5 as any).maxPerExp);
-      setTcplModelRecordMaxPerExp(Number.isFinite(mpe) && mpe > 0 ? mpe : 10);
     }
 
     if (raw.theorySheet && typeof raw.theorySheet === 'object') {
@@ -716,7 +579,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const saveLocal = () => {
     try {
       lsSet(qpTypeStorageKey, String(qpType ?? ''));
-      lsSet(blankTemplateQuestionBtlStorageKey, blankTemplateQuestionBtl);
       lsSet(theoryQuestionBtlStorageKey, theoryQuestionBtl);
       lsSet(tcplQuestionBtlStorageKey, tcplQuestionBtl);
       lsSet(tcplSheetStorageKey, tcplSheet);
@@ -763,21 +625,11 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       for (const s of students) {
         const sid = String(s.id);
         clearedTheory[sid] = { absent: false, absentKind: undefined, q: { ...emptyTheoryQ } };
-        clearedTcpl[sid] = { absent: false, absentKind: undefined, lab: '', q: { ...emptyTcplQ }, recordMarksCo5: [] };
+        clearedTcpl[sid] = { absent: false, absentKind: undefined, lab: '', q: { ...emptyTcplQ } };
       }
 
       setTheorySheet(clearedTheory);
       setTcplSheet(clearedTcpl);
-
-      try {
-        await OBE.resetAssessmentMarks('model', String(subjectId), teachingAssignmentId ?? undefined);
-      } catch (e: any) {
-        const status = Number((e as any)?.status || 0);
-        const msg = String(e?.message || '');
-        const routeMissing = status === 404 || /\b404\b|not\s*found/i.test(msg);
-        if (!routeMissing) throw e;
-        console.warn('Backend rejected native model assessment reset, gracefully falling back to draft reset:', msg);
-      }
 
       await OBE.saveDraft(
         'model',
@@ -840,82 +692,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     setPublishing(true);
     setActionError(null);
     try {
-      const coMarksTarget = students.map((s, idx) => {
-        const rowKey = getRowKey(s as any, idx);
-        const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
-        
-        const absent = Boolean(row.absent);
-        const kind = absent ? normalizeAbsenceKind((row as any).absentKind) : null;
-        const assignedTotal = absent && kind === 'AL' ? 0 : null;
-
-        const qMarks: Record<string, number> = {};
-        const defs = getQuestionDefsForSheet();
-        defs.forEach((q) => {
-          const v = ((row.q || {}) as Record<string, CellNumber>)[q.key] ?? '';
-          const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
-          qMarks[q.key] = Math.max(0, Math.min(q.max, n));
-        });
-        const qTotal = Object.values(qMarks).reduce((sum, n) => sum + n, 0);
-
-        let labNum = 0;
-        let coCount = theoryCoCount;
-        let coMaxRow = theoryCoMaxRow;
-
-        if (isTcplLike) {
-          const lv = (row as any).lab ?? '';
-          labNum = typeof lv === 'number' && Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : 0;
-          coCount = tcplCoCount;
-          coMaxRow = tcplCoMaxRow;
-        }
-
-        const totalVal = assignedTotal != null ? assignedTotal : qTotal + labNum;
-
-        const coMark: number[] = Array.from({ length: coCount }, () => 0);
-        
-        if (!isTcplLike) {
-          theoryQuestions.forEach((q, i) => {
-            const cs = theoryCosRow[i] ?? [1];
-            const validCos = Array.isArray(cs) ? cs.filter(c => c >= 1 && c <= coCount) : (typeof cs === 'number' && cs >= 1 && cs <= coCount ? [cs] : []);
-            if (validCos.length > 0) {
-              const splitVal = (qMarks[q.key] || 0) / validCos.length;
-              validCos.forEach(c => coMark[c - 1] += splitVal);
-            }
-          });
-        } else {
-          tcplQuestions.forEach((q, i) => {
-            const co = tcplCosRow[i] ?? 1;
-            if (co >= 1 && co <= coCount) coMark[co - 1] += qMarks[q.key] || 0;
-          });
-          if (tcplReviewIsCo5) {
-            coMark[4] += labNum;
-          } else if (tcplModelRecordEnabled) {
-            // Record mode: CO1-CO5 each get the equal LAB/5 share; CO5 additionally
-            // accrues the record contribution (avg/maxPerExp)×2.
-            for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
-            const _recRaw = ((row.recordMarksCo5 ?? []) as (number | '')[]);
-            const _recValid = _recRaw.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
-            const _recAvg = _recValid.length > 0 ? _recValid.reduce((a, b) => a + b, 0) / _recValid.length : 0;
-            coMark[4] += (_recAvg / tcplModelRecordMaxPerExp) * 2.0;
-          } else {
-            for (let i = 0; i < coCount; i++) coMark[i] += labNum / coCount;
-          }
-        }
-
-        const coBreakdown: Record<string, any> = {};
-        coMark.forEach((m, i) => {
-          const denom = coMaxRow[i] || 0;
-          const pct = denom ? (m / denom) * 100 : 0;
-          coBreakdown[`co${i + 1}`] = { mark: m, percentage: pct };
-        });
-
-        return {
-          studentId: (s as any).id,
-          total: absent && kind === 'AL' ? 0 : totalVal,
-          coBreakdown
-        };
-      });
-
-      await OBE.publishModelSheet(subjectId, { ...buildPayload(), coMarks: coMarksTarget }, teachingAssignmentId);
+      await OBE.publishModelSheet(subjectId, buildPayload(), teachingAssignmentId);
       setPublishedAt(new Date().toLocaleString());
       await refreshPublishedSnapshot(false);
       refreshPublishWindow({ silent: true });
@@ -1107,27 +884,10 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   }, [entryOpen, isPublished, subjectId, refreshMarkLock]);
 
   const rowsToRender = useMemo(() => {
-    let rows: TeachingAssignmentRosterStudent[] = students.length
-      ? [...students]
-      : (Array.from({ length: 5 }, (_, i) => ({ id: -(i + 1), reg_no: '', name: '', section: null })) as any);
-
-    const digitQuery = normalizeRegDigits(digitFilterValue).slice(0, digitFilterLength);
-    if (digitFilterEnabled && digitQuery) {
-      rows = rows.filter((s: any) => {
-        const regDigits = normalizeRegDigits(String((s as any)?.reg_no || ''));
-        const suffix = regDigits.slice(-digitFilterLength);
-        return suffix.endsWith(digitQuery);
-      }) as any;
-    }
-
-    if (alphaOrderEnabled) {
-      rows = [...rows].sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || ''))) as any;
-    } else {
-      rows = [...rows].sort((a: any, b: any) => compareByRegLast3(a?.reg_no, b?.reg_no)) as any;
-    }
-
-    return rows;
-  }, [students, alphaOrderEnabled, digitFilterEnabled, digitFilterLength, digitFilterValue]);
+    if (students.length) return students;
+    // Fallback skeleton rows when roster isn't available yet.
+    return Array.from({ length: 5 }, (_, i) => ({ id: -(i + 1), reg_no: '', name: '', section: null }));
+  }, [students]);
 
   const hasAbsentees = useMemo(() => {
     const sheet = activeSheet || {};
@@ -1173,7 +933,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const theoryQuestions = useMemo<QuestionDef[]>(() => {
     // Prefer IQAC-configured QP pattern if present.
     const marks = Array.isArray((iqacPattern as any)?.marks) ? (iqacPattern as any).marks : null;
-    if (Array.isArray(marks) && marks.length && (isTheory || isSpecial || isTamil)) {
+    if (Array.isArray(marks) && marks.length && isTheory) {
       return marks.map((max, i) => ({
         key: `q${i + 1}`,
         label: `Q${i + 1}`,
@@ -1199,44 +959,29 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       { key: 'q15', label: 'Q15', max: 14 },
       { key: 'q16', label: 'Q16', max: 10 },
     ];
-  }, [iqacPattern, isTheory, isSpecial, isTamil]);
+  }, [iqacPattern, isTheory]);
 
   const theoryTotalMax = useMemo(() => theoryQuestions.reduce((sum, q) => sum + q.max, 0), [theoryQuestions]);
 
   // CO mapping row under Q1..Q16.
-  const extractModelCos = (raw: any): number[] => {
-    if (typeof raw === 'number' && Number.isFinite(raw)) return [Math.trunc(raw)];
-    const s = String(raw || '').trim().replace(/CO/ig, '');
-    if (s.includes('&') || s.includes(',') || s.includes('/')) {
-      return s.split(/[&,/]+/).map((p) => parseInt(p, 10)).filter(Number.isFinite);
-    }
-    const n = Number(raw);
-    if (Number.isFinite(n)) return [Math.trunc(n)];
-    return [1];
-  };
-
   const theoryCosRow = useMemo(() => {
     const defaultRow = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 1, 2, 3, 4, 5, 5];
     const cos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-    if ((isTheory || isSpecial || isTamil) && Array.isArray(cos) && cos.length === theoryQuestions.length) {
-      return cos.map((v: any) => extractModelCos(v));
+    if (isTheory && Array.isArray(cos) && cos.length === theoryQuestions.length) {
+      return cos.map((v: any) => {
+        const n = Number(v);
+        if (Number.isFinite(n)) return Math.max(1, Math.trunc(n));
+        return 1;
+      });
     }
-    if (theoryQuestions.length === defaultRow.length) return defaultRow.map(v => [v]);
-    return Array.from({ length: theoryQuestions.length }, (_, i) => [defaultRow[i % defaultRow.length]]);
-  }, [iqacPattern, isTheory, isSpecial, isTamil, theoryQuestions.length]);
+    if (theoryQuestions.length === defaultRow.length) return defaultRow;
+    return Array.from({ length: theoryQuestions.length }, (_, i) => defaultRow[i % defaultRow.length]);
+  }, [iqacPattern, isTheory, theoryQuestions.length]);
 
   // Derived from actual COs used so unused CO columns are hidden automatically.
   const theoryCoCount = useMemo(() => {
     if (!theoryCosRow.length) return 1;
-    let maxCo = 1;
-    theoryCosRow.forEach(row => {
-      if (Array.isArray(row)) {
-        row.forEach(co => maxCo = Math.max(maxCo, co));
-      } else if (typeof row === 'number') {
-        maxCo = Math.max(maxCo, row as number);
-      }
-    });
-    return Math.max(1, maxCo);
+    return Math.max(1, Math.max(...theoryCosRow));
   }, [theoryCosRow]);
 
   // BTL mapping row under Q1..Q16.
@@ -1250,14 +995,8 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const theoryCoTheoryMaxRow = useMemo(() => {
     const coMax: number[] = Array.from({ length: theoryCoCount }, () => 0);
     theoryQuestions.forEach((q, i) => {
-      const coMap = theoryCosRow[i] ?? [1];
-      const validCos = coMap.filter((co: number) => co >= 1 && co <= theoryCoCount);
-      if (validCos.length > 0) {
-        const splitMax = q.max / validCos.length;
-        validCos.forEach((co: number) => {
-          coMax[co - 1] += splitMax;
-        });
-      }
+      const co = theoryCosRow[i] ?? 1;
+      if (co >= 1 && co <= theoryCoCount) coMax[co - 1] += q.max;
     });
     return coMax;
   }, [theoryQuestions, theoryCosRow, theoryCoCount]);
@@ -1280,7 +1019,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   const [theoryQuestionBtl, setTheoryQuestionBtl] = useState<Record<string, BtlValue>>(defaultTheoryQuestionBtl);
 
   useEffect(() => {
-    if (!isTheory && !isSpecial && !isTamil) return;
+    if (!isTheory) return;
     const stored = lsGet<Record<string, BtlValue>>(theoryQuestionBtlStorageKey);
     if (stored && typeof stored === 'object') {
       setTheoryQuestionBtl({
@@ -1290,7 +1029,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     } else {
       setTheoryQuestionBtl(defaultTheoryQuestionBtl);
     }
-  }, [isTheory, isSpecial, isTamil, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
+  }, [isTheory, theoryQuestionBtlStorageKey, defaultTheoryQuestionBtl]);
 
   const setTheoryBtl = (qKey: string, value: BtlValue) => {
     setTheoryQuestionBtl((prev) => {
@@ -1492,7 +1231,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       return out;
     });
 
-    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : String(normalizedClassType || 'THEORY');
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
     downloadCsv(`${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.csv`, rows);
   };
 
@@ -1504,27 +1243,11 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     if (isTcplLike) header.push(`${tcplLabLabel} (${tcplLabMax})`);
     header.push('Status', 'Absence Kind');
 
-    const data = students.map((s, idx) => {
-      const rowKey = getRowKey(s as any, idx);
-      const row = (activeSheet || ({} as any))[rowKey] || ({} as TcplRowEntry);
-      const qObj = (row.q || {}) as Record<string, CellNumber>;
-      const absent = Boolean(row.absent);
-      const statusStr = absent ? 'absent' : 'present';
-      const kindStr = absent ? normalizeAbsenceKind((row as any).absentKind) : 'AL';
-
+    const data = students.map((s) => {
       const base = [String((s as any).reg_no || ''), String((s as any).name || '')];
-      const marks = defs.map((q) => {
-        const raw = qObj[q.key];
-        const n = Number(raw);
-        return Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
-      });
-
-      if (isTcplLike) {
-        const lv = Number(row.lab);
-        const labMark = Number.isFinite(lv) ? Math.max(0, Math.min(tcplLabMax, lv)) : '';
-        return [...base, ...marks, labMark, statusStr, kindStr];
-      }
-      return [...base, ...marks, statusStr, kindStr];
+      const marks = defs.map(() => '');
+      if (isTcplLike) return [...base, ...marks, '', 'present', 'AL'];
+      return [...base, ...marks, 'present', 'AL'];
     });
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
@@ -1532,8 +1255,8 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'MODEL');
 
-    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : String(normalizedClassType || 'THEORY');
-    const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}.xlsx`;
+    const suffix = isTcplLike ? String(normalizedClassType || 'TCPL') : 'THEORY';
+    const filename = `${safeFilePart(subjectId)}_MODEL_${safeFilePart(suffix)}_template.xlsx`;
     (XLSX as any).writeFile(wb, filename);
   };
 
@@ -1581,11 +1304,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       });
 
       const q10Col = normalizedQpType === 'QP2' ? headerRow.findIndex((h) => extractQLabel(h) === 'Q10') : -1;
-      const hasSeparateQ10Def = defs.some((d) => {
-        const key = String(d.key || '').trim().toLowerCase();
-        const label = String(d.label || '').trim().toUpperCase();
-        return key === 'q10' || label === 'Q10';
-      });
 
       const labCol = isTcplLike
         ? findCol((h) => h === String(tcplLabLabel || '').toLowerCase() || h.startsWith(String(tcplLabLabel || '').toLowerCase()))
@@ -1625,9 +1343,8 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           qObj[q.key] = Number.isFinite(n) ? Math.max(0, Math.min(q.max, n)) : '';
         });
 
-        // Legacy QP2 templates can split Q9/Q10 in Excel while UI has only collapsed Q9.
-        // Merge only when this sheet does not already define a separate Q10 field.
-        if (normalizedQpType === 'QP2' && q10Col >= 0 && !hasSeparateQ10Def) {
+        // QP2: template has Q9 (8) and Q10 (8) but UI has only Q9 (16).
+        if (normalizedQpType === 'QP2' && q10Col >= 0) {
           const q9 = defs.find((d) => String(d.key || '').toLowerCase() === 'q9' || String(d.label || '').trim().toUpperCase() === 'Q9');
           if (q9) {
             const add = Number(rowArr[q10Col]);
@@ -1692,11 +1409,10 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
       return tcplCoTheoryMaxRow.map((m, i) => (i === 4 ? tcplLabMax : m));
     }
 
-    // TCPL: CO max = (sum of question max for that CO) + (LAB max / CO-count).
-    // When the CO5 record-mark option is enabled, CO5 also carries an extra +2 raw
-    // (avg-of-experiments scaled to /2), so its raw max becomes theory + share + 2.
-    return tcplCoTheoryMaxRow.map((m, i) => m + tcplLabShareMax + (i === 4 && tcplModelRecordEnabled ? 2 : 0));
-  }, [tcplCoTheoryMaxRow, tcplLabShareMax, tcplReviewIsCo5, tcplLabMax, tcplModelRecordEnabled]);
+    // TCPL: Excel logic inferred from screenshot:
+    // CO max = (sum of question max for that CO) + (LAB max / CO-count)
+    return tcplCoTheoryMaxRow.map((m) => m + tcplLabShareMax);
+  }, [tcplCoTheoryMaxRow, tcplLabShareMax, tcplReviewIsCo5, tcplLabMax]);
 
   const tcplBtlMaxRow = useMemo(() => {
     const btlMax: number[] = [0, 0, 0, 0, 0, 0];
@@ -1744,10 +1460,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
   };
 
   // BTL attainment columns are dynamic (only enabled/used BTLs are shown, like CIA sheets).
-  const tcplRecordExtraCols = (isTcplLike && !tcplReviewIsCo5 && tcplModelRecordEnabled) ? tcplModelRecordExpCount : 0;
-  // +1 for 'Total Average' display column when record mode is active
-  const tcplRecordAvgCol = tcplRecordExtraCols > 0 ? 1 : 0;
-  const tcplColSpan = 4 + tcplQuestions.length + 1 + 1 + tcplRecordExtraCols + tcplRecordAvgCol + tcplCoCount * 2 + tcplVisibleBtls.length * 2;
+  const tcplColSpan = 4 + tcplQuestions.length + 1 + 1 + tcplCoCount * 2 + tcplVisibleBtls.length * 2;
   const theoryVisibleBtls = useMemo(() => {
     const set = new Set<number>();
     theoryQuestions.forEach((q) => {
@@ -1899,47 +1612,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           <button onClick={triggerExcelImport} className="obe-btn obe-btn-secondary" disabled={!students.length || publishedEditLocked || excelBusy}>
             {excelBusy ? 'Importing…' : 'Import Excel'}
           </button>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              flexWrap: 'wrap',
-              padding: '6px 10px',
-              border: '1px solid #e5e7eb',
-              borderRadius: 10,
-              background: '#f8fafc',
-            }}
-          >
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-              <input type="checkbox" checked={alphaOrderEnabled} onChange={(e) => setAlphaOrderEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
-              Alphabetical order
-            </label>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-              <input type="checkbox" checked={digitFilterEnabled} onChange={(e) => setDigitFilterEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
-              Digits filter
-            </label>
-            <select
-              value={digitFilterLength}
-              disabled={!digitFilterEnabled}
-              onChange={(e) => setDigitFilterLength(Number(e.target.value) === 8 ? 8 : 3)}
-              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}
-            >
-              <option value={3}>Last 3</option>
-              <option value={8}>Last 8</option>
-            </select>
-            <input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder={digitFilterLength === 8 ? 'Enter up to 8 digits' : 'Enter up to 3 digits'}
-              disabled={!digitFilterEnabled}
-              value={digitFilterValue}
-              onChange={(e) => setDigitFilterValue(normalizeRegDigits(e.target.value).slice(0, digitFilterLength))}
-              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, width: 170, background: '#fff' }}
-            />
-          </div>
           <input
             ref={excelFileInputRef}
             type="file"
@@ -1960,33 +1632,16 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
               {savingDraft ? 'Saving…' : 'Save Draft'}
             </button>
           ) : null}
-          <button
-            onClick={resetAllMarks}
-            className="obe-btn obe-btn-danger"
-            disabled={
-              resettingMarks ||
-              students.length === 0 ||
-              tableBlocked ||
-              publishedEditLocked ||
-              globalLocked ||
-              !publishAllowed ||
-              !subjectId ||
-              typeof teachingAssignmentId !== 'number'
-            }
-            title={
-              globalLocked
-                ? 'Reset is blocked: publishing is locked by IQAC'
-                : !publishAllowed
-                  ? 'Reset is blocked: publish window is closed'
-                  : publishedEditLocked
-                    ? 'Reset is blocked: published table is locked; request edit first'
-                    : typeof teachingAssignmentId !== 'number'
-                      ? 'Reset is unavailable: teaching assignment is not selected'
-                      : 'Clears marks from draft and database for this teaching assignment'
-            }
-          >
-            {resettingMarks ? 'Resetting…' : 'Reset Marks'}
-          </button>
+          {!isPublished && publishAllowed && !globalLocked ? (
+            <button
+              onClick={resetAllMarks}
+              className="obe-btn obe-btn-danger"
+              disabled={resettingMarks || students.length === 0 || tableBlocked || publishedEditLocked}
+              title="Clears the saved draft marks"
+            >
+              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+            </button>
+          ) : null}
           <button
             onClick={publish}
             className="obe-btn obe-btn-primary"
@@ -2341,59 +1996,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           </div>
         ) : null}
 
-        {isTcplLike && !tcplReviewIsCo5 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '10px 16px', background: '#fef3c7', border: '1px solid #d97706', borderRadius: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1, minWidth: '300px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={tcplModelRecordEnabled}
-                  onChange={(e) => setTcplModelRecordEnabled(e.target.checked)}
-                />
-                Enable Record Marks for CO5 (Model Lab)
-              </label>
-              {tcplModelRecordEnabled && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                  No. of Experiments:
-                  <select
-                    value={tcplModelRecordExpCount}
-                    onChange={(e) => setTcplModelRecordExpCount(Number(e.target.value))}
-                    style={{ fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706' }}
-                  >
-                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {tcplModelRecordEnabled && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                  Max mark / experiment:
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={tcplModelRecordMaxPerExp}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (Number.isFinite(v) && v >= 1) setTcplModelRecordMaxPerExp(v);
-                    }}
-                    style={{ width: 70, fontSize: 13, padding: '2px 6px', borderRadius: 4, border: '1px solid #d97706' }}
-                  />
-                </label>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              {tcplModelRecordEnabled && (
-                <span style={{ fontSize: 12, color: '#92400e', fontWeight: 500 }}>
-                  CO1–CO5: LAB/5 each (≤6) | CO5 record: + (avg/{tcplModelRecordMaxPerExp})×2
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
         <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
           <table
             className="obe-table"
@@ -2408,12 +2010,12 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
           >
           {!isTcplLike ? (
             <>
-              {isTheory || isSpecial || isTamil ? (
+              {isTheory ? (
                 <>
                   <thead>
                     <tr>
                       <th style={cellTh} colSpan={theoryColSpan}>
-                        MODEL ({isSpecial ? 'SPECIAL' : isTamil ? 'TAMIL' : 'THEORY'} Header Template)
+                        MODEL (THEORY Header Template)
                       </th>
                     </tr>
 
@@ -2464,7 +2066,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                     <tr>
                       {theoryCosRow.map((v, i) => (
                         <th key={`theory-co-map-${i}`} style={{ ...cellTh, width: 40, minWidth: 40 }}>
-                          {Array.isArray(v) ? v.join('&') : String(v)}
+                          {v}
                         </th>
                       ))}
 
@@ -2614,14 +2216,8 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
 
                           const coMark: number[] = Array.from({ length: theoryCoCount }, () => 0);
                           theoryQuestions.forEach((q, i) => {
-                              const cs = theoryCosRow[i] ?? [1];
-                              const validCos = Array.isArray(cs) ? cs.filter(co => co >= 1 && co <= theoryCoCount) : (typeof cs === 'number' && cs >= 1 && cs <= theoryCoCount ? [cs] : []);
-                              if (validCos.length > 0) {
-                                const splitVal = (qMarks[q.key] || 0) / validCos.length;
-                                validCos.forEach(co => {
-                                  coMark[co - 1] += splitVal;
-                                });
-                              }
+                            const co = theoryCosRow[i] ?? 1;
+                            if (co >= 1 && co <= theoryCoCount) coMark[co - 1] += qMarks[q.key] || 0;
                           });
 
                           const coPct = coMark.map((m, i) => {
@@ -2796,21 +2392,13 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                                         const next = Number(raw);
                                         if (!Number.isFinite(next)) return;
                                         if (next > q.max) {
-                                          showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                          setQ(q.key, '', q.max);
+                                          e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                          e.currentTarget.reportValidity();
+                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                                           return;
                                         }
                                         e.currentTarget.setCustomValidity('');
                                         setQ(q.key, raw, q.max);
-                                      }}
-                                      onBlur={(e) => {
-                                        const raw = e.target.value;
-                                        if (raw === '') return;
-                                        const next = Number(raw);
-                                        if (!Number.isFinite(next) || next < 0 || next > q.max) {
-                                          showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                          setQ(q.key, '', q.max);
-                                        }
                                       }}
                                       onFocus={(e) => e.currentTarget.select()}
                                       onKeyDown={onCellKeyDown(q.key)}
@@ -2851,26 +2439,26 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                       </th>
                     </tr>
                     <tr>
-                      <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }} rowSpan={4}>
+                      <th style={{ ...cellTh, width: SNO_COL_WIDTH, minWidth: SNO_COL_WIDTH }} rowSpan={3}>
                         S.No
                       </th>
-                      <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }} rowSpan={4}>
+                      <th style={{ ...cellTh, minWidth: 70, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                         R.No
                       </th>
-                      <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={4}>
+                      <th style={{ ...cellTh, minWidth: 240, overflow: 'visible', textOverflow: 'clip' }} rowSpan={3}>
                         Name of the Students
                       </th>
-                      <th style={{ ...cellTh, minWidth: 32 }} rowSpan={4}>
+                      <th style={{ ...cellTh, minWidth: 32 }} rowSpan={3}>
                         AB
                       </th>
 
                       <th style={cellTh} colSpan={questions.length}>
                         QUESTIONS
                       </th>
-                      <th style={cellTh} rowSpan={4}>
+                      <th style={cellTh} rowSpan={3}>
                         Total
                       </th>
-                      <th style={cellTh} colSpan={blankTemplateCos.length * 2}>
+                      <th style={cellTh} colSpan={4}>
                         CO ATTAINMENT
                       </th>
                       <th style={cellTh} colSpan={visibleBtls.length * 2}>
@@ -2883,73 +2471,16 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                           {q.label}
                         </th>
                       ))}
-                      {blankTemplateCos.map((c) => (
-                        <th key={`co-head-${c}`} style={cellTh} colSpan={2}>CO-{c}</th>
-                      ))}
+                      <th style={cellTh} colSpan={2}>
+                        CO-1
+                      </th>
+                      <th style={cellTh} colSpan={2}>
+                        CO-2
+                      </th>
                       {visibleBtls.map((n) => (
                         <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
                           BTL-{n}
                         </th>
-                      ))}
-                    </tr>
-                    <tr>
-                      {questions.map((q) => {
-                        const v = (blankTemplateQuestionBtl || ({} as any))[q.key] ?? '';
-                        const display = v === '' ? '-' : String(v);
-                        return (
-                          <th key={`blank-btl-sel-${q.key}`} style={{ ...cellTh, width: 46, minWidth: 46, padding: 0 }}>
-                            <div style={{ position: 'relative', minWidth: 40 }}>
-                              <div
-                                style={{
-                                  width: '100%',
-                                  fontSize: 11,
-                                  padding: '4px 4px',
-                                  border: '1px solid #d1d5db',
-                                  borderRadius: 8,
-                                  background: '#fff',
-                                  textAlign: 'center',
-                                  userSelect: 'none',
-                                  margin: 2,
-                                }}
-                                title={`BTL: ${display}`}
-                              >
-                                {display}
-                              </div>
-                              <select
-                                style={{
-                                  position: 'absolute',
-                                  inset: 0,
-                                  width: '100%',
-                                  height: '100%',
-                                  opacity: 0,
-                                  cursor: 'pointer',
-                                }}
-                                value={v}
-                                onChange={(e) => {
-                                  if (publishedEditLocked) return;
-                                  const val = e.target.value;
-                                  if (val === '') setBlankTemplateBtl(q.key, '');
-                                  else setBlankTemplateBtl(q.key, Number(val) as BtlValue);
-                                }}
-                                disabled={publishedEditLocked}
-                              >
-                                <option value="">-</option>
-                                <option value="1">1</option>
-                                <option value="2">2</option>
-                                <option value="3">3</option>
-                                <option value="4">4</option>
-                                <option value="5">5</option>
-                                <option value="6">6</option>
-                              </select>
-                            </div>
-                          </th>
-                        );
-                      })}
-                      {Array.from({ length: blankTemplateCos.length + visibleBtls.length }).flatMap((_, i) => (
-                        <React.Fragment key={`btlsel-spacer-${i}`}>
-                          <th style={cellTh}></th>
-                          <th style={cellTh}></th>
-                        </React.Fragment>
                       ))}
                     </tr>
                     <tr>
@@ -2958,7 +2489,7 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                           {q.max}
                         </th>
                       ))}
-                      {Array.from({ length: blankTemplateCos.length + visibleBtls.length }).flatMap((_, i) => (
+                      {Array.from({ length: 2 + visibleBtls.length }).flatMap((_, i) => (
                         <React.Fragment key={i}>
                           <th style={{ ...cellTh, minWidth: 52 }}>
                             <div style={{ whiteSpace: 'pre-line', lineHeight: '0.9', fontSize: '0.7em' }}>{'M\nA\nR\nK'}</div>
@@ -3146,21 +2677,13 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                                     const next = Number(raw);
                                     if (!Number.isFinite(next)) return;
                                     if (next > q.max) {
-                                      showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                      setQ(q.key, '', q.max);
+                                      e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                      e.currentTarget.reportValidity();
+                                      window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                                       return;
                                     }
                                     e.currentTarget.setCustomValidity('');
                                     setQ(q.key, raw, q.max);
-                                  }}
-                                  onBlur={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === '') return;
-                                    const next = Number(raw);
-                                    if (!Number.isFinite(next) || next < 0 || next > q.max) {
-                                      showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                      setQ(q.key, '', q.max);
-                                    }
                                   }}
                                   onFocus={(e) => e.currentTarget.select()}
                                   onKeyDown={onCellKeyDown(q.key)}
@@ -3171,47 +2694,21 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                           })}
 
                           <td style={{ ...cellTd, textAlign: 'center', fontWeight: 700 }}>{fmt1(assignedTotal != null ? assignedTotal : total)}</td>
-                          {blankTemplateCos.map((c) => {
-                            const patternCos = Array.isArray((iqacPattern as any)?.cos) ? (iqacPattern as any).cos : null;
-                            let coMark = 0;
-                            if (patternCos) {
-                              for (let qi = 0; qi < questions.length; qi++) {
-                                if (Number(patternCos[qi]) === c) coMark += qMarks[questions[qi].key] || 0;
-                              }
-                            }
-                            const coMaxVal = blankTemplateCoMax[c] || 0;
-                            return (
-                              <React.Fragment key={`co-cell-${idx}-${c}`}>
-                                <td style={{ ...cellTd, textAlign: 'center' }}>{coMark}</td>
-                                <td style={{ ...cellTd, textAlign: 'center' }}><span className="obe-pct-badge">{coMaxVal > 0 ? `${Math.round((coMark / coMaxVal) * 100)}%` : '\u2014'}</span></td>
-                              </React.Fragment>
-                            );
-                          })}
-
-                          {visibleBtls.flatMap((n) => {
-                            let btlMark = 0;
-                            for (let qi = 0; qi < questions.length; qi++) {
-                              const assignedBtl = blankTemplateBtlRow[qi];
-                              if (assignedBtl === n) btlMark += qMarks[questions[qi].key] || 0;
-                            }
-                            const maxForBtl = blankTemplateBtlMaxRow[n - 1] || 0;
-                            let btlPct = 0;
-                            if (!absent && maxForBtl > 0) btlPct = (btlMark / maxForBtl) * 100;
-                            let cTd = cellTd;
-                            if (!absent && maxForBtl > 0) {
-                              if (btlPct >= 60) cTd = { ...cellTd, backgroundColor: '#d4edda', color: '#155724' };
-                              else cTd = { ...cellTd, backgroundColor: '#f8d7da', color: '#721c24' };
-                            }
-                            return (
-                              <React.Fragment key={`${idx}-btl-${n}`}>
-                                <td style={{ ...cTd, textAlign: 'center' }}>{absent || maxForBtl === 0 ? '-' : fmt1(btlMark)}</td>
-                                <td style={{ ...cTd, textAlign: 'center' }}>{absent || maxForBtl === 0 ? '-' : `${Math.round(btlPct)}%`}</td>
-                              </React.Fragment>
-                            );
-                          })}
                         </>
                       );
                     })()}
+
+                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+                    <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+
+                    {visibleBtls.flatMap((n) => (
+                      <React.Fragment key={`${idx}-btl-${n}`}>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+                        <td style={{ ...cellTd, textAlign: 'center' }}>&nbsp;</td>
+                      </React.Fragment>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -3252,17 +2749,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                   <th style={{ ...cellTh, minWidth: 56 }} rowSpan={3}>
                     {tcplLabLabel}
                   </th>
-
-                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
-                    <th key={`rec-head1-${i}`} style={{ ...cellTh, minWidth: 52, background: '#fef3c7', color: '#92400e' }} rowSpan={3}>
-                      RE{i + 1}<br /><span style={{ fontSize: 10 }}>/{tcplModelRecordMaxPerExp}</span>
-                    </th>
-                  ))}
-                  {tcplRecordAvgCol > 0 && (
-                    <th style={{ ...cellTh, minWidth: 60, background: '#fde68a', color: '#78350f' }} rowSpan={3}>
-                      Total<br />Avg<br /><span style={{ fontSize: 10 }}>/2</span>
-                    </th>
-                  )}
 
                   <th style={cellTh} colSpan={tcplCoCount * 2}>
                     CO ATTAINMENT
@@ -3310,11 +2796,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                   </th>
                   <th style={cellTh}>&nbsp;</th>
                   <th style={cellTh}>&nbsp;</th>
-
-                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
-                    <th key={`rec-btl4-${i}`} style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>
-                  ))}
-                  {tcplRecordAvgCol > 0 && <th style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>}
 
                   {/* CO mark/% + BTL mark/% labels */}
                   {Array.from({ length: tcplCoCount + tcplVisibleBtls.length }).flatMap((_, i) => (
@@ -3384,11 +2865,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                   <th style={cellTh}>&nbsp;</th>
                   <th style={cellTh}>&nbsp;</th>
 
-                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
-                    <th key={`rec-btl5-${i}`} style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>
-                  ))}
-                  {tcplRecordAvgCol > 0 && <th style={{ ...cellTh, background: '#fef9e7' }}>&nbsp;</th>}
-
                   {/* Max marks are shown in the 'Name / Max Marks' row (Excel-style). */}
                   {Array.from({ length: tcplCoCount * 2 + tcplVisibleBtls.length * 2 }).map((_, i) => (
                     <th key={`tailblank-${i}`} style={cellTh}>
@@ -3412,13 +2888,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
 
                   <th style={cellTh}>{tcplTotalMax}</th>
                   <th style={cellTh}>30</th>
-
-                  {tcplRecordExtraCols > 0 && Array.from({ length: tcplRecordExtraCols }).map((_, i) => (
-                    <th key={`rec-maxrow-${i}`} style={{ ...cellTh, background: '#fef3c7', color: '#92400e' }}>{tcplModelRecordMaxPerExp}</th>
-                  ))}
-                  {tcplRecordAvgCol > 0 && (
-                    <th style={{ ...cellTh, background: '#fde68a', color: '#78350f' }}>2</th>
-                  )}
 
                   {/* CO max marks + % */}
                   {tcplCoMaxRow.flatMap((max, i) => (
@@ -3470,14 +2939,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                       if (tcplReviewIsCo5) {
                         // TCPR: add REVIEW only to CO5.
                         coMark[4] += labNum;
-                      } else if (tcplModelRecordEnabled) {
-                        // Record mode: CO1-CO5 each get the equal LAB/5 share; CO5 additionally
-                        // accrues the record contribution (avg/maxPerExp)×2.
-                        for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
-                        const _recRawRow = ((row.recordMarksCo5 ?? []) as (number | '')[]);
-                        const _recValidRow = _recRawRow.slice(0, tcplModelRecordExpCount).filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
-                        const _recAvgRow = _recValidRow.length > 0 ? _recValidRow.reduce((a, b) => a + b, 0) / _recValidRow.length : 0;
-                        coMark[4] += (_recAvgRow / tcplModelRecordMaxPerExp) * 2.0;
                       } else {
                         // TCPL: add equal LAB share to each CO.
                         for (let i = 0; i < tcplCoCount; i++) coMark[i] += labNum / tcplCoCount;
@@ -3533,18 +2994,6 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                           ...row,
                           lab: clampCell(raw, tcplLabMax),
                         });
-                      };
-
-                      const setRecordMark = (expIdx: number, raw: string) => {
-                        if (absent && !canEditAbsent) return;
-                        const next = Number(raw);
-                        const nextVal: number | '' = raw === '' ? '' : (Number.isFinite(next) ? Math.max(0, Math.min(tcplModelRecordMaxPerExp, next)) : '');
-                        const currentRecs: (number | '')[] = Array.from({ length: tcplModelRecordExpCount }, (_, i) => {
-                          const v = (row.recordMarksCo5 ?? [])[i];
-                          return typeof v === 'number' ? v : '';
-                        });
-                        currentRecs[expIdx] = nextVal;
-                        setTcplCell(rowKey, { ...row, recordMarksCo5: currentRecs });
                       };
 
                       const setQ = (qKey: string, raw: string, max: number) => {
@@ -3679,21 +3128,13 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                               const next = Number(raw);
                               if (!Number.isFinite(next)) return;
                               if (next > q.max) {
-                                showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                setQ(q.key, '', q.max);
+                                e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${q.max}`);
+                                e.currentTarget.reportValidity();
+                                window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                                 return;
                               }
                               e.currentTarget.setCustomValidity('');
                               setQ(q.key, raw, q.max);
-                            }}
-                            onBlur={(e) => {
-                              const raw = e.target.value;
-                              if (raw === '') return;
-                              const next = Number(raw);
-                              if (!Number.isFinite(next) || next < 0 || next > q.max) {
-                                showMarkLimitPopup(e.currentTarget, `Mark cannot be higher than ${q.max}`, s as any);
-                                setQ(q.key, '', q.max);
-                              }
                             }}
                             onFocus={(e) => e.currentTarget.select()}
                             onKeyDown={onCellKeyDown(q.key)}
@@ -3723,87 +3164,19 @@ const blankTemplateCoMax = useMemo((): Record<number, number> => {
                           const next = Number(raw);
                           if (!Number.isFinite(next)) return;
                           if (next > tcplLabMax) {
-                            showMarkLimitPopup(e.currentTarget, `LAB mark cannot be higher than ${tcplLabMax}`, s as any);
-                            setLab('');
+                            e.currentTarget.setCustomValidity(`Incorrect, the max mark is ${tcplLabMax}`);
+                            e.currentTarget.reportValidity();
+                            window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
                             return;
                           }
                           e.currentTarget.setCustomValidity('');
                           setLab(raw);
-                        }}
-                        onBlur={(e) => {
-                          const raw = e.target.value;
-                          if (raw === '') return;
-                          const next = Number(raw);
-                          if (!Number.isFinite(next) || next < 0 || next > tcplLabMax) {
-                            showMarkLimitPopup(e.currentTarget, `LAB mark cannot be higher than ${tcplLabMax}`, s as any);
-                            setLab('');
-                          }
                         }}
                         onFocus={(e) => e.currentTarget.select()}
                         onKeyDown={onCellKeyDown('lab')}
                         style={excelInputStyle}
                       />
                     </td>
-
-                    {/* Record experiment marks for CO5 (when enabled) */}
-                    {tcplRecordExtraCols > 0 && (() => {
-                      const recRaw = (row.recordMarksCo5 ?? []) as (number | '')[];
-                      const recNums = Array.from({ length: tcplModelRecordExpCount }, (_, i) => {
-                        const v = recRaw[i];
-                        return typeof v === 'number' && Number.isFinite(v) ? v : null;
-                      });
-                      const recValid = recNums.filter((x): x is number => x !== null);
-                      const recAvg = recValid.length > 0 ? recValid.reduce((a, b) => a + b, 0) / recValid.length : null;
-                      const recScaled = recAvg !== null ? (recAvg / tcplModelRecordMaxPerExp) * 2.0 : null;
-                      return (
-                        <>
-                          {Array.from({ length: tcplRecordExtraCols }).map((_, expIdx) => {
-                            const recVal = recRaw[expIdx];
-                            const displayVal = typeof recVal === 'number' ? String(recVal) : '';
-                            return (
-                              <td key={`rec-${idx}-${expIdx}`} style={{ ...cellTd, textAlign: 'center', background: '#fef9e7' }}>
-                                <input
-                                  ref={registerRef(`${rowKey}|rec${expIdx}`)}
-                                  type="text"
-                                  inputMode="decimal"
-                                  disabled={absent && !canEditAbsent}
-                                  value={displayVal}
-                                  title={`Record Exp ${expIdx + 1} (Max: ${tcplModelRecordMaxPerExp})`}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === '') { setRecordMark(expIdx, ''); return; }
-                                    const next = Number(raw);
-                                    if (!Number.isFinite(next)) return;
-                                    if (next > tcplModelRecordMaxPerExp) {
-                                      showMarkLimitPopup(e.currentTarget, `Record mark cannot exceed ${tcplModelRecordMaxPerExp}`, s as any);
-                                      setRecordMark(expIdx, '');
-                                      return;
-                                    }
-                                    setRecordMark(expIdx, raw);
-                                  }}
-                                  onBlur={(e) => {
-                                    const raw = e.target.value;
-                                    if (raw === '') return;
-                                    const next = Number(raw);
-                                    if (!Number.isFinite(next) || next < 0 || next > tcplModelRecordMaxPerExp) {
-                                      showMarkLimitPopup(e.currentTarget, `Record mark cannot exceed ${tcplModelRecordMaxPerExp}`, s as any);
-                                      setRecordMark(expIdx, '');
-                                    }
-                                  }}
-                                  onFocus={(e) => e.currentTarget.select()}
-                                  onKeyDown={onCellKeyDown(`rec${expIdx}`)}
-                                  style={{ ...excelInputStyle, background: 'transparent' }}
-                                />
-                              </td>
-                            );
-                          })}
-                          {/* Total Average column: avg scaled to /2 */}
-                          <td style={{ ...cellTd, textAlign: 'center', background: '#fde68a', color: '#78350f', fontWeight: 700 }}>
-                            {recScaled !== null ? fmt1(recScaled) : ''}
-                          </td>
-                        </>
-                      );
-                    })()}
 
                     {/* CO attainment: MARK + % */}
                     {coMark.flatMap((m, i) => (

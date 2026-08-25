@@ -5,7 +5,6 @@ import CLASS_TYPES, { normalizeClassType, QP_TYPES } from '../../constants/class
 import { createMaster, updateMaster, fetchMasters, fetchBatchYears } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { BookOpen, Save, X as CancelIcon } from 'lucide-react';
-import { showAlert } from '../../utils/dialog';
 
 export default function MasterEditor() {
   const { id } = useParams();
@@ -69,11 +68,14 @@ export default function MasterEditor() {
         // Only call update when we have a valid numeric id
         const numericId = Number(effectiveId);
         if (Number.isNaN(numericId)) throw new Error('Invalid master id');
-        await updateMaster(numericId, payload);
-        navigate('/curriculum/master', { state: { savedMessage: 'Saved', updatedId: numericId } });
+        const updated = await updateMaster(numericId, payload);
+        // refresh component with server response and show saved message
+        setForm(updated);
+        setSavedMessage('Saved');
+        setTimeout(() => setSavedMessage(null), 2500);
       }
     } catch (e: any) {
-      await showAlert(`Error: ${e.message}`, 'error');
+      alert(`Error: ${e.message}`);
     } finally {
       setLoading(false);
     }

@@ -5,7 +5,6 @@ import fetchWithAuth from '../../../services/fetchAuth';
 import { fetchDepartmentStaff } from '../../../services/staff';
 import TeachingAssignSection from './TeachingAssignSection';
 import GroupAllocationModal, { GroupAllocation } from './GroupAllocationModal';
-import VenueAllocationModal, { VenueExceptionRule, VENUE_EXCEPTIONS_STORAGE_KEY } from './VenueAllocationModal';
 
 const DEPARTMENT_OPTIONS = [
   { label: 'CIVIL Engineering', value: 'civil' },
@@ -456,13 +455,11 @@ const buildGeneratedSection = (
   snapshot: SectionSnapshot,
   template: SemesterTemplate,
   globalFacultyUsage: Record<string, Set<string>>,
-  globalVenueUsage: Record<string, Record<string, number>> = {},
   generationSeed: number,
   sectionIndex: number,
   groupAllocations: GroupAllocation[] = [],
   creditAllocations: Record<number, number> = {},
-  classTypeExceptions: ClassTypeExceptionRule[] = [],
-  venueRules: VenueExceptionRule[] = []
+  classTypeExceptions: ClassTypeExceptionRule[] = []
 ): GeneratedSectionTimetable => {
   const cells: Record<string, GeneratedCell> = {};
   const warnings: string[] = [];
@@ -471,20 +468,6 @@ const buildGeneratedSection = (
   const runSeed = generationSeed + sectionIndex + 1;
   const rng = createSeededRng(runSeed);
   const consecutiveTwoBlocks = getConsecutiveBlocksForTemplate(template, 2);
-
-  // Helper to find matching venue rule for a subject
-  const getSubjectVenueRule = (subject: any): VenueExceptionRule | undefined => {
-    if (!venueRules || venueRules.length === 0) return undefined;
-    const sCode = getSubjectCode(subject).toUpperCase().trim();
-    const sName = getSubjectName(subject).toUpperCase().trim();
-    return venueRules.find((rule) =>
-      rule.courses.some((c) => {
-        const cCode = (c.course_code || '').toUpperCase().trim();
-        const cName = (c.course_name || '').toUpperCase().trim();
-        return (cCode && sCode.includes(cCode)) || (cName && sName.includes(cName));
-      })
-    );
-  };
 
   // Find Group Allocations that match this section / mixed section
   const matchingGroups = groupAllocations.filter((g) => {
@@ -506,8 +489,6 @@ const buildGeneratedSection = (
   matchingGroups.forEach((g, gIdx) => {
     const groupSeed = hashString(`${generationSeed}-${g.id || g.groupName}-${gIdx}`);
     const groupRng = createSeededRng(groupSeed);
-    const groupVenueId = `group-${g.id || g.groupName}`;
-    const groupVenueCap = g.venueAvailability ?? Infinity;
 
     const pairedCount = g.pairedPeriods !== undefined ? g.pairedPeriods : (g.blockPeriodEnabled ? (g.blockPeriodCount || 1) : 0);
     const individualCount = g.individualPeriods !== undefined ? g.individualPeriods : (pairedCount === 0 ? 1 : 0);
@@ -518,21 +499,10 @@ const buildGeneratedSection = (
       const shuffled2Blocks = shuffleWithRng(available2Blocks, groupRng);
 
       for (let p = 1; p <= pairedCount; p++) {
-        const selectedBlock = shuffled2Blocks.find((b) =>
-          b.keys.every((k) => {
-            if (occupied.has(k)) return false;
-            const currentCount = globalVenueUsage[groupVenueId]?.[k] || 0;
-            return currentCount < groupVenueCap;
-          })
-        ) || shuffled2Blocks.find((b) => b.keys.every((k) => !occupied.has(k))) || shuffled2Blocks[0];
-
+        const selectedBlock = shuffled2Blocks.find((b) => b.keys.every((k) => !occupied.has(k))) || shuffled2Blocks[0];
         if (selectedBlock) {
           selectedBlock.keys.forEach((key) => {
             occupied.add(key);
-            if (!globalVenueUsage[groupVenueId]) {
-              globalVenueUsage[groupVenueId] = {};
-            }
-            globalVenueUsage[groupVenueId][key] = (globalVenueUsage[groupVenueId][key] || 0) + 1;
             cells[key] = {
               subject: g.groupName,
               faculty: 'Group Allocation',
@@ -549,18 +519,9 @@ const buildGeneratedSection = (
       const available1Slots = shuffleWithRng(slots, groupRng);
 
       for (let i = 1; i <= individualCount; i++) {
-        const selectedSlot = available1Slots.find((s) => {
-          if (occupied.has(s.key)) return false;
-          const currentCount = globalVenueUsage[groupVenueId]?.[s.key] || 0;
-          return currentCount < groupVenueCap;
-        }) || available1Slots.find((s) => !occupied.has(s.key)) || available1Slots[0];
-
+        const selectedSlot = available1Slots.find((s) => !occupied.has(s.key)) || available1Slots[0];
         if (selectedSlot && !occupied.has(selectedSlot.key)) {
           occupied.add(selectedSlot.key);
-          if (!globalVenueUsage[groupVenueId]) {
-            globalVenueUsage[groupVenueId] = {};
-          }
-          globalVenueUsage[groupVenueId][selectedSlot.key] = (globalVenueUsage[groupVenueId][selectedSlot.key] || 0) + 1;
           cells[selectedSlot.key] = {
             subject: g.groupName,
             faculty: 'Group Allocation',
@@ -605,10 +566,6 @@ const buildGeneratedSection = (
   };
 
   const sortedSubjects = [...filteredSubjects].sort((a, b) => {
-    const aVenue = getSubjectVenueRule(a) ? 0 : 1;
-    const bVenue = getSubjectVenueRule(b) ? 0 : 1;
-    if (aVenue !== bVenue) return aVenue - bVenue;
-
     const aExcept = hasExceptionRule(a) ? 0 : 1;
     const bExcept = hasExceptionRule(b) ? 0 : 1;
     if (aExcept !== bExcept) return aExcept - bExcept;
@@ -622,10 +579,8 @@ const buildGeneratedSection = (
   const subjectDayUsage: Record<string, Set<string>> = {};
   const getSubjectKey = (subject: any) => getSubjectCode(subject) || getSubjectName(subject) || getSubjectLabel(subject);
 
-  const reserveSlot = (facultyIds: string[], subjectKey: string, venueRule?: VenueExceptionRule) => {
+  const reserveSlot = (facultyIds: string[], subjectKey: string) => {
     const slotOrder = shuffleWithRng(slots, rng);
-    const venueId = venueRule?.id;
-    const venueCap = venueRule?.capacity ?? Infinity;
 
     const canUseSlot = (slot: { key: string; day: string }) => {
       if (occupied.has(slot.key)) return false;
@@ -634,15 +589,7 @@ const buildGeneratedSection = (
         if (!facultyId) return false;
         return globalFacultyUsage[facultyId]?.has(slot.key) || false;
       });
-      if (facultyConflict) return false;
-
-      // Venue capacity constraint
-      if (venueId) {
-        const currentVenueCount = globalVenueUsage[venueId]?.[slot.key] || 0;
-        if (currentVenueCount >= venueCap) return false;
-      }
-
-      return true;
+      return !facultyConflict;
     };
 
     for (const slot of slotOrder) {
@@ -655,12 +602,6 @@ const buildGeneratedSection = (
         }
         globalFacultyUsage[facultyId].add(slot.key);
       });
-      if (venueId) {
-        if (!globalVenueUsage[venueId]) {
-          globalVenueUsage[venueId] = {};
-        }
-        globalVenueUsage[venueId][slot.key] = (globalVenueUsage[venueId][slot.key] || 0) + 1;
-      }
       if (!subjectDayUsage[subjectKey]) {
         subjectDayUsage[subjectKey] = new Set();
       }
@@ -671,12 +612,6 @@ const buildGeneratedSection = (
     // Fallback if no slot on un-used day
     for (const slot of slotOrder) {
       if (occupied.has(slot.key)) continue;
-      // If venue limit reached, don't allow fallback to breach venue capacity if possible
-      if (venueId) {
-        const currentVenueCount = globalVenueUsage[venueId]?.[slot.key] || 0;
-        if (currentVenueCount >= venueCap) continue;
-      }
-
       occupied.add(slot.key);
       facultyIds.forEach((facultyId) => {
         if (!facultyId) return;
@@ -685,12 +620,6 @@ const buildGeneratedSection = (
         }
         globalFacultyUsage[facultyId].add(slot.key);
       });
-      if (venueId) {
-        if (!globalVenueUsage[venueId]) {
-          globalVenueUsage[venueId] = {};
-        }
-        globalVenueUsage[venueId][slot.key] = (globalVenueUsage[venueId][slot.key] || 0) + 1;
-      }
       if (!subjectDayUsage[subjectKey]) {
         subjectDayUsage[subjectKey] = new Set();
       }
@@ -701,10 +630,8 @@ const buildGeneratedSection = (
     return null;
   };
 
-  const reserveBlockPair = (facultyIds: string[], subjectKey: string, venueRule?: VenueExceptionRule) => {
+  const reserveBlockPair = (facultyIds: string[], subjectKey: string) => {
     const blockOrder = shuffleWithRng(consecutiveTwoBlocks, rng);
-    const venueId = venueRule?.id;
-    const venueCap = venueRule?.capacity ?? Infinity;
 
     const canUseBlock = (block: { keys: string[]; day: string }) => {
       if (block.keys.some((k) => occupied.has(k))) return false;
@@ -713,18 +640,7 @@ const buildGeneratedSection = (
         if (!facultyId) return false;
         return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
       });
-      if (facultyConflict) return false;
-
-      // Venue capacity check for each slot in the block
-      if (venueId) {
-        const venueConflict = block.keys.some((key) => {
-          const currentVenueCount = globalVenueUsage[venueId]?.[key] || 0;
-          return currentVenueCount >= venueCap;
-        });
-        if (venueConflict) return false;
-      }
-
-      return true;
+      return !facultyConflict;
     };
 
     for (const block of blockOrder) {
@@ -737,14 +653,6 @@ const buildGeneratedSection = (
         }
         block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
       });
-      if (venueId) {
-        if (!globalVenueUsage[venueId]) {
-          globalVenueUsage[venueId] = {};
-        }
-        block.keys.forEach((key) => {
-          globalVenueUsage[venueId][key] = (globalVenueUsage[venueId][key] || 0) + 1;
-        });
-      }
       if (!subjectDayUsage[subjectKey]) {
         subjectDayUsage[subjectKey] = new Set();
       }
@@ -754,13 +662,6 @@ const buildGeneratedSection = (
 
     for (const block of blockOrder) {
       if (block.keys.some((k) => occupied.has(k))) continue;
-      if (venueId) {
-        const venueConflict = block.keys.some((key) => {
-          const currentVenueCount = globalVenueUsage[venueId]?.[key] || 0;
-          return currentVenueCount >= venueCap;
-        });
-        if (venueConflict) continue;
-      }
       const facultyConflict = facultyIds.some((facultyId) => {
         if (!facultyId) return false;
         return block.keys.some((key) => globalFacultyUsage[facultyId]?.has(key));
@@ -773,14 +674,6 @@ const buildGeneratedSection = (
         }
         block.keys.forEach((key) => globalFacultyUsage[facultyId].add(key));
       });
-      if (venueId) {
-        if (!globalVenueUsage[venueId]) {
-          globalVenueUsage[venueId] = {};
-        }
-        block.keys.forEach((key) => {
-          globalVenueUsage[venueId][key] = (globalVenueUsage[venueId][key] || 0) + 1;
-        });
-      }
       if (!subjectDayUsage[subjectKey]) {
         subjectDayUsage[subjectKey] = new Set();
       }
@@ -803,7 +696,6 @@ const buildGeneratedSection = (
 
     const subjectKey = getSubjectKey(subject);
     const sClassType = normalizeClassType(subject?.class_type, subject).toUpperCase();
-    const venueRule = getSubjectVenueRule(subject);
 
     // Check if a Class Type Exception rule exists for this subject's class_type
     const exceptionRule = classTypeExceptions.find(
@@ -816,7 +708,7 @@ const buildGeneratedSection = (
 
       // 1. Schedule Paired Block Periods (2 consecutive slots per pair)
       for (let p = 1; p <= pairedCount; p++) {
-        const blockResult = reserveBlockPair(facultyIds, subjectKey, venueRule);
+        const blockResult = reserveBlockPair(facultyIds, subjectKey);
         if (!blockResult) {
           warnings.push(`No 2-period block available in the template for ${getSubjectLabel(subject)} (Paired Block ${p}).`);
           continue;
@@ -832,14 +724,14 @@ const buildGeneratedSection = (
             subject: buildCellText(subject, 'theory', `Block Pair ${p}`),
             faculty: buildFacultyText(subject),
             kind: 'theory',
-            note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Block Pair${venueRule ? ` [Venue: ${venueRule.venueName}]` : ''}`,
+            note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Block Pair`,
           };
         });
       }
 
       // 2. Schedule Individual Single Periods
       for (let i = 1; i <= individualCount; i++) {
-        const reserveResult = reserveSlot(facultyIds, subjectKey, venueRule);
+        const reserveResult = reserveSlot(facultyIds, subjectKey);
         if (!reserveResult) {
           warnings.push(`No single slot available in the template for ${getSubjectLabel(subject)} (Individual ${i}).`);
           continue;
@@ -854,7 +746,7 @@ const buildGeneratedSection = (
           subject: buildCellText(subject, 'theory', `Single ${i}`),
           faculty: buildFacultyText(subject),
           kind: 'theory',
-          note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Single Period${venueRule ? ` [Venue: ${venueRule.venueName}]` : ''}`,
+          note: (conflict ? '⚠️ Conflict! ' : '') + `Exception (${sClassType}) - Single Period`,
         };
       }
     } else {
@@ -862,7 +754,7 @@ const buildGeneratedSection = (
       const slotPlan = getRequiredSlotPlan(subject, creditAllocations);
 
       for (const entry of slotPlan) {
-        const reserveResult = reserveSlot(facultyIds, subjectKey, venueRule);
+        const reserveResult = reserveSlot(facultyIds, subjectKey);
         if (!reserveResult) {
           warnings.push(`No unoccupied slot available in the template for ${getSubjectLabel(subject)} (${entry.label}).`);
           continue;
@@ -879,7 +771,7 @@ const buildGeneratedSection = (
           subject: buildCellText(subject, entry.kind, entry.label),
           faculty: buildFacultyText(subject),
           kind: 'theory',
-          note: (conflict ? '⚠️ Conflict! ' : '') + `Credit (${credits}C) Allocation${venueRule ? ` [Venue: ${venueRule.venueName}]` : ''}`,
+          note: (conflict ? '⚠️ Conflict! ' : '') + `Credit (${credits}C) Allocation`,
         };
       }
     }
@@ -961,7 +853,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
   const [showTeachingAssign, setShowTeachingAssign] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showCreditModal, setShowCreditModal] = useState(false);
-  const [showVenueModal, setShowVenueModal] = useState(false);
   const [sectionSnapshots, setSectionSnapshots] = useState<Record<string, SectionSnapshot>>({});
   const [generatedSections, setGeneratedSections] = useState<GeneratedSectionTimetable[]>([]);
   
@@ -1254,10 +1145,9 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
         }
 
         const globalFacultyUsage: Record<string, Set<string>> = {};
-        const globalVenueUsage: Record<string, Record<string, number>> = {};
         const generationSeed = Date.now();
 
-        // Load saved Group Allocations, Credit Allocations, and Venue Exceptions
+        // Load saved Group Allocations and Credit Allocations
         let groupAllocations: GroupAllocation[] = [];
         try {
           const storedAllocations = localStorage.getItem('iqac_timetable_group_allocations');
@@ -1291,29 +1181,16 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           console.error('Failed to load class type exceptions during generation:', e);
         }
 
-        let venueRules: VenueExceptionRule[] = [];
-        try {
-          const storedVenues = localStorage.getItem(VENUE_EXCEPTIONS_STORAGE_KEY);
-          if (storedVenues) {
-            const parsed = JSON.parse(storedVenues);
-            if (Array.isArray(parsed)) venueRules = parsed;
-          }
-        } catch (e) {
-          console.error('Failed to load venue exceptions during generation:', e);
-        }
-
         const results = workingSnapshots.map((snapshot, index) =>
           buildGeneratedSection(
             snapshot,
             selectedTemplate,
             globalFacultyUsage,
-            globalVenueUsage,
             generationSeed,
             index,
             groupAllocations,
             creditAllocations,
-            classTypeExceptions,
-            venueRules
+            classTypeExceptions
           )
         );
 
@@ -1381,12 +1258,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
               className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
             >
               🎯 Credit Allocations
-            </button>
-            <button 
-              onClick={() => setShowVenueModal(true)}
-              className="bg-sky-600 text-white px-4 py-2 rounded-lg hover:bg-sky-700 transition-colors text-sm font-semibold shadow-xs flex items-center gap-1.5"
-            >
-              🏛️ Venue Exceptions
             </button>
             <button
               onClick={() => {
@@ -1475,13 +1346,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                 className="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
               >
                 🎯 Credit Allocations
-              </button>
-
-              <button 
-                onClick={() => setShowVenueModal(true)}
-                className="bg-sky-600 text-white px-6 py-2 rounded-lg hover:bg-sky-700 transition-colors font-semibold shadow-sm flex items-center gap-2"
-              >
-                🏛️ Venue Exceptions
               </button>
 
               {showTeachingAssign && (
@@ -1621,33 +1485,13 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
                   </h3>
                 </div>
                 
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => setShowGroupModal(true)}
-                    className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5"
-                  >
-                    🏢 Group Allocation
-                  </button>
-                  <button
-                    onClick={() => setShowCreditModal(true)}
-                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5"
-                  >
-                    🎯 Credit Allocations
-                  </button>
-                  <button
-                    onClick={() => setShowVenueModal(true)}
-                    className="bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5"
-                  >
-                    🏛️ Venue Exceptions
-                  </button>
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
-                    activeGenerated 
-                      ? 'bg-green-50 border-green-200 text-green-700' 
-                      : 'bg-amber-50 border-amber-200 text-amber-700'
-                  }`}>
-                    {activeGenerated ? '● Timetable Generated' : '○ Not Generated Yet'}
-                  </span>
-                </div>
+                <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
+                  activeGenerated 
+                    ? 'bg-green-50 border-green-200 text-green-700' 
+                    : 'bg-amber-50 border-amber-200 text-amber-700'
+                }`}>
+                  {activeGenerated ? '● Timetable Generated' : '○ Not Generated Yet'}
+                </span>
               </div>
 
               {activeGenerated && activeGenerated.warnings.length > 0 && (
@@ -1776,10 +1620,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
           isOpen={showCreditModal}
           onClose={() => setShowCreditModal(false)}
         />
-        <VenueAllocationModal
-          isOpen={showVenueModal}
-          onClose={() => setShowVenueModal(false)}
-        />
       </div>
     );
   }
@@ -1832,12 +1672,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
           >
             🎯 Credit Allocations
-          </button>
-          <button 
-            onClick={() => setShowVenueModal(true)}
-            className="bg-sky-600 hover:bg-sky-700 text-white px-5 py-2.5 rounded-lg font-bold shadow-md transition-colors flex items-center gap-2"
-          >
-            🏛️ Venue Exceptions
           </button>
         </div>
       </div>
@@ -1927,11 +1761,6 @@ export default function TimetableGenerator({ templates }: TimetableGeneratorProp
       <CreditBasedAllocationModal
         isOpen={showCreditModal}
         onClose={() => setShowCreditModal(false)}
-      />
-
-      <VenueAllocationModal
-        isOpen={showVenueModal}
-        onClose={() => setShowVenueModal(false)}
       />
     </div>
   );

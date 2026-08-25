@@ -6,7 +6,6 @@
  * Students with combined total < 58% of 60 (= 34.8) are flagged as "CQI NOT ATTAINED".
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import * as XLSX from 'xlsx';
 import fetchWithAuth from '../services/fetchAuth';
 import { ensureMobileVerified } from '../services/auth';
 import { createEditRequest, fetchPublishedLabSheet, formatApiErrorMessage, formatEditRequestSentMessage } from '../services/obe';
@@ -15,7 +14,6 @@ import { useCqiEditRequestsEnabled } from '../utils/requestControl';
 import { useEditWindow } from '../hooks/useEditWindow';
 import { useMarkTableLock } from '../hooks/useMarkTableLock';
 import { useEditRequestPending } from '../hooks/useEditRequestPending';
-import { exportCqiPdf } from '../utils/cqiExportPdf';
 
 // ──────────────────────────────────────────────────────────────────────
 //  Constants
@@ -192,7 +190,6 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
   const [publishedAt, setPublishedAt] = useState<string | null>(null);
   const [saving, setSaving]           = useState(false);
   const [publishing, setPublishing]   = useState(false);
-  const [resettingMarks, setResettingMarks] = useState(false);
   const [statusMsg, setStatusMsg]     = useState<string | null>(null);
 
   // Edit-request modal
@@ -319,59 +316,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
     });
   }, [roster, cycle1Sheet, cycle2Sheet, cycle3Sheet, cqiEntries]);
 
-  const [showDownloadModal, setShowDownloadModal] = useState(false);
-
-  // ── Export handlers ───────────────────────────────────────────────
-  const flaggedRows = useMemo(() => rows.filter((r) => r.needsCqi), [rows]);
-
-  const handleExportExcel = () => {
-    const code = String(subjectId || 'CQI_Lab').replace(/[^A-Za-z0-9_-]/g, '_');
-    const wsData: (string | number)[][] = [
-      ['S.No', 'Reg No.', 'Student Name', 'Section', 'Combined (/60)', 'CQI Mark (/10)', 'After CQI (/60)'],
-      ...flaggedRows.map((r, idx) => {
-        const cqiMark = cqiEntries[String(r.student.id)];
-        return [
-          idx + 1,
-          r.student.reg_no,
-          r.student.name,
-          r.student.section || '',
-          r.combined ?? '',
-          cqiMark !== undefined && cqiMark !== '' ? Number(cqiMark) : '',
-          r.afterCqi ?? '',
-        ];
-      }),
-    ];
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    XLSX.utils.book_append_sheet(wb, ws, 'CQI Marks');
-    XLSX.writeFile(wb, `CQI_Lab_${code}.xlsx`);
-    setShowDownloadModal(false);
-  };
-
-  const bbbbbbbbbbbbhandleExportPdf = () => {
-    const code = String(subjectId || 'CQI_Lab').trim();
-    const pdfRows = flaggedRows.map((r) => {
-      const cqiMark = cqiEntries[String(r.student.id)];
-      const cqiStr = cqiMark !== undefined && cqiMark !== '' ? `${cqiMark}/10` : '—';
-      return {
-        regNo: r.student.reg_no,
-        name: r.student.name,
-        section: r.student.section ?? null,
-        flaggedCos: [`CQI Mark: ${cqiStr}`, `After CQI: ${r.afterCqi ?? '—'}/60`],
-        total: r.combined != null ? `${r.combined}/60` : null,
-      };
-    });
-    exportCqiPdf({
-      subjectCode: code,
-      coNumbers: [],
-      rows: pdfRows,
-      title: `CQI Lab Report — ${code}`,
-      filename: `CQI_Lab_${code}.pdf`,
-    });
-    setShowDownloadModal(false);
-  };
-
-  // ── Save draft ────────────────────────────────────────────────────────────
+  // ── Save draft ────────────────────────────────────────────────────────
   async function saveDraft() {
     if (!subjectId || teachingAssignmentId == null) return;
     setSaving(true);
@@ -379,8 +324,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
     try {
       const entries: Record<string, any> = {};
       for (const [sid, val] of Object.entries(cqiEntries)) {
-        const mark = typeof val === 'number' ? val : null;
-        entries[sid] = { cqiMark: mark, co1: mark };
+        entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
         `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
@@ -415,8 +359,7 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
       await saveDraft();
       const entries: Record<string, any> = {};
       for (const [sid, val] of Object.entries(cqiEntries)) {
-        const mark = typeof val === 'number' ? val : null;
-        entries[sid] = { cqiMark: mark, co1: mark };
+        entries[sid] = { cqiMark: typeof val === 'number' ? val : null };
       }
       const res = await fetchWithAuth(
         `/api/obe/cqi-publish/${encodeURIComponent(subjectId)}`,
@@ -634,10 +577,6 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
               <th rowSpan={2} style={hStyle}>CQI Status</th>
               <th rowSpan={2} style={hStyle}>CQI Marks<br /><span style={{ fontWeight: 400, fontSize: 10 }}>(intervention)</span></th>
               <th rowSpan={2} style={hStyle}>After CQI<br /><span style={{ fontWeight: 400, fontSize: 10 }}>/60</span></th>
-              <th rowSpan={2} style={{ ...hStyle, backgroundColor: '#ecfeff', color: '#0f766e', minWidth: 140 }}>
-                GRAND TOTAL<br />
-                <span style={{ fontWeight: 600, fontSize: 10, color: '#0e7490' }}>(AFTER CQI) /{PURE_LAB_TOTAL_MAX}</span>
-              </th>
             </tr>
             {/* Sub-header row for Cycle 1 & Cycle 2 breakdown */}
             <tr>
@@ -727,40 +666,12 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
                   <td style={{ ...cellStyle, fontWeight: 700 }}>
                     {r.afterCqi != null ? r.afterCqi : '—'}
                   </td>
-                  <td style={{ ...cellStyle, padding: '6px 8px' }}>
-                    {r.afterCqi != null && r.combined != null ? (() => {
-                      const afterPct = (r.afterCqi / PURE_LAB_TOTAL_MAX) * 100;
-                      const beforePct = (r.combined / PURE_LAB_TOTAL_MAX) * 100;
-                      const deltaMark = round2(r.afterCqi - r.combined);
-                      const deltaPct = round2(afterPct - beforePct);
-                      const isBelow = afterPct < PURE_LAB_THRESHOLD_PCT;
-                      return (
-                        <div style={{ backgroundColor: isBelow ? '#fff1f2' : '#ecfdf5', padding: 6, borderRadius: 6 }}>
-                          <div style={{ color: isBelow ? '#ef4444' : '#047857', fontSize: 14, fontWeight: 800 }}>
-                            {round2(r.afterCqi)} / {PURE_LAB_TOTAL_MAX}
-                          </div>
-                          <div style={{ fontSize: 12, color: isBelow ? '#ef4444' : '#0f766e', fontWeight: 700, marginTop: 2 }}>
-                            {round2(afterPct)}%
-                          </div>
-                          {deltaMark > 0 ? (
-                            <div style={{ fontSize: 10, color: '#16a34a', marginTop: 2, fontWeight: 600 }}>
-                              +{deltaMark} (+{deltaPct}%)
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>—</div>
-                          )}
-                        </div>
-                      );
-                    })() : (
-                      <span style={{ color: '#94a3b8' }}>—</span>
-                    )}
-                  </td>
                 </tr>
               );
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={15} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
+                <td colSpan={14} style={{ ...cellStyle, color: '#94a3b8', textAlign: 'center', padding: 24 }}>
                   No student data available. Ensure Cycle 1, Cycle 2, and Cycle 3 are published first.
                 </td>
               </tr>
@@ -799,89 +710,6 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
           </button>
         </div>
       )}
-
-      {/* Reset Marks — always visible */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <button
-          type="button"
-          onClick={() => setShowDownloadModal(true)}
-          style={{
-            padding: '8px 18px', borderRadius: 6, border: '1px solid #0284c7',
-            background: '#f0f9ff', color: '#0284c7', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-          }}
-        >
-          Download CQI Marks
-        </button>
-      </div>
-
-      {/* Reset Marks — always visible */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <button
-          onClick={async () => {
-            if (!subjectId || teachingAssignmentId == null) return;
-            const confirmMsg = isPublished
-              ? 'Reset & Unpublish CQI marks? This will clear published data and unlock this page.'
-              : 'Reset CQI marks for all students? This clears the saved draft.';
-            if (!window.confirm(confirmMsg)) return;
-            setResettingMarks(true);
-            setStatusMsg(null);
-            try {
-              if (isPublished) {
-                const res = await fetchWithAuth(
-                  `/api/obe/cqi-reset-page/${encodeURIComponent(subjectId)}`,
-                  {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      teaching_assignment_id: teachingAssignmentId,
-                      assessment_type: 'model',
-                      page_key: 'pure_lab_cqi',
-                      co_numbers: [1],
-                    }),
-                  },
-                );
-                if (!res.ok) throw new Error(`Reset failed (${res.status})`);
-                setCqiEntries({});
-                setPublishedAt(null);
-                setSavedAt(null);
-                setPublishConsumedApprovals(null);
-                refreshLock();
-                refreshMarkEntryEditWindow({ silent: true });
-                setStatusMsg('CQI reset & unpublished successfully.');
-              } else {
-                setCqiEntries({});
-                const res = await fetchWithAuth(
-                  `/api/obe/cqi-draft/${encodeURIComponent(subjectId)}?teaching_assignment_id=${teachingAssignmentId}`,
-                  {
-                    method: 'PUT',
-                    body: JSON.stringify({
-                      teaching_assignment_id: teachingAssignmentId,
-                      assessment_type: 'model',
-                      page_key: 'pure_lab_cqi',
-                      co_numbers: [1],
-                      entries: {},
-                    }),
-                  },
-                );
-                if (!res.ok) throw new Error(`Reset draft failed (${res.status})`);
-                setSavedAt(null);
-                setStatusMsg('CQI draft reset.');
-              }
-            } catch (e: any) {
-              setStatusMsg(`Error: ${e?.message || 'Reset failed'}`);
-            } finally {
-              setResettingMarks(false);
-            }
-          }}
-          disabled={resettingMarks || saving || publishing}
-          style={{
-            padding: '8px 18px', borderRadius: 6, border: 'none',
-            background: resettingMarks ? '#94a3b8' : '#dc2626', color: '#fff',
-            fontWeight: 700, fontSize: 13, cursor: 'pointer',
-          }}
-        >
-          {resettingMarks ? 'Resetting…' : isPublished ? 'Reset & Unpublish' : 'Reset Marks'}
-        </button>
-      </div>
 
       {/* Status message */}
       {statusMsg && (
@@ -949,67 +777,6 @@ export default function PureLabCQIEntry({ subjectId, teachingAssignmentId }: Pro
                 {editReasonBusy ? 'Submitting…' : 'Submit Request'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Download CQI Marks Modal ── */}
-      {showDownloadModal && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 1000,
-            background: 'rgba(15,23,42,0.45)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}
-          onClick={() => setShowDownloadModal(false)}
-        >
-          <div
-            style={{
-              background: '#fff', borderRadius: 16, padding: 32, width: 400,
-              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
-              Download CQI Marks
-            </h3>
-            <p style={{ margin: '0 0 20px', fontSize: 13, color: '#64748b' }}>
-              Exports {flaggedRows.length} flagged student(s) with CQI NOT ATTAINED.
-            </p>
-            <div style={{ display: 'flex', gap: 12 }}>
-              {([
-                { fmt: 'pdf',   icon: '📄', label: 'PDF',   color: '#dc2626' },
-                { fmt: 'excel', icon: '📊', label: 'Excel', color: '#16a34a' },
-              ] as const).map(({ fmt, icon, label, color }) => (
-                <button
-                  key={fmt}
-                  type="button"
-                  onClick={fmt === 'pdf' ? handleExportPdf : handleExportExcel}
-                  style={{
-                    flex: 1, padding: '18px 8px', borderRadius: 12,
-                    border: `2px solid ${color}20`, background: `${color}08`,
-                    cursor: 'pointer', display: 'flex', flexDirection: 'column',
-                    alignItems: 'center', gap: 8,
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = `${color}15`)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = `${color}08`)}
-                >
-                  <span style={{ fontSize: 28 }}>{icon}</span>
-                  <span style={{ fontWeight: 700, fontSize: 14, color }}>{label}</span>
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowDownloadModal(false)}
-              style={{
-                marginTop: 16, width: '100%', padding: '10px 0', borderRadius: 8,
-                border: '1px solid #e2e8f0', background: 'transparent', cursor: 'pointer',
-                color: '#64748b', fontWeight: 600, fontSize: 14,
-              }}
-            >
-              Cancel
-            </button>
           </div>
         </div>
       )}

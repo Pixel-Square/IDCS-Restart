@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { fetchIQACCourseTeachingMap, IQACTeachingMapRow } from '../../services/academics';
+import { fetchDeptRows, DeptRow } from '../../services/curriculum';
 import {
   fetchTeachingAssignmentEnabledAssessmentsInfo,
   iqacResetAssessment,
   setTeachingAssignmentEnabledAssessmentsInfo,
-  IqacResetAssessmentKey,
+  DraftAssessmentKey,
 } from '../../services/obe';
 import { clearLocalDraftCache } from '../../utils/obeDraftCache';
 import { normalizeClassType } from '../../constants/classTypes';
@@ -82,6 +83,7 @@ export default function AcademicControllerCoursePage(): JSX.Element {
 
   const code = useMemo(() => decodeURIComponent(String(courseCode || '')).trim(), [courseCode]);
   const [rows, setRows] = useState<IQACTeachingMapRow[]>([]);
+  const [deptRows, setDeptRows] = useState<DeptRow[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,9 +92,10 @@ export default function AcademicControllerCoursePage(): JSX.Element {
     (async () => {
       if (!code) return;
       try {
-        const r = await fetchIQACCourseTeachingMap(code);
+        const [r, drows] = await Promise.all([fetchIQACCourseTeachingMap(code), fetchDeptRows()]);
         if (!mounted) return;
         setRows(Array.isArray(r) ? r : []);
+        setDeptRows(Array.isArray(drows) ? drows : []);
         setError(null);
       } catch (e: any) {
         if (!mounted) return;
@@ -142,7 +145,7 @@ export default function AcademicControllerCoursePage(): JSX.Element {
     if (!teachingAssignmentId) return;
     const ok = window.confirm('Resetting this course will delete all entered exam data for this teaching assignment. This cannot be undone. Proceed?');
     if (!ok) return;
-    const assessments: IqacResetAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model', 'cqi'];
+    const assessments: DraftAssessmentKey[] = ['ssa1', 'review1', 'ssa2', 'review2', 'cia1', 'cia2', 'formative1', 'formative2', 'model'];
     try {
       // sequentially reset each assessment; ignore errors for individual ones but surface at end
       for (const a of assessments) {
@@ -212,8 +215,10 @@ export default function AcademicControllerCoursePage(): JSX.Element {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10 }}>
-                {g.items.map((r) => {
-                    const itemClassType = normalizeClassType((r as any)?.class_type || '');
+                {g.items.map((r) => (
+                  (() => {
+                    const dept = (deptRows || []).find((d) => String(d?.course_code || '').trim().toUpperCase() === code.toUpperCase());
+                    const itemClassType = normalizeClassType((r as any)?.class_type || dept?.class_type || '');
                     return (
                   <div
                     key={String(r.teaching_assignment_id)}
@@ -223,8 +228,7 @@ export default function AcademicControllerCoursePage(): JSX.Element {
                       <div style={{ fontSize: 12, color: '#6b7280' }}>
                         {r.section_name ? `Section: ${r.section_name}` : ''}
                         {r.academic_year ? `  •  AY: ${r.academic_year}` : ''}
-                        {r.department ? `  •  Dept: ${r.department.name || r.department.code || ''}` : ''}
-                        {r.semester ? `  •  Sem: ${r.semester}` : ''}
+                        {dept ? `  •  Dept: ${dept.department?.name || dept.department?.code || ''}  •  Sem: ${dept.semester || '—'}` : ''}
                       </div>
                     <div style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <button
@@ -246,7 +250,8 @@ export default function AcademicControllerCoursePage(): JSX.Element {
                     {itemClassType === 'LAB' ? <LabModelToggleButton teachingAssignmentId={Number(r.teaching_assignment_id)} /> : null}
                   </div>
                     );
-                  })}
+                  })()
+                ))}
               </div>
             </div>
           ))}

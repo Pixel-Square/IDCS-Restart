@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { ModalPortal } from '../../../components/ModalPortal'
 import {
+  PBASAudience,
+  PBASFormField,
+  PBASFormFieldType,
   PBASNode,
   StaffMember,
   fetchStaffList,
@@ -18,11 +21,16 @@ function generateId(): string {
   return 'node_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now().toString(36)
 }
 
+function generateFieldId(): string {
+  return 'field_' + Math.random().toString(36).substring(2, 9)
+}
+
 function draftToPayload(n: PBASNode): any {
   return {
     label: n.label,
     audience: n.audience || 'both',
     input_mode: n.input_mode || 'upload',
+    form_schema: n.form_schema || [],
     pbas_credit: n.pbas_credit != null ? Number(n.pbas_credit) : null,
     link: n.link ? n.link : null,
     uploaded_name: n.uploaded_name ? n.uploaded_name : null,
@@ -45,6 +53,7 @@ export default function PBASAdminPage() {
   const [modalTitle, setModalTitle] = useState('')
   const [targetParentId, setTargetParentId] = useState<string | null>(null) // null = top-level Group
   const [inputTitle, setInputTitle] = useState('')
+  const [inputAudience, setInputAudience] = useState<PBASAudience>('both')
   const [errorMsg, setErrorMsg] = useState('')
 
   // Modal State for Approver Authorization ("Auth" button)
@@ -59,6 +68,13 @@ export default function PBASAdminPage() {
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([])
   const [authSaving, setAuthSaving] = useState(false)
   const [authMsg, setAuthMsg] = useState('')
+
+  // Modal State for Google Forms-like Dynamic Form Builder ("Form" button)
+  const [isFormModalOpen, setIsFormModalOpen] = useState(false)
+  const [formTargetNodeId, setFormTargetNodeId] = useState<string>('')
+  const [formTargetLabel, setFormTargetLabel] = useState<string>('')
+  const [editingFields, setEditingFields] = useState<PBASFormField[]>([])
+  const [formMsg, setFormMsg] = useState('')
 
   // Load master tree from Database on mount
   const loadMasterTree = async () => {
@@ -110,6 +126,7 @@ export default function PBASAdminPage() {
     setTargetParentId(null)
     setModalTitle('Create New Group')
     setInputTitle('')
+    setInputAudience('both')
     setErrorMsg('')
     setIsModalOpen(true)
   }
@@ -119,6 +136,7 @@ export default function PBASAdminPage() {
     setTargetParentId(parentId)
     setModalTitle(`Create Subgroup under "${parentLabel}"`)
     setInputTitle('')
+    setInputAudience('both')
     setErrorMsg('')
     setIsModalOpen(true)
   }
@@ -134,8 +152,9 @@ export default function PBASAdminPage() {
     const newNode: PBASNode = {
       id: generateId(),
       label: title,
-      audience: 'both',
+      audience: inputAudience || 'both',
       input_mode: 'upload',
+      form_schema: [],
       pbas_credit: 10,
       children: [],
     }
@@ -179,8 +198,11 @@ export default function PBASAdminPage() {
 
     try {
       // Load current approvers for node
-      const currentApprovers = await getNodeApprovers(nodeId)
-      setSelectedUserIds(currentApprovers.map((a) => a.id))
+      const currentApproversRes = await getNodeApprovers(nodeId)
+      const list = Array.isArray(currentApproversRes)
+        ? currentApproversRes
+        : currentApproversRes.approvers || []
+      setSelectedUserIds(list.map((a: any) => a.id))
 
       // Load departments for filter
       const depts = await listCustomDepartments('faculty')
@@ -246,6 +268,93 @@ export default function PBASAdminPage() {
     }
   }
 
+  // Open Form Builder Modal for a leaf node
+  const handleOpenFormModal = (node: PBASNode) => {
+    setFormTargetNodeId(node.id)
+    setFormTargetLabel(node.label)
+    setEditingFields(node.form_schema ? JSON.parse(JSON.stringify(node.form_schema)) : [])
+    setFormMsg('')
+    setIsFormModalOpen(true)
+  }
+
+  // Form Builder handlers
+  const handleAddField = (type: PBASFormFieldType = 'short_text') => {
+    const defaultLabels: Record<PBASFormFieldType, string> = {
+      short_text: 'Short Answer Question',
+      long_text: 'Detailed Description / Paragraph',
+      dropdown: 'Select Option Dropdown',
+      checkboxes: 'Select Applicable Options',
+      file_upload: 'Upload Evidence File / Document',
+    }
+
+    const newField: PBASFormField = {
+      id: generateFieldId(),
+      label: defaultLabels[type] || 'Untitled Question',
+      field_type: type,
+      required: true,
+      options: type === 'dropdown' || type === 'checkboxes' ? ['Option 1', 'Option 2'] : undefined,
+      placeholder: '',
+    }
+    setEditingFields((prev) => [...prev, newField])
+  }
+
+  const handleUpdateField = (fieldId: string, updates: Partial<PBASFormField>) => {
+    setEditingFields((prev) =>
+      prev.map((f) => (f.id === fieldId ? { ...f, ...updates } : f))
+    )
+  }
+
+  const handleDeleteField = (fieldId: string) => {
+    setEditingFields((prev) => prev.filter((f) => f.id !== fieldId))
+  }
+
+  const handleAddOption = (fieldId: string) => {
+    setEditingFields((prev) =>
+      prev.map((f) => {
+        if (f.id === fieldId) {
+          const opts = f.options || []
+          return { ...f, options: [...opts, `Option ${opts.length + 1}`] }
+        }
+        return f
+      })
+    )
+  }
+
+  const handleUpdateOption = (fieldId: string, optIndex: number, val: string) => {
+    setEditingFields((prev) =>
+      prev.map((f) => {
+        if (f.id === fieldId) {
+          const opts = [...(f.options || [])]
+          opts[optIndex] = val
+          return { ...f, options: opts }
+        }
+        return f
+      })
+    )
+  }
+
+  const handleDeleteOption = (fieldId: string, optIndex: number) => {
+    setEditingFields((prev) =>
+      prev.map((f) => {
+        if (f.id === fieldId) {
+          const opts = (f.options || []).filter((_, idx) => idx !== optIndex)
+          return { ...f, options: opts }
+        }
+        return f
+      })
+    )
+  }
+
+  const handleSaveFormSchema = async () => {
+    if (!formTargetNodeId) return
+    handleNodeChange(formTargetNodeId, { form_schema: editingFields })
+    setFormMsg('Form template saved successfully ✓')
+    setTimeout(() => {
+      setIsFormModalOpen(false)
+      setFormMsg('')
+    }, 1000)
+  }
+
   // Update specific node property
   const handleNodeChange = (nodeId: string, updates: Partial<PBASNode>) => {
     const updateRecursively = (nodes: PBASNode[]): PBASNode[] => {
@@ -292,9 +401,9 @@ export default function PBASAdminPage() {
               </span>
             )}
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 mt-2">PBAS Admin - Tree Structure Manager</h1>
+          <h1 className="text-2xl font-bold text-slate-900 mt-2">PBAS Admin - Tree & Form Manager</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Build and manage hierarchical PBAS categories, subgroup trees, approvers, node types, and credit allocations.
+            Build hierarchical PBAS groups, set audience visibility (Staff/Student/Both), authorize approvers, and build dynamic forms for leaf submissions.
           </p>
         </div>
 
@@ -320,7 +429,7 @@ export default function PBASAdminPage() {
 
       {/* Tree Visualization Container */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200/80 space-y-4">
-        <div className="flex items-center justify-between border-b pb-4">
+        <div className="flex items-center justify-between border-b pb-4 flex-wrap gap-2">
           <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
             <svg className="w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -328,7 +437,7 @@ export default function PBASAdminPage() {
             Group Tree Hierarchy ({tree.length} Root Groups)
           </h2>
           <span className="text-xs text-slate-400">
-            Click "Auth" on parent nodes to authorize faculty approvers • Leaf nodes contain Type & Credit controls.
+            Click "Auth" for approvers • Click "Form" on leaf nodes to build custom Google Forms-like questionnaires.
           </span>
         </div>
 
@@ -353,6 +462,7 @@ export default function PBASAdminPage() {
                 depth={0}
                 onAddSubgroup={handleOpenCreateSubgroupModal}
                 onOpenAuth={handleOpenAuthModal}
+                onOpenForm={handleOpenFormModal}
                 onChangeNode={handleNodeChange}
                 onDeleteNode={handleDeleteNode}
               />
@@ -361,13 +471,13 @@ export default function PBASAdminPage() {
         )}
       </div>
 
-      {/* Modal Popup for Group / Subgroup creation */}
+      {/* MODAL POPUP FOR CREATING GROUP / SUBGROUP */}
       {isModalOpen && (
         <ModalPortal>
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
             <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-md overflow-hidden transform transition-all">
               <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
-                <h3 className="text-base font-semibold">{modalTitle}</h3>
+                <h3 className="text-base font-bold">{modalTitle}</h3>
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
@@ -395,6 +505,19 @@ export default function PBASAdminPage() {
                     className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                     autoFocus
                   />
+                </label>
+
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Target Audience</span>
+                  <select
+                    value={inputAudience}
+                    onChange={(e) => setInputAudience(e.target.value as PBASAudience)}
+                    className="w-full px-4 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all bg-white font-medium"
+                  >
+                    <option value="both">Both (Staff & Students)</option>
+                    <option value="faculty">Staff Only</option>
+                    <option value="student">Students Only</option>
+                  </select>
                 </label>
               </div>
 
@@ -479,104 +602,74 @@ export default function PBASAdminPage() {
                   <div className="relative flex-1">
                     <input
                       type="text"
-                      placeholder="Search faculty name or staff ID…"
+                      placeholder="Search faculty name, staff ID, username…"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2 text-xs border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      className="w-full px-3.5 py-2 text-xs border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"
                     />
-                    <svg
-                      className="w-4 h-4 text-slate-400 absolute left-3 top-2.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
+                    {searchTerm && (
+                      <button
+                        onClick={() => setSearchTerm('')}
+                        className="absolute right-2.5 top-2.5 text-xs text-slate-400 hover:text-slate-600"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                {/* Selected Approvers Badges */}
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    Assigned Approvers ({selectedUserIds.length})
-                  </div>
-                  {selectedUserIds.length === 0 ? (
-                    <div className="text-xs text-slate-400 italic">No approvers assigned yet. Select from list below.</div>
-                  ) : (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {selectedUserIds.map((id) => {
-                        const m = staffList.find((s) => s.user_id === id)
-                        const label = m ? m.name : `User #${id}`
-                        return (
-                          <span
-                            key={id}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-semibold"
-                          >
-                            <span>{label}</span>
-                            <button
-                              type="button"
-                              onClick={() => toggleUserSelection(id)}
-                              className="text-indigo-500 hover:text-indigo-900 font-bold"
-                            >
-                              ✕
-                            </button>
-                          </span>
-                        )
-                      })}
-                    </div>
-                  )}
+                {/* Selected count info banner */}
+                <div className="flex items-center justify-between text-xs px-3 py-2 bg-indigo-50/70 border border-indigo-100 rounded-xl text-indigo-900">
+                  <span className="font-semibold">Selected Approvers:</span>
+                  <span className="font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full text-[11px]">
+                    {selectedUserIds.length} Selected
+                  </span>
                 </div>
 
-                {/* Faculty Multi-select list */}
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                    Select Faculty / Staff Approvers
-                  </div>
-
+                {/* Faculty Checklist */}
+                <div className="border border-slate-200 rounded-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
                   {staffLoading ? (
-                    <div className="py-8 text-center text-xs text-slate-400 font-medium">Searching faculty database…</div>
+                    <div className="p-8 text-center text-xs text-slate-500 font-medium">Loading faculty list…</div>
                   ) : staffList.length === 0 ? (
-                    <div className="py-8 text-center text-xs text-slate-400 font-medium">No faculty members found.</div>
+                    <div className="p-8 text-center text-xs text-slate-400">No faculty members found.</div>
                   ) : (
-                    <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 border border-slate-200 rounded-xl p-2 bg-white">
-                      {staffList.map((staff) => {
-                        const isSelected = selectedUserIds.includes(staff.user_id)
-                        return (
-                          <div
-                            key={staff.user_id}
-                            onClick={() => toggleUserSelection(staff.user_id)}
-                            className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-all ${
-                              isSelected
-                                ? 'bg-indigo-50/80 border-indigo-300 text-indigo-950 font-semibold'
-                                : 'bg-white border-slate-200/80 hover:bg-slate-50 text-slate-800'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {}} // Handled by parent div onClick
-                                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300"
-                              />
-                              <div>
-                                <div className="text-xs font-semibold leading-tight">{staff.name}</div>
-                                <div className="text-[11px] text-slate-400 font-normal">
-                                  ID: {staff.staff_id} • {staff.department_name}
-                                </div>
-                              </div>
+                    staffList.map((s) => {
+                      const isSelected = selectedUserIds.includes(s.user_id)
+                      return (
+                        <label
+                          key={s.user_id}
+                          className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-slate-50 transition-colors ${
+                            isSelected ? 'bg-indigo-50/40' : ''
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleUserSelection(s.user_id)}
+                            className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                          />
+                          {s.profile_image ? (
+                            <img
+                              src={s.profile_image}
+                              alt={s.name}
+                              className="w-8 h-8 rounded-full object-cover border shrink-0"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0">
+                              {s.name.charAt(0).toUpperCase()}
                             </div>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500">
-                              @{staff.username}
-                            </span>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-xs text-slate-800 truncate">{s.name}</div>
+                            <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                              <span>ID: {s.staff_id}</span>
+                              <span>•</span>
+                              <span>{s.department_name}</span>
+                            </div>
                           </div>
-                        )
-                      })}
-                    </div>
+                        </label>
+                      )
+                    })
                   )}
                 </div>
               </div>
@@ -603,6 +696,251 @@ export default function PBASAdminPage() {
           </div>
         </ModalPortal>
       )}
+
+      {/* GOOGLE FORMS-LIKE DYNAMIC FORM BUILDER MODAL ("Form" Button) */}
+      {isFormModalOpen && (
+        <ModalPortal>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
+              {/* Modal Header */}
+              <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <span className="w-8 h-8 rounded-xl bg-indigo-500/30 text-indigo-300 flex items-center justify-center font-bold text-base">
+                    📋
+                  </span>
+                  <div>
+                    <span className="text-[11px] font-bold text-indigo-400 uppercase tracking-wider">
+                      Form Builder • Google Forms Interface
+                    </span>
+                    <h3 className="text-base font-bold text-white truncate max-w-lg" title={formTargetLabel}>
+                      {formTargetLabel}
+                    </h3>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsFormModalOpen(false)}
+                  className="text-slate-400 hover:text-white transition-colors text-lg"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Modal Body: Google Forms Form Designer */}
+              <div className="p-6 space-y-5 overflow-y-auto flex-1 bg-slate-50/60">
+                {formMsg && (
+                  <div className="p-3 text-xs font-semibold rounded-xl border bg-emerald-50 text-emerald-700 border-emerald-200">
+                    {formMsg}
+                  </div>
+                )}
+
+                {/* Form Title Card */}
+                <div className="bg-white p-5 rounded-2xl border-t-8 border-indigo-600 shadow-sm space-y-2">
+                  <h4 className="text-lg font-bold text-slate-800">{formTargetLabel}</h4>
+                  <p className="text-xs text-slate-500">
+                    Configure question fields, input types, and required validations for faculty / students submitting this activity.
+                  </p>
+                </div>
+
+                {/* Question List */}
+                <div className="space-y-4">
+                  {editingFields.map((field, fIdx) => (
+                    <div
+                      key={field.id}
+                      className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-sm space-y-4 hover:border-indigo-300 transition-all"
+                    >
+                      {/* Top row: Question Label Input & Type Selector */}
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                        <div className="flex-1 w-full">
+                          <input
+                            type="text"
+                            value={field.label}
+                            onChange={(e) => handleUpdateField(field.id, { label: e.target.value })}
+                            placeholder={`Question ${fIdx + 1} Title`}
+                            className="w-full px-3.5 py-2 text-sm font-semibold border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                          />
+                        </div>
+
+                        {/* Type Dropdown */}
+                        <div className="shrink-0 w-full sm:w-auto">
+                          <select
+                            value={field.field_type}
+                            onChange={(e) => {
+                              const nextType = e.target.value as PBASFormFieldType
+                              const hasOpts = nextType === 'dropdown' || nextType === 'checkboxes'
+                              handleUpdateField(field.id, {
+                                field_type: nextType,
+                                options: hasOpts ? (field.options?.length ? field.options : ['Option 1', 'Option 2']) : undefined,
+                              })
+                            }}
+                            className="w-full sm:w-48 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            <option value="short_text">📝 Short Text</option>
+                            <option value="long_text">📄 Long Text / Paragraph</option>
+                            <option value="dropdown">🔽 Dropdown</option>
+                            <option value="checkboxes">☑️ Checkboxes</option>
+                            <option value="file_upload">📎 File Upload</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Field Type Specific Body / Options */}
+                      <div className="pt-1">
+                        {field.field_type === 'short_text' && (
+                          <div className="border-b border-dashed border-slate-300 pb-2 text-xs text-slate-400 italic">
+                            Short text input box will be shown to the user.
+                          </div>
+                        )}
+
+                        {field.field_type === 'long_text' && (
+                          <div className="border border-dashed border-slate-300 rounded-xl p-3 text-xs text-slate-400 italic">
+                            Multi-line textarea will be shown to the user.
+                          </div>
+                        )}
+
+                        {field.field_type === 'file_upload' && (
+                          <div className="border-2 border-dashed border-indigo-200 bg-indigo-50/40 rounded-xl p-4 text-center text-xs text-indigo-700 font-medium flex items-center justify-center gap-2">
+                            <span>📎 File upload component (PDF, PNG, JPG up to 10MB)</span>
+                          </div>
+                        )}
+
+                        {(field.field_type === 'dropdown' || field.field_type === 'checkboxes') && (
+                          <div className="space-y-2 pl-2">
+                            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                              Options:
+                            </span>
+                            {(field.options || []).map((opt, optIdx) => (
+                              <div key={optIdx} className="flex items-center gap-2">
+                                <span className="text-slate-400 text-xs">
+                                  {field.field_type === 'checkboxes' ? '☑' : '●'}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={opt}
+                                  onChange={(e) => handleUpdateOption(field.id, optIdx, e.target.value)}
+                                  placeholder={`Option ${optIdx + 1}`}
+                                  className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-lg outline-none focus:border-indigo-500"
+                                />
+                                {(field.options?.length || 0) > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteOption(field.id, optIdx)}
+                                    className="text-slate-400 hover:text-red-600 p-1 text-xs"
+                                    title="Delete option"
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => handleAddOption(field.id)}
+                              className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 mt-1 pl-4"
+                            >
+                              <span>+ Add option</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bottom row: Required Toggle & Delete Field */}
+                      <div className="flex items-center justify-end gap-4 border-t border-slate-100 pt-3">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <span className="text-xs font-semibold text-slate-600">Required</span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(field.required)}
+                            onChange={(e) => handleUpdateField(field.id, { required: e.target.checked })}
+                            className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                          />
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteField(field.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors text-xs font-medium flex items-center gap-1"
+                          title="Delete question"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          <span>Remove</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Add Question Menu (+ Buttons like Google Forms) */}
+                  <div className="bg-white p-4 rounded-2xl border-2 border-dashed border-indigo-200 flex flex-wrap items-center justify-center gap-2.5">
+                    <span className="text-xs font-bold text-slate-600 uppercase tracking-wider mr-2">
+                      + Add Question:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleAddField('short_text')}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold border border-indigo-200 transition-all active:scale-95"
+                    >
+                      + Short Text
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddField('long_text')}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold border border-indigo-200 transition-all active:scale-95"
+                    >
+                      + Long Text
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddField('dropdown')}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold border border-indigo-200 transition-all active:scale-95"
+                    >
+                      + Dropdown
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddField('checkboxes')}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs font-bold border border-indigo-200 transition-all active:scale-95"
+                    >
+                      + Checkboxes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddField('file_upload')}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold border border-emerald-200 transition-all active:scale-95"
+                    >
+                      + File Upload
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between shrink-0">
+                <span className="text-xs text-slate-500 font-medium">
+                  {editingFields.length} Form field{editingFields.length === 1 ? '' : 's'} defined
+                </span>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsFormModalOpen(false)}
+                    className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium hover:bg-slate-100 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveFormSchema}
+                    className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-md shadow-indigo-500/20 transition-all active:scale-95"
+                  >
+                    Save Form
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
     </div>
   )
 }
@@ -613,6 +951,7 @@ interface TreeNodeItemProps {
   depth: number
   onAddSubgroup: (parentId: string, parentLabel: string) => void
   onOpenAuth: (nodeId: string, nodeLabel: string) => void
+  onOpenForm: (node: PBASNode) => void
   onChangeNode: (nodeId: string, updates: Partial<PBASNode>) => void
   onDeleteNode: (nodeId: string) => void
 }
@@ -622,6 +961,7 @@ function TreeNodeItem({
   depth,
   onAddSubgroup,
   onOpenAuth,
+  onOpenForm,
   onChangeNode,
   onDeleteNode,
 }: TreeNodeItemProps) {
@@ -641,6 +981,8 @@ function TreeNodeItem({
     }
     setEditingTitle(false)
   }
+
+  const formFieldsCount = node.form_schema?.length || 0
 
   return (
     <div
@@ -714,6 +1056,18 @@ function TreeNodeItem({
           >
             {isLeafNode ? 'Leaf Node' : 'Parent Group'}
           </span>
+
+          {/* Audience Selector */}
+          <select
+            value={node.audience || 'both'}
+            onChange={(e) => onChangeNode(node.id, { audience: e.target.value as PBASAudience })}
+            className="text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 rounded-md px-2 py-0.5 outline-none focus:ring-1 focus:ring-indigo-500"
+            title="Target Audience"
+          >
+            <option value="both">View: Both</option>
+            <option value="faculty">View: Staff</option>
+            <option value="student">View: Student</option>
+          </select>
         </div>
 
         {/* Right Section: Node Controls */}
@@ -740,21 +1094,29 @@ function TreeNodeItem({
             <span>Subgroup</span>
           </button>
 
-          {/* Leaf Node Type & Credit Controls */}
+          {/* Leaf Node Form Builder Button & Credit Controls */}
           {isLeafNode && (
             <div className="flex items-center gap-2 bg-slate-100/80 p-1 rounded-xl border border-slate-200">
-              <div className="flex items-center gap-1">
-                <span className="text-[11px] font-medium text-slate-500 pl-1">Type:</span>
-                <select
-                  value={node.input_mode || 'upload'}
-                  onChange={(e) => onChangeNode(node.id, { input_mode: e.target.value as any })}
-                  className="text-xs font-semibold bg-white text-slate-800 border border-slate-300 rounded-lg px-2 py-1 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="upload">Upload</option>
-                  <option value="link">Link</option>
-                </select>
-              </div>
+              {/* Form Button */}
+              <button
+                type="button"
+                onClick={() => onOpenForm(node)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all active:scale-95 border ${
+                  formFieldsCount > 0
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                }`}
+                title="Configure Google Forms-like fields for this leaf node"
+              >
+                <span>📋 Form</span>
+                {formFieldsCount > 0 && (
+                  <span className="bg-amber-400 text-slate-900 px-1.5 py-0.2 rounded-full text-[10px] font-black">
+                    {formFieldsCount}
+                  </span>
+                )}
+              </button>
 
+              {/* PBAS Credit input */}
               <div className="flex items-center gap-1 border-l border-slate-300 pl-2">
                 <span className="text-[11px] font-medium text-slate-500">Credit:</span>
                 <input
@@ -794,6 +1156,7 @@ function TreeNodeItem({
               depth={depth + 1}
               onAddSubgroup={onAddSubgroup}
               onOpenAuth={onOpenAuth}
+              onOpenForm={onOpenForm}
               onChangeNode={onChangeNode}
               onDeleteNode={onDeleteNode}
             />

@@ -12,19 +12,26 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='CourseQuestionBankLog',
-            fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('action', models.CharField(choices=[('created', 'Created'), ('updated', 'Updated'), ('finalized', 'Finalized'), ('unfinalezed', 'Unfinalized')], max_length=20)),
-                ('old_values', models.JSONField(blank=True, default=dict)),
-                ('new_values', models.JSONField(blank=True, default=dict)),
-                ('edited_at', models.DateTimeField(auto_now_add=True)),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.CreateModel(
+                    name='CourseQuestionBankLog',
+                    fields=[
+                        ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                        ('action', models.CharField(choices=[('created', 'Created'), ('updated', 'Updated'), ('finalized', 'Finalized'), ('unfinalezed', 'Unfinalized')], max_length=20)),
+                        ('old_values', models.JSONField(blank=True, default=dict)),
+                        ('new_values', models.JSONField(blank=True, default=dict)),
+                        ('edited_at', models.DateTimeField(auto_now_add=True)),
+                        ('edited_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='question_bank_logs', to='academics.staffprofile')),
+                        ('question_bank', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='logs', to='OBE.coursequestionbank')),
+                    ],
+                    options={
+                        'db_table': 'obe_course_question_bank_log',
+                        'ordering': ('-edited_at',),
+                    },
+                ),
             ],
-            options={
-                'db_table': 'obe_course_question_bank_log',
-                'ordering': ('-edited_at',),
-            },
         ),
         migrations.RenameIndex(
             model_name='coursequestionbank',
@@ -40,16 +47,6 @@ class Migration(migrations.Migration):
             model_name='coursequestionbank',
             name='question_type',
             field=models.CharField(choices=[('D', 'Descriptive'), ('O', 'Objective')], default='D', help_text='D=Descriptive, O=Objective', max_length=1),
-        ),
-        migrations.AddField(
-            model_name='coursequestionbanklog',
-            name='edited_by',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='question_bank_logs', to='academics.staffprofile'),
-        ),
-        migrations.AddField(
-            model_name='coursequestionbanklog',
-            name='question_bank',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='logs', to='OBE.coursequestionbank'),
         ),
         migrations.AddIndex(
             model_name='coursequestionbanklog',

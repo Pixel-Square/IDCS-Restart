@@ -5,10 +5,9 @@ interface Props {
   fields: FormField[];
   values: Record<string, any>;
   onChange: (values: Record<string, any>) => void;
-  className?: string;
 }
 
-export default function DynamicFormRenderer({ fields, values, onChange, className }: Props) {
+export default function DynamicFormRenderer({ fields, values, onChange }: Props) {
   const handleChange = (fieldName: string, value: any) => {
     onChange({ ...values, [fieldName]: value });
   };
@@ -42,7 +41,7 @@ export default function DynamicFormRenderer({ fields, values, onChange, classNam
 
       case 'textarea':
         return (
-          <div key={field.name} className="mb-4 md:col-span-2">
+          <div key={field.name} className="mb-4">
             <label htmlFor={field.name} className={labelClasses}>
               {field.label}
               {field.required && <span className="text-red-600 ml-1">*</span>}
@@ -235,7 +234,7 @@ export default function DynamicFormRenderer({ fields, values, onChange, classNam
   };
 
   return (
-    <div className={className}>
+    <div>
       {fields.map((field) => renderField(field))}
     </div>
   );

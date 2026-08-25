@@ -2,7 +2,6 @@ export const CLASS_TYPES = [
   { value: 'THEORY', label: 'Theory' },
   { value: 'THEORY_PMBL', label: 'Theory (PMBL)' },
   { value: 'LAB', label: 'Lab' },
-  { value: 'LAB_2', label: 'Lab 2' },
   { value: 'PURE_LAB', label: 'Pure Lab' },
   { value: 'TCPL', label: 'Tcpl' },
   { value: 'TCPR', label: 'Tcpr' },
@@ -10,20 +9,13 @@ export const CLASS_TYPES = [
   { value: 'PRBL', label: 'PRBL' },
   { value: 'PROJECT', label: 'Project' },
   { value: 'AUDIT', label: 'Audit' },
-  { value: 'SPECIAL', label: 'Special' },
-  { value: 'ENGLISH', label: 'English' },
-  { value: 'TAMIL', label: 'Tamil' },
-  { value: 'FOREIGN_LANG', label: 'Foreign Language' },
+  { value: 'SPECIAL', label: 'Special' }
 ] as const;
 
 export const QP_TYPES = [
   { value: 'QP1', label: 'QP1' },
   { value: 'QP2', label: 'QP2' },
-  { value: 'ASPR', label: 'ASPR' },
-  { value: 'ELECTIVE1', label: 'Elective 1' },
-  { value: 'TAM_THEORY', label: 'Tamil Theory' },
-  { value: 'FLC_QP', label: 'Foreign Language Course QP' },
-  { value: 'LAB_PC', label: 'Lab PC' },
+  { value: 'ASPR', label: 'ASPR' }
 ] as const;
 
 export type ClassType = (typeof CLASS_TYPES)[number]['value'] | string;
@@ -40,17 +32,13 @@ export function normalizeObeClassType(raw?: string | null): string {
   if (!compact) return '';
   if (compact.includes('TCPR')) return 'TCPR';
   if (compact.includes('TCPL')) return 'TCPL';
-  if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY') || compact === 'TH') return 'THEORY';
+  if (compact === 'THEORYPMBL' || compact === 'THEORY' || compact.startsWith('THEORY')) return 'THEORY';
   if (compact === 'PRBL' || compact === 'PROJECT' || compact.includes('PROJECT')) return 'PROJECT';
-  if (compact === 'LAB2') return 'LAB2';
   if (compact === 'PURELAB') return 'PURE_LAB';
   if (compact === 'LAB' || compact === 'L' || compact.startsWith('LAB')) return 'LAB';
-  if (compact === 'PRACTICAL' || compact.startsWith('PRACT') || compact === 'PR') return 'PRACTICAL';
+  if (compact === 'PRACTICAL' || compact.startsWith('PRACT')) return 'PRACTICAL';
   if (compact === 'AUDIT') return 'AUDIT';
   if (compact === 'SPECIAL') return 'SPECIAL';
-  if (compact === 'ENGLISH') return 'ENGLISH';
-  if (compact === 'TAMIL') return 'TAMIL';
-  if (compact === 'FOREIGNLANG' || compact === 'FOREIGN_LANG' || compact === 'FOREIGNLANGUAGE') return 'FOREIGN_LANG';
 
   return normalized;
 }
@@ -67,27 +55,6 @@ export function isLabClassType(raw?: string | null): boolean {
 
 export function isSpecialClassType(raw?: string | null): boolean {
   return normalizeObeClassType(raw) === 'SPECIAL';
-}
-
-export function isEnglishClassType(raw?: string | null): boolean {
-  return normalizeObeClassType(raw) === 'ENGLISH';
-}
-
-export function isForeignLangClassType(raw?: string | null): boolean {
-  return normalizeObeClassType(raw) === 'FOREIGN_LANG';
-}
-
-export function isEnglishOrForeignLangClassType(raw?: string | null): boolean {
-  const t = normalizeObeClassType(raw);
-  return t === 'ENGLISH' || t === 'FOREIGN_LANG';
-}
-
-export function isTamilClassType(raw?: string | null): boolean {
-  return normalizeObeClassType(raw) === 'TAMIL';
-}
-
-export function isLab2ClassType(raw?: string | null): boolean {
-  return normalizeObeClassType(raw) === 'LAB2';
 }
 
 export default CLASS_TYPES;
