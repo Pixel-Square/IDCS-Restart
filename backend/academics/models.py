@@ -797,6 +797,8 @@ class StaffProfile(models.Model):
         unique=True,
         db_index=True,
         editable=False,
+        null=True,
+        blank=True,
         help_text='Auto-generated 6-digit numeric unique ID.',
     )
     staff_id = models.CharField(

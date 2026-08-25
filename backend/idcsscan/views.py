@@ -4051,6 +4051,52 @@ class BioSecureStudentLogsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class BioSecureDeviceModeView(APIView):
+    """
+    GET, POST /api/idscan/biosecure/device/mode/
+
+    Allows web browser and ESP32 hardware to coordinate:
+    1. Default state: ATTENDANCE (Live input scan)
+    2. When admin clicks 'Connect / Enroll' on Web UI: Mode changes to ENROLL with target slot and user details.
+    3. ESP32 on boot checks this endpoint. If enrollment is requested, it executes enrollment immediately,
+       then automatically releases back to ATTENDANCE mode.
+    """
+    from rest_framework.permissions import AllowAny
+    permission_classes = [AllowAny]
+
+    # In-memory device session queue
+    DEVICE_STATE = {
+        "mode": "ATTENDANCE", # "ATTENDANCE" or "ENROLL"
+        "target_slot": None,
+        "user_id": None,
+        "reg_no": None,
+        "finger": "Right Index",
+        "timestamp": 0
+    }
+
+    def get(self, request):
+        return Response(self.DEVICE_STATE, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        mode = request.data.get("mode", "ATTENDANCE").upper()
+        if mode == "ENROLL":
+            slot = request.data.get("slot") or request.data.get("slot_id")
+            self.DEVICE_STATE["mode"] = "ENROLL"
+            self.DEVICE_STATE["target_slot"] = int(slot) if slot else None
+            self.DEVICE_STATE["user_id"] = request.data.get("user_id")
+            self.DEVICE_STATE["reg_no"] = request.data.get("reg_no")
+            self.DEVICE_STATE["finger"] = request.data.get("finger", "Right Index")
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+        else:
+            self.DEVICE_STATE["mode"] = "ATTENDANCE"
+            self.DEVICE_STATE["target_slot"] = None
+            self.DEVICE_STATE["user_id"] = None
+            self.DEVICE_STATE["reg_no"] = None
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+
+        return Response({"status": "OK", "state": self.DEVICE_STATE}, status=status.HTTP_200_OK)
+
+
 class BioSecureAdminLogsView(APIView):
     """
     GET /api/idscan/biosecure/admin/logs/?date=YYYY-MM-DD&page=1&page_size=25&search=...&user_type=...&status=...&group_id=...&department=...
