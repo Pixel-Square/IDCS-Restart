@@ -157,6 +157,7 @@ const AcV2LCAWorkflowPage = safeLazy(() => import('./pages/Academic 2.1/faculty/
 const AcV2StudentDashboardPage = safeLazy(() => import('./pages/Academic 2.1/students/DashboardPage'), 'StudentDashboardPage');
 const AcV2StudentCourseListPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseListPage'), 'StudentCourseListPage');
 const AcV2StudentCourseDetailPage = safeLazy(() => import('./pages/Academic 2.1/students/CourseDetailPage'), 'StudentCourseDetailPage');
+const AcademicPerformancePage = safeLazy(() => import('./pages/Academic 2.1/AcademicPerformancePage'), 'AcademicPerformancePage');
 
 type RoleObj = { name: string };
 type Me = {
@@ -445,6 +446,7 @@ export default function App() {
                 <Route path="/obe/master/requests" element={<ProtectedRoute user={user} requiredPermissions={["obe.master_obe_requests"]} element={<OBERequestsPage />} />} />
                 <Route path="/obe/master/due-dates" element={<ProtectedRoute user={user} requiredPermissions={["obe.master.manage"]} element={<OBEDueDatesPage />} />} />
                 <Route path="/academic" element={<AcademicPage />} />
+                <Route path="/academic-performance" element={<AcademicPerformancePage />} />
 
                 <Route
                   path="/hod/advisors"

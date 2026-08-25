@@ -47,7 +47,7 @@ function getDeviceName(port: any): string {
    Supports: SecuGen WebAPI · Mantra MFS100 · Demo (simulated)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-type ScannerType = 'auto' | 'secugen' | 'mantra' | 'demo';
+type ScannerType = 'auto' | 'secugen' | 'mantra' | 'demo' | 'wifi_esp32';
 type ResolvedScannerType = Exclude<ScannerType, 'auto'>;
 
 interface CaptureResult {
@@ -59,13 +59,14 @@ const SCANNER_DEFAULTS: Record<ResolvedScannerType, string> = {
   secugen: 'https://localhost:8443',
   mantra: 'https://127.0.0.1:11100',
   demo: '',
+  wifi_esp32: '',
 };
 
-const SCANNER_LABELS: Record<ScannerType, string> = {
-  auto: 'Auto-detect',
-  secugen: 'SecuGen WebAPI',
-  mantra: 'Mantra MFS100',
-  demo: 'Demo (Simulated)',
+const SCANNER_LABELS: Record<ResolvedScannerType, string> = {
+  secugen: 'SecuGen WebAPI (Hamster Pro / FDU04)',
+  mantra: 'Mantra MFS100 RD Service',
+  demo: 'Demo Mode (Simulated Data)',
+  wifi_esp32: 'ESP32 BioSecure (College Wi-Fi)',
 };
 
 async function captureFromScanner(
@@ -595,6 +596,62 @@ export default function FingerprintEnrollPage() {
               )}
               Select USB Port
             </button>
+
+            {/* Wi-Fi ESP32 Network Enrollment Sync Trigger */}
+            <button
+              onClick={async () => {
+                try {
+                  setDeviceConnecting(true);
+                  const isEnrolling = scannerDetectedType === 'wifi_esp32';
+                  const nextMode = isEnrolling ? 'ATTENDANCE' : 'ENROLL';
+                  const res = await fetch(`${apiBase}/api/idscan/biosecure/device/mode/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      mode: nextMode,
+                      user_id: userInfo?.user_id || null,
+                      reg_no: userInfo?.identifier || null,
+                      finger: 'Right Index'
+                    })
+                  });
+                  if (res.ok) {
+                    if (nextMode === 'ENROLL') {
+                      setScannerDetectedType('wifi_esp32' as any);
+                      setScannerOnline(true);
+                      setMessage({ type: 'success', text: 'ESP32 is now in Enrollment Mode! Place student finger on sensor.' });
+                    } else {
+                      setScannerDetectedType(null);
+                      setScannerOnline(null);
+                      setMessage({ type: 'info', text: 'ESP32 returned to Live Attendance Input Mode.' });
+                    }
+                  }
+                } catch (e: any) {
+                  setMessage({ type: 'error', text: 'Failed to toggle ESP32 mode: ' + e.message });
+                } finally {
+                  setDeviceConnecting(false);
+                }
+              }}
+              disabled={deviceConnecting}
+              className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition ${
+                scannerDetectedType === 'wifi_esp32'
+                  ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+              }`}
+            >
+              {deviceConnecting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Fingerprint className="w-4 h-4" />
+              )}
+              {scannerDetectedType === 'wifi_esp32' ? 'Stop ESP32 Enrollment' : 'Connect Wi-Fi ESP32'}
+            </button>
+
+            {scannerDetectedType === 'wifi_esp32' && (
+              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-2 text-xs font-bold text-emerald-800 animate-pulse">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                ESP32 Priority Enrollment Active (College Wi-Fi)
+              </div>
+            )}
 
             {usbPort && (
               <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-2">
