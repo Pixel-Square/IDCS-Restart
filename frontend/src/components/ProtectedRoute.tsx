@@ -21,6 +21,10 @@ export default function ProtectedRoute({ user, element, requiredRoles, requiredP
 
   let allowed = false
 
+  if (user.is_superuser) {
+    allowed = true;
+  }
+
   if(requiredProfile){
     if(requiredProfile === 'STUDENT' && profile === 'STUDENT') allowed = true
     if(requiredProfile === 'STAFF' && profile === 'STAFF') allowed = true

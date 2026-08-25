@@ -190,6 +190,7 @@ def resolve_dashboard_capabilities(user) -> Dict:
         'username': str(getattr(user, 'username', '') or ''),
         'email': str(getattr(user, 'email', '') or ''),
         'is_iqac_main': bool(is_iqac_main),
+        'is_superuser': bool(getattr(user, 'is_superuser', False)),
         'profile_type': profile_type,
         'roles': role_names,
         'permissions': perm_codes,

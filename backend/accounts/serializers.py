@@ -160,6 +160,7 @@ class MeSerializer(serializers.Serializer):
     profileEdited = serializers.SerializerMethodField()
     pbas_credit = serializers.SerializerMethodField()
     under_construction = serializers.SerializerMethodField()
+    is_superuser = serializers.BooleanField(read_only=True)
 
     @staticmethod
     def _safe_related_profile(obj, attr_name):
