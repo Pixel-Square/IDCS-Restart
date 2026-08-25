@@ -509,7 +509,6 @@ class AcademicPerformanceAnalyticsView(APIView):
                 fail_count = total_filtered_students
 
             # Attendance Calculation using DailyAttendanceRecord
-            from academics.models import DailyAttendanceRecord
             att_qs = DailyAttendanceRecord.objects.filter(student_id__in=student_ids)
             total_att_records = att_qs.count()
             if total_att_records > 0:
@@ -630,7 +629,6 @@ class AcademicPerformanceAnalyticsView(APIView):
         # Attendance (same source as the internal pipeline)
         overall_attendance = 0.0
         if student_ids:
-            from academics.models import DailyAttendanceRecord
             att_qs = DailyAttendanceRecord.objects.filter(student_id__in=student_ids)
             total_att = att_qs.count()
             if total_att > 0:
@@ -654,7 +652,6 @@ class AcademicPerformanceAnalyticsView(APIView):
             d_ids = list(d_student_qs.values_list('id', flat=True))
             d_att_pct = None
             if d_ids:
-                from academics.models import DailyAttendanceRecord
                 d_att = DailyAttendanceRecord.objects.filter(student_id__in=d_ids)
                 d_att_total = d_att.count()
                 if d_att_total > 0:
