@@ -8,21 +8,12 @@ from rest_framework import status, permissions
 
 from academics.models import (
     Department, AcademicYear, Semester, Section, Subject, StudentProfile,
-    StaffProfile, StudentMentorMap, SectionAdvisor, TeachingAssignment
+    StaffProfile, StudentMentorMap, SectionAdvisor, TeachingAssignment,
+    DailyAttendanceRecord
 )
 from OBE.models import Cia1Mark, Cia2Mark, ModelExamMark
 from accounts.models import User, Role, UserRole
 from .academic_visuals_views import load_dashboards_store, get_performance_level
-
-def get_dynamic_semester(batch_name):
-    if not batch_name:
-        return "5"
-    batch_str = str(batch_name).strip()
-    if "2023" in batch_str: return "7"
-    if "2024" in batch_str: return "5"
-    if "2025" in batch_str: return "3"
-    if "2026" in batch_str: return "1"
-    return "5"
 
 logger = logging.getLogger(__name__)
 
@@ -69,49 +60,24 @@ def resolve_user_auth_context(user):
             dept_code = staff.department.code or staff.department.short_name or str(staff.department.id)
             dept_name = staff.department.name
 
-        advised_dept = None
-        teaching_dept = None
-
         if staff:
-            for sa in SectionAdvisor.objects.filter(advisor=staff, is_active=True).select_related("section", "section__semester", "section__batch", "section__batch__course__department", "section__managing_department"):
+            for sa in SectionAdvisor.objects.filter(advisor=staff, is_active=True).select_related("section", "section__semester", "section__batch"):
                 sec = sa.section
                 if sec:
                     advised_sections.append({
                         "section_id": str(sec.id),
                         "section_name": sec.name,
-                        "semester": str(sec.semester.number) if sec.semester else get_dynamic_semester(sec.batch.name if sec.batch else None),
+                        "semester": str(sec.semester.number) if sec.semester else "5",
                         "batch": str(sec.batch.name) if (sec.batch and sec.batch.name) else "2023"
                     })
-                    d = sec.managing_department or (sec.batch.course.department if sec.batch and sec.batch.course else None)
-                    if d and not advised_dept:
-                        advised_dept = d
 
-            for ta in TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section", "section__semester", "section__batch", "section__batch__course__department", "section__managing_department"):
-                sec = ta.section
+            for ta in TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section"):
                 assigned_subjects.append({
                     "assignment_id": str(ta.id),
                     "subject_name": ta.subject.name if ta.subject else "Course",
                     "subject_code": ta.subject.code if ta.subject else "SUB",
-                    "section_name": sec.name if sec else "A",
-                    "semester": str(sec.semester.number) if (sec and sec.semester) else get_dynamic_semester(sec.batch.name if (sec and sec.batch) else None),
-                    "batch": str(sec.batch.name) if (sec and sec.batch and sec.batch.name) else "2023"
+                    "section_name": ta.section.name if ta.section else "A"
                 })
-                if sec and not teaching_dept:
-                    d = sec.managing_department or (sec.batch.course.department if sec.batch and sec.batch.course else None)
-                    if d:
-                        teaching_dept = d
-            
-            # Prioritize advised or teaching department over native department for advisors/faculty
-            if not is_principal and not is_hod:
-                if advised_dept:
-                    dept_id = str(advised_dept.id)
-                    dept_code = advised_dept.code or advised_dept.short_name or str(advised_dept.id)
-                    dept_name = advised_dept.name
-                elif teaching_dept:
-                    dept_id = str(teaching_dept.id)
-                    dept_code = teaching_dept.code or teaching_dept.short_name or str(teaching_dept.id)
-                    dept_name = teaching_dept.name
-
     except Exception as e:
         logger.exception("Error resolving staff context: %s", e)
 
@@ -153,43 +119,57 @@ def resolve_user_auth_context(user):
         "assigned_subjects": assigned_subjects
     }
 
+def active_student_cohort():
+    """
+    Active-student cohort definition consistent with the rest of the codebase
+    (see _get_active_students_for_teaching_assignment in academic_v2/views.py):
+    a student is "active" unless explicitly marked INACTIVE/DEBAR. Requiring
+    status == 'ACTIVE' exactly drops rows whose status is NULL or uses any
+    other label, which made the College KPI query return an empty queryset
+    (all KPIs 0 / attendance fallback) while faculty-wise data was fine.
+    """
+    return StudentProfile.objects.filter(
+        Q(status__isnull=True) | ~Q(status__in=["INACTIVE", "DEBAR"])
+    )
+
+
 def get_student_dept_q(dept_val):
     if not dept_val:
         return Q()
     dept_str = str(dept_val).strip()
-    q = Q(home_department__code__iexact=dept_str) | \
-        Q(home_department__short_name__iexact=dept_str) | \
-        Q(section__batch__course__department__code__iexact=dept_str) | \
-        Q(section__batch__course__department__short_name__iexact=dept_str) | \
-        Q(section__managing_department__code__iexact=dept_str) | \
-        Q(section__managing_department__short_name__iexact=dept_str)
-    
     if dept_str.isdigit():
         d_id = int(dept_str)
-        q = q | Q(home_department_id=d_id) | \
-                Q(section__batch__course__department_id=d_id) | \
-                Q(section__batch__department_id=d_id) | \
-                Q(section__managing_department_id=d_id)
-    return q
+        return (
+            Q(home_department_id=d_id) |
+            Q(section__batch__course__department_id=d_id) |
+            Q(section__batch__department_id=d_id) |
+            Q(section__managing_department_id=d_id)
+        )
+    return (
+        Q(home_department__code__iexact=dept_str) |
+        Q(home_department__short_name__iexact=dept_str) |
+        Q(section__batch__course__department__code__iexact=dept_str) |
+        Q(section__batch__course__department__short_name__iexact=dept_str)
+    )
 
 def get_mark_dept_q(dept_val):
     if not dept_val:
         return Q()
     dept_str = str(dept_val).strip()
-    q = Q(student__home_department__code__iexact=dept_str) | \
-        Q(student__home_department__short_name__iexact=dept_str) | \
-        Q(student__section__batch__course__department__code__iexact=dept_str) | \
-        Q(student__section__batch__course__department__short_name__iexact=dept_str) | \
-        Q(student__section__managing_department__code__iexact=dept_str) | \
-        Q(student__section__managing_department__short_name__iexact=dept_str)
-
     if dept_str.isdigit():
         d_id = int(dept_str)
-        q = q | Q(student__home_department_id=d_id) | \
-                Q(student__section__batch__course__department_id=d_id) | \
-                Q(student__section__batch__department_id=d_id) | \
-                Q(student__section__managing_department_id=d_id)
-    return q
+        return (
+            Q(student__home_department_id=d_id) |
+            Q(student__section__batch__course__department_id=d_id) |
+            Q(student__section__batch__department_id=d_id) |
+            Q(student__section__managing_department_id=d_id)
+        )
+    return (
+        Q(student__home_department__code__iexact=dept_str) |
+        Q(student__home_department__short_name__iexact=dept_str) |
+        Q(student__section__batch__course__department__code__iexact=dept_str) |
+        Q(student__section__batch__course__department__short_name__iexact=dept_str)
+    )
 
 
 class PublishedDashboardsListView(APIView):
@@ -212,7 +192,7 @@ class AcademicPerformanceAnalyticsView(APIView):
             auth_ctx = resolve_user_auth_context(request.user)
             params = request.query_params
 
-            req_batch = params.get("year", params.get("batch", "")).strip()
+            req_batch = params.get("batch", "").strip()
             req_dept = params.get("dept", "").strip()
             req_sem = params.get("sem", "").strip()
             req_sec = params.get("section", "").strip()
@@ -223,19 +203,83 @@ class AcademicPerformanceAnalyticsView(APIView):
             else:
                 effective_dept = req_dept
 
-            # Choose mark table and maximum score
-            if req_qp == "CIA 2":
-                marks_model = Cia2Mark
-                mark_field = "mark"
-                max_score = 50.0
-            elif req_qp == "Model Exam":
-                marks_model = ModelExamMark
-                mark_field = "total_mark"
-                max_score = 100.0
+            # Assessment registry: every real assessment entity in the database.
+            # Each entry: (display name, mark model, value field). The reference
+            # maximum is derived from the data itself (observed in-scope maximum),
+            # so no max score is hardcoded here.
+            from OBE.models import (
+                Ssa1Mark, Ssa2Mark, Review1Mark, Review2Mark,
+                Formative1Mark, Formative2Mark,
+            )
+            assessment_registry = [
+                ("CIA 1", Cia1Mark, "mark"),
+                ("CIA 2", Cia2Mark, "mark"),
+                ("SSA 1", Ssa1Mark, "mark"),
+                ("SSA 2", Ssa2Mark, "mark"),
+                ("Review 1", Review1Mark, "mark"),
+                ("Review 2", Review2Mark, "mark"),
+                ("Formative 1", Formative1Mark, "total"),
+                ("Formative 2", Formative2Mark, "total"),
+                ("Model Exam", ModelExamMark, "total_mark"),
+            ]
+            registry_by_name = {name: (M, f) for name, M, f in assessment_registry}
+
+            def _scoped_marks(M, field):
+                """Marks queryset for model M filtered strictly by current slicers."""
+                qs = M.objects.all()
+                if effective_dept:
+                    qs = qs.filter(get_mark_dept_q(effective_dept))
+                if req_batch:
+                    qs = qs.filter(Q(student__batch=req_batch) | Q(student__section__batch__name=req_batch))
+                if req_sec:
+                    qs = qs.filter(student__section__name__iexact=req_sec)
+                if req_sem:
+                    try:
+                        qs = qs.filter(student__section__semester__number=int(req_sem))
+                    except Exception:
+                        pass
+                return qs.exclude(**{"%s__isnull" % field: True})
+
+            # Context-aware list of assessments that actually have records in scope
+            available_assessments = [
+                name for name, M, field in assessment_registry
+                if _scoped_marks(M, field).exists()
+            ]
+
+            # Data-driven batches / semesters for the dropdowns
+            cohort_scope = active_student_cohort()
+            if effective_dept:
+                cohort_scope = cohort_scope.filter(get_student_dept_q(effective_dept))
+            batches_list = sorted(
+                b for b in cohort_scope.exclude(batch="").values_list("batch", flat=True).distinct()
+            )
+            sem_scope = cohort_scope.exclude(section__isnull=True).exclude(section__semester__isnull=True)
+            semesters_list = sorted(
+                {n for n in sem_scope.values_list("section__semester__number", flat=True) if n}
+            )
+            batch_semesters = {}
+            for b_val, s_val in sem_scope.exclude(batch="").values_list("batch", "section__semester__number").distinct():
+                if b_val and s_val:
+                    batch_semesters.setdefault(b_val, []).append(s_val)
+            for b_key in batch_semesters:
+                batch_semesters[b_key].sort()
+
+            selected_entry = registry_by_name.get(req_qp)
+            pooled_mode = selected_entry is None
+            if pooled_mode:
+                marks_model = None
+                mark_field = None
+                max_score = 0.0
             else:
-                marks_model = Cia1Mark
-                mark_field = "mark"
-                max_score = 50.0
+                marks_model, mark_field = selected_entry
+                scoped = _scoped_marks(marks_model, mark_field)
+                ref = scoped.aggregate(m=Max(mark_field))["m"]
+                max_score = float(ref) if ref and float(ref) > 0 else 50.0
+
+            # Semester Exam selection → real End Semester Examination (ESE) data from the
+            # COE final-result table. Sealed off from the internal-assessment pipeline above.
+            if req_qp in ("Semester", "Semester Exam"):
+                return self._semester_exam_analytics(params, auth_ctx, effective_dept)
 
             # Dynamic all departments from database
             all_depts_db = Department.objects.filter(is_teaching=True).order_by("name")
@@ -246,12 +290,12 @@ class AcademicPerformanceAnalyticsView(APIView):
 
             batches_list = ["2023", "2024", "2025"]
 
-            # Base Student QuerySet filtered strictly by all selected filters
-            student_qs = StudentProfile.objects.filter(status__iexact="ACTIVE").select_related("home_department", "section", "user")
+                        # Base Student QuerySet filtered strictly by all selected filters
+            student_qs = active_student_cohort().select_related("home_department", "section", "user")
             if effective_dept:
                 student_qs = student_qs.filter(get_student_dept_q(effective_dept))
             if req_batch:
-                student_qs = student_qs.filter(Q(batch=req_batch) | Q(section__batch__name=req_batch))
+                student_qs = student_qs.filter(batch=req_batch)
             if req_sec:
                 student_qs = student_qs.filter(section__name__iexact=req_sec)
             if req_sem:
@@ -261,35 +305,102 @@ class AcademicPerformanceAnalyticsView(APIView):
                 except Exception:
                     pass
 
+            # Dynamic Section options for the current scope (dept / batch / sem aware).
+            # Deliberately computed WITHOUT the section selection itself so the dropdown
+            # keeps showing every section that exists in the current dataset.
+            section_scope = active_student_cohort()
+            if effective_dept:
+                section_scope = section_scope.filter(get_student_dept_q(effective_dept))
+            if req_batch:
+                section_scope = section_scope.filter(Q(batch=req_batch) | Q(section__batch__name=req_batch))
+            if req_sem:
+                try:
+                    section_scope = section_scope.filter(section__semester__number=int(req_sem))
+                except Exception:
+                    pass
+            section_options = sorted(
+                name
+                for name in section_scope
+                .exclude(section__isnull=True)
+                .values_list("section__name", flat=True)
+                .distinct()
+            )
+
             total_filtered_students = student_qs.count()
 
             # Build Marks QuerySet filtered strictly by current slicers
-            marks_qs = marks_model.objects.all()
-            if effective_dept:
-                marks_qs = marks_qs.filter(get_mark_dept_q(effective_dept))
-            if req_batch:
-                marks_qs = marks_qs.filter(student__batch=req_batch)
-            if req_sec:
-                marks_qs = marks_qs.filter(student__section__name__iexact=req_sec)
-            if req_sem:
-                try:
-                    sem_num = int(req_sem)
-                    marks_qs = marks_qs.filter(student__section__semester__number=sem_num)
-                except Exception:
-                    pass
+            def _legacy_marks_qs():
+                qs = marks_model.objects.all()
+                if effective_dept:
+                    qs = qs.filter(get_mark_dept_q(effective_dept))
+                if req_batch:
+                    qs = qs.filter(student__batch=req_batch)
+                if req_sec:
+                    qs = qs.filter(student__section__name__iexact=req_sec)
+                if req_sem:
+                    try:
+                        qs = qs.filter(student__section__semester__number=int(req_sem))
+                    except Exception:
+                        pass
+                return qs
 
-            total_marks_records = marks_qs.count()
+            # Pooled cross-assessment statistics (used when no specific assessment is
+            # selected). Every mark is normalized against its OWN assessment's observed
+            # maximum in scope, so different scales (SSA /20, Review /30, CIA /50 ...)
+            # are combined honestly instead of being forced into one scale.
+            dept_stats = {}          # dept_id -> [record_count, sum_pct, pass_count]
+            student_pass_map = {}    # student_id -> True/False (passed ALL taken exams)
+            total_records_pooled = 0
+            sum_pct_pooled = 0.0
+            pass_count_pooled = 0
 
-            # Calculate exact live Overall Academic Average and Pass Rate % for current filter
-            if total_marks_records > 0:
-                avg_raw = marks_qs.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
-                overall_marks_pct = round((float(avg_raw) / max_score) * 100.0, 1)
-                pass_threshold = max_score * 0.50
-                passed_marks_count = marks_qs.filter(**{f"{mark_field}__gte": pass_threshold}).count()
-                overall_pass_pct = round((passed_marks_count / total_marks_records) * 100.0, 1)
+            if pooled_mode:
+                for _name, _M, _field in assessment_registry:
+                    qs = _scoped_marks(_M, _field)
+                    ref = qs.aggregate(m=Max(_field))["m"]
+                    if not ref or float(ref) <= 0:
+                        continue
+                    ref = float(ref)
+                    thresh = ref * 0.50
+                    for sid, did, val in qs.values_list("student_id", "student__home_department_id", _field):
+                        if val is None:
+                            continue
+                        pct = (float(val) / ref) * 100.0
+                        passed = pct >= 50.0
+                        total_records_pooled += 1
+                        sum_pct_pooled += pct
+                        if passed:
+                            pass_count_pooled += 1
+                        if did is not None:
+                            st = dept_stats.setdefault(did, [0, 0.0, 0])
+                            st[0] += 1
+                            st[1] += pct
+                            if passed:
+                                st[2] += 1
+                        prev = student_pass_map.get(sid)
+                        student_pass_map[sid] = passed if prev is None else (prev and passed)
+
+                total_marks_records = total_records_pooled
+                if total_records_pooled > 0:
+                    overall_marks_pct = round(sum_pct_pooled / total_records_pooled, 1)
+                    overall_pass_pct = round((pass_count_pooled / total_records_pooled) * 100.0, 1)
+                else:
+                    overall_marks_pct = 0.0
+                    overall_pass_pct = 0.0
             else:
-                overall_marks_pct = 0.0
-                overall_pass_pct = 0.0
+                marks_qs = _legacy_marks_qs()
+                total_marks_records = marks_qs.count()
+
+                # Calculate exact live Overall Academic Average and Pass Rate % for current filter
+                if total_marks_records > 0:
+                    avg_raw = marks_qs.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
+                    overall_marks_pct = round((float(avg_raw) / max_score) * 100.0, 1)
+                    pass_threshold = max_score * 0.50
+                    passed_marks_count = marks_qs.filter(**{f"{mark_field}__gte": pass_threshold}).count()
+                    overall_pass_pct = round((passed_marks_count / total_marks_records) * 100.0, 1)
+                else:
+                    overall_marks_pct = 0.0
+                    overall_pass_pct = 0.0
 
             # Department performance breakdown
             depts_to_evaluate = all_depts_db
@@ -297,36 +408,73 @@ class AcademicPerformanceAnalyticsView(APIView):
                 depts_to_evaluate = depts_to_evaluate.filter(Q(id=effective_dept if effective_dept.isdigit() else -1) | Q(code__iexact=effective_dept) | Q(short_name__iexact=effective_dept))
 
             dept_comparison = []
-            for d in depts_to_evaluate:
-                d_marks = marks_model.objects.filter(get_mark_dept_q(d.id))
-                if req_batch:
-                    d_marks = d_marks.filter(student__batch=req_batch)
-                if req_sec:
-                    d_marks = d_marks.filter(student__section__name__iexact=req_sec)
-                if req_sem:
-                    try:
-                        d_marks = d_marks.filter(student__section__semester__number=int(req_sem))
-                    except Exception:
-                        pass
+            if pooled_mode:
+                # Pooled mode: per-department stats come from the normalized pool
+                for d in depts_to_evaluate:
+                    st = dept_stats.get(d.id)
+                    if not st or st[0] == 0:
+                        continue
+                    d_cnt, d_sum, d_pass = st
+                    d_avg_pct = round(d_sum / d_cnt, 1)
+                    d_pass_pct = round((d_pass / d_cnt) * 100.0, 1)
 
-                d_cnt = d_marks.count()
-                if d_cnt > 0:
-                    d_avg = d_marks.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
-                    d_avg_pct = round((float(d_avg) / max_score) * 100.0, 1)
-                    d_passed = d_marks.filter(**{f"{mark_field}__gte": max_score * 0.50}).count()
-                    d_pass_pct = round((d_passed / d_cnt) * 100.0, 1)
+                    d_student_qs = student_qs.filter(get_student_dept_q(d.id))
+                    d_students = d_student_qs.count()
+
+                    d_att_pct = None
+                    d_att_qs = DailyAttendanceRecord.objects.filter(student__in=d_student_qs)
+                    d_att_total = d_att_qs.count()
+                    if d_att_total > 0:
+                        d_att_present = d_att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                        d_att_pct = round((d_att_present / d_att_total) * 100.0, 1)
+
                     dept_comparison.append({
                         "dept_code": d.short_name or d.code or d.name[:4],
                         "dept_name": d.name,
                         "pass_rate_pct": min(100.0, max(0.0, d_pass_pct)),
                         "avg_marks_pct": min(100.0, max(0.0, d_avg_pct)),
-                        "total_records": d_cnt
+                        "total_records": d_cnt,
+                        "total_students": d_students,
+                        "attendance_pct": d_att_pct
                     })
+            else:
+                for d in depts_to_evaluate:
+                    d_marks = _legacy_marks_qs().filter(get_mark_dept_q(d.id))
+
+                    d_cnt = d_marks.count()
+                    if d_cnt > 0:
+                        d_avg = d_marks.aggregate(Avg(mark_field))[f"{mark_field}__avg"] or 0
+                        d_avg_pct = round((float(d_avg) / max_score) * 100.0, 1)
+                        d_passed = d_marks.filter(**{f"{mark_field}__gte": max_score * 0.50}).count()
+                        d_pass_pct = round((d_passed / d_cnt) * 100.0, 1)
+
+                        # Real unique student count for this department from the active student cohort
+                        d_student_qs = student_qs.filter(get_student_dept_q(d.id))
+                        d_students = d_student_qs.count()
+
+                        # Per-department attendance from DailyAttendanceRecord
+                        d_att_pct = None
+                        d_att_qs = DailyAttendanceRecord.objects.filter(student__in=d_student_qs)
+                        d_att_total = d_att_qs.count()
+                        if d_att_total > 0:
+                            d_att_present = d_att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                            d_att_pct = round((d_att_present / d_att_total) * 100.0, 1)
+
+                        dept_comparison.append({
+                            "dept_code": d.short_name or d.code or d.name[:4],
+                            "dept_name": d.name,
+                            "pass_rate_pct": min(100.0, max(0.0, d_pass_pct)),
+                            "avg_marks_pct": min(100.0, max(0.0, d_avg_pct)),
+                            "total_records": d_cnt,
+                            "total_students": d_students,
+                            "attendance_pct": d_att_pct
+                        })
 
             # Calculate exact Students Needing Support (< 58% average) for current filter
+            # (single-assessment mode only; the college view does not render this list)
             weak_students = []
             students_needing_support_count = 0
-            for s in student_qs[:60]:
+            for s in ([] if pooled_mode else student_qs[:60]):
                 s_marks = marks_model.objects.filter(student=s)
                 cnt = s_marks.count()
                 if cnt > 0:
@@ -336,7 +484,7 @@ class AcademicPerformanceAnalyticsView(APIView):
                         students_needing_support_count += 1
                         if len(weak_students) < 50:
                             failed = s_marks.filter(**{f"{mark_field}__lt": max_score * 0.50}).count()
-                            sem_str = str(s.section.semester.number) if (s.section and s.section.semester) else get_dynamic_semester(s.batch or (s.section.batch.name if s.section and s.section.batch else None))
+                            sem_str = str(s.section.semester.number) if (s.section and s.section.semester) else "5"
                             dept_label = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
                             weak_students.append({
                                 "student_id": str(s.id),
@@ -381,7 +529,6 @@ class AcademicPerformanceAnalyticsView(APIView):
                 {"name": "CIA 1", "pass": c1_p, "fail": c1_c - c1_p, "total": c1_c, "pass_rate_pct": round((c1_p/c1_c)*100, 1)},
                 {"name": "CIA 2", "pass": c2_p, "fail": c2_c - c2_p, "total": c2_c, "pass_rate_pct": round((c2_p/c2_c)*100, 1)},
                 {"name": "Model Exam", "pass": md_p, "fail": md_c - md_p, "total": md_c, "pass_rate_pct": round((md_p/md_c)*100, 1)},
-                {"name": "Semester Exam", "pass": int(md_c * 0.92), "fail": int(md_c * 0.08), "total": md_c, "pass_rate_pct": 92.0},
             ]
 
             # 10-Mark Interval Range Distribution (0-10, 11-20, ..., 91-100)
@@ -400,6 +547,8 @@ class AcademicPerformanceAnalyticsView(APIView):
             ]
 
             tot_m = total_marks_records or 1
+            if pooled_mode:
+                intervals = []  # cross-assessment ranges are not scale-comparable
             for low_pct, high_pct, label in intervals:
                 low_val = max_score * (low_pct / 100.0)
                 high_val = max_score * (high_pct / 100.0)
@@ -415,7 +564,7 @@ class AcademicPerformanceAnalyticsView(APIView):
             # INDIVIDUAL STUDENTS PERFORMANCE TABLE WITH SUBJECT CELLS IN CLASS SELECTED
             class_students_perf = []
             distinct_subjects = []
-            if req_sec and effective_dept:
+            if req_sec and effective_dept and not pooled_mode:
                 # Get the matching student ID list
                 s_ids = list(student_qs.values_list('id', flat=True))
                 # Find all subjects actually taken by these students
@@ -452,15 +601,72 @@ class AcademicPerformanceAnalyticsView(APIView):
                             s_perf_row["marks"][str(sb.id)] = "-"
                     class_students_perf.append(s_perf_row)
 
+            # Calculate unique student pass / fail counts
+            student_ids = list(student_qs.values_list('id', flat=True))
+            if pooled_mode and total_records_pooled > 0:
+                pass_count = sum(1 for v in student_pass_map.values() if v)
+                fail_count = len(student_pass_map) - pass_count
+                untested = len(student_ids) - len(student_pass_map)
+                if untested > 0:
+                    fail_count += untested
+            elif student_ids and total_marks_records > 0:
+                pass_th = max_score * 0.50
+                # Students with at least one mark who passed ALL their taken exams
+                # Group by student
+                pass_count = 0
+                fail_count = 0
+                student_marks_map = {}
+                for m in marks_qs.values('student_id', mark_field):
+                    sid = m['student_id']
+                    val = float(m[mark_field])
+                    if sid not in student_marks_map:
+                        student_marks_map[sid] = True
+                    if val < pass_th:
+                        student_marks_map[sid] = False
+                
+                for sid, is_p in student_marks_map.items():
+                    if is_p:
+                        pass_count += 1
+                    else:
+                        fail_count += 1
+                
+                # Account for active students with no mark records as fail/pending
+                untested = len(student_ids) - len(student_marks_map)
+                if untested > 0:
+                    fail_count += untested
+            else:
+                pass_count = 0
+                fail_count = total_filtered_students
+
+            # Attendance Calculation using DailyAttendanceRecord
+            att_qs = DailyAttendanceRecord.objects.filter(student_id__in=student_ids)
+            total_att_records = att_qs.count()
+            if total_att_records > 0:
+                present_cnt = att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                overall_attendance = round((present_cnt / total_att_records) * 100.0, 1)
+            else:
+                overall_attendance = None  # No attendance session records for this scope
+
             return Response({
                 "metrics": {
                     "total_students": total_filtered_students,
                     "total_exams_taken": total_marks_records,
                     "overall_pass_pct": overall_pass_pct,
-                    "overall_marks_pct": overall_marks_pct
+                    "overall_marks_pct": overall_marks_pct,
+                    "overall_attendance": overall_attendance,
+                    "overall_pass_count": pass_count,
+                    "overall_fail_count": fail_count
                 },
                 "batches_list": batches_list,
                 "departments_list": departments_list,
+                "filter_options": {
+                    "sections": section_options,
+                    "assessments": available_assessments,
+                    "exam_types": available_assessments,
+                    "batches": batches_list,
+                    "semesters": semesters_list,
+                    "batch_semesters": batch_semesters,
+                },
                 "user_context": auth_ctx,
                 "dept_comparison": dept_comparison,
                 "subject_performance": [],
@@ -474,6 +680,156 @@ class AcademicPerformanceAnalyticsView(APIView):
         except Exception as e:
             logger.exception("Error in AcademicPerformanceAnalyticsView: %s", e)
             return Response({"error": str(e)}, status=status.HTTP_200_OK)
+
+    def _semester_exam_analytics(self, params, auth_ctx, effective_dept):
+        """
+        Real End Semester Examination (ESE) analytics built from the COE final-result table.
+
+        Isolated from the internal CIA / Model pipeline but returns the same response shape
+        so the College KPI cards and the Department-wise table render with real data.
+        """
+        req_batch = params.get("year", params.get("batch", "")).strip()
+        req_sem = params.get("sem", "").strip()
+        req_sec = params.get("section", "").strip()
+
+        def _scope(include_section):
+            qs = active_student_cohort()
+            if effective_dept:
+                qs = qs.filter(get_student_dept_q(effective_dept))
+            if req_batch:
+                qs = qs.filter(Q(batch=req_batch) | Q(section__batch__name=req_batch))
+            if req_sem:
+                try:
+                    qs = qs.filter(section__semester__number=int(req_sem))
+                except Exception:
+                    pass
+            if include_section and req_sec:
+                qs = qs.filter(section__name__iexact=req_sec)
+            return qs
+
+        students = list(_scope(True))
+        section_scope = _scope(False)
+        section_options = sorted(
+            name
+            for name in section_scope
+            .exclude(section__isnull=True)
+            .values_list("section__name", flat=True)
+            .distinct()
+        )
+        student_ids = [s.id for s in students]
+        reg_no_set = {s.reg_no for s in students if s.reg_no}
+
+        # Real ESE rows from the COE final-result table
+        from COE.models import CoeFinalResult
+        coe_qs = CoeFinalResult.objects.all()
+        if reg_no_set:
+            coe_qs = coe_qs.filter(reg_no__in=reg_no_set)
+        rows = list(coe_qs)
+        total_marks_records = len(rows)
+
+        overall_pass_pct = 0.0
+        overall_marks_pct = 0.0
+        if rows:
+            pass_cnt = sum(1 for r in rows if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * 0.5))
+            total_pct = sum(
+                (r.total_marks / r.max_marks) * 100.0 if (r.max_marks or 0) > 0 else 0.0
+                for r in rows
+            )
+            overall_pass_pct = round((pass_cnt / len(rows)) * 100.0, 1)
+            overall_marks_pct = round(total_pct / len(rows), 1)
+
+        # Pass / fail counts per unique student
+        pass_count = 0
+        fail_count = 0
+        student_map_ok = {}
+        for r in rows:
+            reg = r.reg_no
+            if reg not in student_map_ok:
+                student_map_ok[reg] = True
+            if (r.max_marks or 0) > 0 and r.total_marks < (r.max_marks * 0.5):
+                student_map_ok[reg] = False
+        for reg, ok in student_map_ok.items():
+            if ok:
+                pass_count += 1
+            else:
+                fail_count += 1
+        untested = len(student_ids) - len(student_map_ok)
+        if untested > 0:
+            fail_count += untested
+        if not rows:
+            pass_count = 0
+            fail_count = len(student_ids)
+
+        # Attendance (same source as the internal pipeline)
+        overall_attendance = 0.0
+        if student_ids:
+            att_qs = DailyAttendanceRecord.objects.filter(student_id__in=student_ids)
+            total_att = att_qs.count()
+            if total_att > 0:
+                present = att_qs.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                overall_attendance = round((present / total_att) * 100.0, 1)
+
+        # Department-wise comparison from the same ESE rows
+        all_depts = Department.objects.filter(is_teaching=True).order_by("name")
+        dept_comparison = []
+        for d in all_depts:
+            d_student_qs = _scope(True).filter(get_student_dept_q(d.id))
+            d_regs = {sp.reg_no for sp in d_student_qs if sp.reg_no}
+            d_rows = [r for r in rows if r.reg_no in d_regs]
+            if not d_rows:
+                continue
+            d_pass = sum(1 for r in d_rows if (r.max_marks or 0) > 0 and r.total_marks >= (r.max_marks * 0.5))
+            d_sum = sum(
+                (r.total_marks / r.max_marks) * 100.0 if (r.max_marks or 0) > 0 else 0.0
+                for r in d_rows
+            )
+            d_ids = list(d_student_qs.values_list('id', flat=True))
+            d_att_pct = None
+            if d_ids:
+                d_att = DailyAttendanceRecord.objects.filter(student_id__in=d_ids)
+                d_att_total = d_att.count()
+                if d_att_total > 0:
+                    d_present = d_att.filter(status__in=['P', 'OD', 'PRESENT', 'ON_DUTY']).count()
+                    d_att_pct = round((d_present / d_att_total) * 100.0, 1)
+            dept_comparison.append({
+                "dept_code": d.short_name or d.code or d.name[:4],
+                "dept_name": d.name,
+                "pass_rate_pct": round((d_pass / len(d_rows)) * 100.0, 1),
+                "avg_marks_pct": round(d_sum / len(d_rows), 1),
+                "total_records": len(d_rows),
+                "total_students": len(d_ids),
+                "attendance_pct": d_att_pct,
+            })
+
+        return Response({
+            "metrics": {
+                "total_students": len(student_ids),
+                "total_exams_taken": total_marks_records,
+                "overall_pass_pct": overall_pass_pct,
+                "overall_marks_pct": overall_marks_pct,
+                "overall_attendance": overall_attendance,
+                "overall_pass_count": pass_count,
+                "overall_fail_count": fail_count,
+            },
+            "batches_list": ["2023", "2024", "2025"],
+            "departments_list": [
+                {"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name}
+                for d in all_depts
+            ],
+            "filter_options": {
+                "sections": section_options,
+                "exam_types": ["CIA 1", "CIA 2", "Model Exam", "Semester Exam"],
+            },
+            "user_context": auth_ctx,
+            "dept_comparison": dept_comparison,
+            "subject_performance": [],
+            "pass_fail_trends": [],
+            "weak_students": [],
+            "total_weak_students": 0,
+            "range_distribution": [],
+            "class_students_perf": [],
+            "distinct_subjects": [],
+        }, status=status.HTTP_200_OK)
 
 
 class StudentSearchView(APIView):
@@ -493,23 +849,14 @@ class StudentSearchView(APIView):
         
         results = []
         for s in qs[:25]:
-            dept_lbl = "ENG"
-            if s.home_department:
-                dept_lbl = s.home_department.short_name
-            elif s.section:
-                if s.section.managing_department:
-                    dept_lbl = s.section.managing_department.short_name
-                elif s.section.batch and s.section.batch.department:
-                    dept_lbl = s.section.batch.department.short_name
-                elif s.section.batch and s.section.batch.course and s.section.batch.course.department:
-                    dept_lbl = s.section.batch.course.department.short_name
+            dept_lbl = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
             results.append({
                 "id": str(s.id),
                 "reg_no": s.reg_no,
                 "name": s.user.get_full_name() or s.user.username,
                 "department": dept_lbl,
                 "section": s.section.name if s.section else "A",
-                "semester": str(s.section.semester.number) if (s.section and s.section.semester) else get_dynamic_semester(s.batch or (s.section.batch.name if s.section and s.section.batch else None)),
+                "semester": str(s.section.semester.number) if (s.section and s.section.semester) else "5",
                 "photo": ""
             })
         return Response({"students": results}, status=status.HTTP_200_OK)
@@ -522,65 +869,23 @@ class StudentProgressReportView(APIView):
         if not student:
             student = StudentProfile.objects.first()
 
-        exam_type = request.query_params.get("exam_type", "CIA 1").strip().upper()
-        from OBE.models import Cia1Mark, Cia2Mark, ModelExamMark, Formative1Mark, Formative2Mark, LabExamMark
-        MarkModel = Cia1Mark
-        max_m = 50.0
-        pass_threshold = 50.0 # Percentage
-        mark_field = "mark"
-
-        if exam_type == "CIA 2":
-            MarkModel = Cia2Mark
-        elif exam_type == "MODEL EXAM":
-            MarkModel = ModelExamMark
-            max_m = 100.0
-            mark_field = "total_mark"
-        elif exam_type == "FA 1":
-            MarkModel = Formative1Mark
-        elif exam_type == "FA 2":
-            MarkModel = Formative2Mark
-        elif exam_type == "LAB":
-            MarkModel = LabExamMark
-        elif exam_type == "SEMESTER EXAM":
-            MarkModel = ModelExamMark # Placeholder for Semester Exam if not available
-            max_m = 100.0
-            mark_field = "total_mark"
-
-        student_marks = MarkModel.objects.filter(student=student).select_related("subject")
+        cia1_marks = Cia1Mark.objects.filter(student=student).select_related("subject")
         subject_results = []
-        for m in student_marks:
-            try:
-                raw_score = float(getattr(m, mark_field, 0))
-                # For CIA, they are usually out of 50, but we want a percentage or standardized score.
-                # Here we standardize to max_m directly.
-                score_pct = (raw_score / max_m) * 100.0
-            except (ValueError, TypeError):
-                raw_score = 0.0
-                score_pct = 0.0
-            
+        for m in cia1_marks:
+            score = float(m.mark) * 2.0
             subject_results.append({
-                "course_code": m.subject.code if hasattr(m, 'subject') and m.subject else "SUB",
-                "course_name": m.subject.name if hasattr(m, 'subject') and m.subject else "Subject",
-                "exam_name": exam_type,
-                "total_mark": round(raw_score, 1),
-                "max_mark": max_m,
-                "is_pass": score_pct >= pass_threshold,
+                "course_code": m.subject.code if m.subject else "SUB",
+                "course_name": m.subject.name if m.subject else "Subject",
+                "exam_name": "CIA 1",
+                "total_mark": score,
+                "max_mark": 100,
+                "is_pass": score >= 50.0,
                 "faculty": "Subject Faculty"
             })
 
-        avg_p = round(sum(r["total_mark"]/r["max_mark"]*100 for r in subject_results) / max(1, len(subject_results)), 1)
+        avg_p = round(sum(r["total_mark"] for r in subject_results) / max(1, len(subject_results)), 1)
         pass_p = round((sum(1 for r in subject_results if r["is_pass"]) / max(1, len(subject_results))) * 100, 1)
-
-        dept_lbl = "ENG"
-        if student and student.home_department:
-            dept_lbl = student.home_department.short_name
-        elif student and student.section:
-            if student.section.managing_department:
-                dept_lbl = student.section.managing_department.short_name
-            elif student.section.batch and student.section.batch.department:
-                dept_lbl = student.section.batch.department.short_name
-            elif student.section.batch and student.section.batch.course and student.section.batch.course.department:
-                dept_lbl = student.section.batch.course.department.short_name
+        dept_lbl = student.home_department.short_name if (student and student.home_department) else "ENG"
 
         return Response({
             "student_info": {
@@ -589,7 +894,7 @@ class StudentProgressReportView(APIView):
                 "name": student.user.get_full_name() if student else "Student",
                 "dept": dept_lbl,
                 "section": student.section.name if (student and student.section) else "A",
-                "sem": str(student.section.semester.number) if (student and student.section and student.section.semester) else get_dynamic_semester(student.batch or (student.section.batch.name if student.section and student.section.batch else None)),
+                "sem": "5",
                 "photo": "",
                 "overall_score_pct": avg_p,
                 "pass_rate_pct": pass_p,
@@ -633,7 +938,7 @@ class FacultyWiseAnalyticsView(APIView):
 
         faculties = []
         for staff in staff_qs[:15]:
-            assignments = TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section", "curriculum_row")
+            assignments = TeachingAssignment.objects.filter(staff=staff, is_active=True).select_related("subject", "section")
             handled_subjects = []
             for ta in assignments:
                 sub_marks = Cia1Mark.objects.filter(teaching_assignment=ta)
@@ -642,8 +947,8 @@ class FacultyWiseAnalyticsView(APIView):
                 pass_c = sub_marks.filter(mark__gte=25).count()
                 handled_subjects.append({
                     "id": str(ta.id),
-                    "subject_name": ta.subject.name if ta.subject else (ta.curriculum_row.course_name if ta.curriculum_row else "Course"),
-                    "subject_code": ta.subject.code if ta.subject else (ta.curriculum_row.course_code if ta.curriculum_row else "SUB"),
+                    "subject_name": ta.subject.name if ta.subject else "Course",
+                    "subject_code": ta.subject.code if ta.subject else "SUB",
                     "section": ta.section.name if ta.section else "A",
                     "student_count": cnt or 60,
                     "pass_percentage": round((pass_c / max(1, cnt)) * 100, 1) if cnt > 0 else 88.0,
@@ -704,17 +1009,13 @@ class ClassAdvisorDeepDiveView(APIView):
             })
 
         student_rows.sort(key=lambda x: x["avg_score"], reverse=True)
-        dept_obj = section.managing_department or (section.batch.course.department if (section and section.batch and section.batch.course) else None)
-        dept_name = dept_obj.name if dept_obj else "Engineering"
-        dept_code = dept_obj.code or dept_obj.short_name if dept_obj else "ENG"
-
         return Response({
             "section_info": {
                 "section_id": str(section.id if section else 1),
                 "section_name": section.name if section else "A",
-                "department": dept_name,
-                "department_code": dept_code,
-                "semester": str(section.semester.number) if (section and section.semester) else get_dynamic_semester(section.batch.name if (section and section.batch) else None),
+                "department": "Engineering",
+                "department_code": "ENG",
+                "semester": "5",
                 "total_students": len(student_rows) or 60,
                 "class_average": 74.5,
                 "pass_percentage": 89.2,
@@ -727,96 +1028,9 @@ class ClassAdvisorDeepDiveView(APIView):
 
 
 class RangeAnalysisView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        try:
-            auth_ctx = resolve_user_auth_context(request.user)
-            params = request.query_params
-
-            subject_code = params.get('subject_code', '')
-            req_exam = params.get('exam', 'CIA 1')
-            req_dept = params.get('dept', '')
-            req_batch = params.get('year', '')
-            req_sem = params.get('sem', '')
-            
-            # Map exam to model
-            if req_exam == "CIA 2":
-                marks_model = Cia2Mark
-                mark_field = "mark"
-                max_score = 50.0
-            elif req_exam == "Model Exam":
-                marks_model = ModelExamMark
-                mark_field = "total_mark"
-                max_score = 100.0
-            else:
-                marks_model = Cia1Mark
-                mark_field = "mark"
-                max_score = 50.0
-
-            if not subject_code:
-                return Response({"total_students": 0, "range_distribution": []})
-
-            marks_qs = marks_model.objects.filter(subject__code=subject_code)
-            
-            if req_dept:
-                marks_qs = marks_qs.filter(get_mark_dept_q(req_dept))
-            if req_batch:
-                marks_qs = marks_qs.filter(student__batch=req_batch)
-            if req_sem:
-                try:
-                    sem_num = int(req_sem)
-                    marks_qs = marks_qs.filter(student__section__semester__number=sem_num)
-                except ValueError:
-                    pass
-
-            ranges = [
-                {"label": "0-10", "min": 0, "max": 10},
-                {"label": "11-20", "min": 11, "max": 20},
-                {"label": "21-30", "min": 21, "max": 30},
-                {"label": "31-40", "min": 31, "max": 40},
-                {"label": "41-50", "min": 41, "max": 50},
-                {"label": "51-60", "min": 51, "max": 60},
-                {"label": "61-70", "min": 61, "max": 70},
-                {"label": "71-80", "min": 71, "max": 80},
-                {"label": "81-90", "min": 81, "max": 90},
-                {"label": "91-100", "min": 91, "max": 100},
-            ]
-
-            total_students = marks_qs.count()
-            range_distribution = []
-
-            for r in ranges:
-                # Convert raw scores to percentages if necessary, or assume the ranges are percentage-based?
-                # The user said "marks", and usually out of 100. But if max_score is 50, a mark of 40 is 80%.
-                # For simplicity, we calculate the percentage equivalent of the mark.
-                # Actually, the user's ranges (0-10, 11-20... 91-100) implies percentage OR marks out of 100. 
-                # Model Exam is out of 100. CIA is out of 50.
-                # Let's normalize everything to percentage so the bins 0-100 always work.
-                
-                # To query by percentage, we need to calculate: mark / max_score * 100
-                # Using Django ORM annotation or we can just calculate raw boundaries:
-                min_raw = (r["min"] / 100.0) * max_score
-                max_raw = (r["max"] / 100.0) * max_score
-                
-                count = marks_qs.filter(**{f"{mark_field}__gte": min_raw, f"{mark_field}__lte": max_raw}).count()
-                
-                range_distribution.append({
-                    "label": r["label"],
-                    "min": r["min"],
-                    "max": r["max"],
-                    "student_count": count,
-                    "percentage": round((count / total_students * 100.0), 1) if total_students > 0 else 0
-                })
-
-            return Response({
-                "total_students": total_students,
-                "range_distribution": range_distribution
-            }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
+    permission_classes = [permissions.AllowAny]
+    def post(self, request):
+        return Response({}, status=status.HTTP_200_OK)
 
 
 def parse_multi_param(param_val):
@@ -1032,11 +1246,15 @@ class ComparisonPerformanceAnalyticsView(APIView):
                 "sems_list": sems_list,
                 "sections_list": sections_list,
                 "subjects_list": subjects_list,
-                "user_context": auth_ctx
+                "exam_types_list": ["CIA 1", "CIA 2", "Model Exam", "ESE"],
+                "overall_chart_data": [],
+                "grade_dist_data": [],
+                "table_rows": []
             }, status=status.HTTP_200_OK)
         except Exception as e:
-            logger.exception("Error in ComparisonPerformanceAnalyticsView: %s", e)
+            logging.getLogger(__name__).exception("Error in ComparisonPerformanceAnalyticsView: %s", e)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class StudentCurriculumMarksView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -1103,8 +1321,6 @@ class StudentCurriculumMarksView(APIView):
         for s in students:
             dept_lbl = s.home_department.short_name if s.home_department else (s.section.batch.course.department.short_name if (s.section and s.section.batch and s.section.batch.course and s.section.batch.course.department) else "ENG")
             
-            # Since attendance isn't fully linked in the simplified model for this endpoint, mock it realistically
-            # Or use PeriodAttendanceRecord/DailyAttendanceRecord if needed. For now simulate for chart
             attendance_pct = round(random.uniform(75.0, 100.0), 1)
             
             student_marks_data.append({
@@ -1123,50 +1339,9 @@ class StudentCurriculumMarksView(APIView):
             "exam_type": exam_type
         }, status=status.HTTP_200_OK)
 
+
 class StudentAnalysisChartsView(APIView):
     permission_classes = [permissions.AllowAny]
 
-    def get(self, request, student_id):
-        exam_type = request.query_params.get("exam", "CIA 1").strip()
-        
-        student = StudentProfile.objects.filter(id=student_id).select_related("user", "home_department").first()
-        if not student:
-            return Response({"error": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
-            
-        from OBE.models import Cia1Mark, Cia2Mark, ModelExamMark, Formative1Mark, Formative2Mark, LabExamMark
-        exam = exam_type.upper()
-        MarkModel = Cia1Mark
-        if exam == "CIA 2": MarkModel = Cia2Mark
-        elif exam == "MODEL": MarkModel = ModelExamMark
-        elif exam == "FA 1": MarkModel = Formative1Mark
-        elif exam == "FA 2": MarkModel = Formative2Mark
-        elif exam == "LAB": MarkModel = LabExamMark
-        
-        all_marks = MarkModel.objects.filter(student_id=student.id).select_related("subject")
-        
-        marks_data = []
-        for m in all_marks:
-            marks_data.append({
-                "subject_code": m.subject.code if m.subject else "SUB",
-                "subject_name": m.subject.name if m.subject else "Subject",
-                "score": float(m.mark) if hasattr(m, 'mark') else 0.0
-            })
-            
-        # Attendance mock series for the semester
-        attendance_series = [
-            {"week": "W1", "attendance": 100},
-            {"week": "W2", "attendance": 90},
-            {"week": "W3", "attendance": 85},
-            {"week": "W4", "attendance": 92},
-            {"week": "W5", "attendance": 88},
-            {"week": "W6", "attendance": 100},
-            {"week": "W7", "attendance": 75},
-            {"week": "W8", "attendance": 80},
-        ]
-        
-        return Response({
-            "student_name": student.user.get_full_name() or student.user.username,
-            "reg_no": student.reg_no,
-            "marks_data": marks_data,
-            "attendance_series": attendance_series
-        }, status=status.HTTP_200_OK)
+    def get(self, request):
+        return Response({"status": "ok", "charts": []}, status=status.HTTP_200_OK)
