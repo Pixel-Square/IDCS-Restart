@@ -20,10 +20,9 @@ const styles: { [k: string]: React.CSSProperties } = {
   tdLeft: { padding: '10px', border: '1px solid #eef6fb', color: '#234451', fontSize: 13, textAlign: 'left' },
   targetTable: { width: '100%', borderCollapse: 'collapse', border: '2px solid #0b3b57', tableLayout: 'fixed' as const },
   targetTh: { padding: '12px 10px', border: '1px solid #0b3b57', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontWeight: 800, fontSize: 13, lineHeight: 1.35 },
-  targetTd: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontSize: 20, lineHeight: 1.2, fontWeight: 500, color: '#0b3b57' },
-  targetScaleValueTd: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontSize: 20, lineHeight: 1.2, fontWeight: 900, color: '#0b3b57' },
-  targetTdLabel: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'left' as const, verticalAlign: 'middle' as const, fontSize: 20, lineHeight: 1.2, fontWeight: 500, color: '#0b3b57' },
-  targetWeightInput: { ...({ width: '100%', maxWidth: 86, margin: '0 auto', display: 'block', padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5e1', textAlign: 'center' } as React.CSSProperties), background: '#f8fafc', color: '#0b3b57', fontSize: 20, fontWeight: 500, cursor: 'not-allowed' },
+  targetTd: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'center' as const, verticalAlign: 'middle' as const, fontSize: 13, lineHeight: 1.35 },
+  targetTdLabel: { padding: '12px 10px', border: '1px solid #d7e3ee', textAlign: 'left' as const, verticalAlign: 'middle' as const, fontSize: 13, lineHeight: 1.35, fontWeight: 700 },
+  targetWeightInput: { ...({ width: '100%', maxWidth: 86, margin: '0 auto', display: 'block', padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5e1', textAlign: 'center' } as React.CSSProperties), background: '#f8fafc', color: '#64748b', cursor: 'not-allowed' },
   checkbox: { transform: 'scale(1.2)', cursor: 'pointer', margin: '0' },
   inputNumber: { width: 80, padding: '6px 8px', borderRadius: 6, border: '1px solid #d1e3f0', textAlign: 'center' },
   note: { color: '#557085', fontSize: 13, marginTop: 8 },
@@ -100,7 +99,9 @@ export default function COTargetPage({
     { batchCay: '', noOfSuccessful: '', meanCgpa: '' }
   );
 
-  const fixedLcaLevels = { l3: 60, l2: 55, l1: 50 };
+  const [lcaLevels, setLcaLevels] = useState<{ l1: string; l2: string; l3: string }>(
+    { l1: '', l2: '', l3: '' }
+  );
 
   // Load previously saved CO Target inputs
   useEffect(() => {
@@ -134,6 +135,13 @@ export default function COTargetPage({
             batchCay: String((d.apiSummary as any).batchCay ?? p.batchCay),
             noOfSuccessful: String((d.apiSummary as any).noOfSuccessful ?? p.noOfSuccessful),
             meanCgpa: String((d.apiSummary as any).meanCgpa ?? p.meanCgpa),
+          }));
+        }
+        if (d.lcaLevels && typeof d.lcaLevels === 'object') {
+          setLcaLevels((p) => ({
+            l1: String((d.lcaLevels as any).l1 ?? p.l1),
+            l2: String((d.lcaLevels as any).l2 ?? p.l2),
+            l3: String((d.lcaLevels as any).l3 ?? p.l3),
           }));
         }
         setSaveNote('Loaded');
@@ -172,7 +180,7 @@ export default function COTargetPage({
           weights,
           manuals,
           apiSummary,
-          lcaLevels: fixedLcaLevels,
+          lcaLevels,
         },
         'published',
       );
@@ -387,8 +395,8 @@ export default function COTargetPage({
     });
   }, [threeScaleRows]);
 
-  // computed BCO values (based on BTL selection): BTL-1=100, BTL-2=90, ..., BTL-6=50
-  const bcoComputed = React.useMemo(() => btlSelection.map((s) => (s ? 110 - s * 10 : null)), [btlSelection]);
+  // computed BCO values (based on BTL selection)
+  const bcoComputed = React.useMemo(() => btlSelection.map((s) => (s ? s * 10 : null)), [btlSelection]);
 
   const apiGpaComputed = React.useMemo(() => {
     const strength = Number(apiSummary.batchCay);
@@ -809,8 +817,8 @@ export default function COTargetPage({
             <div style={{ ...styles.card, padding: 18, minHeight: 180 }}>
               <div style={{ fontWeight: 700, marginBottom: 8 }}>5. The Improvement Index on CO attainment (IIC)</div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'stretch' }}>
-                {/* Top: Learner Centric Approach (LCA) box */}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                {/* Left: Learner Centric Approach (LCA) box */}
                 <div style={{ border: '2px solid #0b3b57', borderRadius: 4, overflow: 'hidden', width: 280, background: '#fff' }}>
                   <table style={{ borderCollapse: 'collapse', width: '100%' }}>
                     <tbody>
@@ -820,33 +828,51 @@ export default function COTargetPage({
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L3</td>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
-                          <div style={{ width: 90, margin: '0 auto', padding: '6px 8px', borderRadius: 10, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#f5f5f5' }}>
-                            {fixedLcaLevels.l3}
-                          </div>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l3}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l3: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
                         </td>
                       </tr>
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L2</td>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
-                          <div style={{ width: 90, margin: '0 auto', padding: '6px 8px', borderRadius: 10, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#f5f5f5' }}>
-                            {fixedLcaLevels.l2}
-                          </div>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l2}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l2: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
                         </td>
                       </tr>
                       <tr>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'right', paddingRight: 20, fontWeight: 700 }}>L1</td>
                         <td style={{ padding: 10, background: '#bfdbfe', textAlign: 'center', fontWeight: 800 }}>
-                          <div style={{ width: 90, margin: '0 auto', padding: '6px 8px', borderRadius: 10, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#f5f5f5' }}>
-                            {fixedLcaLevels.l1}
-                          </div>
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={lcaLevels.l1}
+                            onChange={(e) => setLcaLevels((prev) => ({ ...prev, l1: e.target.value }))}
+                            placeholder="0"
+                            style={{ width: 90, padding: '6px 8px', borderRadius: 6, border: '1px solid #0b3b57', textAlign: 'center', fontWeight: 700, background: '#fff' }}
+                          />
                         </td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
 
-                {/* Bottom: Course Outcome Attainment Targets table */}
-                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'stretch' }}>
+                {/* Right: large Course Outcome Attainment Targets table + green note box */}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'stretch' }}>
                   <div style={{ width: '100%' }}>
                     <div style={{ fontWeight: 800, marginBottom: 8, textAlign: 'center', color: '#0b3b57' }}>The Course Outcome Attainment Targets</div>
                     <table style={styles.targetTable}>
@@ -892,14 +918,16 @@ export default function COTargetPage({
                             <td style={styles.targetTd}>{apiGpaComputed != null ? apiGpaComputed.toFixed(2) : ''}</td>
                             <td style={styles.targetTd}>{iicComputed ?? ''}</td>
                             <td style={styles.targetTd}>{coTargetComputed[idx]?.target != null ? coTargetComputed[idx].target.toFixed(2) : ''}</td>
-                            <td style={styles.targetScaleValueTd}>{coTargetComputed[idx]?.scale != null ? coTargetComputed[idx].scale.toFixed(2) : ''}</td>
+                            <td style={styles.targetTd}>{coTargetComputed[idx]?.scale != null ? coTargetComputed[idx].scale.toFixed(2) : ''}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
 
-                  
+                  <div style={{ width: '100%', background: '#86efac', padding: 12, borderRadius: 6, border: '2px solid #16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontWeight: 700 }}>
+                    TARGET TABLE WILL BE GENERATED AUTOMATICALLY
+                  </div>
                 </div>
               </div>
             </div>

@@ -11,7 +11,6 @@ type StaffFormData = {
   last_name: string
   email: string
   designation: string
-  date_of_join: string
   department: number | null
   status: string
   roles: string[]
@@ -41,10 +40,6 @@ const DESIGNATION_CHOICES = [
   'Assistant Professor - SG',
   'Associate Professor',
   'Professor',
-  'Placement Trainer',
-  'Research Scholar',
-  'Tutor',
-  'Teaching Assistant',
 ]
 
 export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, initialData, departmentId }: Props) {
@@ -56,7 +51,6 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
     last_name: '',
     email: '',
     designation: '',
-    date_of_join: '',
     department: departmentId || null,
     status: 'ACTIVE',
     roles: ['STAFF'],
@@ -79,7 +73,6 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
           last_name: initialData.user?.last_name || '',
           email: initialData.user?.email || '',
           designation: initialData.designation || '',
-          date_of_join: initialData.date_of_join || '',
           department: initialData.department || departmentId || null,
           status: initialData.status || 'ACTIVE',
           roles: initialData.roles || ['STAFF'],
@@ -94,7 +87,6 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
           last_name: '',
           email: '',
           designation: '',
-          date_of_join: '',
           department: departmentId || null,
           status: 'ACTIVE',
           roles: ['STAFF'],
@@ -123,12 +115,9 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
     setError(null)
 
     try {
-      const normalizedStaffId = formData.staff_id.trim()
-      const initialStaffId = String(initialData?.staff_id || '').trim()
-
       const payload: any = {
+        staff_id: formData.staff_id,
         designation: formData.designation,
-        date_of_join: formData.date_of_join || null,
         department: formData.department,
         status: formData.status,
         roles: formData.roles,
@@ -139,17 +128,11 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
       }
 
       if (!staffId) {
-        payload.staff_id = normalizedStaffId
         // Creating new staff
         if (formData.password) {
           payload.password = formData.password
         }
       } else {
-        // Updating existing staff: only send staff_id if it was changed
-        if (normalizedStaffId !== initialStaffId) {
-          payload.staff_id = normalizedStaffId
-        }
-
         // Updating existing staff
         if (formData.password) {
           payload.password = formData.password
@@ -160,7 +143,7 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
       if (staffId) {
         // Update
         response = await fetchWithAuth(`/api/academics/staffs/${staffId}/`, {
-          method: 'PATCH',
+          method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         })
@@ -310,17 +293,6 @@ export default function StaffFormModal({ isOpen, onClose, onSuccess, staffId, in
                     <option key={d} value={d}>{d}</option>
                   ))}
                 </select>
-              </div>
-
-              {/* Date of Join */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Date of Join</label>
-                <input
-                  type="date"
-                  value={formData.date_of_join || ''}
-                  onChange={(e) => setFormData({ ...formData, date_of_join: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                />
               </div>
 
               {/* Department */}

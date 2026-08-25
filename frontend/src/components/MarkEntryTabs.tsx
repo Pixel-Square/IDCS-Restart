@@ -20,7 +20,6 @@ import Cia2Entry from './Cia2Entry';
 import CQIEntry from '../pages/staff/CQIEntry';
 import PureLabCQIEntry from './PureLabCQIEntry';
 import PureProjectCQIEntry from './PureProjectCQIEntry';
-import CqiAccessGuard from './CqiAccessGuard';
 import DashboardWidgets from './layout/DashboardWidgets';
 import {
   DraftAssessmentKey,
@@ -139,28 +138,6 @@ function parseCqiOption(optionId: string): CqiPlacement | null {
   return null;
 }
 
-// Theory QP1/QP2/PMBL extends the Model CQI placement to include CO1/CO2 in addition
-// to CO3/CO4/CO5.  The CIA1 CQI placement (smaller set) still owns CO1/CO2 per the
-// ownership rule, but CQIEntry forces them OUT of borrowed/INTO owned on the Model
-// page so they become independently editable with their own model-exam-based totals.
-function maybeExtendModelPlacementForTheory(
-  placement: CqiPlacement,
-  normalizedClassType: string,
-  questionPaperType: string | null | undefined,
-): CqiPlacement {
-  if (placement.assessmentType !== 'model') return placement;
-  if (normalizedClassType !== 'THEORY' && normalizedClassType !== 'THEORY_PMBL') return placement;
-  const qp = String(questionPaperType ?? '').trim().toUpperCase().replace(/\s+/g, '');
-  const isQpEligible = /(^|[^A-Z0-9])(QP1|QP2|PMBL)([^A-Z0-9]|$)/.test(qp) && !/QP1FINAL/.test(qp);
-  if (!isQpEligible) return placement;
-  const cos = Array.isArray(placement.cos) ? placement.cos : [];
-  const hasCo1 = cos.some((c) => /1/.test(String(c)));
-  const hasCo2 = cos.some((c) => /2/.test(String(c)));
-  if (hasCo1 && hasCo2) return placement;
-  const merged = Array.from(new Set([...(hasCo1 ? [] : ['CO1']), ...(hasCo2 ? [] : ['CO2']), ...cos]));
-  return { ...placement, cos: merged };
-}
-
 function normalizeEnabledAssessments(enabledAssessments: string[] | null | undefined): Set<string> {
   const arr = Array.isArray(enabledAssessments) ? enabledAssessments : [];
   return new Set(arr.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
@@ -177,7 +154,8 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
   // SPECIAL: show only explicitly enabled assessments (+ dashboard)
   if (ct === 'SPECIAL') {
     const allowedKeys = new Set<BaseTabKey>(['dashboard']);
-    (['ssa1', 'ssa2', 'formative1', 'formative2', 'cia1', 'cia2', 'model'] as const).forEach((k) => {
+    // Only these six are supported for SPECIAL, per requirement
+    (['ssa1', 'ssa2', 'formative1', 'formative2', 'cia1', 'cia2'] as const).forEach((k) => {
       if (enabled.has(k)) allowedKeys.add(k);
     });
     return BASE_TABS.filter((t) => allowedKeys.has(t.key));
@@ -249,26 +227,8 @@ function getVisibleTabs(classType: string | null | undefined, enabledAssessments
     });
   }
 
-  // LAB: 2 cycles only (CO1-CO3, CO3-CO5) – weights are configurable
-  if (ct === 'LAB') {
-    return [
-      { key: 'dashboard', label: 'Dashboard' },
-      { key: 'cia1', label: 'Cycle 1 LAB' },
-      { key: 'cia2', label: 'Cycle 2 LAB' },
-    ] as TabDef[];
-  }
-
-  // LAB2: 2 cycles only (CO1-CO3, CO3-CO5) – no MODEL tab, no CIA exam, total 60 marks
-  if (ct === 'LAB2') {
-    return [
-      { key: 'dashboard', label: 'Dashboard' },
-      { key: 'cia1', label: 'Cycle 1 LAB' },
-      { key: 'cia2', label: 'Cycle 2 LAB' },
-    ] as TabDef[];
-  }
-
-  // PURE_LAB: keep 3 cycles (Cycle 1, Cycle 2, Cycle 3 Records)
-  if (ct === 'PURE_LAB') {
+  // LAB / PURE_LAB: Cycle 1, Cycle 2, Cycle 3 (records), + CQI (final internal only)
+  if (ct === 'LAB' || ct === 'PURE_LAB') {
     return [
       { key: 'dashboard', label: 'Dashboard' },
       { key: 'cia1', label: 'Cycle 1 LAB' },
@@ -737,21 +697,13 @@ export default function MarkEntryTabs({
     return raw === 'PRBL' || raw.includes('PRBL');
   }, [effectiveClassType]);
 
-  // QP1FINAL-like: THEORY+QP1FINAL and TAMIL+TAM_THEORY get a single combined CQI after MODEL
+  // QP1FINAL: Theory courses with QP1FINAL question paper type get a single combined CQI after MODEL
   const isQp1Final = useMemo(() => {
     const qp = String(questionPaperType || '').trim().toUpperCase().replace(/\s/g, '');
-    const isTheoryQp1Final = normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
-    const isTamilTamTheory = normalizedEffectiveClassType === 'TAMIL' && qp === 'TAM_THEORY';
-    return isTheoryQp1Final || isTamilTamTheory;
+    return normalizedEffectiveClassType === 'THEORY' && qp === 'QP1FINAL';
   }, [normalizedEffectiveClassType, questionPaperType]);
 
   const cqiPlacements = useMemo(() => {
-    // SPECIAL: single CQI after MODEL only, covering all COs
-    if (normalizedEffectiveClassType === 'SPECIAL') {
-      return [
-        { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3'] },
-      ] as CqiPlacement[];
-    }
     if (normalizedEffectiveClassType === 'PROJECT') {
       // PRBL: single combined CQI at the end covering all three cycles
       if (isPrblRaw) {
@@ -764,16 +716,9 @@ export default function MarkEntryTabs({
         { showAfter: 'review2', assessmentType: 'project_combined', cos: ['CO1'] },
       ] as CqiPlacement[];
     }
-    // LAB / LAB2 / PURE_LAB: CQI placements handled in visibleTabs below, not via cqiPlacements
-    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
+    // LAB / PURE_LAB: single CQI tab after Cycle 3 (model) – handled by PureLabCQIEntry
+    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
       return [] as CqiPlacement[];
-    }
-    // ENGLISH + ELECTIVE1: single final CQI after MODEL covering all CO1–CO5
-    if (normalizedEffectiveClassType === 'ENGLISH' &&
-        String(questionPaperType || '').trim().toUpperCase() === 'ELECTIVE1') {
-      return [
-        { showAfter: 'model', assessmentType: 'model', cos: ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'] },
-      ] as CqiPlacement[];
     }
     // QP1FINAL (Theory): single combined CQI after MODEL covering all three cycles
     if (isQp1Final) {
@@ -784,42 +729,25 @@ export default function MarkEntryTabs({
     const options = Array.isArray(cqiConfig?.options) ? cqiConfig.options : [];
     return options
       .map((raw) => parseCqiOption(raw))
-      .filter((x): x is CqiPlacement => Boolean(x))
-      .map((p) => maybeExtendModelPlacementForTheory(p, normalizedEffectiveClassType, questionPaperType));
-  }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final, questionPaperType]);
+      .filter((x): x is CqiPlacement => Boolean(x));
+  }, [cqiConfig, normalizedEffectiveClassType, isPrblRaw, isQp1Final]);
 
   const visibleTabs = useMemo(() => {
     const out: TabDef[] = [...baseVisibleTabs];
-    // PURE_LAB: CQI tab after Cycle 3 (model key)
-    if (normalizedEffectiveClassType === 'PURE_LAB') {
+    // LAB / PURE_LAB: inject a dedicated CQI tab after Cycle 3 (model key)
+    if (normalizedEffectiveClassType === 'PURE_LAB' || normalizedEffectiveClassType === 'LAB') {
       out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'model', assessmentType: 'model', cos: ['CO1'] } });
-      return out;
-    }
-    // LAB (2 cycles): CQI tab after Cycle 2 (cia2 key)
-    if (normalizedEffectiveClassType === 'LAB') {
-      out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'cia2', assessmentType: 'cia2', cos: ['CO1'] } });
-      return out;
-    }
-    // LAB2 (2 cycles, no MODEL): CQI tab after Cycle 2 covering CO1-CO5
-    if (normalizedEffectiveClassType === 'LAB2') {
-      out.push({ key: 'cqi_0' as any, label: 'CQI (Final)', cqi: { showAfter: 'cia2', assessmentType: 'cia2', cos: ['CO1'] } });
       return out;
     }
     if (!cqiPlacements.length) return out;
 
     cqiPlacements.forEach((placement, idxPlacement) => {
       let cqiLabel: string;
-      if (normalizedEffectiveClassType === 'SPECIAL' && placement.assessmentType === 'model') {
-        cqiLabel = 'CQI (Final)';
-      } else if ((isPrblRaw && placement.assessmentType === 'model' && normalizedEffectiveClassType === 'PROJECT') ||
+      if ((isPrblRaw && placement.assessmentType === 'model' && normalizedEffectiveClassType === 'PROJECT') ||
           (isQp1Final && placement.assessmentType === 'model')) {
         cqiLabel = 'CQI (CYCLE1, CYCLE2, CYCLE3)';
       } else if (placement.assessmentType === 'project_combined' && normalizedEffectiveClassType === 'PROJECT') {
         cqiLabel = 'CQI (Combined)';
-      } else if (normalizedEffectiveClassType === 'ENGLISH' &&
-          String(questionPaperType || '').trim().toUpperCase() === 'ELECTIVE1' &&
-          placement.assessmentType === 'model') {
-        cqiLabel = 'CQI (Final — All COs)';
       } else {
         cqiLabel = `CQI (${placement.assessmentType.toUpperCase()} ${placement.cos.join(', ')})`;
       }
@@ -839,7 +767,7 @@ export default function MarkEntryTabs({
       else out.push(cqiTab);
     });
     return out;
-  }, [baseVisibleTabs, cqiPlacements, isPrblRaw, isQp1Final, normalizedEffectiveClassType, questionPaperType]);
+  }, [baseVisibleTabs, cqiPlacements, isPrblRaw, isQp1Final, normalizedEffectiveClassType]);
 
   useEffect(() => {
     if (!subjectId) return;
@@ -1371,8 +1299,8 @@ export default function MarkEntryTabs({
               : active === 'review2'
                 ? 'Review 2 sheet-style entry (CO + BTL attainment) matching the Excel layout.'
               : active === 'cia1'
-                ? (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2'
-                    ? 'Cycle 1 LAB entry (CO-1/CO-2/CO-3 experiments).'
+                ? (normalizedEffectiveClassType === 'LAB'
+                    ? 'CIA 1 LAB entry (CO-1/CO-2 experiments + CIA exam)'
                     : normalizedEffectiveClassType === 'PRACTICAL'
                       ? 'CIA 1 Review (Practical) - enter review marks for practical content.'
                       : normalizedEffectiveClassType === 'TCPR'
@@ -1380,8 +1308,8 @@ export default function MarkEntryTabs({
                       : 'CIA 1 sheet-style entry (Q-wise + CO + BTL) matching the Excel layout.')
               : active === 'cia2'
                 ? (
-                    normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2'
-                      ? 'Cycle 2 LAB entry (CO-3/CO-4/CO-5 experiments).'
+                    normalizedEffectiveClassType === 'LAB'
+                      ? 'CIA 2 LAB entry (CO-3/CO-4/CO-5 experiments + CIA exam).'
                       : normalizedEffectiveClassType === 'PRACTICAL'
                         ? 'CIA 2 Review (Practical) - enter review marks for practical content.'
                         : normalizedEffectiveClassType === 'TCPR'
@@ -1492,7 +1420,7 @@ export default function MarkEntryTabs({
                   );
                 }
 
-                if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} forceSingleCo={isPrblRaw} />;
+                if (active === 'ssa1') return <Ssa1Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} />;
                 if (active === 'review1') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
                     <Review1SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 1" />
@@ -1504,7 +1432,7 @@ export default function MarkEntryTabs({
                     />
                   );
                 }
-                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} forceSingleCo={isPrblRaw} />;
+                if (active === 'ssa2') return <Ssa2Entry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} classType={effectiveClassType ?? null} questionPaperType={questionPaperType ?? null} />;
                 if (active === 'review2') {
                   return normalizedEffectiveClassType === 'TCPR' ? (
                     <Review2SheetEntry subjectId={subjectId} teachingAssignmentId={selectedTaId ?? undefined} label="Review 2" />
@@ -1534,7 +1462,7 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
+                  if (normalizedEffectiveClassType === 'LAB') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
@@ -1543,8 +1471,7 @@ export default function MarkEntryTabs({
                         label="Cycle 1 LAB"
                         coA={1}
                         coB={2}
-                        initialEnabledCos={[1, 2, 3]}
-                        ciaExamAvailable={normalizedEffectiveClassType !== 'LAB2'}
+                        initialEnabledCos={[1, 2]}
                         classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
@@ -1598,7 +1525,7 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
-                  if (normalizedEffectiveClassType === 'LAB' || normalizedEffectiveClassType === 'LAB2') {
+                  if (normalizedEffectiveClassType === 'LAB') {
                     return (
                       <LabCourseMarksEntry
                         subjectId={subjectId}
@@ -1607,8 +1534,7 @@ export default function MarkEntryTabs({
                         label="Cycle 2 LAB"
                         coA={3}
                         coB={4}
-                        initialEnabledCos={[3, 4, 5]}
-                        ciaExamAvailable={normalizedEffectiveClassType !== 'LAB2'}
+                        initialEnabledCos={[3, 4]}
                         classType={effectiveClassType ?? null}
                         viewerMode={Boolean(activeForcedViewerMode)}
                       />
@@ -1692,7 +1618,6 @@ export default function MarkEntryTabs({
                         allCos={[1]}
                         useSsaPublishedLockUi
                         projectReviewMode
-                        projectReviewMaxTotal={isPrblRaw ? 100 : undefined}
                       />
                     );
                   }
@@ -1736,29 +1661,19 @@ export default function MarkEntryTabs({
                       />
                     );
                   }
-                  const cqiCos = activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5'];
                   return (
-                    <CqiAccessGuard
+                    <CQIEntry
+                      key={`${activeCqi?.assessmentType || 'model'}:${(activeCqi?.cos || []).join('_')}`}
                       subjectId={subjectId}
                       teachingAssignmentId={selectedTaId ?? undefined}
                       classType={effectiveClassType ?? null}
-                      cos={cqiCos}
-                      onRedirect={(tabKey) => switchTab(tabKey as TabKey)}
-                    >
-                      <CQIEntry
-                        key={`${activeCqi?.assessmentType || 'model'}:${cqiCos.join('_')}`}
-                        subjectId={subjectId}
-                        teachingAssignmentId={selectedTaId ?? undefined}
-                        classType={effectiveClassType ?? null}
-                        questionPaperType={questionPaperType ?? null}
-                        enabledAssessments={effectiveEnabled ?? null}
-                        assessmentType={(activeCqi?.assessmentType || 'model') as 'cia1' | 'cia2' | 'model' | 'review1' | 'review2'}
-                        cos={cqiCos}
-                        allCqiPlacements={cqiPlacements.map((p) => ({ assessmentType: p.assessmentType, cos: p.cos }))}
-                        cqiDivider={Number(cqiConfig?.divider) || 2}
-                        cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
-                      />
-                    </CqiAccessGuard>
+                      questionPaperType={questionPaperType ?? null}
+                      enabledAssessments={effectiveEnabled ?? null}
+                      assessmentType={(activeCqi?.assessmentType || 'model') as 'cia1' | 'cia2' | 'model' | 'review1' | 'review2'}
+                      cos={activeCqi?.cos || ['CO1', 'CO2', 'CO3', 'CO4', 'CO5']}
+                      cqiDivider={Number(cqiConfig?.divider) || 2}
+                      cqiMultiplier={Number(cqiConfig?.multiplier) || 0.15}
+                    />
                   );
                 }
 

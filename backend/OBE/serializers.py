@@ -31,7 +31,6 @@ from .models import (
     ObeMarkTableLock,
     ObePublishRequest,
     ObeQpPatternConfig,
-    ProjectMark,
     Review1Mark,
     Review2Mark,
     Ssa1Mark,
@@ -172,12 +171,6 @@ class Review1MarkSerializer(UserFriendlyModelSerializer):
 class Review2MarkSerializer(UserFriendlyModelSerializer):
     class Meta:
         model = Review2Mark
-        fields = '__all__'
-
-
-class ProjectMarkSerializer(UserFriendlyModelSerializer):
-    class Meta:
-        model = ProjectMark
         fields = '__all__'
 
 
@@ -345,7 +338,6 @@ OBE_MODEL_SERIALIZER_MAP = {
     Ssa2Mark: Ssa2MarkSerializer,
     Review1Mark: Review1MarkSerializer,
     Review2Mark: Review2MarkSerializer,
-    ProjectMark: ProjectMarkSerializer,
     Formative1Mark: Formative1MarkSerializer,
     Formative2Mark: Formative2MarkSerializer,
     Cia2Mark: Cia2MarkSerializer,

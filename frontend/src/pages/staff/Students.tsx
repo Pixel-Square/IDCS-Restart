@@ -1,17 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import fetchWithAuth from '../../services/fetchAuth'
-import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search, Upload, Download, FileText, AlertCircle, CheckCircle2, Eye, Check, Award } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { approveCertificate, fetchAdviseeAchievements, fetchCertificateStats, fetchMenteeAchievements, fetchPendingReviews, rejectCertificate, type AchievementRecord, type CertificateRecord } from '../../services/certificates'
-
-const REJECTION_REASONS = [
-  { value: 'INVALID_FORMAT', label: 'Invalid document format' },
-  { value: 'UNCLEAR', label: 'Certificate unclear' },
-  { value: 'UNRECOGNISED_ORG', label: 'Organization not recognized' },
-  { value: 'OUTSIDE_SCOPE', label: 'Outside scope' },
-  { value: 'DUPLICATE', label: 'Already submitted' },
-  { value: 'OTHER', label: 'Custom' },
-]
+import { Users, GraduationCap, Mail, Loader2, UserCircle2, ChevronLeft, ChevronRight, Building2, Globe, UserCheck, Heart, RefreshCw, Edit2, X, Search, Upload, Download, FileText, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 
 // Cache key and expiry time (1 minute - shorter to pick up new departments quickly)
@@ -58,7 +47,6 @@ interface StudentsPageProps {
 }
 
 export default function StudentsPage({ user }: StudentsPageProps = {}) {
-  const navigate = useNavigate()
   const [viewMode, setViewMode] = useState<ViewMode>('my-students')
   // section list + lazy-loaded students per selected section
   const [myStudentsSections, setMyStudentsSections] = useState<SectionMeta[]>([])
@@ -110,18 +98,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
     total_errors: number
   } | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
-  const [pendingReviewCount, setPendingReviewCount] = useState(0)
-  const [pendingCertificates, setPendingCertificates] = useState<CertificateRecord[]>([])
-  const [reviewModalStudent, setReviewModalStudent] = useState<Student | null>(null)
-  const [reviewActionLoading, setReviewActionLoading] = useState<number | null>(null)
-  const [reviewNotice, setReviewNotice] = useState<string | null>(null)
-  const [rejectingCert, setRejectingCert] = useState<CertificateRecord | null>(null)
-  const [rejectionReason, setRejectionReason] = useState('INVALID_FORMAT')
-  const [rejectionMessage, setRejectionMessage] = useState('')
-  const [expandedAchievements, setExpandedAchievements] = useState<Record<number, boolean>>({})
-  const [achievementCache, setAchievementCache] = useState<Record<number, AchievementRecord[]>>({})
-  const [achievementLoading, setAchievementLoading] = useState<Record<number, boolean>>({})
-  const [advisorAchievementGroupsLoaded, setAdvisorAchievementGroupsLoaded] = useState(false)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -511,16 +487,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
         // Cache the data
         setCachedData(viewMode, { sections, studentsCache: cache })
 
-        try {
-          const pending = await fetchPendingReviews()
-          const list = pending.results || []
-          setPendingCertificates(list)
-          setPendingReviewCount(list.length)
-        } catch {
-          setPendingCertificates([])
-          setPendingReviewCount(0)
-        }
-
       } else if (viewMode === 'department-students') {
         const res = await fetchWithAuth('/api/academics/department-students/')
         if (!res.ok) throw new Error(await res.text())
@@ -741,11 +707,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
       return regNo.includes(normalizedSearch) || fullName.includes(normalizedSearch) || username.includes(normalizedSearch)
     })
     .sort(compareStudentsByViewMode)
-
-  const inactiveCount = displayStudentsList.filter(student => {
-    const status = String(student.status || 'active').toLowerCase().trim()
-    return status === 'inactive'
-  }).length
 
   // Pagination calculations
   const totalItems = displayStudentsList.length
@@ -994,96 +955,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
 
   const canImport = hasPermission('students.view_all_students')
 
-  const loadStudentAchievements = async (student: Student) => {
-    if (achievementCache[student.id]) return
-    setAchievementLoading(prev => ({ ...prev, [student.id]: true }))
-    try {
-      if (viewMode === 'my-mentees') {
-        const res = await fetchMenteeAchievements(student.id)
-        setAchievementCache(prev => ({ ...prev, [student.id]: res.results || [] }))
-      } else if (viewMode === 'my-students') {
-        if (!advisorAchievementGroupsLoaded) {
-          const res = await fetchAdviseeAchievements()
-          const groups = (res.results || []).reduce((acc: Record<number, AchievementRecord[]>, item) => {
-            const key = Number(item.student)
-            if (!acc[key]) acc[key] = []
-            acc[key].push(item)
-            return acc
-          }, {})
-          setAchievementCache(prev => ({ ...prev, ...groups }))
-          setAdvisorAchievementGroupsLoaded(true)
-        }
-      }
-    } finally {
-      setAchievementLoading(prev => ({ ...prev, [student.id]: false }))
-    }
-  }
-
-  const toggleStudentAchievements = async (student: Student) => {
-    const nextOpen = !expandedAchievements[student.id]
-    setExpandedAchievements(prev => ({ ...prev, [student.id]: nextOpen }))
-    if (nextOpen) {
-      await loadStudentAchievements(student)
-    }
-  }
-
-  const getPendingCertificatesForStudent = (student: Student) => {
-    return pendingCertificates.filter(
-      (c) => c.student === student.id || String(c.student_reg_no || '').toLowerCase() === String(student.reg_no || '').toLowerCase()
-    )
-  }
-
-  const handleApproveCertFromModal = async (cert: CertificateRecord) => {
-    setReviewActionLoading(cert.id)
-    setReviewNotice(null)
-    try {
-      const res = await approveCertificate(cert.id)
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Approval failed')
-      }
-      setPendingCertificates(prev => prev.filter(c => c.id !== cert.id))
-      setPendingReviewCount(prev => Math.max(0, prev - 1))
-      setReviewNotice(`Approved "${cert.title}"!`)
-      if (reviewModalStudent) {
-        try {
-          const resAchieve = await fetchMenteeAchievements(reviewModalStudent.id)
-          setAchievementCache(prev => ({ ...prev, [reviewModalStudent.id]: resAchieve.results || [] }))
-        } catch {}
-      }
-    } catch (e: any) {
-      setReviewNotice(`Error: ${e?.message || 'Failed to approve'}`)
-    } finally {
-      setReviewActionLoading(null)
-    }
-  }
-
-  const handleRejectCertFromModal = async () => {
-    if (!rejectingCert) return
-    setReviewActionLoading(rejectingCert.id)
-    setReviewNotice(null)
-    try {
-      const res = await rejectCertificate(rejectingCert.id, {
-        rejection_reason: rejectionReason,
-        rejection_message: rejectionMessage,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Rejection failed')
-      }
-      setPendingCertificates(prev => prev.filter(c => c.id !== rejectingCert.id))
-      setPendingReviewCount(prev => Math.max(0, prev - 1))
-      setReviewNotice(`Rejected "${rejectingCert.title}"`)
-      setRejectingCert(null)
-      setRejectionReason('INVALID_FORMAT')
-      setRejectionMessage('')
-    } catch (e: any) {
-      setReviewNotice(`Error: ${e?.message || 'Failed to reject'}`)
-    } finally {
-      setReviewActionLoading(null)
-    }
-  }
-
   const totalLabel = `${currentSectionList.length} sections`
   const hasContent = currentSectionList.length > 0
 
@@ -1150,9 +1021,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               >
                 <Icon className="w-4 h-4" />
                 {view.label}
-                {view.key === 'my-mentees' && pendingReviewCount > 0 ? (
-                  <span className="ml-1 inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-rose-600 text-white text-[11px] font-semibold">{pendingReviewCount}</span>
-                ) : null}
               </button>
             )
           })}
@@ -1416,130 +1284,77 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {displayStudents.map((student, index) => (
-                  <React.Fragment key={student.id}>
-                    <tr 
-                      className="hover:bg-blue-50 transition-colors"
-                    >
-                      <td className="py-3 px-4">
-                        <span className="text-sm font-medium text-slate-600">{startIndex + index + 1}</span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="text-sm font-semibold text-slate-900">{student.reg_no}</span>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <UserCircle2 className="w-5 h-5 text-slate-400" />
-                          <span className="text-sm font-medium text-slate-900">
-                            {student.username || student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim()}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                          {(() => {
-                            const displayDept = getStudentDepartment(student)
-                            const sectionDept = student.department_short_name || student.department_code || ''
-                            const homeDept = student.home_department_short_name || ''
-                            const tooltip = homeDept
-                              ? `Home: ${homeDept}${sectionDept ? ` | Section: ${sectionDept}` : ''}`
-                              : (sectionDept || displayDept)
-                            return (
-                          <span className="text-sm text-slate-700">
-                              <span title={tooltip || undefined}>
-                                  {displayDept || '-'}
-                                  {student.is_shared_section && <span className="ml-1 text-xs text-amber-600 font-medium">(Y1)</span>}
-                              </span>
-                          </span>
-                            )
-                          })()}
-                        </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2 text-slate-600">
-                          {student.email ? (
-                            <>
-                              <Mail className="w-4 h-4 text-slate-400" />
-                              <span className="text-sm">{student.email}</span>
-                            </>
-                          ) : (
-                            <span className="text-sm text-slate-400">-</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          student.status === 'active' 
-                            ? 'bg-green-100 text-green-800'
-                            : student.status === 'resigned'
-                            ? 'bg-red-100 text-red-800'
-                            : student.status === 'debar'
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {student.status || 'active'}
+                  <tr 
+                    key={student.id} 
+                    className="hover:bg-blue-50 transition-colors"
+                  >
+                    <td className="py-3 px-4">
+                      <span className="text-sm font-medium text-slate-600">{startIndex + index + 1}</span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="text-sm font-semibold text-slate-900">{student.reg_no}</span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-2">
+                        <UserCircle2 className="w-5 h-5 text-slate-400" />
+                        <span className="text-sm font-medium text-slate-900">
+                          {student.username || student.name || `${student.first_name || ''} ${student.last_name || ''}`.trim()}
                         </span>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                        {(() => {
+                          const displayDept = getStudentDepartment(student)
+                          const sectionDept = student.department_short_name || student.department_code || ''
+                          const homeDept = student.home_department_short_name || ''
+                          const tooltip = homeDept
+                            ? `Home: ${homeDept}${sectionDept ? ` | Section: ${sectionDept}` : ''}`
+                            : (sectionDept || displayDept)
+                          return (
+                        <span className="text-sm text-slate-700">
+                            <span title={tooltip || undefined}>
+                                {displayDept || '-'}
+                                {student.is_shared_section && <span className="ml-1 text-xs text-amber-600 font-medium">(Y1)</span>}
+                            </span>
+                        </span>
+                          )
+                        })()}
                       </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <button 
-                            onClick={() => handleEdit(student)}
-                            className="p-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors"
-                            title="Edit Student"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          {(viewMode === 'my-students' || viewMode === 'my-mentees') && (
-                            <button
-                              onClick={() => navigate(`/staff/students/${student.id}/certificates`, { state: { student, viewMode } })}
-                              className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors flex items-center gap-1.5 font-bold text-xs"
-                              title="View Certificates"
-                            >
-                              <Award className="w-4 h-4" />
-                              <span>View</span>
-                            </button>
-                          )}
-                          {getPendingCertificatesForStudent(student).length > 0 && (
-                            <button
-                              onClick={() => {
-                                setReviewNotice(null)
-                                setReviewModalStudent(student)
-                              }}
-                              className="px-2.5 py-1.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-lg hover:bg-amber-200 transition-colors flex items-center gap-1.5 font-bold text-xs shadow-xs"
-                              title={`${getPendingCertificatesForStudent(student).length} Pending Certificate Review(s)`}
-                            >
-                              <FileText className="w-4 h-4 text-amber-700 animate-pulse" />
-                              <span>{getPendingCertificatesForStudent(student).length} Review</span>
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {expandedAchievements[student.id] && (viewMode === 'my-students' || viewMode === 'my-mentees') && (
-                      <tr className="bg-slate-50/70">
-                        <td colSpan={7} className="px-4 pb-4">
-                          <div className="rounded-xl border border-slate-200 bg-white p-4">
-                            <div className="flex items-center justify-between gap-3 mb-3">
-                              <div className="text-sm font-semibold text-slate-900">Achievements</div>
-                              <div className="text-xs text-slate-500">Approved certificates visible across the hierarchy</div>
-                            </div>
-                            {achievementLoading[student.id] ? (
-                              <div className="flex items-center gap-2 text-slate-600 py-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading achievements...</div>
-                            ) : ((achievementCache[student.id] || []).length === 0 ? (
-                              <div className="text-sm text-slate-500 py-2">No achievements found.</div>
-                            ) : (
-                              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                                {(achievementCache[student.id] || []).map((achievement) => (
-                                  <div key={achievement.id} className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-                                    <div className="text-xs uppercase tracking-wide text-emerald-700 font-semibold">{achievement.achievement_type.replace(/_/g, ' ')}</div>
-                                    <div className="font-semibold text-slate-900 mt-1">{achievement.title}</div>
-                                    <div className="text-xs text-slate-600 mt-1">{achievement.issuing_body} · {achievement.date_earned}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-2 text-slate-600">
+                        {student.email ? (
+                          <>
+                            <Mail className="w-4 h-4 text-slate-400" />
+                            <span className="text-sm">{student.email}</span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-slate-400">-</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        student.status === 'active' 
+                          ? 'bg-green-100 text-green-800'
+                          : student.status === 'resigned'
+                          ? 'bg-red-100 text-red-800'
+                          : student.status === 'debar'
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {student.status || 'active'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      <button 
+                        onClick={() => handleEdit(student)}
+                        className="p-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors"
+                        title="Edit Student"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -1553,7 +1368,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                   Showing <span className="font-semibold text-slate-900">{startIndex + 1}</span> to{' '}
                   <span className="font-semibold text-slate-900">{Math.min(endIndex, totalItems)}</span> of{' '}
                   <span className="font-semibold text-slate-900">{totalItems}</span> students
-                  <span className="text-slate-500"> (Inactive: {inactiveCount})</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -1865,194 +1679,6 @@ export default function StudentsPage({ user }: StudentsPageProps = {}) {
                 ) : (
                   <><Upload className="w-4 h-4" /> Import</>
                 )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Student Certificate Review Modal */}
-      {reviewModalStudent && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-50 to-indigo-50/50">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-amber-100 text-amber-800 rounded-xl border border-amber-200">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    Certificate Review: {reviewModalStudent.name || reviewModalStudent.username}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Reg No: <span className="font-semibold text-slate-700">{reviewModalStudent.reg_no}</span>
-                    {reviewModalStudent.department_short_name ? ` · ${reviewModalStudent.department_short_name}` : ''}
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setReviewModalStudent(null)
-                  setRejectingCert(null)
-                  setReviewNotice(null)
-                }}
-                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6 overflow-y-auto space-y-4 flex-1">
-              {reviewNotice && (
-                <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-sm font-medium flex items-center justify-between">
-                  <span>{reviewNotice}</span>
-                  <button onClick={() => setReviewNotice(null)} className="text-indigo-500 hover:text-indigo-700">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-
-              {getPendingCertificatesForStudent(reviewModalStudent).length === 0 ? (
-                <div className="py-12 text-center text-slate-500 bg-slate-50 rounded-2xl border border-slate-200">
-                  <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
-                  <p className="font-semibold text-slate-800 text-base">All clear!</p>
-                  <p className="text-xs text-slate-500 mt-1">No pending certificate submissions for this student.</p>
-                </div>
-              ) : (
-                getPendingCertificatesForStudent(reviewModalStudent).map((cert) => (
-                  <div key={cert.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 uppercase tracking-wide">
-                          {cert.certificate_type.replace(/_/g, ' ')}
-                        </span>
-                        <h4 className="text-base font-bold text-slate-900 mt-1.5">{cert.title}</h4>
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          Issued by <strong className="text-slate-800">{cert.issuing_organization}</strong>
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50 p-3 rounded-xl border border-slate-100 text-slate-600">
-                      <div>
-                        <span className="text-slate-400 block font-medium">Issue Date</span>
-                        <span className="font-semibold text-slate-800">{cert.issue_date}</span>
-                      </div>
-                      {cert.expiry_date ? (
-                        <div>
-                          <span className="text-slate-400 block font-medium">Expiry Date</span>
-                          <span className="font-semibold text-slate-800">{cert.expiry_date}</span>
-                        </div>
-                      ) : (
-                        <div>
-                          <span className="text-slate-400 block font-medium">Submitted On</span>
-                          <span className="font-semibold text-slate-800">{cert.created_at?.slice(0, 10) || cert.issue_date}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Certificate File Link & Actions */}
-                    <div className="flex items-center justify-between flex-wrap gap-3 pt-1 border-t border-slate-100">
-                      {cert.file ? (
-                        <a
-                          href={cert.file}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-semibold border border-indigo-200 transition-colors"
-                        >
-                          <Eye className="w-4 h-4 text-indigo-600" />
-                          <span>View Certificate Document</span>
-                        </a>
-                      ) : (
-                        <span className="text-xs text-slate-400">No file attached</span>
-                      )}
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleApproveCertFromModal(cert)}
-                          disabled={reviewActionLoading === cert.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 font-semibold text-xs transition-colors shadow-xs disabled:opacity-50"
-                        >
-                          {reviewActionLoading === cert.id ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Check className="w-3.5 h-3.5" />
-                          )}
-                          <span>Approve</span>
-                        </button>
-                        <button
-                          onClick={() => setRejectingCert(cert)}
-                          disabled={reviewActionLoading === cert.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 font-semibold text-xs transition-colors shadow-xs disabled:opacity-50"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          <span>Reject</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Rejection inputs when rejecting this cert */}
-                    {rejectingCert?.id === cert.id && (
-                      <div className="mt-3 p-4 bg-rose-50/70 border border-rose-200 rounded-xl space-y-3">
-                        <h5 className="text-xs font-bold text-rose-900">Rejection Details</h5>
-                        <div>
-                          <label className="block text-xs font-medium text-rose-800 mb-1">Reason</label>
-                          <select
-                            value={rejectionReason}
-                            onChange={(e) => setRejectionReason(e.target.value)}
-                            className="w-full px-3 py-2 text-xs rounded-lg border border-rose-200 bg-white text-slate-800"
-                          >
-                            {REJECTION_REASONS.map((r) => (
-                              <option key={r.value} value={r.value}>{r.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-rose-800 mb-1">Feedback Note (optional)</label>
-                          <textarea
-                            value={rejectionMessage}
-                            onChange={(e) => setRejectionMessage(e.target.value)}
-                            rows={2}
-                            placeholder="Reason for rejecting this certificate..."
-                            className="w-full px-3 py-2 text-xs rounded-lg border border-rose-200 bg-white text-slate-800"
-                          />
-                        </div>
-                        <div className="flex items-center justify-end gap-2 pt-1">
-                          <button
-                            onClick={() => setRejectingCert(null)}
-                            className="px-3 py-1.5 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={handleRejectCertFromModal}
-                            disabled={reviewActionLoading === cert.id}
-                            className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
-                          >
-                            {reviewActionLoading === cert.id && <Loader2 className="w-3 h-3 animate-spin" />}
-                            <span>Confirm Rejection</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end">
-              <button
-                onClick={() => {
-                  setReviewModalStudent(null)
-                  setRejectingCert(null)
-                  setReviewNotice(null)
-                }}
-                className="px-4 py-2 text-sm font-semibold text-slate-700 bg-slate-200 hover:bg-slate-300 rounded-xl transition-colors"
-              >
-                Close
               </button>
             </div>
           </div>

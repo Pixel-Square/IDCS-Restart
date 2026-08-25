@@ -9,7 +9,6 @@ export type SubjectBatch = {
   staff?: { id: number; user?: string; staff_id?: string; name?: string }
   created_by?: { id: number; user?: string; staff_id?: string; name?: string }
   curriculum_row?: { id: number; course_code?: string; course_name?: string }
-  elective_subject?: { id: number; course_code?: string; course_name?: string }
   students?: Array<{ id: number; reg_no: string; username: string }>
   is_active?: boolean
   created_at?: string
@@ -28,7 +27,6 @@ export async function createSubjectBatch(payload: {
   student_ids?: number[]
   academic_year?: number
   curriculum_row_id?: number
-  elective_subject_id?: number
   section_id?: number
   staff_id?: number
 }){

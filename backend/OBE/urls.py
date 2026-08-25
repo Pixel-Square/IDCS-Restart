@@ -23,7 +23,6 @@ urlpatterns = [
     path('cqi-save/<str:subject_id>', views.cqi_save),
     path('cqi-published/<str:subject_id>', views.cqi_published),
     path('cqi-publish/<str:subject_id>', views.cqi_publish),
-    path('cqi-reset-page/<str:subject_id>', views.cqi_reset_page),
 
     path('ssa1-published/<str:subject_id>', views.ssa1_published),
     path('ssa1-publish/<str:subject_id>', views.ssa1_publish),
@@ -69,9 +68,6 @@ urlpatterns = [
     # Authoritative lock state per mark-entry table
     path('mark-table-lock/<str:assessment>/<str:subject_id>', views.mark_table_lock_status),
     path('mark-table-lock/<str:assessment>/<str:subject_id>/confirm-mark-manager', views.mark_table_lock_confirm_mark_manager),
-
-    # Batch publication status for a CQI cycle (gates CQI page access on the frontend)
-    path('cqi-publication-status/<str:subject_id>', views.cqi_publication_status),
 
     path('due-schedule-subjects', views.due_schedule_subjects),
     path('due-schedules', views.due_schedules),
@@ -119,25 +115,19 @@ urlpatterns = [
     path('edit-requests/<int:req_id>/reject', views.edit_request_reject),
 
     # IQAC tools
-    path('reset/<str:assessment>/<str:subject_id>', views.faculty_reset_assessment),
     path('iqac/reset/<str:assessment>/<str:subject_id>', views.iqac_reset_assessment),
     path('iqac/reset-notifications', views.get_reset_notifications),
     path('iqac/reset-notifications/dismiss', views.dismiss_reset_notifications),
     path('iqac/class-type-weights', views.class_type_weights_list),
     path('iqac/class-type-weights/save', views.class_type_weights_upsert),
-    path('iqac/special-courses', views.iqac_special_courses_list),
     path('iqac/internal-mark-mapping/<str:subject_id>', views.internal_mark_mapping_get),
     path('iqac/internal-mark-mapping/<str:subject_id>/save', views.internal_mark_mapping_upsert),
-    path('iqac/template-apply', views.obe_template_apply),
     path('iqac/final-internal-marks/sync', views.iqac_sync_final_internal_marks),
     path('iqac/final-internal-marks/student/<int:student_id>', views.final_internal_marks_by_student),
-    path('final-internal-marks/<str:subject_id>', views.final_internal_marks_for_ta),
-    path('iqac/dashboard-analytics', views.iqac_dashboard_analytics),
 
     # IQAC QP Pattern config
     path('iqac/qp-pattern', views.qp_pattern_get),
     path('iqac/qp-pattern/save', views.qp_pattern_upsert),
-    path('iqac/special-exam-config', views.iqac_special_exam_config),
 
     # IQAC Customizable Exam (batch-scoped QP pattern overrides)
     path('iqac/custom-exam/batches', views.iqac_custom_exam_batches),

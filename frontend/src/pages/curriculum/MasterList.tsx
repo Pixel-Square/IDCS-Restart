@@ -1,11 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { fetchMasters, fetchBatchYears, createMaster, fetchDeptRows, Master, deleteMaster } from '../../services/curriculum';
+import React, { useEffect, useState } from 'react';
+import { fetchMasters, fetchBatchYears, propagateMaster, Master } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
 import { useLocation, useNavigate } from 'react-router-dom';
 import CurriculumLayout from './CurriculumLayout';
 import { Link } from 'react-router-dom';
-import { BookOpen, Download, Upload, Edit, RefreshCw, Copy, Trash2 } from 'lucide-react';
-import { showAlert, showConfirm } from '../../utils/dialog';
+import { BookOpen, Download, Upload, Edit, RefreshCw, Copy } from 'lucide-react';
 
 export default function MasterList() {
   const [data, setData] = useState<any[]>([]);
@@ -14,47 +13,18 @@ export default function MasterList() {
   const [flash, setFlash] = useState<string | null>(null);
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
+  const [propagateRow, setPropagateRow] = useState<Master | null>(null);
+  const [propagateTargets, setPropagateTargets] = useState<number[]>([]);
+  const [propagating, setPropagating] = useState(false);
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
   const [propagatingSec, setPropagatingSec] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Master | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [propagateMessage, setPropagateMessage] = useState<{ type: 'success' | 'error' | 'warn'; text: string } | null>(null);
-  const propagateMessageTimer = useRef<number | null>(null);
-  const [deptList, setDeptList] = useState<Array<{ id: number; label: string }>>([]);
-  const [batchDeptExisting, setBatchDeptExisting] = useState<Record<number, number[]>>({});
-  const userPerms = (() => {
-    try { return JSON.parse(localStorage.getItem('permissions') || '[]') as string[]; } catch { return []; }
-  })();
-  const masterWritePerms = [
-    'curriculum.master.edit',
-    'CURRICULUM_MASTER_EDIT',
-    'curriculum.master.publish',
-    'CURRICULUM_MASTER_PUBLISH',
-    'curriculum_master_edit',
-    'curriculum_master_publish',
-    'obe.master.manage',
-  ];
-  const canDeleteMaster = Array.isArray(userPerms) && userPerms.some(p => masterWritePerms.includes(p));
   const loc = useLocation();
   const navigate = useNavigate();
   const uniqueRegs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
   const uniqueSems = data && data.length ? Array.from(new Set(data.map(d => d.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(uniqueRegs.length === 1 ? uniqueRegs[0] : (uniqueRegs[0] ?? null));
   const [selectedSem, setSelectedSem] = useState<number | null>(uniqueSems.length === 1 ? uniqueSems[0] : (uniqueSems[0] ?? null));
-  const filteredData = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch)));
-  const totals = filteredData.reduce(
-    (acc, row) => {
-      acc.l += Number(row.l || 0);
-      acc.t += Number(row.t || 0);
-      acc.p += Number(row.p || 0);
-      acc.s += Number(row.s || 0);
-      acc.c += Number(row.c || 0);
-      return acc;
-    },
-    { l: 0, t: 0, p: 0, s: 0, c: 0 }
-  );
 
   useEffect(() => {
     const regs = data && data.length ? Array.from(new Set(data.map(d => d.regulation))) : [];
@@ -72,60 +42,6 @@ export default function MasterList() {
       .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    const isModalOpen = propagateSection;
-    if (!isModalOpen) {
-      setBatchDeptExisting({});
-      return;
-    }
-    const reg = selectedReg;
-    const sem = selectedSem;
-    if (!reg || !sem) return;
-
-    let active = true;
-    const load = async () => {
-      try {
-        const [depsRes, deptRows] = await Promise.all([
-          fetchWithAuth('/api/curriculum/departments/'),
-          fetchDeptRows(),
-        ]);
-        if (!active) return;
-        const depsData = depsRes.ok ? await depsRes.json() : { results: [] };
-        const depList = Array.isArray(depsData) ? depsData : (depsData.results || []);
-        const normalizedDeps = depList
-          .map((d: any) => ({
-            id: Number(d.id),
-            label: String(d.short_name || d.shortname || d.code || d.name || `Dept ${d.id}`),
-          }))
-          .filter((d: any) => d.id > 0);
-        const targets = propagateSectionTargets;
-        const existing: Record<number, Set<number>> = {};
-        for (const row of deptRows) {
-          const batchId = (row as any)?.batch?.id ?? (row as any)?.batch_id ?? null;
-          const deptId = (row as any)?.department?.id ?? null;
-          if (!batchId || !deptId) continue;
-          if (targets.length && !targets.includes(batchId)) continue;
-          if (row.regulation !== reg || row.semester !== sem) continue;
-          if (!existing[batchId]) existing[batchId] = new Set();
-          existing[batchId].add(deptId);
-        }
-        const existingMap: Record<number, number[]> = {};
-        Object.keys(existing).forEach((batchId) => {
-          existingMap[Number(batchId)] = Array.from(existing[Number(batchId)] || []);
-        });
-        setDeptList(normalizedDeps);
-        setBatchDeptExisting(existingMap);
-      } catch (e) {
-        console.error('Failed to load department occupancy', e);
-      }
-    };
-    load();
-    return () => { active = false; };
-  }, [propagateSection, propagateSectionTargets, selectedReg, selectedSem]);
-
-  const deptNameMap = new Map(deptList.map(d => [d.id, d.label]));
-  const totalDeptCount = deptList.length;
 
   // Auto-refresh when page becomes visible (e.g., returning from admin tab)
   useEffect(() => {
@@ -163,7 +79,7 @@ export default function MasterList() {
 
   function handleDownloadVisible() {
     const rows = data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && m.editable === true);
-    if (!rows.length) { showAlert('No editable subjects in current view', 'warning'); return }
+    if (!rows.length) { alert('No editable subjects in current view'); return }
     const headers = ['regulation','semester','course_code','course_name','category','class_type','l','t','p','s','c','internal_mark','external_mark','for_all_departments','editable','departments'];
     const lines = [headers.join(',')];
     for (const m of rows) {
@@ -185,7 +101,7 @@ export default function MasterList() {
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>){
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    if (!(await showConfirm(`Upload ${file.name} to import masters?`))) { e.currentTarget.value = ''; return }
+    if (!confirm(`Upload ${file.name} to import masters?`)) { e.currentTarget.value = ''; return }
     try{
       const fd = new FormData();
       fd.append('csv_file', file, file.name);
@@ -193,21 +109,21 @@ export default function MasterList() {
       const res = await fetchWithAuth(`/api/curriculum/master/import/`, { method: 'POST', body: fd });
       
       if (res.status === 401) {
-        await showAlert('Your session has expired. Please refresh the page and try again.', 'error');
+        alert('Your session has expired. Please refresh the page and try again.');
         return;
       }
       
       if (!res.ok) {
         let txt = '';
         try{ txt = await res.text() }catch(_){ txt = res.statusText }
-        await showAlert('Import failed: ' + (txt || res.statusText), 'error');
+        alert('Import failed: ' + (txt || res.statusText));
       } else {
-        await showAlert('Import request submitted; refresh to see changes.');
+        alert('Import request submitted; refresh to see changes.');
         // re-fetch masters
         setLoading(true);
         fetchMasters().then(r=> setData(r)).catch(()=>{}).finally(()=> setLoading(false));
       }
-    }catch(err:any){ console.error(err); await showAlert('Import failed: '+ (err.message || err), 'error'); }
+    }catch(err:any){ console.error(err); alert('Import failed: '+ (err.message || err)); }
     // Safely clear the file input value (element may be null if React re-rendered)
     try{
       const inp = document.getElementById('master-import-file') as HTMLInputElement | null;
@@ -216,123 +132,54 @@ export default function MasterList() {
   }
 
   async function handlePropagateSection() {
-    const visibleRows = filteredData;
+    const visibleRows = data.filter(m =>
+      (!selectedReg || m.regulation === selectedReg) &&
+      (!selectedSem || m.semester === selectedSem) &&
+      (!selectedBatch || (m.batch && m.batch.id === selectedBatch))
+    );
     if (visibleRows.length === 0) return;
-    if (propagateMessageTimer.current) {
-      window.clearTimeout(propagateMessageTimer.current);
-      propagateMessageTimer.current = null;
-    }
-    setPropagateMessage(null);
+    if (!confirm(`Propagate all ${visibleRows.length} visible row(s) to ${propagateSectionTargets.length} batch(es)?`)) return;
     setPropagatingSec(true);
     let totalSuccess = 0;
     const allErrors: string[] = [];
-    const warnings: string[] = [];
     try {
-      const deptRows = await fetchDeptRows();
-      const regs = Array.from(new Set(visibleRows.map((m) => m.regulation).filter(Boolean)));
-      const sems = Array.from(new Set(visibleRows.map((m) => m.semester).filter(Boolean)));
-      const existingMap = new Map<string, Set<number>>();
-      for (const row of deptRows) {
-        const batchId = (row as any)?.batch?.id ?? (row as any)?.batch_id ?? null;
-        const deptId = (row as any)?.department?.id ?? null;
-        if (!batchId || !deptId) continue;
-        if (!propagateSectionTargets.includes(batchId)) continue;
-        if (!regs.includes(row.regulation) || !sems.includes(row.semester)) continue;
-        const key = `${batchId}|${row.regulation}|${row.semester}`;
-        if (!existingMap.has(key)) existingMap.set(key, new Set());
-        existingMap.get(key)!.add(deptId);
-      }
-
-      const needAllDepts = visibleRows.some((m) => m.for_all_departments);
-      let allDeptIds: number[] = [];
-      if (needAllDepts) {
-        const depsRes = await fetchWithAuth('/api/curriculum/departments/');
-        const depsData = depsRes.ok ? await depsRes.json() : { results: [] };
-        const depList = Array.isArray(depsData) ? depsData : (depsData.results || []);
-        allDeptIds = depList.map((d: any) => Number(d.id)).filter((id: number) => id > 0);
-      }
-
       for (const m of visibleRows) {
-        for (const batchId of propagateSectionTargets) {
-          const key = `${batchId}|${m.regulation}|${m.semester}`;
-          const existing = existingMap.get(key) || new Set<number>();
-          const baseDepts = m.for_all_departments ? allDeptIds : (m.departments || []);
-          const allowedDepts = baseDepts.filter((id: number) => !existing.has(id));
-          const blockedCount = baseDepts.length - allowedDepts.length;
-          if (blockedCount > 0) {
-            const batchName = batchYears.find(b => b.id === batchId)?.name || String(batchId);
-            warnings.push(`Batch ${batchName}: ${blockedCount} department(s) already have subjects; propagated to ${allowedDepts.length}.`);
-          }
-          if (allowedDepts.length === 0) {
-            continue;
-          }
-          const payload: Partial<Master> = {
-            regulation: m.regulation,
-            semester: m.semester,
-            batch_id: batchId,
-            course_code: m.course_code,
-            course_name: m.course_name,
-            category: m.category,
-            class_type: m.class_type,
-            is_elective: m.is_elective,
-            l: m.l, t: m.t, p: m.p, s: m.s, c: m.c,
-            internal_mark: m.internal_mark,
-            external_mark: m.external_mark,
-            for_all_departments: false,
-            departments: allowedDepts,
-            editable: m.editable,
-          };
-          try {
-            const created = await createMaster(payload);
-            totalSuccess += 1;
-            if (created?.id) {
-              // noop
-            }
-          } catch (e: any) {
-            allErrors.push(String(e));
-          }
-        }
+        const r = await propagateMaster(m as Master, propagateSectionTargets);
+        totalSuccess += r.success.length;
+        allErrors.push(...r.errors);
       }
       if (allErrors.length) {
-        setPropagateMessage({
-          type: 'error',
-          text: `${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`,
-        });
+        alert(`${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`);
       } else {
-        const notice = warnings.length ? `\n${warnings.slice(0, 5).join('\n')}` : '';
-        setPropagateMessage({
-          type: warnings.length ? 'warn' : 'success',
-          text: `Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).${notice}`,
-        });
+        alert(`Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
       }
       await handleRefresh();
       setPropagateSection(false);
       setPropagateSecTargets([]);
     } catch (e: any) {
-      setPropagateMessage({ type: 'error', text: 'Propagation failed: ' + String(e) });
+      alert('Propagation failed: ' + String(e));
     } finally {
-      propagateMessageTimer.current = window.setTimeout(() => {
-        setPropagateMessage(null);
-        propagateMessageTimer.current = null;
-      }, 5000);
       setPropagatingSec(false);
     }
   }
 
-
-  async function handleDeleteMaster() {
-    if (!deleteTarget) return;
-    setDeleteLoading(true);
-    setDeleteError(null);
+  async function handlePropagateMaster() {
+    if (!propagateRow || propagateTargets.length === 0) return;
+    setPropagating(true);
     try {
-      await deleteMaster(deleteTarget.id);
+      const result = await propagateMaster(propagateRow, propagateTargets);
+      if (result.errors.length) {
+        alert(`${result.success.length} succeeded, ${result.errors.length} failed:\n${result.errors.join('\n')}`);
+      } else {
+        alert(`Successfully propagated to ${result.success.length} batch(es).`);
+      }
       await handleRefresh();
-      setDeleteTarget(null);
+      setPropagateRow(null);
+      setPropagateTargets([]);
     } catch (e: any) {
-      const message = String(e?.message || e || 'Delete failed');
-      setDeleteError(message);
+      alert('Propagation failed: ' + String(e));
     } finally {
-      setDeleteLoading(false);
+      setPropagating(false);
     }
   }
 
@@ -346,7 +193,6 @@ export default function MasterList() {
       setTimeout(() => setFlash(null), 2500);
     }
   }, [loc, navigate]);
-
 
 
   if (loading) return (
@@ -470,19 +316,6 @@ export default function MasterList() {
             {flash}
           </div>
         )}
-        {propagateMessage && (
-          <div
-            className={`mb-4 rounded-lg px-4 py-2 text-sm font-semibold whitespace-pre-wrap ${
-              propagateMessage.type === 'success'
-                ? 'bg-green-100 text-green-800'
-                : propagateMessage.type === 'warn'
-                ? 'bg-amber-100 text-amber-800'
-                : 'bg-rose-100 text-rose-800'
-            }`}
-          >
-            {propagateMessage.text}
-          </div>
-        )}
         
         {/* Scrollable Table View */}
         <div className="w-full overflow-x-auto bg-white rounded-lg shadow-md">
@@ -509,14 +342,14 @@ export default function MasterList() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredData.length === 0 ? (
+                {data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch))).length === 0 ? (
                   <tr>
                     <td colSpan={16} className="px-4 py-8 text-center text-gray-500">
                       No curriculum entries found for the selected filters.
                     </td>
                   </tr>
                 ) : (
-                  filteredData.map(m => (
+                  data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch))).map(m => (
                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${m.editable ? 'bg-blue-50/30' : ''}`}>
                       <td className="px-3 py-3 text-sm text-gray-900 whitespace-nowrap">{m.course_code || '-'}</td>
                       <td className="px-3 py-3 text-sm whitespace-nowrap">
@@ -559,13 +392,13 @@ export default function MasterList() {
                           >
                             <Edit className="w-4 h-4" />
                           </Link>
-                          {canDeleteMaster && (
+                          {batchYears.length > 1 && (
                             <button
-                              onClick={() => { setDeleteTarget(m); setDeleteError(null); }}
-                              className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                              title="Delete"
+                              onClick={() => { setPropagateRow(m); setPropagateTargets([]); }}
+                              className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                              title="Propagate to other batch"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Copy className="w-4 h-4" />
                             </button>
                           )}
                           {m.status === 'PENDING' && (
@@ -589,17 +422,6 @@ export default function MasterList() {
                     </tr>
                   ))
                 )}
-                {filteredData.length > 0 && (
-                  <tr className="bg-gray-50 font-semibold">
-                    <td colSpan={6} className="px-3 py-3 text-sm text-gray-700">Total</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.l}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.t}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.p}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.s}</td>
-                    <td className="px-3 py-3 text-sm text-center text-gray-900">{totals.c}</td>
-                    <td colSpan={6} className="px-3 py-3"></td>
-                  </tr>
-                )}
               </tbody>
             </table>
         </div>
@@ -610,7 +432,7 @@ export default function MasterList() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate Entire Section</h3>
             <p className="text-sm text-gray-500 mb-1">
-              Copy <strong>all {filteredData.length} visible rows</strong>
+              Copy <strong>all {data.filter(m => (!selectedReg || m.regulation === selectedReg) && (!selectedSem || m.semester === selectedSem) && (!selectedBatch || (m.batch && m.batch.id === selectedBatch))).length} visible rows</strong>
             </p>
             <p className="text-xs text-gray-400 mb-4">
               Reg: <span className="font-medium">{selectedReg || 'All'}</span> &nbsp;|&nbsp;
@@ -621,12 +443,8 @@ export default function MasterList() {
             <div className="space-y-2 mb-5">
               {batchYears
                 .filter(b => !selectedBatch || b.id !== selectedBatch)
-                .map(b => {
-                  const existingIds = batchDeptExisting[b.id] || [];
-                  const isBlocked = totalDeptCount > 0 && existingIds.length >= totalDeptCount;
-                  const existingNames = existingIds.map(id => deptNameMap.get(id)).filter(Boolean).join(', ');
-                  return (
-                  <label key={b.id} className={`flex items-center gap-3 p-2 rounded-lg ${isBlocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
                     <input
                       type="checkbox"
                       className="w-4 h-4 rounded border-gray-300 accent-purple-600"
@@ -636,18 +454,10 @@ export default function MasterList() {
                           e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
                         )
                       }
-                      disabled={isBlocked}
                     />
                     <span className="text-sm font-medium text-gray-700">{b.name}</span>
-                    {existingNames && (
-                      <span className="ml-auto text-xs text-amber-700">Existing: {existingNames}</span>
-                    )}
-                    {isBlocked && (
-                      <span className="ml-auto text-xs text-rose-600">All depts filled</span>
-                    )}
                   </label>
-                  );
-                })}
+                ))}
             </div>
             <div className="flex gap-3 justify-end">
               <button
@@ -668,40 +478,54 @@ export default function MasterList() {
         </div>
       )}
 
-      {deleteTarget && (
+      {/* Propagate Row Modal */}
+      {propagateRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <h3 className="text-lg font-bold text-gray-900">Delete Master Curriculum</h3>
-            <p className="text-sm text-gray-600 mt-2">
-              Are you sure you want to delete{' '}
-              <span className="font-semibold">{deleteTarget.course_name || deleteTarget.course_code || 'this subject'}</span>?
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate to Other Batch</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Copy <strong>{propagateRow.course_name || propagateRow.course_code}</strong>{' '}
+              (Batch: <span className="font-medium text-indigo-700">{(propagateRow as any).batch?.name || '—'}</span>) to:
             </p>
-            <p className="text-xs text-gray-400 mt-1">This action cannot be undone.</p>
-            {deleteError && (
-              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 whitespace-pre-wrap">
-                {deleteError}
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-3">
+            <div className="space-y-2 mb-5">
+              {batchYears
+                .filter(b => b.id !== ((propagateRow as any).batch?.id ?? propagateRow.batch_id))
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300 accent-purple-600"
+                      checked={propagateTargets.includes(b.id)}
+                      onChange={e =>
+                        setPropagateTargets(prev =>
+                          e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
+                        )
+                      }
+                    />
+                    <span className="text-sm font-medium text-gray-700">{b.name}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="flex gap-3 justify-end">
               <button
-                onClick={() => { if (!deleteLoading) setDeleteTarget(null); }}
+                onClick={() => { setPropagateRow(null); setPropagateTargets([]); }}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                disabled={deleteLoading}
               >
                 Cancel
               </button>
               <button
-                onClick={handleDeleteMaster}
-                disabled={deleteLoading}
-                className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 disabled:opacity-50"
+                disabled={propagateTargets.length === 0 || propagating}
+                onClick={handlePropagateMaster}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
               >
-                {deleteLoading ? 'Deleting…' : 'Delete'}
+                {propagating
+                  ? 'Propagating…'
+                  : `Propagate to ${propagateTargets.length} batch${propagateTargets.length !== 1 ? 'es' : ''}`}
               </button>
             </div>
           </div>
         </div>
       )}
-
     </CurriculumLayout>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Fingerprint, Search, RotateCcw, Save, AlertCircle,
-  CheckCircle2, Loader2, Usb, X, Play, Scan, Sparkles, UserCheck, UserPlus,
+  CheckCircle2, Loader2, Usb,
 } from 'lucide-react';
 import { getApiBase } from '../../services/apiBase';
 
@@ -47,45 +47,31 @@ function getDeviceName(port: any): string {
    Supports: SecuGen WebAPI · Mantra MFS100 · Demo (simulated)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-type ScannerType = 'auto' | 'secugen' | 'mantra' | 'esp32_bridge' | 'demo';
+type ScannerType = 'auto' | 'secugen' | 'mantra' | 'demo' | 'wifi_esp32';
 type ResolvedScannerType = Exclude<ScannerType, 'auto'>;
 
 interface CaptureResult {
   template_b64: string;
   quality_score: number;
-  slot?: number;
-  user_id?: string;
-  slot_map?: Record<string, string>;
-  esp32_output?: string;
 }
 
 const SCANNER_DEFAULTS: Record<ResolvedScannerType, string> = {
   secugen: 'https://localhost:8443',
   mantra: 'https://127.0.0.1:11100',
-  esp32_bridge: '/fingerprint-bridge',
   demo: '',
+  wifi_esp32: '',
 };
 
-const ESP32_BRIDGE_CANDIDATES = [
-  'http://192.168.29.159',
-  '/fingerprint-bridge',
-  'http://localhost:8889',
-  'http://127.0.0.1:8889',
-  'http://0.0.0.0:8889',
-];
-
-const SCANNER_LABELS: Record<ScannerType, string> = {
-  auto: 'Auto-detect',
-  secugen: 'SecuGen WebAPI',
-  mantra: 'Mantra MFS100',
-  esp32_bridge: 'ESP32 Fingerprint Bridge',
-  demo: 'Demo (Simulated)',
+const SCANNER_LABELS: Record<ResolvedScannerType, string> = {
+  secugen: 'SecuGen WebAPI (Hamster Pro / FDU04)',
+  mantra: 'Mantra MFS100 RD Service',
+  demo: 'Demo Mode (Simulated Data)',
+  wifi_esp32: 'ESP32 BioSecure (College Wi-Fi)',
 };
 
 async function captureFromScanner(
   type: ResolvedScannerType,
   url: string,
-  opts?: { userId?: string; mode?: 'C' | 'M'; slot?: number },
 ): Promise<CaptureResult> {
   /* ── Demo mode ─────────────────────────────────────────────── */
   if (type === 'demo') {
@@ -139,73 +125,19 @@ async function captureFromScanner(
     const text = await res.text();
     const doc = new DOMParser().parseFromString(text, 'text/xml');
     const resp = doc.querySelector('Resp');
-    if (resp?.getAttribute('errCode') !== '0') {
-      throw new Error(resp?.getAttribute('errInfo') || 'Mantra capture failed.');
-    }
-    const pidData = doc.querySelector('Data');
-    const template = pidData?.textContent?.trim();
+    const errCode = resp?.getAttribute('errCode') || '1';
+    if (errCode !== '0')
+      throw new Error(
+        `Mantra error: ${resp?.getAttribute('errInfo') || 'Unknown'}`,
+      );
+    const dataEl = doc.querySelector('Data');
+    const template = dataEl?.textContent || '';
     if (!template) {
       throw new Error('Scanner returned no template data.');
     }
     return {
       template_b64: template,
       quality_score: parseInt(resp?.getAttribute('qScore') || '0', 10),
-    };
-  }
-
-  /* ── ESP32 HTTP Bridge ───────────────────────────────────── */
-  if (type === 'esp32_bridge') {
-    const statusRes = await fetch(`${url}/status`, { method: 'GET' });
-    if (!statusRes.ok) {
-      throw new Error(`Bridge status failed (${statusRes.status}).`);
-    }
-    const statusData = await statusRes.json().catch(() => ({}));
-    if (!statusData?.connected) {
-      const reconnectRes = await fetch(`${url}/reconnect`, { method: 'POST' });
-      const reconnectData = await reconnectRes.json().catch(() => ({}));
-      if (!reconnectRes.ok || !reconnectData?.connected) {
-        throw new Error('Fingerprint bridge is running but no sensor is connected. Check USB cable/port and retry.');
-      }
-    }
-
-    if (opts?.mode) {
-      try {
-        const modeRes = await fetch(`${url}/mode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: opts.mode }),
-        }).catch(() => null);
-        if (modeRes && !modeRes.ok) {
-          const modeData = await modeRes.json().catch(() => ({}));
-          if (modeData?.error && modeRes.status !== 405) {
-            console.warn(`Mode switch ${opts.mode} returned non-ok:`, modeData.error);
-          }
-        }
-      } catch {
-        // Non-blocking mode switch
-      }
-    }
-
-    const captureRes = await fetch(`${url}/capture`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: String(opts?.userId || 'capture'),
-        mode: opts?.mode,
-        slot: opts?.slot,
-      }),
-    });
-    const captureData = await captureRes.json().catch(() => ({}));
-    if (!captureRes.ok || !captureData?.template_b64) {
-      throw new Error(captureData?.error || `Bridge capture failed (${captureRes.status}).`);
-    }
-    return {
-      template_b64: String(captureData.template_b64),
-      quality_score: Number(captureData.quality_score ?? 0),
-      slot: captureData.slot ?? undefined,
-      user_id: captureData.user_id ?? undefined,
-      slot_map: captureData.slot_map ?? undefined,
-      esp32_output: captureData.esp32_output ?? undefined,
     };
   }
 
@@ -217,22 +149,6 @@ async function probeScannerAvailable(
   url: string,
 ): Promise<boolean> {
   if (type === 'demo') return true;
-  if (type === 'esp32_bridge') {
-    try {
-      const statusRes = await fetch(`${url}/status`, { method: 'GET' });
-      if (statusRes.ok) {
-        const statusData = await statusRes.json().catch(() => ({}));
-        return typeof statusData?.connected === 'boolean' ? true : Boolean(statusData);
-      }
-
-      const reconnectRes = await fetch(`${url}/reconnect`, { method: 'POST' });
-      if (!reconnectRes.ok) return false;
-      const reconnectData = await reconnectRes.json().catch(() => ({}));
-      return Boolean(reconnectData?.connected) || reconnectRes.ok;
-    } catch {
-      return false;
-    }
-  }
   try {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 3000);
@@ -252,13 +168,12 @@ async function detectScannerConnection(
     return { available: true, resolvedType: 'demo', resolvedUrl: '' };
   }
 
-  if (type === 'secugen' || type === 'mantra' || type === 'esp32_bridge') {
+  if (type === 'secugen' || type === 'mantra') {
     const available = await probeScannerAvailable(type, url);
     return { available, resolvedType: available ? type : null, resolvedUrl: available ? url : '' };
   }
 
   const candidates: Array<{ type: ResolvedScannerType; url: string }> = [
-    ...ESP32_BRIDGE_CANDIDATES.map((u) => ({ type: 'esp32_bridge' as const, url: u })),
     { type: 'secugen', url: SCANNER_DEFAULTS.secugen },
     { type: 'mantra', url: SCANNER_DEFAULTS.mantra },
   ];
@@ -278,11 +193,10 @@ async function detectScannerConnection(
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const FINGERS = [
-  { key: 'R_INDEX_1', label: 'Right Index (Sample 1)' },
-  { key: 'R_INDEX_2', label: 'Right Index (Sample 2)' },
-  { key: 'R_INDEX_3', label: 'Right Index (Sample 3)' },
-  { key: 'R_INDEX_4', label: 'Right Index (Sample 4)' },
-  { key: 'R_INDEX_5', label: 'Right Index (Sample 5)' },
+  { key: 'R_THUMB', label: 'Right Thumb' },
+  { key: 'R_INDEX', label: 'Right Index' },
+  { key: 'L_THUMB', label: 'Left Thumb' },
+  { key: 'L_INDEX', label: 'Left Index' },
 ] as const;
 
 type FingerKey = (typeof FINGERS)[number]['key'];
@@ -295,7 +209,6 @@ interface FingerSlot {
   status: FingerStatus;
   template_b64: string | null;
   quality_score: number | null;
-  slot?: number | null;
   errorMsg: string | null;
 }
 
@@ -309,41 +222,6 @@ interface UserInfo {
   enrolled: boolean;
   count: number;
   fingers: string[];
-}
-
-interface IdentifiedUser {
-  user_id: number;
-  user_name: string;
-  user_type: string;
-  identifier: string;
-  department: string;
-  profile_image: string;
-  finger?: string;
-}
-
-interface MonitorEvent {
-  at: string;
-  status: 'matched' | 'unmatched' | 'error';
-  text: string;
-}
-
-async function readApiErrorMessage(res: Response, fallback: string): Promise<string> {
-  try {
-    const payload = await res.json();
-    if (typeof payload?.detail === 'string' && payload.detail.trim()) return payload.detail;
-    if (Array.isArray(payload?.detail) && payload.detail.length) return String(payload.detail[0]);
-    if (payload?.detail && typeof payload.detail === 'object') return JSON.stringify(payload.detail);
-    if (typeof payload?.error === 'string' && payload.error.trim()) return payload.error;
-    if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message;
-  } catch {}
-
-  try {
-    const raw = await res.text();
-    if (!raw) return fallback;
-    return raw.length > 220 ? `${raw.slice(0, 220)}…` : raw;
-  } catch {
-    return fallback;
-  }
 }
 
 const emptySlots = (): FingerSlot[] =>
@@ -383,9 +261,6 @@ export default function FingerprintEnrollPage() {
 
   /* ── Finger capture slots ────────────────────────────────── */
   const [slots, setSlots] = useState<FingerSlot[]>(emptySlots());
-  const [autoEnrolling, setAutoEnrolling] = useState(false);
-  const [activeFingerIndex, setActiveFingerIndex] = useState<number>(-1);
-  const autoCancelRef = useRef(false);
 
   /* ── Global state ────────────────────────────────────────── */
   const [saving, setSaving] = useState(false);
@@ -395,77 +270,8 @@ export default function FingerprintEnrollPage() {
     text: string;
   } | null>(null);
 
-  /* ── Live monitoring state ──────────────────────────────── */
-  const [monitoring, setMonitoring] = useState(false);
-  const [monitorBusy, setMonitorBusy] = useState(false);
-  const [monitorError, setMonitorError] = useState<string | null>(null);
-  const [lastIdentified, setLastIdentified] = useState<IdentifiedUser | null>(null);
-  const [monitorEvents, setMonitorEvents] = useState<MonitorEvent[]>([]);
-  const monitorActiveRef = useRef(false);
-  const monitorConsecutiveErrorsRef = useRef(0);
-
-  /* ── Test modal state ────────────────────────────────────── */
-  const [showTestModal, setShowTestModal] = useState(false);
-  const [testSearching, setTestSearching] = useState(false);
-  const [testScanResult, setTestScanResult] = useState<{
-    status: 'matched' | 'unregistered' | 'none';
-    user: IdentifiedUser | null;
-    slot?: number | null;
-    timestamp?: string;
-  }>({ status: 'none', user: null });
-  const [testSearchStatus, setTestSearchStatus] = useState<string>('Waiting for finger on sensor...');
-  const testActiveRef = useRef(false);
-
-  /* ── Register New Fingerprint Modal State ────────────────── */
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [selectedUserForEnroll, setSelectedUserForEnroll] = useState<any | null>(null);
-
   const apiBase = getApiBase();
   const token = () => localStorage.getItem('access') || '';
-
-  const resolveScannerForCapture = useCallback((): { type: ResolvedScannerType; url: string } | null => {
-    const resolvedType: ResolvedScannerType | null =
-      scannerType === 'auto' ? scannerDetectedType : scannerType;
-    if (!resolvedType) return null;
-    const resolvedUrl =
-      resolvedType === 'demo'
-        ? ''
-        : scannerType === 'auto'
-          ? SCANNER_DEFAULTS[resolvedType]
-          : scannerUrl;
-    return { type: resolvedType, url: resolvedUrl };
-  }, [scannerDetectedType, scannerType, scannerUrl]);
-
-  const runScannerDetection = useCallback(
-    async (preferredType: ScannerType = 'auto', preferredUrl = '') => {
-      setScannerOnline(null);
-      setScannerDetectedType(null);
-      setDeviceConnecting(true);
-      try {
-        const result = await detectScannerConnection(preferredType, preferredUrl);
-        setScannerOnline(result.available);
-        setScannerDetectedType(result.resolvedType);
-        if (result.resolvedType) {
-          setScannerType(result.resolvedType);
-        }
-        if (result.resolvedUrl) {
-          setScannerUrl(result.resolvedUrl);
-        }
-        if (!result.available && window.location.protocol === 'https:') {
-          setUsbError('Browser blocked local scanner access from HTTPS page. Allow Local network access for this site in browser Site settings, then retry detection.');
-        } else if (result.available) {
-          setUsbError(null);
-        }
-        return result.available;
-      } finally {
-        setDeviceConnecting(false);
-      }
-    },
-    [],
-  );
 
   /* ── Select USB Port via Web Serial API ──────────────────── */
   const handleSelectPort = useCallback(async () => {
@@ -481,430 +287,33 @@ export default function FingerprintEnrollPage() {
       }
       setUsbPort(p);
       setUsbDeviceName(getDeviceName(p));
+
       // Auto-detect scanner type after port is selected
-      await runScannerDetection('auto', '');
+      setScannerOnline(null);
+      setScannerDetectedType(null);
+      setDeviceConnecting(true);
+      try {
+        const result = await detectScannerConnection('auto', '');
+        setScannerType(result.resolvedType ? (result.resolvedType as ScannerType) : 'auto');
+        setScannerOnline(result.available);
+        setScannerDetectedType(result.resolvedType);
+        if (result.resolvedUrl) setScannerUrl(result.resolvedUrl);
+      } finally {
+        setDeviceConnecting(false);
+      }
     } catch (e: any) {
       if (e?.name !== 'NotAllowedError')
         setUsbError('Could not select port: ' + (e?.message ?? String(e)));
     }
-  }, [runScannerDetection]);
-
-  useEffect(() => {
-    if (!usbPort) return;
-    if (scannerOnline !== false) return;
-    if (deviceConnecting) return;
-
-    const id = window.setInterval(() => {
-      if (deviceConnecting) return;
-      runScannerDetection('auto', '').catch(() => {});
-    }, 4000);
-
-    return () => window.clearInterval(id);
-  }, [usbPort, scannerOnline, deviceConnecting, runScannerDetection]);
+  }, []);
 
   /* ── Cleanup USB port on unmount ─────────────────────────── */
   useEffect(() => {
     return () => {
-      monitorActiveRef.current = false;
       try { readerRef.current?.cancel(); } catch {}
       try { usbPort?.close(); } catch {}
     };
   }, [usbPort]);
-
-  const runMonitorOnce = useCallback(async () => {
-    const resolved = resolveScannerForCapture();
-    if (!resolved) {
-      setMonitorError('No scanner detected. Connect scanner and retry monitoring.');
-      return;
-    }
-
-    setMonitorBusy(true);
-    try {
-      const capture = await captureFromScanner(resolved.type, resolved.url, {
-        userId: resolved.type === 'esp32_bridge' ? 'verify' : undefined,
-        mode: resolved.type === 'esp32_bridge' ? 'M' : undefined,
-      });
-      if (!monitorActiveRef.current) return;
-
-      const res = await fetch(`${apiBase}/api/idscan/fingerprint/identify/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token()}`,
-        },
-        body: JSON.stringify({
-          template_b64: capture.template_b64,
-          slot: capture.slot,
-          slot_id: capture.slot,
-          user_id: capture.user_id,
-          device_id: resolved.type === 'esp32_bridge' ? 'esp32_bridge' : undefined,
-        }),
-      });
-
-      if (!monitorActiveRef.current) return;
-
-      if (res.ok) {
-        const data = await res.json();
-        const identified: IdentifiedUser = {
-          user_id: Number(data.user_id),
-          user_name: String(data.user_name || ''),
-          user_type: String(data.user_type || ''),
-          identifier: String(data.identifier || ''),
-          department: String(data.department || ''),
-          profile_image: String(data.profile_image || ''),
-          finger: String(data.finger || ''),
-        };
-        setLastIdentified(identified);
-        setMonitorError(null);
-        monitorConsecutiveErrorsRef.current = 0;
-        setMonitorEvents((prev) => [
-          { at: new Date().toLocaleTimeString(), status: 'matched' as const, text: `${identified.user_name} (${identified.identifier})` },
-          ...prev,
-        ].slice(0, 8));
-        return;
-      }
-
-      if (res.status === 404) {
-        const err = await res.json().catch(() => ({}));
-        const unmatchedMsg = String(err?.detail || 'Finger detected but no enrolled match found');
-        setLastIdentified(null);
-        monitorConsecutiveErrorsRef.current = 0;
-        setMonitorEvents((prev) => [
-          { at: new Date().toLocaleTimeString(), status: 'unmatched' as const, text: unmatchedMsg },
-          ...prev,
-        ].slice(0, 8));
-        return;
-      }
-
-      const err = await res.json().catch(() => ({}));
-      const msg = String(err?.detail || `Identify failed (${res.status})`);
-      setMonitorError(msg);
-      monitorConsecutiveErrorsRef.current += 1;
-      setMonitorEvents((prev) => [
-        { at: new Date().toLocaleTimeString(), status: 'error' as const, text: msg },
-        ...prev,
-      ].slice(0, 8));
-
-      if (monitorConsecutiveErrorsRef.current >= 5) {
-        setMonitoring(false);
-        setMonitorError('Monitoring auto-stopped after repeated errors. Please reconnect scanner and start monitoring again.');
-      }
-    } catch (e: any) {
-      if (!monitorActiveRef.current) return;
-      const msg = e?.message || 'Monitoring capture failed';
-      setMonitorError(msg);
-      monitorConsecutiveErrorsRef.current += 1;
-      setMonitorEvents((prev) => [
-        { at: new Date().toLocaleTimeString(), status: 'error' as const, text: msg },
-        ...prev,
-      ].slice(0, 8));
-
-      if (monitorConsecutiveErrorsRef.current >= 5) {
-        setMonitoring(false);
-        setMonitorError('Monitoring auto-stopped after repeated errors. Please reconnect scanner and start monitoring again.');
-      }
-    } finally {
-      if (monitorActiveRef.current) setMonitorBusy(false);
-    }
-  }, [apiBase, resolveScannerForCapture]);
-
-  const refreshMonitoringSection = useCallback(() => {
-    monitorActiveRef.current = false;
-    monitorConsecutiveErrorsRef.current = 0;
-    setMonitoring(false);
-    setMonitorBusy(false);
-    setMonitorError(null);
-    setLastIdentified(null);
-    setMonitorEvents([]);
-  }, []);
-
-  const startMonitoring = useCallback(async () => {
-    const resolved = resolveScannerForCapture();
-    if (!resolved) {
-      setMonitorError('No scanner detected. Connect scanner and retry monitoring.');
-      return;
-    }
-
-    if (resolved.type === 'esp32_bridge') {
-      try {
-        const modeRes = await fetch(`${resolved.url}/mode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'M' }),
-        }).catch(() => null);
-        if (modeRes && !modeRes.ok) {
-          const modeData = await modeRes.json().catch(() => ({}));
-          if (modeData?.error && modeRes.status !== 405) {
-            console.warn('Mode switch response:', modeData.error);
-          }
-        }
-      } catch (e: any) {
-        console.warn('Non-fatal mode switch issue:', e?.message);
-      }
-    }
-
-    setMonitorError(null);
-    setMonitoring(true);
-  }, [resolveScannerForCapture]);
-
-  const refreshCaptureSection = useCallback(() => {
-    setMessage(null);
-    setSlots((prev) => {
-      if (!userInfo) return prev;
-      return prev.map((slot) => ({
-        ...slot,
-        status: userInfo.fingers.includes(slot.finger) ? 'enrolled' : 'empty',
-        template_b64: null,
-        quality_score: null,
-        errorMsg: null,
-      }));
-    });
-  }, [userInfo]);
-
-  useEffect(() => {
-    if (!monitoring) {
-      monitorActiveRef.current = false;
-      setMonitorBusy(false);
-      return;
-    }
-
-    monitorActiveRef.current = true;
-    let cancelled = false;
-
-    const loop = async () => {
-      while (monitorActiveRef.current && !cancelled) {
-        await runMonitorOnce();
-        if (!monitorActiveRef.current || cancelled) break;
-        await new Promise((r) => setTimeout(r, 1500));
-      }
-    };
-
-    loop();
-
-    return () => {
-      cancelled = true;
-      monitorActiveRef.current = false;
-      setMonitorBusy(false);
-    };
-  }, [monitoring, runMonitorOnce]);
-
-  /* ── Test Popup Search Loop ──────────────────────────────── */
-  const openTestModal = useCallback(async () => {
-    const resolved = resolveScannerForCapture();
-    if (!resolved) {
-      setMessage({ type: 'error', text: 'Please connect a fingerprint scanner first.' });
-      return;
-    }
-
-    if (resolved.type === 'esp32_bridge') {
-      try {
-        await fetch(`${resolved.url}/mode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'M' }),
-        }).catch(() => null);
-      } catch (e) {
-        console.warn('Mode switch for test:', e);
-      }
-    }
-
-    setTestScanResult({ status: 'none', user: null });
-    setTestSearchStatus('Place finger on sensor to test search...');
-    setShowTestModal(true);
-  }, [resolveScannerForCapture]);
-
-  const closeTestModal = useCallback(() => {
-    testActiveRef.current = false;
-    setShowTestModal(false);
-    setTestSearching(false);
-  }, []);
-
-  useEffect(() => {
-    if (!showTestModal) {
-      testActiveRef.current = false;
-      setTestSearching(false);
-      return;
-    }
-
-    testActiveRef.current = true;
-    let cancelled = false;
-
-    const runTestLoop = async () => {
-      while (testActiveRef.current && !cancelled) {
-        const resolved = resolveScannerForCapture();
-        if (!resolved) {
-          setTestSearchStatus('Scanner disconnected.');
-          break;
-        }
-
-        setTestSearching(true);
-
-        try {
-          const capture = await captureFromScanner(resolved.type, resolved.url, {
-            userId: resolved.type === 'esp32_bridge' ? 'verify' : undefined,
-            mode: resolved.type === 'esp32_bridge' ? 'M' : undefined,
-          });
-
-          if (!testActiveRef.current || cancelled) break;
-
-          if (capture.template_b64) {
-            setTestSearchStatus('Finger detected! Searching in database...');
-
-            let isMatched = false;
-            try {
-              const res = await fetch(`${apiBase}/api/idscan/fingerprint/identify/`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token()}`,
-                },
-                body: JSON.stringify({
-                  template_b64: capture.template_b64,
-                  slot: capture.slot,
-                  user_id: capture.user_id,
-                  slot_map: capture.slot_map,
-                }),
-              });
-
-              if (!testActiveRef.current || cancelled) break;
-
-              if (res.ok) {
-                const data = await res.json();
-                const identified: IdentifiedUser = {
-                  user_id: Number(data.user_id),
-                  user_name: String(data.user_name || ''),
-                  user_type: String(data.user_type || ''),
-                  identifier: String(data.identifier || ''),
-                  department: String(data.department || ''),
-                  profile_image: String(data.profile_image || ''),
-                  finger: String(data.finger || ''),
-                };
-                setTestScanResult({
-                  status: 'matched',
-                  user: identified,
-                  slot: data.slot || null,
-                  timestamp: new Date().toLocaleTimeString(),
-                });
-                setTestSearchStatus(`✓ Identified: ${identified.user_name} (Listening for next finger...)`);
-                isMatched = true;
-              }
-            } catch (netErr) {
-              console.warn('Identify network call error:', netErr);
-            }
-
-            if (!isMatched) {
-              // Unregistered fingerprint detected on hardware
-              setTestScanResult({
-                status: 'unregistered',
-                user: null,
-                timestamp: new Date().toLocaleTimeString(),
-              });
-              setTestSearchStatus('⚠️ Fingerprint detected, but no matching user is registered in the database.');
-            }
-          }
-        } catch (err: any) {
-          // Scanner still waiting for next finger
-        } finally {
-          if (testActiveRef.current && !cancelled) {
-            setTestSearching(false);
-          }
-        }
-
-        if (!testActiveRef.current || cancelled) break;
-        // Pause briefly before listening for the next test fingerprint
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    };
-
-    runTestLoop();
-
-    return () => {
-      cancelled = true;
-      testActiveRef.current = false;
-    };
-  }, [showTestModal, apiBase, resolveScannerForCapture]);
-
-  /* ── Live People Search for Registration Modal ──────────── */
-  useEffect(() => {
-    const q = searchQuery.trim();
-    if (q.length < 1) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setSearchLoading(true);
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/idscan/people-search/?q=${encodeURIComponent(q)}`, {
-          headers: { Authorization: `Bearer ${token()}` },
-        });
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setSearchResults(Array.isArray(data) ? data : []);
-        }
-      } catch (err) {
-        console.error('People search failed:', err);
-      } finally {
-        if (!cancelled) setSearchLoading(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [searchQuery, apiBase]);
-
-  const selectUserForRegistration = useCallback(async (u: any) => {
-    setSelectedUserForEnroll(u);
-    const resolvedType = u.user_type === 'staff' ? 'staff_id' : 'reg_no';
-    setIdType(resolvedType);
-    setIdValue(u.identifier);
-
-    // Initial state
-    setUserInfo({
-      user_id: u.user_id || u.id,
-      user_type: u.user_type,
-      identifier: u.identifier,
-      user_name: u.user_name,
-      department: u.department,
-      profile_image: u.profile_image,
-      enrolled: false,
-      count: 0,
-      fingers: [],
-    });
-
-    setSlots(emptySlots());
-    setMessage(null);
-
-    // Immediately fetch enrolled fingers status from backend
-    try {
-      const param =
-        resolvedType === 'reg_no'
-          ? `reg_no=${encodeURIComponent(u.identifier)}`
-          : `staff_id=${encodeURIComponent(u.identifier)}`;
-      const res = await fetch(
-        `${apiBase}/api/idscan/fingerprint/status/?${param}`,
-        { headers: { Authorization: `Bearer ${token()}` } },
-      );
-      if (res.ok) {
-        const data: UserInfo = await res.json();
-        setUserInfo(data);
-        const enrolledFingers = data.fingers || [];
-        setSlots((prev) =>
-          prev.map((s) => ({
-            ...s,
-            status: enrolledFingers.includes(s.finger) ? 'enrolled' : 'empty',
-          })),
-        );
-      }
-    } catch (e) {
-      console.warn('Auto status check on select failed:', e);
-    }
-  }, [apiBase]);
 
   /* ── User lookup ─────────────────────────────────────────── */
   const lookupUser = useCallback(async () => {
@@ -943,166 +352,146 @@ export default function FingerprintEnrollPage() {
     }
   }, [idType, idValue, apiBase]);
 
-  /* ── Save single finger immediately to backend ──────────── */
-  const saveSingleFingerToBackend = async (
-    fingerKey: FingerKey,
-    templateB64: string,
-    qualityScore: number,
-    slotNumber?: number | null,
-  ): Promise<{ success: boolean; error?: string }> => {
-    if (!userInfo) return { success: false, error: 'No user selected' };
-    try {
-      const body: Record<string, any> = {
-        finger: fingerKey,
-        template_b64: templateB64,
-        template_format: 'ISO_19794_2',
-        quality_score: qualityScore,
-        device_type: scannerType,
-      };
-      if (slotNumber !== undefined && slotNumber !== null) {
-        body.slot_id = slotNumber;
-        body.slot = slotNumber;
+  /* ── Capture a single finger ─────────────────────────────── */
+  const captureFinger = useCallback(
+    async (fingerKey: FingerKey) => {
+      const resolvedType: ResolvedScannerType | null =
+        scannerType === 'auto' ? scannerDetectedType : scannerType;
+      if (!resolvedType) {
+        setMessage({
+          type: 'error',
+          text: 'No local fingerprint scanner bridge was detected. Install the vendor SDK/driver and refresh detection.',
+        });
+        return;
       }
-      if (idType === 'reg_no') body.reg_no = idValue.trim();
-      else body.staff_id = idValue.trim();
 
-      const res = await fetch(`${apiBase}/api/idscan/fingerprint/enroll/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token()}`,
-        },
-        body: JSON.stringify(body),
-      });
+      const resolvedUrl =
+        resolvedType === 'demo'
+          ? ''
+          : scannerType === 'auto'
+            ? SCANNER_DEFAULTS[resolvedType]
+            : scannerUrl;
 
-      if (!res.ok) {
-        const errorText = await readApiErrorMessage(res, `Save failed (${res.status})`);
-        return { success: false, error: errorText };
-      }
-      return { success: true };
-    } catch (err: any) {
-      console.error('Error saving finger to backend:', err);
-      return { success: false, error: err?.message || 'Save error' };
-    }
-  };
-
-  /* ── Automated sequential capture ────────────────────────── */
-  const stopAutoEnrollment = useCallback(() => {
-    autoCancelRef.current = true;
-    setAutoEnrolling(false);
-    setActiveFingerIndex(-1);
-  }, []);
-
-  const startAutoEnrollment = useCallback(async () => {
-    if (!userInfo) return;
-    const resolved = resolveScannerForCapture();
-    if (!resolved) {
-      setMessage({ type: 'error', text: 'No scanner connected. Please connect scanner first.' });
-      return;
-    }
-
-    autoCancelRef.current = false;
-    setAutoEnrolling(true);
-    setMessage(null);
-
-    let enrolledCountAcc = 0;
-
-    for (let i = 0; i < FINGERS.length; i++) {
-      if (autoCancelRef.current) break;
-
-      const f = FINGERS[i];
-      setActiveFingerIndex(i);
-
-      // Mark current as capturing
       setSlots((prev) =>
-        prev.map((s) => (s.finger === f.key ? { ...s, status: 'capturing', errorMsg: null } : s)),
+        prev.map((s) =>
+          s.finger === fingerKey
+            ? { ...s, status: 'capturing', errorMsg: null }
+            : s,
+        ),
       );
-
-      let captureSuccess = false;
-      let lastError = '';
-
-      // Try capturing with retries
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        if (autoCancelRef.current) break;
-
-        try {
-          const esp32CaptureUserId =
-            resolved.type === 'esp32_bridge'
-              ? String(userInfo.identifier || idValue.trim() || f.key || 'capture').trim()
-              : undefined;
-
-          // Dynamically allocate unique dedicated hardware slot on R305
-          let targetSlot = i + 1;
-          if (resolved.type === 'esp32_bridge') {
-            try {
-              const idParam = idType === 'reg_no' ? `reg_no=${encodeURIComponent(idValue.trim())}` : `staff_id=${encodeURIComponent(idValue.trim())}`;
-              const slotRes = await fetch(`${apiBase}/api/idscan/fingerprint/allocate-slot/?${idParam}&finger=${f.key}`, {
-                headers: { Authorization: `Bearer ${token()}` },
-              });
-              if (slotRes.ok) {
-                const slotData = await slotRes.json();
-                if (slotData?.slot) targetSlot = Number(slotData.slot);
-              }
-            } catch (slotErr) {
-              console.warn('Slot allocation fallback to local index:', slotErr);
-            }
-          }
-
-          const result = await captureFromScanner(resolved.type, resolved.url, {
-            userId: esp32CaptureUserId,
-            mode: resolved.type === 'esp32_bridge' ? 'C' : undefined,
-            slot: targetSlot,
-          });
-
-          if (result.template_b64) {
-            setSlots((prev) =>
-              prev.map((s) =>
-                s.finger === f.key
-                  ? {
-                      ...s,
-                      status: 'enrolled',
-                      template_b64: result.template_b64,
-                      quality_score: result.quality_score,
-                      slot: result.slot ?? targetSlot,
-                      errorMsg: null,
-                    }
-                  : s,
-              ),
-            );
-            captureSuccess = true;
-            enrolledCountAcc++;
-            break;
-          }
-        } catch (err: any) {
-          lastError = err?.message || 'Capture failed';
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-      }
-
-      if (!captureSuccess && !autoCancelRef.current) {
+      setMessage(null);
+      try {
+        const result = await captureFromScanner(resolvedType, resolvedUrl);
         setSlots((prev) =>
           prev.map((s) =>
-            s.finger === f.key ? { ...s, status: 'error', errorMsg: lastError || 'Capture failed' } : s,
+            s.finger === fingerKey
+              ? {
+                  ...s,
+                  status: 'captured',
+                  template_b64: result.template_b64,
+                  quality_score: result.quality_score,
+                  errorMsg: null,
+                }
+              : s,
+          ),
+        );
+      } catch (e: any) {
+        setSlots((prev) =>
+          prev.map((s) =>
+            s.finger === fingerKey
+              ? {
+                  ...s,
+                  status: 'error',
+                  errorMsg: e.message || 'Capture failed',
+                }
+              : s,
           ),
         );
       }
+    },
+    [scannerType, scannerUrl],
+  );
 
-      // Short breathing pause for user to switch finger
-      if (!autoCancelRef.current && i < FINGERS.length - 1) {
-        await new Promise((r) => setTimeout(r, 1200));
+  /* ── Save all newly captured fingers ─────────────────────── */
+  const saveAll = useCallback(async () => {
+    if (!userInfo) return;
+    const toSave = slots.filter(
+      (s) => s.status === 'captured' && s.template_b64,
+    );
+    if (toSave.length === 0) {
+      setMessage({ type: 'info', text: 'No new captures to save.' });
+      return;
+    }
+    setSaving(true);
+    setMessage(null);
+    let successCount = 0;
+    let lastError = '';
+
+    for (const slot of toSave) {
+      try {
+        const body: Record<string, any> = {
+          finger: slot.finger,
+          template_b64: slot.template_b64,
+          template_format: 'ISO_19794_2',
+          quality_score: slot.quality_score,
+          device_type: scannerType,
+        };
+        if (idType === 'reg_no') body.reg_no = idValue.trim();
+        else body.staff_id = idValue.trim();
+
+        const res = await fetch(
+          `${apiBase}/api/idscan/fingerprint/enroll/`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token()}`,
+            },
+            body: JSON.stringify(body),
+          },
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `Save failed (${res.status})`);
+        }
+        setSlots((prev) =>
+          prev.map((s) =>
+            s.finger === slot.finger ? { ...s, status: 'enrolled' } : s,
+          ),
+        );
+        successCount++;
+      } catch (e: any) {
+        lastError = e.message;
+        setSlots((prev) =>
+          prev.map((s) =>
+            s.finger === slot.finger
+              ? { ...s, status: 'error', errorMsg: e.message }
+              : s,
+          ),
+        );
       }
     }
-
-    setAutoEnrolling(false);
-    setActiveFingerIndex(-1);
-
-    if (!autoCancelRef.current) {
+    setSaving(false);
+    if (successCount === toSave.length) {
+      setSlots((prev) =>
+        prev.map((s) =>
+          s.status === 'enrolled'
+            ? { ...s, template_b64: null, quality_score: null, errorMsg: null }
+            : s,
+        ),
+      );
       setMessage({
-        type: 'info',
-        text: `Captured ${enrolledCountAcc}/${FINGERS.length} fingers. Click "Save Fingerprints to Database" below to store.`,
+        type: 'success',
+        text: `All ${successCount} fingerprint(s) saved successfully.`,
+      });
+      lookupUser();
+    } else {
+      setMessage({
+        type: 'error',
+        text: `Saved ${successCount}/${toSave.length}. Error: ${lastError}`,
       });
     }
-  }, [userInfo, resolveScannerForCapture, idValue, idType, scannerType, apiBase]);
+  }, [userInfo, slots, idType, idValue, scannerType, apiBase, lookupUser]);
 
   /* ── Reset ALL fingerprints for user ─────────────────────── */
   const resetAll = useCallback(async () => {
@@ -1152,8 +541,10 @@ export default function FingerprintEnrollPage() {
     }
   }, [userInfo, idType, idValue, apiBase]);
 
-  const activeSlot = activeFingerIndex >= 0 ? slots[activeFingerIndex] : null;
+  /* ── Derived counts ──────────────────────────────────────── */
+  const capturedCount = slots.filter((s) => s.status === 'captured').length;
   const enrolledCount = slots.filter((s) => s.status === 'enrolled').length;
+  const canSave = capturedCount > 0 && !saving;
   const canReset = enrolledCount > 0 && !resetting;
   const activeScannerLabel =
     scannerDetectedType
@@ -1166,465 +557,14 @@ export default function FingerprintEnrollPage() {
      Render
      ═══════════════════════════════════════════════════════════ */
   return (
-    <div className="max-w-4xl mx-auto p-4 sm:p-6 relative">
-      {/* Header with Test Button */}
-      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
-            <Fingerprint className="w-7 h-7" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              Fingerprint Enrollment
-            </h1>
-            <p className="text-xs text-gray-500">
-              Enroll and test biometric verification with ESP32 & optical fingerprint scanner
-            </p>
-          </div>
-        </div>
-
-        {/* Top Action Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Register New Fingerprint Button */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowRegisterModal(true);
-              setSearchQuery('');
-              setSearchResults([]);
-            }}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-sm font-semibold rounded-xl shadow-md transition transform active:scale-95"
-          >
-            <UserPlus className="w-4 h-4 text-indigo-200" />
-            Register New Fingerprint
-          </button>
-
-          {/* Test Fingerprint Search Button */}
-          <button
-            type="button"
-            onClick={openTestModal}
-            disabled={deviceConnecting || (scannerOnline === false && scannerType !== 'demo')}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold rounded-xl shadow-md transition transform active:scale-95 disabled:opacity-50"
-          >
-            <Sparkles className="w-4 h-4 text-emerald-200 animate-spin" />
-            Test Fingerprint Search
-          </button>
-        </div>
+    <div className="max-w-4xl mx-auto p-4 sm:p-6">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <Fingerprint className="w-7 h-7 text-indigo-600" />
+        <h1 className="text-2xl font-bold text-gray-900">
+          Fingerprint Enrollment
+        </h1>
       </div>
-
-      {/* ── Register New Fingerprint Modal ────────────────────── */}
-      {showRegisterModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 max-w-2xl w-full p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100">
-                  <UserPlus className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-gray-900">Register New Fingerprint</h3>
-                  <p className="text-xs text-gray-500">Search student or staff by name, register number, username, or staff ID</p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowRegisterModal(false)}
-                className="p-2 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Realtime Search Input */}
-            <div className="relative mb-6">
-              <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                Search User (Realtime)
-              </label>
-              <div className="relative">
-                <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Type student name, reg no (e.g. 2403811714821042), staff ID, or username..."
-                  className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none transition shadow-xs"
-                  autoFocus
-                />
-                {searchLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-indigo-600 absolute right-3.5 top-1/2 -translate-y-1/2" />
-                ) : searchQuery ? (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                ) : null}
-              </div>
-
-              {/* Realtime Dropdown Results */}
-              {searchQuery.trim().length > 0 && (
-                <div className="mt-2 bg-white border border-gray-200 rounded-2xl shadow-xl max-h-60 overflow-y-auto divide-y divide-gray-100 z-20">
-                  {searchResults.length === 0 && !searchLoading ? (
-                    <div className="p-4 text-center text-xs text-gray-500">
-                      No matching student or staff found for "{searchQuery}".
-                    </div>
-                  ) : (
-                    searchResults.map((u) => (
-                      <button
-                        key={`${u.user_type}-${u.identifier}`}
-                        type="button"
-                        onClick={() => selectUserForRegistration(u)}
-                        className={`w-full p-3.5 text-left flex items-center justify-between gap-3 hover:bg-indigo-50/80 transition ${
-                          selectedUserForEnroll?.identifier === u.identifier ? 'bg-indigo-50' : ''
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          {u.profile_image ? (
-                            <img src={u.profile_image} alt="" className="w-10 h-10 rounded-xl object-cover border border-gray-200 shrink-0" />
-                          ) : (
-                            <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm shrink-0">
-                              {(u.user_name || '?').slice(0, 1).toUpperCase()}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <div className="font-semibold text-sm text-gray-900 truncate flex items-center gap-2">
-                              {u.user_name}
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-bold capitalize">
-                                {u.user_type}
-                              </span>
-                            </div>
-                            <div className="text-xs text-gray-500 truncate">
-                              ID: <strong className="text-gray-700">{u.identifier}</strong>
-                              {u.department ? ` • ${u.department}` : ''}
-                            </div>
-                          </div>
-                        </div>
-
-                        <span className="text-xs font-semibold text-indigo-600 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100 shrink-0">
-                          Select User
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Selected User & Finger Guidance Section */}
-            {selectedUserForEnroll && (
-              <div className="rounded-2xl border-2 border-indigo-200 bg-indigo-50/40 p-5 mb-6 animate-in slide-in-from-top-2 duration-300">
-                <div className="flex items-center justify-between mb-4 pb-3 border-b border-indigo-100">
-                  <div className="flex items-center gap-3">
-                    {selectedUserForEnroll.profile_image ? (
-                      <img src={selectedUserForEnroll.profile_image} alt="" className="w-12 h-12 rounded-xl object-cover border border-indigo-200" />
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg">
-                        {(selectedUserForEnroll.user_name || '?').slice(0, 1).toUpperCase()}
-                      </div>
-                    )}
-                    <div>
-                      <h4 className="font-bold text-sm text-gray-900">{selectedUserForEnroll.user_name}</h4>
-                      <p className="text-xs text-gray-600">
-                        {selectedUserForEnroll.identifier} • {selectedUserForEnroll.department || selectedUserForEnroll.user_type}
-                      </p>
-                    </div>
-                  </div>
-
-                  {!autoEnrolling ? (
-                    <button
-                      type="button"
-                      onClick={startAutoEnrollment}
-                      disabled={scannerOnline === false && scannerType !== 'demo'}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-md transition disabled:opacity-50"
-                    >
-                      <Fingerprint className="w-4 h-4 animate-pulse" />
-                      Start Capturing 5 Index Samples
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={stopAutoEnrollment}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-red-100 text-red-700 text-xs font-semibold rounded-xl"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Cancel
-                    </button>
-                  )}
-                </div>
-
-                {/* Finger Step-by-Step Guidance */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 mb-4">
-                  {slots.map((slot, idx) => {
-                    const isCur = autoEnrolling && activeFingerIndex === idx;
-                    const isEnr = slot.status === 'enrolled';
-                    const isErr = slot.status === 'error';
-
-                    return (
-                      <div
-                        key={slot.finger}
-                        className={`p-3 rounded-xl border text-center transition-all ${
-                          isEnr
-                            ? 'bg-green-50 border-green-300'
-                            : isCur
-                              ? 'bg-indigo-100/90 border-indigo-600 ring-2 ring-indigo-300'
-                              : isErr
-                                ? 'bg-red-50 border-red-200'
-                                : 'bg-white border-gray-200'
-                        }`}
-                      >
-                        <div className="flex justify-center mb-1.5">
-                          {isEnr ? (
-                            <CheckCircle2 className="w-5 h-5 text-green-600" />
-                          ) : isCur ? (
-                            <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
-                          ) : isErr ? (
-                            <AlertCircle className="w-5 h-5 text-red-500" />
-                          ) : (
-                            <Fingerprint className="w-5 h-5 text-gray-400" />
-                          )}
-                        </div>
-                        <div className="text-xs font-bold text-gray-800">{slot.label}</div>
-                        <div className={`text-[10px] mt-0.5 font-medium ${
-                          isEnr ? 'text-green-700' : isCur ? 'text-indigo-700' : isErr ? 'text-red-600' : 'text-gray-400'
-                        }`}>
-                          {isEnr ? '✓ Captured' : isCur ? 'Place now…' : isErr ? (slot.errorMsg || 'Failed') : `Step #${idx + 1}`}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Explicit Save Fingerprints to Database Button */}
-                {slots.some((s) => s.status === 'enrolled' && s.template_b64) && !autoEnrolling && (
-                  <div className="pt-3 border-t border-indigo-100 flex items-center justify-between gap-3 flex-wrap animate-in fade-in duration-300">
-                    <p className="text-xs text-indigo-900 font-medium">
-                      ✓ {slots.filter((s) => s.status === 'enrolled').length} fingers ready. Click to finalize database storage.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setSaving(true);
-                        setMessage(null);
-                        let savedCount = 0;
-                        let lastSaveErr = '';
-
-                        for (const slot of slots) {
-                          if (slot.status === 'enrolled' && slot.template_b64) {
-                            const res = await saveSingleFingerToBackend(
-                              slot.finger,
-                              slot.template_b64,
-                              slot.quality_score || 80,
-                              slot.slot,
-                            );
-                            if (res.success) {
-                              savedCount++;
-                            } else {
-                              lastSaveErr = res.error || 'Failed to save finger';
-                              setSlots((prev) =>
-                                prev.map((s) =>
-                                  s.finger === slot.finger ? { ...s, status: 'error', errorMsg: lastSaveErr } : s,
-                                ),
-                              );
-                            }
-                          }
-                        }
-
-                        setSaving(false);
-                        if (savedCount > 0) {
-                          setMessage({
-                            type: 'success',
-                            text: `🎉 Success! Stored ${savedCount} biometric fingerprint(s) for ${selectedUserForEnroll.user_name} into database.`,
-                          });
-                          lookupUser();
-                        } else if (lastSaveErr) {
-                          setMessage({
-                            type: 'error',
-                            text: lastSaveErr,
-                          });
-                        }
-                      }}
-                      disabled={saving}
-                      className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold rounded-xl shadow-md transition transform active:scale-95 disabled:opacity-50"
-                    >
-                      {saving ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="w-4 h-4" />
-                      )}
-                      {saving ? 'Storing Fingerprints in Database...' : 'Save Fingerprints to Database'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Modal Footer */}
-            <div className="flex items-center justify-between border-t border-gray-100 pt-4">
-              <span className="text-xs text-gray-500">
-                Templates are stored directly in the database and synced for live biometric verification.
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowRegisterModal(false)}
-                className="px-5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-xl transition"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Test Search Popup Modal ─────────────────────────────── */}
-      {showTestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 max-w-xl w-full p-6 sm:p-8 relative overflow-hidden">
-            {/* Background Decorative Rings */}
-            <div className="absolute -top-16 -right-16 w-44 h-44 bg-indigo-100/60 rounded-full blur-2xl pointer-events-none" />
-            <div className="absolute -bottom-16 -left-16 w-44 h-44 bg-emerald-100/60 rounded-full blur-2xl pointer-events-none" />
-
-            {/* Modal Header */}
-            <div className="flex items-center justify-between mb-6 relative z-10">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
-                  <Scan className="w-5 h-5 animate-pulse" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-gray-900">Live Biometric Test Search</h3>
-                  <p className="text-xs text-gray-500">Continuous background search & identification loop</p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={closeTestModal}
-                className="p-2 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Animated Finger Placement Area */}
-            <div className="rounded-2xl bg-gradient-to-b from-slate-900 via-indigo-950 to-slate-900 p-6 sm:p-8 text-center text-white relative mb-6 shadow-inner border border-slate-800">
-              <div className="relative inline-block mb-4">
-                <div className="w-24 h-24 rounded-full bg-emerald-500/20 border-4 border-emerald-400/40 flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/10">
-                  <Fingerprint className={`w-14 h-14 ${testSearching ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
-                </div>
-                <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-white rounded-full p-1 shadow">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                </div>
-              </div>
-
-              <h4 className="text-lg font-bold text-white mb-1">
-                {testSearching ? 'Scanning Fingerprint…' : 'Place Finger on Sensor'}
-              </h4>
-              <p className="text-xs text-slate-300 max-w-sm mx-auto">
-                Hold any enrolled finger firmly on the sensor. Matches are identified in real-time while continuously listening for next scans.
-              </p>
-
-              <div className="mt-4 inline-flex items-center gap-2 bg-white/10 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-medium text-emerald-300 border border-white/10">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                {testSearchStatus}
-              </div>
-            </div>
-
-            {/* Scan State Card Area */}
-            {testScanResult.status === 'matched' && testScanResult.user ? (
-              <div className="rounded-2xl border-2 border-emerald-400/80 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 p-4 shadow-md transition animate-in slide-in-from-bottom-2 duration-300">
-                <div className="flex items-center gap-4">
-                  {testScanResult.user.profile_image ? (
-                    <img
-                      src={testScanResult.user.profile_image}
-                      alt=""
-                      className="w-16 h-16 rounded-2xl object-cover border-2 border-emerald-300 shadow-sm shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-2xl bg-emerald-600 text-white flex items-center justify-center text-xl font-bold shrink-0 shadow-sm">
-                      {(testScanResult.user.user_name || '?').slice(0, 1).toUpperCase()}
-                    </div>
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-base font-bold text-gray-900 truncate">
-                        {testScanResult.user.user_name}
-                      </h4>
-                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs capitalize">
-                        {testScanResult.user.user_type}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1 text-xs text-gray-700">
-                      <div>
-                        <span className="text-gray-500">ID / Reg No: </span>
-                        <strong className="font-semibold text-gray-900">{testScanResult.user.identifier}</strong>
-                      </div>
-                      {testScanResult.user.department && (
-                        <div>
-                          <span className="text-gray-500">Dept: </span>
-                          <strong className="font-semibold text-gray-900">{testScanResult.user.department}</strong>
-                        </div>
-                      )}
-                      {testScanResult.user.finger && (
-                        <div className="col-span-2">
-                          <span className="text-gray-500">Finger: </span>
-                          <span className="inline-flex items-center gap-1 font-medium text-emerald-800 bg-emerald-100/70 px-2 py-0.5 rounded-md">
-                            <UserCheck className="w-3 h-3 text-emerald-700" />
-                            {testScanResult.user.finger}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-2.5 border-t border-emerald-200/60 flex items-center justify-between text-[11px] text-emerald-800">
-                  <span className="font-medium">✓ Verified & matched in database ({testScanResult.timestamp})</span>
-                  <span className="text-gray-500">Listening for next finger…</span>
-                </div>
-              </div>
-            ) : testScanResult.status === 'unregistered' ? (
-              <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm transition animate-in slide-in-from-bottom-2 duration-300 text-left">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                    <AlertCircle className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-amber-900">Fingerprint Detected (Unregistered)</h4>
-                    <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
-                      A physical fingerprint was scanned on the sensor at {testScanResult.timestamp}, but no matching user profile was found enrolled in the database.
-                    </p>
-                    <div className="mt-2.5 inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-900 bg-amber-200/60 px-2.5 py-1 rounded-lg">
-                      <Fingerprint className="w-3.5 h-3.5" />
-                      Place another enrolled finger on the scanner to test...
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-gray-300 p-5 text-center text-xs text-gray-400 bg-gray-50/60 flex flex-col items-center justify-center gap-1">
-                <Fingerprint className="w-6 h-6 text-gray-300 animate-pulse" />
-                <span>Place any finger on the scanner. Identified profile or scan info will stay here until the next finger is detected.</span>
-              </div>
-            )}
-
-            {/* Footer Buttons */}
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeTestModal}
-                className="px-5 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold transition"
-              >
-                Close Popup
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Web Serial not supported banner */}
       {!serialSupported && (
@@ -1634,34 +574,20 @@ export default function FingerprintEnrollPage() {
       )}
 
       {/* ══════════════════════════════════════════════════════════
-         Step 1 – Connect Fingerprint Device
+         Step 1 – Connect Scanner
          ══════════════════════════════════════════════════════════ */}
-      <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden mb-6">
-        <div className="px-6 py-4 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-xl bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">
-              1
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-gray-800">Connect Fingerprint Device</h2>
-              <p className="text-[11px] text-gray-500">Connect your USB or WiFi ESP32 R305/R307 biometric scanner</p>
-            </div>
-          </div>
-
-          {(usbPort || scannerOnline) && (
-            <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-3.5 py-1.5 shadow-xs">
-              <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
-              <span className="text-xs font-bold text-green-800">{usbDeviceName || 'Scanner Connected & Ready'}</span>
-            </div>
-          )}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-4">
+        <div className="px-5 py-3 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
+          <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">1</span>
+          <span className="text-sm font-semibold text-gray-700">Connect Scanner</span>
         </div>
 
-        <div className="p-6 space-y-4">
+        <div className="p-5 space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
             <button
               onClick={handleSelectPort}
               disabled={!serialSupported || deviceConnecting}
-              className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-2xl px-5 py-2.5 text-sm font-semibold shadow-sm transition"
+              className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition"
             >
               {deviceConnecting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1671,83 +597,141 @@ export default function FingerprintEnrollPage() {
               Select USB Port
             </button>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="http://192.168.29.159"
-                value={scannerUrl}
-                onChange={(e) => setScannerUrl(e.target.value)}
-                className="border border-gray-300 rounded-2xl px-4 py-2.5 text-xs font-mono w-60 focus:ring-2 focus:ring-indigo-500 focus:outline-none shadow-xs"
-              />
-              <button
-                type="button"
-                onClick={() => runScannerDetection('esp32_bridge', scannerUrl || 'http://192.168.29.159')}
-                disabled={deviceConnecting}
-                className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl px-4 py-2.5 text-xs font-semibold border border-gray-300 transition shadow-xs"
-              >
-                Connect WiFi ESP32
-              </button>
-            </div>
+            {/* Wi-Fi ESP32 Network Enrollment Sync Trigger */}
+            <button
+              onClick={async () => {
+                try {
+                  setDeviceConnecting(true);
+                  const isEnrolling = scannerDetectedType === 'wifi_esp32';
+                  const nextMode = isEnrolling ? 'ATTENDANCE' : 'ENROLL';
+                  const res = await fetch(`${apiBase}/api/idscan/biosecure/device/mode/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      mode: nextMode,
+                      user_id: userInfo?.user_id || null,
+                      reg_no: userInfo?.identifier || null,
+                      finger: 'Right Index'
+                    })
+                  });
+                  if (res.ok) {
+                    if (nextMode === 'ENROLL') {
+                      setScannerDetectedType('wifi_esp32' as any);
+                      setScannerOnline(true);
+                      setMessage({ type: 'success', text: 'ESP32 is now in Enrollment Mode! Place student finger on sensor.' });
+                    } else {
+                      setScannerDetectedType(null);
+                      setScannerOnline(null);
+                      setMessage({ type: 'info', text: 'ESP32 returned to Live Attendance Input Mode.' });
+                    }
+                  }
+                } catch (e: any) {
+                  setMessage({ type: 'error', text: 'Failed to toggle ESP32 mode: ' + e.message });
+                } finally {
+                  setDeviceConnecting(false);
+                }
+              }}
+              disabled={deviceConnecting}
+              className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition ${
+                scannerDetectedType === 'wifi_esp32'
+                  ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+              }`}
+            >
+              {deviceConnecting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Fingerprint className="w-4 h-4" />
+              )}
+              {scannerDetectedType === 'wifi_esp32' ? 'Stop ESP32 Enrollment' : 'Connect Wi-Fi ESP32'}
+            </button>
+
+            {scannerDetectedType === 'wifi_esp32' && (
+              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-2 text-xs font-bold text-emerald-800 animate-pulse">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                ESP32 Priority Enrollment Active (College Wi-Fi)
+              </div>
+            )}
+
+            {usbPort && (
+              <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-xl px-4 py-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-green-500 flex-shrink-0" />
+                <div>
+                  <div className="text-xs font-bold text-green-800 leading-tight">{usbDeviceName || 'Device connected'}</div>
+                  <div className="text-xs text-green-600">
+                    {activeScannerLabel}{scannerOnline === true ? ' · ready' : scannerOnline === false ? ' · scanner not detected' : ' · detecting...'}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {usbError && (
-            <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-xs text-red-600">
+            <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-600">
               {usbError}
+            </div>
+          )}
+
+          {usbPort && scannerOnline === false && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+              USB port connected but no fingerprint scanner bridge was detected. Ensure the vendor SDK service (SecuGen / Mantra) is running on this machine.
             </div>
           )}
         </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-         Main Action Hub: Register User & Test Fingerprint
+         Step 2 – Find User
          ══════════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-        {/* Card 1: Register New Fingerprint */}
-        <div className="rounded-3xl border-2 border-indigo-100 bg-gradient-to-br from-indigo-50/50 via-white to-indigo-50/30 p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition">
+      <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
+        <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-bold">2</span>
+          Find User
+        </h2>
+        <div className="flex flex-wrap gap-3 items-end">
           <div>
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center mb-4 shadow-md shadow-indigo-200">
-              <UserPlus className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-bold text-gray-900 mb-1">Register Users Fingerprints</h3>
-            <p className="text-xs text-gray-600 leading-relaxed mb-4">
-              Search any student or staff in real-time by Name, Register Number, Staff ID, or Username, then sequentially register and save all 4 fingers directly to database.
-            </p>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Identifier Type
+            </label>
+            <select
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              value={idType}
+              onChange={(e) =>
+                setIdType(e.target.value as 'reg_no' | 'staff_id')
+              }
+            >
+              <option value="reg_no">Register Number</option>
+              <option value="staff_id">Staff ID</option>
+            </select>
           </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setShowRegisterModal(true);
-              setSearchQuery('');
-              setSearchResults([]);
-            }}
-            className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-2xl shadow-md transition transform active:scale-95"
-          >
-            <UserPlus className="w-4 h-4" />
-            Open Register User Window
-          </button>
-        </div>
-
-        {/* Card 2: Test Fingerprint Search */}
-        <div className="rounded-3xl border-2 border-emerald-100 bg-gradient-to-br from-emerald-50/50 via-white to-teal-50/30 p-6 shadow-sm flex flex-col justify-between hover:shadow-md transition">
-          <div>
-            <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center mb-4 shadow-md shadow-emerald-200">
-              <Sparkles className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-bold text-gray-900 mb-1">Test Fingerprint Verification</h3>
-            <p className="text-xs text-gray-600 leading-relaxed mb-4">
-              Place any finger on the sensor. If registered, displays verified profile card. If unregistered, detects physical presence and reports unregistered notice.
-            </p>
+          <div className="flex-1 min-w-[180px]">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              {idType === 'reg_no' ? 'Register Number' : 'Staff ID'}
+            </label>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              value={idValue}
+              onChange={(e) => setIdValue(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && lookupUser()}
+              placeholder={
+                idType === 'reg_no'
+                  ? 'e.g. 811722104001'
+                  : 'e.g. KR001'
+              }
+            />
           </div>
-
           <button
-            type="button"
-            onClick={openTestModal}
-            disabled={deviceConnecting || (scannerOnline === false && scannerType !== 'demo')}
-            className="w-full inline-flex items-center justify-center gap-2 py-3 px-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-sm font-semibold rounded-2xl shadow-md transition transform active:scale-95 disabled:opacity-50"
+            onClick={lookupUser}
+            disabled={lookingUp || !idValue.trim()}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
-            <Sparkles className="w-4 h-4 animate-spin" />
-            Launch Test Fingerprint Search
+            {lookingUp ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Search className="w-4 h-4" />
+            )}
+            Search
           </button>
         </div>
       </div>
@@ -1755,7 +739,7 @@ export default function FingerprintEnrollPage() {
       {/* ── Message banner ─────────────────────────────────────── */}
       {message && (
         <div
-          className={`mb-4 p-4 rounded-2xl text-sm flex items-start gap-2.5 ${
+          className={`mb-4 p-3 rounded-lg text-sm flex items-start gap-2 ${
             message.type === 'error'
               ? 'bg-red-50 text-red-700 border border-red-200'
               : message.type === 'success'
@@ -1764,15 +748,219 @@ export default function FingerprintEnrollPage() {
           }`}
         >
           {message.type === 'error' ? (
-            <AlertCircle className="w-5 h-5 shrink-0" />
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
           ) : message.type === 'success' ? (
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
+            <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
           ) : (
-            <AlertCircle className="w-5 h-5 shrink-0" />
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
           )}
-          <span>{message.text}</span>
+          {message.text}
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════
+         User info card
+         ══════════════════════════════════════════════════════════ */}
+      {userInfo && (
+        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
+          <div className="flex items-center gap-4">
+            {userInfo.profile_image ? (
+              <img
+                src={userInfo.profile_image}
+                alt=""
+                className="w-14 h-14 rounded-full object-cover border-2 border-gray-200"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-lg">
+                {(userInfo.user_name || '?')[0].toUpperCase()}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-gray-900 truncate">
+                {userInfo.user_name || '—'}
+              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600 mt-0.5">
+                <span className="capitalize">
+                  Type: <strong>{userInfo.user_type}</strong>
+                </span>
+                <span>
+                  ID: <strong>{userInfo.identifier}</strong>
+                </span>
+                {userInfo.department && (
+                  <span>
+                    Dept: <strong>{userInfo.department}</strong>
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-gray-500 text-xs">Enrolled</p>
+              <p className="text-2xl font-bold text-indigo-600">
+                {userInfo.count}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════
+         Step 2 – Capture fingerprints
+         ══════════════════════════════════════════════════════════ */}
+      {userInfo && (
+        <>
+          <div className="bg-white border border-gray-200 rounded-xl p-4 mb-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-bold">3</span>
+              Capture Fingerprints
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {slots.map((slot) => (
+                <FingerCard
+                  key={slot.finger}
+                  slot={slot}
+                  onCapture={() => captureFinger(slot.finger)}
+                  disabled={
+                    saving ||
+                    resetting ||
+                    (scannerOnline === false && scannerType !== 'demo')
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* ── Action buttons ─────────────────────────────────── */}
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={saveAll}
+              disabled={!canSave}
+              className="flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            >
+              {saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+              {saving
+                ? 'Saving...'
+                : `Save ${capturedCount} Fingerprint${capturedCount !== 1 ? 's' : ''}`}
+            </button>
+            <button
+              onClick={resetAll}
+              disabled={!canReset}
+              className="flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            >
+              {resetting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <RotateCcw className="w-4 h-4" />
+              )}
+              {resetting ? 'Resetting...' : 'Reset All Fingerprints'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Finger Card sub-component
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function FingerCard({
+  slot,
+  onCapture,
+  disabled,
+}: {
+  slot: FingerSlot;
+  onCapture: () => void;
+  disabled: boolean;
+}) {
+  const cfg: Record<
+    FingerStatus,
+    { bg: string; border: string; icon: React.ReactNode; label: string }
+  > = {
+    empty: {
+      bg: 'bg-gray-50',
+      border: 'border-gray-200',
+      icon: <Fingerprint className="w-10 h-10 text-gray-300" />,
+      label: 'Not captured',
+    },
+    capturing: {
+      bg: 'bg-amber-50',
+      border: 'border-amber-300',
+      icon: <Loader2 className="w-10 h-10 text-amber-500 animate-spin" />,
+      label: 'Place finger on scanner...',
+    },
+    captured: {
+      bg: 'bg-blue-50',
+      border: 'border-blue-400',
+      icon: <Fingerprint className="w-10 h-10 text-blue-500" />,
+      label: 'Captured (unsaved)',
+    },
+    enrolled: {
+      bg: 'bg-green-50',
+      border: 'border-green-400',
+      icon: <CheckCircle2 className="w-10 h-10 text-green-500" />,
+      label: 'Enrolled',
+    },
+    error: {
+      bg: 'bg-red-50',
+      border: 'border-red-300',
+      icon: <AlertCircle className="w-10 h-10 text-red-400" />,
+      label: 'Error',
+    },
+  };
+
+  const c = cfg[slot.status];
+  const isCapturing = slot.status === 'capturing';
+  const canCapture = !isCapturing && !disabled;
+  const btnLabel =
+    slot.status === 'enrolled' || slot.status === 'captured'
+      ? 'Re-capture'
+      : slot.status === 'error'
+        ? 'Retry'
+        : 'Capture';
+
+  return (
+    <div
+      className={`rounded-xl border-2 ${c.border} ${c.bg} p-5 flex flex-col items-center text-center transition-all`}
+    >
+      {c.icon}
+      <p className="mt-2 font-semibold text-gray-800">{slot.label}</p>
+      <p
+        className={`text-xs mt-0.5 ${
+          slot.status === 'error' ? 'text-red-600' : 'text-gray-500'
+        }`}
+      >
+        {slot.status === 'error' ? slot.errorMsg : c.label}
+      </p>
+      {slot.quality_score != null && slot.status !== 'empty' && (
+        <p className="text-xs text-gray-500 mt-1">
+          Quality:{' '}
+          <strong
+            className={
+              slot.quality_score >= 60 ? 'text-green-600' : 'text-amber-600'
+            }
+          >
+            {slot.quality_score}%
+          </strong>
+        </p>
+      )}
+      <button
+        onClick={onCapture}
+        disabled={!canCapture}
+        className={`mt-3 px-4 py-1.5 text-sm font-medium rounded-lg transition ${
+          isCapturing
+            ? 'bg-amber-200 text-amber-800 cursor-wait'
+            : canCapture
+              ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+              : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+        }`}
+      >
+        {isCapturing ? 'Scanning...' : btnLabel}
+      </button>
     </div>
   );
 }

@@ -3521,8 +3521,46 @@ class FingerprintIdentifyView(APIView):
     def post(self, request):
         data = request.data or {}
         b64 = (data.get("template_b64") or "").strip()
+
+        # ── Step 0: Hardware slot lookup from ESP32 R305 onboard search
+        req_slot = data.get('slot')
+        if req_slot is None:
+            req_slot = data.get('slot_id')
+
+        matched_slot_num = None
+        if req_slot is not None and str(req_slot).strip() not in ('0', '', 'None', '-1'):
+            try:
+                matched_slot_num = int(str(req_slot).strip())
+            except Exception:
+                matched_slot_num = None
+
+        req_device = (data.get('device_id') or data.get('device_type') or '').strip()
+
+        if matched_slot_num and matched_slot_num > 0:
+            from idcsscan.models import BiometricFingerprintData
+            qs = BiometricFingerprintData.objects.filter(slot_id=matched_slot_num, is_active=True)
+            if req_device:
+                dev_qs = qs.filter(Q(device_type__icontains=req_device) | Q(device_type='esp32_bridge') | Q(device_type='esp32_r307'))
+                bio_by_slot = dev_qs.select_related('user').first() or qs.select_related('user').first()
+            else:
+                bio_by_slot = qs.select_related('user').first()
+
+            if bio_by_slot:
+                payload = self._build_user_payload(bio_by_slot.user, None)
+                payload['finger'] = bio_by_slot.finger_name
+                payload['slot'] = matched_slot_num
+                payload['match_source'] = 'hardware_slot_direct'
+
+                # Auto-record BioSecure attendance for student if they belong to an active batch today
+                try:
+                    self._record_biosecure_log(bio_by_slot.user, bio_by_slot.finger_name, matched_slot_num)
+                except Exception as bse:
+                    logging.getLogger('fp_identify').warning('BioSecure attendance log error: %s', bse)
+
+                return Response(payload, status=status.HTTP_200_OK)
+
         if not b64:
-            return Response({"detail": "template_b64 is required."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "template_b64 or valid slot is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         import base64
         import hashlib
@@ -4010,4 +4048,226 @@ class BioSecureStudentLogsView(APIView):
             "selected_date": selected_date.isoformat(),
             "logs": day_logs,
             "available_dates": [d.isoformat() for d in distinct_dates],
+        }, status=status.HTTP_200_OK)
+
+
+class BioSecureDeviceModeView(APIView):
+    """
+    GET, POST /api/idscan/biosecure/device/mode/
+
+    Allows web browser and ESP32 hardware to coordinate:
+    1. Default state: ATTENDANCE (Live input scan)
+    2. When admin clicks 'Connect / Enroll' on Web UI: Mode changes to ENROLL with target slot and user details.
+    3. ESP32 on boot checks this endpoint. If enrollment is requested, it executes enrollment immediately,
+       then automatically releases back to ATTENDANCE mode.
+    """
+    from rest_framework.permissions import AllowAny
+    permission_classes = [AllowAny]
+
+    # In-memory device session queue
+    DEVICE_STATE = {
+        "mode": "ATTENDANCE", # "ATTENDANCE" or "ENROLL"
+        "target_slot": None,
+        "user_id": None,
+        "reg_no": None,
+        "finger": "Right Index",
+        "timestamp": 0
+    }
+
+    def get(self, request):
+        return Response(self.DEVICE_STATE, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        mode = request.data.get("mode", "ATTENDANCE").upper()
+        if mode == "ENROLL":
+            slot = request.data.get("slot") or request.data.get("slot_id")
+            self.DEVICE_STATE["mode"] = "ENROLL"
+            self.DEVICE_STATE["target_slot"] = int(slot) if slot else None
+            self.DEVICE_STATE["user_id"] = request.data.get("user_id")
+            self.DEVICE_STATE["reg_no"] = request.data.get("reg_no")
+            self.DEVICE_STATE["finger"] = request.data.get("finger", "Right Index")
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+        else:
+            self.DEVICE_STATE["mode"] = "ATTENDANCE"
+            self.DEVICE_STATE["target_slot"] = None
+            self.DEVICE_STATE["user_id"] = None
+            self.DEVICE_STATE["reg_no"] = None
+            self.DEVICE_STATE["timestamp"] = int(datetime.now().timestamp())
+
+        return Response({"status": "OK", "state": self.DEVICE_STATE}, status=status.HTTP_200_OK)
+
+
+class BioSecureAdminLogsView(APIView):
+    """
+    GET /api/idscan/biosecure/admin/logs/?date=YYYY-MM-DD&page=1&page_size=25&search=...&user_type=...&status=...&group_id=...&department=...
+    Comprehensive administrative audit view for all student and staff biosecure attendance logs.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from datetime import datetime, date
+        from django.db.models import Q
+        from idcsscan.models import BioSecureClassGroup, BioSecureBatch, BioSecureAttendanceLog
+        from students.models import StudentProfile
+        from academics.models import Department, Section
+
+        target_date_str = request.query_params.get("date")
+        target_date = date.today()
+        if target_date_str:
+            try:
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            except Exception:
+                target_date = date.today()
+
+        search_q = (request.query_params.get("search") or "").strip()
+        user_type_filter = (request.query_params.get("user_type") or "ALL").upper()
+        status_filter = (request.query_params.get("status") or "ALL").upper()
+        group_id_filter = request.query_params.get("group_id")
+        dept_filter = request.query_params.get("department")
+
+        try:
+            page = int(request.query_params.get("page", 1))
+            page_size = int(request.query_params.get("page_size", 25))
+        except (ValueError, TypeError):
+            page, page_size = 1, 25
+
+        # 1. Fetch relevant Class Groups & their batches
+        group_qs = BioSecureClassGroup.objects.filter(is_active=True).prefetch_related('sections', 'batches')
+        if group_id_filter and group_id_filter not in ('ALL', '', 'None'):
+            group_qs = group_qs.filter(id=group_id_filter)
+
+        # 2. Fetch all actual placed logs for target date
+        placed_logs_qs = BioSecureAttendanceLog.objects.filter(
+            date=target_date
+        ).select_related('student', 'batch', 'batch__group')
+
+        placed_map = {}
+        for pl in placed_logs_qs:
+            key = (pl.student_id, pl.batch_id)
+            placed_map[key] = pl
+
+        # 3. Assemble all cohort rows
+        all_rows = []
+        day_code = target_date.strftime('%a').upper()
+
+        for grp in group_qs:
+            grp_batches = [b for b in grp.batches.all() if b.is_active]
+            sec_ids = list(grp.sections.values_list('id', flat=True))
+
+            # Fetch all students in these mapped sections
+            stu_qs = StudentProfile.objects.filter(
+                section_id__in=sec_ids
+            ).select_related('user', 'section', 'department')
+
+            if dept_filter and dept_filter not in ('ALL', '', 'None'):
+                stu_qs = stu_qs.filter(
+                    Q(department__name__iexact=dept_filter) |
+                    Q(department__short_name__iexact=dept_filter) |
+                    Q(section__batch__department__short_name__iexact=dept_filter)
+                )
+
+            for stu in stu_qs:
+                u = stu.user
+                if not u:
+                    continue
+
+                for b in grp_batches:
+                    b_days = [d.strip().upper() for d in b.days.split(',') if d.strip()]
+                    if b_days and day_code not in b_days and 'ALL' not in b_days:
+                        continue
+
+                    pl_log = placed_map.get((u.id, b.id))
+                    is_placed = bool(pl_log and pl_log.placed)
+
+                    verified_time_str = pl_log.verified_at.strftime("%I:%M:%S %p") if (pl_log and pl_log.verified_at) else None
+                    finger_str = pl_log.finger_name if pl_log else ""
+                    slot_num = pl_log.slot_id if pl_log else None
+
+                    dept_name = ""
+                    if stu.department:
+                        dept_name = stu.department.short_name or stu.department.name
+                    elif stu.section and getattr(stu.section, 'batch', None) and stu.section.batch.department:
+                        dept_name = stu.section.batch.department.short_name or stu.section.batch.department.name
+
+                    profile_img_url = ""
+                    if stu.profile_image:
+                        try:
+                            profile_img_url = stu.profile_image.url
+                        except Exception:
+                            profile_img_url = ""
+
+                    row = {
+                        "id": f"{u.id}_{b.id}_{target_date.isoformat()}",
+                        "user_id": u.id,
+                        "user_name": u.get_full_name() or u.username,
+                        "username": u.username,
+                        "email": u.email,
+                        "identifier": stu.reg_no or u.username,
+                        "user_type": "STUDENT",
+                        "department": dept_name,
+                        "section": stu.section.name if stu.section else "",
+                        "profile_image_url": profile_img_url,
+                        "group_id": grp.id,
+                        "group_name": grp.name,
+                        "batch_id": b.id,
+                        "batch_name": b.name or f"Batch #{b.id}",
+                        "batch_start": b.start_time.strftime("%I:%M %p"),
+                        "batch_end": b.end_time.strftime("%I:%M %p"),
+                        "date": target_date.isoformat(),
+                        "placed": is_placed,
+                        "status": "Placed" if is_placed else "Missed",
+                        "verified_at": verified_time_str,
+                        "finger_name": finger_str,
+                        "slot_id": slot_num,
+                    }
+                    all_rows.append(row)
+
+        # 4. Filter all_rows in memory
+        filtered_rows = []
+        for r in all_rows:
+            if user_type_filter != 'ALL' and r['user_type'] != user_type_filter:
+                continue
+            if status_filter != 'ALL':
+                if status_filter == 'PLACED' and not r['placed']:
+                    continue
+                if status_filter == 'MISSED' and r['placed']:
+                    continue
+            if search_q:
+                sq = search_q.lower()
+                if (sq not in r['user_name'].lower() and
+                    sq not in r['identifier'].lower() and
+                    sq not in r['username'].lower() and
+                    sq not in r['department'].lower()):
+                    continue
+            filtered_rows.append(r)
+
+        # Sort: Placed records on top, then alphabetical by name
+        filtered_rows.sort(key=lambda x: (not x['placed'], x['user_name']))
+
+        # Metrics counts
+        total_count = len(filtered_rows)
+        placed_count = sum(1 for r in filtered_rows if r['placed'])
+        missed_count = total_count - placed_count
+
+        # Pagination
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_rows = filtered_rows[start_idx:end_idx]
+
+        # Available options for UI filter controls
+        all_groups = [{"id": g.id, "name": g.name} for g in BioSecureClassGroup.objects.filter(is_active=True)]
+        all_depts = [{"id": d.id, "name": d.name, "short_name": d.short_name or d.name} for d in Department.objects.filter(is_active=True).order_by('name')]
+
+        return Response({
+            "total_count": total_count,
+            "placed_count": placed_count,
+            "missed_count": missed_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total_count + page_size - 1) // page_size),
+            "results": paginated_rows,
+            "filter_options": {
+                "groups": all_groups,
+                "departments": all_depts,
+            }
         }, status=status.HTTP_200_OK)

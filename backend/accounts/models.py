@@ -433,23 +433,10 @@ class SiteConfiguration(models.Model):
     e.g. { "/student/attendance": ["STUDENT"], "/applications": ["STUDENT", "HOD"] }
     """
 
-    login_lockdown = models.BooleanField(
-        default=False,
-        help_text='When True, only superusers can log in (via impersonation). Regular staff/student login is blocked.',
-    )
     under_construction = models.JSONField(
         default=dict,
         blank=True,
         help_text='Map of {path: [roles]} that should show the Under Construction screen.',
-    )
-    app_conditions = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text=(
-            'Application access conditions. Shape: '
-            '{"application": {"require_profile": true, "require_phone": true}, '
-            '"marks": {"require_profile": true, "require_phone": true}}'
-        ),
     )
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -463,11 +450,5 @@ class SiteConfiguration(models.Model):
     @classmethod
     def get(cls) -> 'SiteConfiguration':
         """Return the singleton row, creating it if it does not exist."""
-        # Prefer any existing SiteConfiguration row (some deployments may have
-        # an instance with a PK other than 1). Using `first()` ensures we
-        # return the single authoritative instance the admin edits. If none
-        # exists, create a new one with sane defaults.
-        obj = cls.objects.first()
-        if obj is None:
-            obj = cls.objects.create(under_construction={})
+        obj, _ = cls.objects.get_or_create(id=1, defaults={'under_construction': {}})
         return obj

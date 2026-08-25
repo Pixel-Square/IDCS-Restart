@@ -28,15 +28,6 @@ def is_reporting_api_key_auth(request) -> bool:
     return isinstance(auth, dict) and auth.get('scheme') == 'reporting_api_key'
 
 
-class HasReportingApiKey(BasePermission):
-    message = 'Valid reporting API key is required.'
-
-    def has_permission(self, request, view):
-        if is_reporting_api_key_auth(request):
-            return True
-        return can_access_reporting(getattr(request, 'user', None))
-
-
 class CanViewPowerBIDataOrApiKey(BasePermission):
     message = 'You do not have reporting access.'
 

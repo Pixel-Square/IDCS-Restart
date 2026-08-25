@@ -399,7 +399,7 @@ export default function PosterMakerPage({ embedded = false, staffMode = false }:
   const [genProgress, setGenProgress] = useState('');
   const [result, setResult] = useState<PosterResult | null>(null);
   const [error, setError] = useState('');
-  const [format, setFormat] = useState<'png' | 'pdf'>('pdf');
+  const [format, setFormat] = useState<'png' | 'pdf'>('png');
   const [canvaEditMode, setCanvaEditMode] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedBack, setUploadedBack] = useState(false);

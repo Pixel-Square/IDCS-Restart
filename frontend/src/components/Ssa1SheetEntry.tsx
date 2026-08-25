@@ -8,7 +8,6 @@ import {
   createEditRequest,
   createPublishRequest,
   fetchDraft,
-  fetchIqacQpPattern,
   fetchMyTeachingAssignments,
   fetchPublishedReview1,
   fetchPublishedSsa1,
@@ -17,7 +16,6 @@ import {
   publishReview1,
   publishSsa1,
   PublishedSsa1Response,
-  resetAssessmentMarks,
   saveDraft,
 } from '../services/obe';
 import { ensureMobileVerified } from '../services/auth';
@@ -33,10 +31,8 @@ import { downloadTotalsWithPrompt } from '../utils/assessmentTotalsDownload';
 import { clearLocalDraftCache } from '../utils/obeDraftCache';
 import { useMarkEntryEditRequestsEnabled, useMarkManagerEditRequestsEnabled } from '../utils/requestControl';
 import { normalizeRegisterNo } from '../utils/excelImport';
-import { normalizeObeClassType } from '../constants/classTypes';
-import { matrixToClipboardText, parseClipboardMatrix } from '../utils/clipboardMatrix';
 
-type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1'; classType?: string | null; questionPaperType?: string | null; /** When true (e.g. PRBL courses), lock to a single CO1 — hides the second CO column entirely. */ forceSingleCo?: boolean; };
+type Props = { subjectId: string; teachingAssignmentId?: number; label?: string; assessmentKey?: 'ssa1' | 'review1' };
 
 type Ssa1Row = {
   studentId: number;
@@ -46,7 +42,6 @@ type Ssa1Row = {
   co1: number | '';
   co2: number | '';
   total: number | '';
-  qMarks?: Array<number | ''>;  // per-question marks for SPECIAL/QP-pattern entry
   reviewCoMarks?: {
     co1?: Array<number | ''>;
     co2?: Array<number | ''>;
@@ -175,14 +170,11 @@ function compareStudentName(a: { name?: string; reg_no?: string }, b: { name?: s
   return (isNaN(aLast3) ? 9999 : aLast3) - (isNaN(bLast3) ? 9999 : bLast3);
 }
 
-function normalizeRegDigits(value: string): string {
-  return String(value || '').replace(/\D/g, '');
-}
 function shortenRegisterNo(registerNo: string): string {
   return String(registerNo || '').trim();
 }
 
-export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa1', classType, questionPaperType, forceSingleCo = false }: Props) {
+export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label, assessmentKey = 'ssa1' }: Props) {
   const displayLabel = String(label || 'SSA1');
   const isReview = assessmentKey === 'review1';
   const showTotalColumn = false;
@@ -193,106 +185,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const publishNow = assessmentKey === 'review1' ? publishReview1 : publishSsa1;
   const [masterCfg, setMasterCfg] = useState<any>(null);
   const [taMeta, setTaMeta] = useState<{ courseName?: string; courseCode?: string; className?: string } | null>(null);
-
-  // ── IQAC QP Pattern: derive effective CO numbers and max marks for SPECIAL courses ──
-  const [iqacPattern, setIqacPattern] = useState<{ marks?: number[]; cos?: Array<number | string> } | null>(null);
-
-  const classTypeKey = useMemo(() => {
-    const v = String(normalizeObeClassType(classType) || '').trim().toUpperCase();
-    return v || '';
-  }, [classType]);
-
-  const qpTypeKey = useMemo(() => {
-    return String(questionPaperType ?? '').trim().toUpperCase();
-  }, [questionPaperType]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!classTypeKey) { setIqacPattern(null); return; }
-      const qpForApi = (classTypeKey === 'THEORY' || classTypeKey === 'SPECIAL') ? (qpTypeKey || null) : null;
-      try {
-        const res: any = await fetchIqacQpPattern({ class_type: classTypeKey, question_paper_type: qpForApi, exam: 'SSA1' as any });
-        if (!alive) return;
-        const p = Array.isArray(res?.pattern?.marks) ? res.pattern.marks : [];
-        setIqacPattern(p.length ? (res.pattern as any) : null);
-      } catch {
-        if (alive) setIqacPattern(null);
-      }
-    })();
-    return () => { alive = false; };
-  }, [classTypeKey, qpTypeKey, assessmentKey]);
-
-  // Derive effective CO numbers from IQAC pattern (default: 1, 2 for SSA1)
-  // forceSingleCo (PRBL): always use CO-1 only.
-  const effectiveCoA = useMemo(() => {
-    if (forceSingleCo) return 1;
-    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
-    if (cos && cos.length) {
-      const nums = cos
-        .flatMap((c) => {
-          const s = String(c ?? '');
-          if (s.includes('&')) return s.split('&').map(Number);
-          const m = s.match(/\d+/);
-          return m ? [Number(m[0])] : [];
-        })
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
-      const unique = [...new Set(nums)].sort((a, b) => a - b);
-      if (unique.length >= 1) return unique[0];
-    }
-    return 1;
-  }, [iqacPattern, forceSingleCo]);
-
-  const effectiveCoB = useMemo(() => {
-    if (forceSingleCo) return 1;
-    const cos = Array.isArray(iqacPattern?.cos) ? iqacPattern!.cos : null;
-    if (cos && cos.length) {
-      const nums = cos
-        .flatMap((c) => {
-          const s = String(c ?? '');
-          if (s.includes('&')) return s.split('&').map(Number);
-          const m = s.match(/\d+/);
-          return m ? [Number(m[0])] : [];
-        })
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
-      const unique = [...new Set(nums)].sort((a, b) => a - b);
-      if (unique.length >= 2) return unique[1];
-      if (unique.length === 1) return unique[0];
-    }
-    return 2;
-  }, [iqacPattern, forceSingleCo]);
-
-  // For SPECIAL courses: derive max marks from QP pattern
-  const qpDerivedMax = useMemo(() => {
-    if (!iqacPattern?.marks?.length) return null;
-    const marks = iqacPattern.marks;
-    const cos = Array.isArray(iqacPattern.cos) ? iqacPattern.cos : [];
-    const total = marks.reduce((s, m) => s + (Number.isFinite(m) ? m : 0), 0);
-    // Group marks by effective CO
-    const uniqueCos = [...new Set(
-      cos.flatMap((c) => {
-        const s = String(c ?? '');
-        if (s.includes('&')) return s.split('&').map(Number);
-        const m = s.match(/\d+/);
-        return m ? [Number(m[0])] : [];
-      }).filter((n) => Number.isFinite(n) && n >= 1 && n <= 5)
-    )].sort((a, b) => a - b);
-    if (uniqueCos.length === 0) return null;
-    let coAMax = 0;
-    let coBMax = 0;
-    for (let i = 0; i < marks.length; i++) {
-      const m = Number.isFinite(marks[i]) ? marks[i] : 0;
-      const coNum = (() => {
-        const s = String(cos[i] ?? '');
-        const match = s.match(/\d+/);
-        return match ? Number(match[0]) : null;
-      })();
-      if (coNum === uniqueCos[0]) coAMax += m;
-      else coBMax += m;
-    }
-    return { total, co1: coAMax, co2: coBMax };
-  }, [classTypeKey, iqacPattern]);
-
   const [sheet, setSheet] = useState<Ssa1Sheet>({
     termLabel: 'KRCT AY25-26',
     batchLabel: subjectId,
@@ -306,38 +198,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
   const masterTermLabel = String(masterCfg?.termLabel || 'KRCT AY25-26');
   const ssa1Cfg = masterCfg?.assessments?.ssa1 || {};
-  const MAX_ASMT1_BASE = qpDerivedMax ? qpDerivedMax.total : (Number.isFinite(Number(ssa1Cfg?.maxTotal)) ? Number(ssa1Cfg.maxTotal) : DEFAULT_MAX_ASMT1);
+  const MAX_ASMT1_BASE = Number.isFinite(Number(ssa1Cfg?.maxTotal)) ? Number(ssa1Cfg.maxTotal) : DEFAULT_MAX_ASMT1;
   const MAX_ASMT1 = isReview ? 30 : MAX_ASMT1_BASE;
-  const CO_MAX_BASE = forceSingleCo
-    // PRBL (or any single-CO mode): all marks go to CO-1; second column is hidden.
-    ? { co1: MAX_ASMT1_BASE, co2: 0 }
-    : qpDerivedMax
-      ? { co1: qpDerivedMax.co1, co2: qpDerivedMax.co2 }
-      : {
-          co1: Number.isFinite(Number(ssa1Cfg?.coMax?.co1)) ? Number(ssa1Cfg.coMax.co1) : DEFAULT_CO_MAX.co1,
-          co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
-        };
+  const CO_MAX_BASE = {
+    co1: Number.isFinite(Number(ssa1Cfg?.coMax?.co1)) ? Number(ssa1Cfg.coMax.co1) : DEFAULT_CO_MAX.co1,
+    co2: Number.isFinite(Number(ssa1Cfg?.coMax?.co2)) ? Number(ssa1Cfg.coMax.co2) : DEFAULT_CO_MAX.co2,
+  };
   const CO_MAX = isReview ? { co1: 15, co2: 15 } : CO_MAX_BASE;
-  // For SPECIAL single-CO or forceSingleCo: hide second column when co2 max is 0
-  const hideSecondCo = !isReview && CO_MAX.co2 === 0;
-
-  // Per-question structure derived from QP pattern for SPECIAL courses
-  const qpQuestions = useMemo(() => {
-    if (!iqacPattern) return [] as Array<{max: number; coKey: 'co1' | 'co2'}>;
-    const marks = Array.isArray((iqacPattern as any).marks) ? (iqacPattern as any).marks as number[] : [];
-    const cos = Array.isArray((iqacPattern as any).cos) ? (iqacPattern as any).cos as (number | string)[] : [];
-    return marks.map((m, i) => {
-      const coRaw = i < cos.length ? cos[i] : null;
-      const s = String(coRaw ?? '');
-      const coNum = Number(s.match(/\d+/)?.[0]);
-      const coKey: 'co1' | 'co2' = coNum === effectiveCoA ? 'co1' : 'co2';
-      return { max: Number.isFinite(Number(m)) ? Number(m) : 0, coKey };
-    });
-  }, [iqacPattern, classTypeKey, effectiveCoA]);
-
-  // Use per-question entry mode for SPECIAL courses with QP pattern
-  const useQpQEntry = !isReview && qpQuestions.length > 0;
-
   const reviewCfg = isReview ? ((((masterCfg as any)?.review_config || {}).TCPR || {})[assessmentKey] || {}) : null;
   const reviewSplitEnabled = Boolean(isReview && (reviewCfg as any)?.split_enabled);
   const BTL_MAX = {
@@ -354,142 +221,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const excelFileInputRef = useRef<HTMLInputElement | null>(null);
   const [excelBusy, setExcelBusy] = useState(false);
   const [excelImportHelpOpen, setExcelImportHelpOpen] = useState(false);
-
-  type QpGridPos = { r: number; c: number };
-  type QpGridSel = { a: QpGridPos; b: QpGridPos };
-  const [qpGridSel, setQpGridSel] = useState<QpGridSel | null>(null);
-  const qpGridDraggingRef = useRef(false);
-
-  useEffect(() => {
-    const onUp = () => { qpGridDraggingRef.current = false; };
-    window.addEventListener('mouseup', onUp);
-    return () => window.removeEventListener('mouseup', onUp);
-  }, []);
-
-  useEffect(() => {
-    if (!useQpQEntry) setQpGridSel(null);
-  }, [useQpQEntry]);
-
-  const normalizeQpSel = (sel: QpGridSel) => {
-    const r0 = Math.min(sel.a.r, sel.b.r);
-    const r1 = Math.max(sel.a.r, sel.b.r);
-    const c0 = Math.min(sel.a.c, sel.b.c);
-    const c1 = Math.max(sel.a.c, sel.b.c);
-    return { r0, r1, c0, c1 };
-  };
-
-  const isQpCellSelected = (r: number, c: number) => {
-    if (!qpGridSel) return false;
-    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
-    return r >= r0 && r <= r1 && c >= c0 && c <= c1;
-  };
-
-  const onQpCellMouseDown = (r: number, c: number, shiftKey: boolean) => {
-    if (!useQpQEntry) return;
-    qpGridDraggingRef.current = true;
-    setQpGridSel((prev) => {
-      if (shiftKey && prev) return { a: prev.a, b: { r, c } };
-      return { a: { r, c }, b: { r, c } };
-    });
-  };
-
-  const onQpCellMouseEnter = (r: number, c: number) => {
-    if (!useQpQEntry) return;
-    if (!qpGridDraggingRef.current) return;
-    setQpGridSel((prev) => {
-      if (!prev) return { a: { r, c }, b: { r, c } };
-      return { a: prev.a, b: { r, c } };
-    });
-  };
-
-  const onQpGridCopyCapture = (e: React.ClipboardEvent) => {
-    if (!useQpQEntry || !qpGridSel) return;
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && !active.closest('.ssa-modern-table')) return;
-
-    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
-    const out: Array<Array<string>> = [];
-    for (let r = r0; r <= r1; r++) {
-      const row = rowsToRender[r];
-      if (!row) continue;
-      const baseRowIdx = resolveBaseRowIndex(row, r);
-      const qm = Array.isArray((sheet.rows[baseRowIdx] as any)?.qMarks) ? ((sheet.rows[baseRowIdx] as any).qMarks as Array<number | ''>) : [];
-      const line: string[] = [];
-      for (let c = c0; c <= c1; c++) {
-        const v = qm[c];
-        line.push(typeof v === 'number' ? String(v) : '');
-      }
-      out.push(line);
-    }
-
-    e.preventDefault();
-    e.stopPropagation();
-    e.clipboardData.setData('text/plain', matrixToClipboardText(out));
-  };
-
-  const onQpGridPasteCapture = (e: React.ClipboardEvent) => {
-    if (!useQpQEntry || !qpGridSel) return;
-    if (marksEditDisabled) return;
-    const active = document.activeElement;
-    if (active instanceof HTMLElement && !active.closest('.ssa-modern-table')) return;
-
-    const text = e.clipboardData.getData('text/plain');
-    if (!text) return;
-    const matrix = parseClipboardMatrix(text);
-    if (!matrix.length) return;
-
-    const { r0, r1, c0, c1 } = normalizeQpSel(qpGridSel);
-    const baseRowIdxByVisRow: Array<number | null> = [];
-    for (let r = r0; r <= r1; r++) {
-      const row = rowsToRender[r];
-      if (!row) { baseRowIdxByVisRow.push(null); continue; }
-      baseRowIdxByVisRow.push(resolveBaseRowIndex(row, r));
-    }
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    setSheet((prev) => {
-      const rowsCopy = prev.rows.slice();
-      for (let vr = r0; vr <= r1; vr++) {
-        const baseRowIdx = baseRowIdxByVisRow[vr - r0];
-        if (typeof baseRowIdx !== 'number' || baseRowIdx < 0 || baseRowIdx >= rowsCopy.length) continue;
-        const existing = rowsCopy[baseRowIdx];
-        if (!existing) continue;
-
-        const qm: Array<number | ''> = Array.isArray((existing as any).qMarks) ? [...((existing as any).qMarks as Array<number | ''>)] : [];
-        while (qm.length < qpQuestions.length) qm.push('');
-
-        const sourceRow = matrix[Math.min(vr - r0, matrix.length - 1)] || [];
-        for (let vc = c0; vc <= c1; vc++) {
-          const sourceCell = sourceRow[Math.min(vc - c0, sourceRow.length - 1)] ?? '';
-          const raw = String(sourceCell ?? '').trim();
-          if (!raw) continue; // Safe paste: never overwrite with blanks
-          const parsed = parseMarkInput(raw);
-          if (parsed == null) continue;
-          const q = qpQuestions[vc];
-          if (!q) continue;
-          if (parsed < 0 || parsed > q.max) continue;
-          qm[vc] = round1(clamp(parsed, 0, q.max));
-        }
-
-        const hasAny = qm.some((v) => v !== '');
-        let c1sum = 0;
-        let c2sum = 0;
-        qpQuestions.forEach((q, i) => {
-          const v = typeof qm[i] === 'number' ? (qm[i] as number) : 0;
-          if (q.coKey === 'co1') c1sum += v;
-          else c2sum += v;
-        });
-        const newCo1: number | '' = hasAny ? round1(clamp(c1sum, 0, CO_MAX.co1)) : '';
-        const newCo2: number | '' = hasAny ? round1(clamp(c2sum, 0, CO_MAX.co2)) : '';
-        const newTotal: number | '' = hasAny ? round1(clamp(c1sum + c2sum, 0, MAX_ASMT1)) : '';
-        rowsCopy[baseRowIdx] = { ...(existing as any), qMarks: qm, co1: newCo1, co2: newCo2, total: newTotal } as Ssa1Row;
-      }
-      return { ...prev, rows: rowsCopy };
-    });
-  };
-
 
   useEffect(() => {
     let mounted = true;
@@ -537,9 +268,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const [publishedViewError, setPublishedViewError] = useState<string | null>(null);
   const [showAbsenteesOnly, setShowAbsenteesOnly] = useState(false);
   const [absenteesSnapshot, setAbsenteesSnapshot] = useState<number[] | null>(null);
-  const [alphaOrderEnabled, setAlphaOrderEnabled] = useState(false);
-  const [digitFilterEnabled, setDigitFilterEnabled] = useState(false);
-  const [digitFilterLength, setDigitFilterLength] = useState<2 | 3 | 4 | 5 | 6 | 7 | 8>(3);
 
   const {
     data: publishWindow,
@@ -565,7 +293,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const [requestReason, setRequestReason] = useState('');
   const [requesting, setRequesting] = useState(false);
   const [requestMessage, setRequestMessage] = useState<string | null>(null);
-  const [resettingMarks, setResettingMarks] = useState(false);
 
   const [markManagerModal, setMarkManagerModal] = useState<null | { mode: 'confirm' | 'request' }>(null);
   const [markManagerBusy, setMarkManagerBusy] = useState(false);
@@ -674,13 +401,11 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   const publishedTableCols = useMemo(() => {
     // Layout matching the Excel header template, but BTL columns are dynamic.
     // S.No, RegNo, Name, SSA1 = 4 (and optional Total = +1)
-    // CO Attainment: 4 normally, 2 hideSecondCo, or Q+pct cols for qpQEntry mode
+    // CO Attainment (CO-1 Mark/% + CO-2 Mark/%) = 4
     // BTL Attainment = selected count * 2 (Mark/% per BTL)
-    const numActiveCOs = hideSecondCo ? 1 : 2;
-    const coCols = useQpQEntry ? (qpQuestions.length + numActiveCOs) : (hideSecondCo ? 2 : 4);
-    const base = 4 + coCols + (showTotalColumn ? 1 : 0);
+    const base = showTotalColumn ? 9 : 8;
     return base + visibleBtlIndices.length * 2;
-  }, [visibleBtlIndices.length, showTotalColumn, hideSecondCo, useQpQEntry, qpQuestions.length]);
+  }, [visibleBtlIndices.length, showTotalColumn]);
 
   const totalTableCols = useMemo(() => {
     if (!isReview || !reviewSplitEnabled) return publishedTableCols;
@@ -700,79 +425,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   }, [sheet.rows]);
 
   const rowsToRender = useMemo(() => {
-    let rows = [...sheet.rows];
-
-    if (showAbsenteesOnly) {
-      if (absenteesSnapshot && absenteesSnapshot.length) {
-        rows = rows.filter((r) => absenteesSnapshot.includes(Number((r as any).studentId)));
-      } else {
-        rows = rows.filter((r) => Boolean((r as any).absent) || Object.values(r).some((v) => typeof v === 'string' && String(v).toLowerCase().includes('absent')));
-      }
-    }
-
-    if (alphaOrderEnabled) {
-      rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-    } else if (digitFilterEnabled) {
-      rows.sort((a, b) => {
-        const aDigits = normalizeRegDigits(String(a.registerNo || ''));
-        const bDigits = normalizeRegDigits(String(b.registerNo || ''));
-        const aSuffix = aDigits.slice(-digitFilterLength);
-        const bSuffix = bDigits.slice(-digitFilterLength);
-        const aValue = aSuffix ? Number(aSuffix) : Number.MAX_SAFE_INTEGER;
-        const bValue = bSuffix ? Number(bSuffix) : Number.MAX_SAFE_INTEGER;
-        if (aValue !== bValue) return aValue - bValue;
-        return compareStudentName({ reg_no: a.registerNo }, { reg_no: b.registerNo });
-      });
-    } else {
-      rows.sort((a, b) => compareStudentName({ reg_no: a.registerNo }, { reg_no: b.registerNo }));
-    }
-
-    return rows;
-  }, [sheet.rows, showAbsenteesOnly, absenteesSnapshot, alphaOrderEnabled, digitFilterEnabled, digitFilterLength]);
-
-  const rowIndexByStudentId = useMemo(() => {
-    const idxMap = new Map<number, number>();
-    sheet.rows.forEach((row, idx) => {
-      const studentId = Number((row as any)?.studentId);
-      if (Number.isFinite(studentId) && studentId > 0 && !idxMap.has(studentId)) {
-        idxMap.set(studentId, idx);
-      }
-    });
-    return idxMap;
-  }, [sheet.rows]);
-
-  const rowIndexByRegisterNo = useMemo(() => {
-    const idxMap = new Map<string, number | null>();
-    sheet.rows.forEach((row, idx) => {
-      const reg = normalizeRegisterNo((row as any)?.registerNo);
-      if (!reg) return;
-      if (!idxMap.has(reg)) {
-        idxMap.set(reg, idx);
-      } else {
-        idxMap.set(reg, null);
-      }
-    });
-    return idxMap;
-  }, [sheet.rows]);
-
-  const resolveBaseRowIndex = (row: Ssa1Row, displayIdx: number): number => {
-    const studentId = Number((row as any)?.studentId);
-    if (Number.isFinite(studentId) && studentId > 0) {
-      const idHit = rowIndexByStudentId.get(studentId);
-      if (typeof idHit === 'number') return idHit;
-    }
-
-    const reg = normalizeRegisterNo((row as any)?.registerNo);
-    if (reg) {
-      const regHit = rowIndexByRegisterNo.get(reg);
-      if (typeof regHit === 'number') return regHit;
-    }
-
-    const sameRefIdx = sheet.rows.indexOf(row);
-    if (sameRefIdx >= 0) return sameRefIdx;
-
-    return displayIdx;
-  };
+    if (!showAbsenteesOnly) return sheet.rows;
+    if (absenteesSnapshot && absenteesSnapshot.length) return sheet.rows.filter((r) => absenteesSnapshot.includes(Number((r as any).studentId)));
+    return sheet.rows.filter((r) => Boolean((r as any).absent) || Object.values(r).some((v) => typeof v === 'string' && String(v).toLowerCase().includes('absent')));
+  }, [sheet.rows, showAbsenteesOnly, absenteesSnapshot]);
 
   // Persist selected BTLs to localStorage and autosave to server (debounced)
   useEffect(() => {
@@ -1047,35 +703,23 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             if (publishedCo2 == null) publishedCo2 = Number(publishedTotal) / 2;
           }
 
-          // Don't clamp prevRow values — CO_MAX may still be at defaults if iqacPattern
-          // hasn't loaded yet, and clamping a valid stored mark (e.g. 20) against the
-          // default max (10) would corrupt the value.  Clamping happens at input time
-          // and on export, not here.
-          const resolvedCo1: number | '' = hasLocalMarks
-            ? (typeof (prevRow as any)?.co1 === 'number' ? (prevRow as any).co1 as number : '')
-            : (publishedCo1 != null ? clamp(Number(publishedCo1), 0, CO_MAX.co1) : '');
-
-          const resolvedCo2: number | '' = hasLocalMarks
-            ? (typeof (prevRow as any)?.co2 === 'number' ? (prevRow as any).co2 as number : '')
-            : (publishedCo2 != null ? clamp(Number(publishedCo2), 0, CO_MAX.co2) : '');
-
-          let resolvedReviewCoMarks = (prevRow as any)?.reviewCoMarks;
-          if (isReview && !resolvedReviewCoMarks) {
-            if (resolvedCo1 !== '' || resolvedCo2 !== '') {
-              resolvedReviewCoMarks = {
-                co1: resolvedCo1 !== '' ? [resolvedCo1] : [],
-                co2: resolvedCo2 !== '' ? [resolvedCo2] : [],
-              };
-            }
-          }
-
           return {
             studentId: s.id,
             section: String(s.section || ''),
             registerNo: String(s.reg_no || ''),
             name: String(s.name || ''),
-            co1: resolvedCo1,
-            co2: resolvedCo2,
+            co1:
+              hasLocalMarks
+                ? (typeof (prevRow as any)?.co1 === 'number'
+                    ? clamp(Number((prevRow as any).co1), 0, CO_MAX.co1)
+                    : '')
+                : (publishedCo1 != null ? clamp(Number(publishedCo1), 0, CO_MAX.co1) : ''),
+            co2:
+              hasLocalMarks
+                ? (typeof (prevRow as any)?.co2 === 'number'
+                    ? clamp(Number((prevRow as any).co2), 0, CO_MAX.co2)
+                    : '')
+                : (publishedCo2 != null ? clamp(Number(publishedCo2), 0, CO_MAX.co2) : ''),
             total:
               hasLocalMarks
                 ? (typeof (prevRow as any)?.total === 'number'
@@ -1084,11 +728,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       ? ''
                       : '')
                 : (publishedTotal != null ? clamp(Number(publishedTotal), 0, MAX_ASMT1) : ''),
-            reviewCoMarks: resolvedReviewCoMarks,
-            // Preserve per-question marks (used by SPECIAL/QP-pattern entry mode)
-            ...(Array.isArray((prevRow as any)?.qMarks) ? { qMarks: (prevRow as any).qMarks } : {}),
-            // Preserve absent flag
-            ...(typeof (prevRow as any)?.absent !== 'undefined' ? { absent: (prevRow as any).absent } : {}),
+            reviewCoMarks: (prevRow as any)?.reviewCoMarks,
           };
         });
 
@@ -1121,6 +761,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           console.log('[SSA1] Direct TA roster returned:', roster.length, 'students');
         } catch (err) {
           console.warn('[SSA1] Direct TA roster fetch failed:', err);
+        }
+        if (roster.length) {
+          mergeRosterIntoRows(roster);
+          return;
         }
       }
 
@@ -1347,7 +991,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
       const ok1 = sumSplit(a) <= CO_MAX.co1 + 1e-6;
       const ok2 = sumSplit(b) <= CO_MAX.co2 + 1e-6;
       if (!ok1 || !ok2) {
-        alert(`CO split totals must not exceed 15 for CO-${effectiveCoA} and CO-${effectiveCoB}.`);
+        alert('CO split totals must not exceed 15 for CO-1 and CO-2.');
         return;
       }
     }
@@ -1520,44 +1164,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     }
   }
 
-  const resetAllMarks = async () => {
+  const resetAllMarks = () => {
     if (!confirm(`Reset ${displayLabel} marks for all students in this section?`)) return;
-    if (tableBlocked || resettingMarks) return;
-    if (typeof teachingAssignmentId !== 'number') {
-      alert('Please select a teaching assignment before resetting marks.');
-      return;
-    }
-
-    setResettingMarks(true);
-    try {
-      await resetAssessmentMarks(assessmentKey, String(subjectId), teachingAssignmentId);
-
-      try {
-        clearLocalDraftCache(String(subjectId || ''), String(assessmentKey || ''), teachingAssignmentId ?? null);
-      } catch {
-        // ignore local cache clear errors
-      }
-
-      setSheet((prev) => ({
-        ...prev,
-        rows: (prev.rows || []).map((r) => ({ ...r, co1: '', co2: '', total: '', qMarks: [] })),
-        markManagerLocked: false,
-        markManagerSnapshot: null,
-        markManagerApprovalUntil: null,
-      }));
-      setSelectedBtls(defaultSelectedBtls);
-      setPublishedAt(null);
-      setPublishedViewSnapshot(null);
-      setSaveError(null);
-
-      refreshMarkLock({ silent: true });
-      refreshPublishWindow();
-      refreshPublishedSnapshot(false);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to reset marks');
-    } finally {
-      setResettingMarks(false);
-    }
+    if (tableBlocked) return;
+    setSheet((prev) => ({
+      ...prev,
+      rows: (prev.rows || []).map((r) => ({ ...r, co1: '', co2: '', total: '' })),
+    }));
   };
 
   const updateRow = (idx: number, patch: Partial<Ssa1Row>) => {
@@ -1576,34 +1189,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
     });
   };
 
-  // Updates a single question mark (for SPECIAL/QP-pattern entry) and re-derives co1/co2/total
-  const updateQMark = (rowIdx: number, qIdx: number, value: string | number) => {
-    setSheet((prev) => {
-      const copy = prev.rows.slice();
-      const existing = copy[rowIdx];
-      if (!existing) return prev;
-      const qm: Array<number | ''> = Array.isArray((existing as any).qMarks) ? [...(existing as any).qMarks] : [];
-      while (qm.length <= qIdx) qm.push('');
-      const parsed = typeof value === 'number' ? value : parseMarkInput(String(value));
-      qm[qIdx] = parsed !== null && parsed !== undefined ? parsed : '';
-      // Derive co1/co2 from all question marks
-      let c1 = 0; let c2 = 0;
-      qpQuestions.forEach((q, i) => {
-        const v = typeof qm[i] === 'number' ? (qm[i] as number) : 0;
-        if (q.coKey === 'co1') c1 += v;
-        else c2 += v;
-      });
-      const hasAny = qm.some((v) => v !== '');
-      const newCo1: number | '' = hasAny ? round1(clamp(c1, 0, CO_MAX.co1)) : '';
-      const newCo2: number | '' = hasAny ? round1(clamp(c2, 0, CO_MAX.co2)) : '';
-      const newTotal: number | '' = hasAny ? round1(clamp(c1 + c2, 0, MAX_ASMT1)) : '';
-      copy[rowIdx] = { ...existing, qMarks: qm, co1: newCo1, co2: newCo2, total: newTotal } as Ssa1Row;
-      return { ...prev, rows: copy };
-    });
-  };
-
   const exportSheetCsv = () => {
-    const out = rowsToRender.map((r, i) => {
+    const out = sheet.rows.map((r, i) => {
       const totalRaw = typeof r.total === 'number' ? clamp(Number(r.total), 0, MAX_ASMT1) : null;
       const total = totalRaw == null ? '' : round1(totalRaw);
 
@@ -1656,42 +1243,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   };
 
   const exportSheetExcel = () => {
-    if (!rowsToRender.length) return;
+    if (!sheet.rows.length) return;
 
     const q1Max = Number.isFinite(Number(CO_MAX.co1)) ? Number(CO_MAX.co1) : 0;
     const q2Max = Number.isFinite(Number(CO_MAX.co2)) ? Number(CO_MAX.co2) : 0;
 
-    const sumSplit = (arr: Array<number | ''> | undefined): number | null => {
-      if (!Array.isArray(arr) || !arr.length) return null;
-      const total = arr.reduce<number>((acc, v) => acc + (typeof v === 'number' && Number.isFinite(v) ? v : 0), 0);
-      return total;
-    };
-
-    const co1ForExport = (row: Ssa1Row): number | '' => {
-      if (!isReview) {
-        return typeof row.co1 === 'number' ? round1(clamp(row.co1, 0, q1Max)) : '';
-      }
-      const split = sumSplit(row.reviewCoMarks?.co1);
-      if (split != null) return round1(clamp(split, 0, q1Max));
-      return typeof row.co1 === 'number' ? round1(clamp(row.co1, 0, q1Max)) : '';
-    };
-
-    const co2ForExport = (row: Ssa1Row): number | '' => {
-      if (!isReview) {
-        return typeof row.co2 === 'number' ? round1(clamp(row.co2, 0, q2Max)) : '';
-      }
-      const split = sumSplit(row.reviewCoMarks?.co2);
-      if (split != null) return round1(clamp(split, 0, q2Max));
-      return typeof row.co2 === 'number' ? round1(clamp(row.co2, 0, q2Max)) : '';
-    };
-
-    // Omit Q2 column entirely when CO2 has no marks (single-CO course like SPECIAL CSD).
-    const header = hideSecondCo
-      ? ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, 'Status']
-      : ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
-    const data = rowsToRender.map((r) => hideSecondCo
-      ? [r.registerNo, r.name, co1ForExport(r), 'present']
-      : [r.registerNo, r.name, co1ForExport(r), co2ForExport(r), 'present']);
+    const header = ['Register No', 'Student Name', `Q1 (${q1Max.toFixed(2)})`, `Q2 (${q2Max.toFixed(2)})`, 'Status'];
+    const data = sheet.rows.map((r) => [r.registerNo, r.name, '', '', 'present']);
 
     const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
     ws['!freeze'] = { xSplit: 0, ySplit: 1 } as any;
@@ -1703,7 +1261,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
   };
 
   const downloadTotals = async () => {
-    const rows = rowsToRender.map((r, idx) => ({
+    const rows = sheet.rows.map((r, idx) => ({
       sno: idx + 1,
       regNo: String(r.registerNo || ''),
       name: String(r.name || ''),
@@ -1972,7 +1530,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           matchedRows: 0,
           unmatchedRows: 0,
           unmatchedSamples: [] as string[],
-          overMaxWarnings: [] as Array<{ reg: string; name: string; col: string; value: number; max: number }>,
         };
 
         const nextRows = existingRows.slice();
@@ -2003,7 +1560,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
           }
           stats.matchedRows += 1;
 
-          const excelName = nameCol >= 0 ? String(line[nameCol] ?? '').trim() : '';
           const statusRaw = statusCol >= 0 ? String(line[statusCol] ?? '') : '';
           const status = statusRaw.trim().toLowerCase();
           const isAbsent = status === 'absent' || status === 'ab' || status === 'a';
@@ -2064,27 +1620,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
               };
               patch.total = round1(clamp(sumArr(nextCo1) + sumArr(nextCo2), 0, MAX_ASMT1));
             } else {
-              if (q1 != null) {
-                if (q1 > q1Max) {
-                  stats.overMaxWarnings.push({ reg: normReg, name: excelName, col: 'CO1', value: q1, max: q1Max });
-                } else {
-                  patch.co1 = round1(clamp(q1, 0, q1Max));
-                }
-              }
-              if (q2 != null) {
-                if (q2 > q2Max) {
-                  stats.overMaxWarnings.push({ reg: normReg, name: excelName, col: 'CO2', value: q2, max: q2Max });
-                } else {
-                  patch.co2 = round1(clamp(q2, 0, q2Max));
-                }
-              }
+              if (q1 != null) patch.co1 = round1(clamp(q1, 0, q1Max));
+              if (q2 != null) patch.co2 = round1(clamp(q2, 0, q2Max));
 
               if (totalX != null) {
                 patch.total = round1(clamp(totalX, 0, MAX_ASMT1));
-              } else if (patch.co1 != null || patch.co2 != null) {
-                const v1 = typeof patch.co1 === "number" ? patch.co1 : 0;
-                const v2 = typeof patch.co2 === "number" ? patch.co2 : 0;
-                patch.total = round1(clamp(v1 + v2, 0, MAX_ASMT1));
+              } else if (q1 != null && q2 != null) {
+                patch.total = round1(clamp((patch.co1 as number) + (patch.co2 as number), 0, MAX_ASMT1));
               }
             }
           }
@@ -2139,19 +1681,11 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
         });
       }
 
-      {
-        let alertMsg = `Import complete. Matched: ${importStats.matchedRows} row(s). Unmatched: ${importStats.unmatchedRows} row(s). Filled: ${filledCells} cell(s).`;
-        if (importStats.unmatchedRows > 0) alertMsg += '\n\nNote: Some register numbers could not be matched to the roster.';
-        if (importStats.overMaxWarnings.length > 0) {
-          alertMsg += `\n\n⚠️ MARKS EXCEEDING MAXIMUM (${importStats.overMaxWarnings.length} issue(s)) — cells left blank, please re-enter correct values:\n`;
-          alertMsg += importStats.overMaxWarnings
-            .slice(0, 30)
-            .map((w) => `  • Roll No: ${w.reg}${w.name ? ` (${w.name})` : ''} — ${w.col}: entered ${w.value}, max allowed is ${w.max}`)
-            .join('\n');
-          if (importStats.overMaxWarnings.length > 30) alertMsg += `\n  … and ${importStats.overMaxWarnings.length - 30} more.`;
-        }
-        alert(alertMsg);
-      }
+      alert(
+        `Import complete. Matched: ${importStats.matchedRows} row(s). Unmatched: ${importStats.unmatchedRows} row(s). Filled: ${filledCells} cell(s).${
+          importStats.unmatchedRows > 0 ? ' (Open console for unmatched register samples.)' : ''
+        }`,
+      );
     } finally {
       setExcelBusy(false);
     }
@@ -2536,10 +2070,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             <button
               onClick={resetAllMarks}
               className="obe-btn obe-btn-danger"
-              disabled={!sheet.rows.length || tableBlocked || resettingMarks}
+              disabled={!sheet.rows.length || tableBlocked}
               title={tableBlocked ? 'Table locked — confirm Mark Manager to enable actions' : undefined}
             >
-              {resettingMarks ? 'Resetting…' : 'Reset Marks'}
+              Reset Marks
             </button>
             <button
               className="obe-btn obe-btn-secondary"
@@ -2650,8 +2184,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       <ul style={{ margin: 0, paddingLeft: 18 }}>
                         <li><b>Register No</b></li>
                         <li><b>Student Name</b></li>
-                        <li><b>Q1</b> (CO-{effectiveCoA} total)</li>
-                        <li><b>Q2</b> (CO-{effectiveCoB} total)</li>
+                        <li><b>Q1</b> (CO-1 total)</li>
+                        <li><b>Q2</b> (CO-2 total)</li>
                         <li><b>Status</b> (present/absent)</li>
                       </ul>
                       {isReview ? (
@@ -2706,45 +2240,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
             >
               {publishButtonIsRequestEdit ? (markEntryReqPending ? 'Request Pending' : 'Request Edit') : publishing ? 'Publishing…' : 'Publish'}
             </button>
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              flexWrap: 'wrap',
-              padding: '6px 10px',
-              border: '1px solid #e5e7eb',
-              borderRadius: 10,
-              background: '#f8fafc',
-            }}
-          >
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-              <input type="checkbox" checked={alphaOrderEnabled} onChange={(e) => setAlphaOrderEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
-              Alphabetical order
-            </label>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-              <input type="checkbox" checked={digitFilterEnabled} onChange={(e) => setDigitFilterEnabled(e.target.checked)} style={{ accentColor: '#2563eb' }} />
-              Digits order
-            </label>
-            <select
-              value={digitFilterLength}
-              disabled={!digitFilterEnabled}
-              onChange={(e) => {
-                const len = Number(e.target.value);
-                if (len >= 2 && len <= 8) setDigitFilterLength(len as 2 | 3 | 4 | 5 | 6 | 7 | 8);
-              }}
-              style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}
-              title="Order by last N digits of register number"
-            >
-              <option value={2}>Last 2</option>
-              <option value={3}>Last 3</option>
-              <option value={4}>Last 4</option>
-              <option value={5}>Last 5</option>
-              <option value={6}>Last 6</option>
-              <option value={7}>Last 7</option>
-              <option value={8}>Last 8</option>
-            </select>
           </div>
         </div>
 
@@ -2879,18 +2374,18 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     <th style={cellTh}>{displayLabel}</th>
                     {showTotalColumn ? <th style={cellTh}>Total</th> : null}
 
-                    <th style={cellTh} colSpan={hideSecondCo ? 2 : 4}>CO ATTAINMENT</th>
+                    <th style={cellTh} colSpan={4}>CO ATTAINMENT</th>
                     {visibleBtlIndices.length ? <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th> : null}
                   </tr>
                   <tr>
                     <th style={cellTh}>
                       <div style={{ fontWeight: 800 }}>COs</div>
-                      <div style={{ fontSize: 12 }}>{hideSecondCo ? effectiveCoA : `${effectiveCoA},${effectiveCoB}`}</div>
+                      <div style={{ fontSize: 12 }}>1,2</div>
                     </th>
                     {showTotalColumn ? <th style={cellTh} /> : null}
 
-                    <th style={cellTh} colSpan={2}>CO-{effectiveCoA}</th>
-                    {!hideSecondCo && <th style={cellTh} colSpan={2}>CO-{effectiveCoB}</th>}
+                    <th style={cellTh} colSpan={2}>CO-1</th>
+                    <th style={cellTh} colSpan={2}>CO-2</th>
 
                     {visibleBtlIndices.map((n) => (
                       <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -2905,7 +2400,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     </th>
                     {showTotalColumn ? <th style={cellTh} /> : null}
 
-                    {Array.from({ length: (hideSecondCo ? 1 : 2) + visibleBtlIndices.length }).flatMap((_, i) => (
+                    {Array.from({ length: 2 + visibleBtlIndices.length }).flatMap((_, i) => (
                       <React.Fragment key={i}>
                         <th style={cellTh}>Mark</th>
                         <th style={cellTh}>%</th>
@@ -2918,8 +2413,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     {showTotalColumn ? <th style={cellTh}>{MAX_ASMT1}</th> : null}
                     <th style={cellTh}>{CO_MAX.co1}</th>
                     <th style={cellTh}>%</th>
-                    {!hideSecondCo && <th style={cellTh}>{CO_MAX.co2}</th>}
-                    {!hideSecondCo && <th style={cellTh}>%</th>}
+                    <th style={cellTh}>{CO_MAX.co2}</th>
+                    <th style={cellTh}>%</th>
                     {visibleBtlIndices.flatMap((n) => [
                       <th key={`btl-max-${n}`} style={cellTh}>
                         {isReview
@@ -2942,10 +2437,10 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       const raw = publishedViewSnapshot?.marks?.[String(r.studentId)] ?? null;
                       const numericTotal = raw == null || raw === '' ? null : clamp(Number(raw), 0, MAX_ASMT1);
 
-                      const coSplitCount = hideSecondCo ? 1 : 2;
+                      const coSplitCount = 2;
                       const coShare = numericTotal == null ? null : round1(numericTotal / coSplitCount);
                       const co1 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co1);
-                      const co2 = hideSecondCo ? null : (coShare == null ? null : clamp(coShare, 0, CO_MAX.co2));
+                      const co2 = coShare == null ? null : clamp(coShare, 0, CO_MAX.co2);
 
                       const visibleIndicesZeroBased = visibleBtlIndices.map((n) => n - 1);
                       const rawBtlMaxByIndex = [BTL_MAX.btl1, BTL_MAX.btl2, BTL_MAX.btl3, BTL_MAX.btl4, BTL_MAX.btl5, BTL_MAX.btl6];
@@ -2970,8 +2465,8 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                           {showTotalColumn ? <td style={{ ...cellTd, textAlign: 'center' }}>{numericTotal == null ? '' : round1(numericTotal)}</td> : null}
                           <td style={{ ...cellTd, textAlign: 'center' }}>{co1 ?? ''}</td>
                           <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co1 as any, CO_MAX.co1)}</td>
-                          {!hideSecondCo && <td style={{ ...cellTd, textAlign: 'center' }}>{co2 ?? ''}</td>}
-                          {!hideSecondCo && <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co2 as any, CO_MAX.co2)}</td>}
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{co2 ?? ''}</td>
+                          <td style={{ ...cellTd, textAlign: 'center' }}>{pct(co2 as any, CO_MAX.co2)}</td>
                           {visibleBtlIndices.map((btl) => {
                             const idx0 = btl - 1;
                             const mark = btlMarksByIndex[idx0];
@@ -3014,11 +2509,11 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                 className="obe-btn obe-btn-success"
                 onClick={() => {
                   // If Mark Manager has not been confirmed (no snapshot), open confirm modal
-                  // to allow selecting BTLs and saving. If already confirmed, open request mode
-                  // only when edit requests are enabled; otherwise allow direct confirm edit.
-                  setMarkManagerModal({ mode: markManagerConfirmed && markManagerEditRequestsEnabled ? 'request' : 'confirm' });
+                  // to allow selecting BTLs and saving. If already confirmed, open request mode.
+                  if (markManagerConfirmed && !markManagerEditRequestsEnabled) return;
+                  setMarkManagerModal({ mode: markManagerConfirmed ? 'request' : 'confirm' });
                 }}
-                disabled={!subjectId || markManagerBusy}
+                disabled={!subjectId || markManagerBusy || (markManagerConfirmed && !markManagerEditRequestsEnabled)}
               >
                 {markManagerConfirmed ? 'Edit' : 'Save'}
               </button>
@@ -3026,7 +2521,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: '#6b7280' }}>
           <div>Max {displayLabel}: <strong style={{ color: '#111' }}>{MAX_ASMT1}</strong></div>
-          <div>CO-{effectiveCoA} max: <strong style={{ color: '#111' }}>{CO_MAX.co1}</strong>{!hideSecondCo && <> • CO-{effectiveCoB} max: <strong style={{ color: '#111' }}>{CO_MAX.co2}</strong></>}</div>
+          <div>CO-1 max: <strong style={{ color: '#111' }}>{CO_MAX.co1}</strong> • CO-2 max: <strong style={{ color: '#111' }}>{CO_MAX.co2}</strong></div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <div style={{ fontSize: 13, color: '#6b7280' }}>Selected BTLs:</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -3060,7 +2555,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
 
       <div style={{ marginTop: 14 }}>
         {showNameList ? (
-          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }} onCopyCapture={onQpGridCopyCapture} onPasteCapture={onQpGridPasteCapture}>
+          <div className="obe-table-wrapper" style={{ overflowX: 'auto' }}>
             <PublishLockOverlay
               locked={Boolean(globalLocked || publishedEditLocked || (isPublished && lockStatusUnknown))}
               title={globalLocked ? 'Locked by IQAC' : publishedEditLocked ? 'Published — Locked' : 'Table Locked'}
@@ -3081,7 +2576,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     <th style={cellTh}>{displayLabel}</th>
                     {showTotalColumn ? <th style={cellTh}>Total</th> : null}
 
-                    <th style={cellTh} colSpan={isReview ? reviewCoAttainmentCols : useQpQEntry ? (qpQuestions.length + (hideSecondCo ? 1 : 2)) : (hideSecondCo ? 2 : 4)}>CO ATTAINMENT</th>
+                    <th style={cellTh} colSpan={isReview ? reviewCoAttainmentCols : 4}>CO ATTAINMENT</th>
                     {visibleBtlIndices.length ? (
                       <th style={cellTh} colSpan={visibleBtlIndices.length * 2}>BTL ATTAINMENT</th>
                     ) : null}
@@ -3089,30 +2584,16 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                   <tr>
                     <th style={cellTh}>
                       <div style={{ fontWeight: 800 }}>COs</div>
-                      <div style={{ fontSize: 12 }}>{hideSecondCo ? String(effectiveCoA) : `${effectiveCoA},${effectiveCoB}`}</div>
+                      <div style={{ fontSize: 12 }}>1,2</div>
                     </th>
                     {showTotalColumn ? <th style={cellTh} /> : null}
 
-                    {useQpQEntry ? (
-                      <>
-                        {qpQuestions.map((q, i) => (
-                          <th key={`qh-${i}`} style={cellTh}>Q-{i + 1}</th>
-                        ))}
-                        <th style={cellTh}>CO-{effectiveCoA}</th>
-                        {!hideSecondCo && <th style={cellTh}>CO-{effectiveCoB}</th>}
-                      </>
-                    ) : (
-                      <>
-                        <th style={cellTh} colSpan={isReview ? reviewCo1ColumnCount * 2 : 2}>
-                          {isReview ? renderCoSplitHeaderCell('co1', CO_MAX.co1, co1TotalSplit) : `CO-${effectiveCoA}`}
-                        </th>
-                        {!hideSecondCo && (
-                          <th style={cellTh} colSpan={isReview ? reviewCo2ColumnCount * 2 : 2}>
-                            {isReview ? renderCoSplitHeaderCell('co2', CO_MAX.co2, co2TotalSplit) : `CO-${effectiveCoB}`}
-                          </th>
-                        )}
-                      </>
-                    )}
+                    <th style={cellTh} colSpan={isReview ? reviewCo1ColumnCount * 2 : 2}>
+                      {isReview ? renderCoSplitHeaderCell('co1', CO_MAX.co1, co1TotalSplit) : 'CO-1'}
+                    </th>
+                    <th style={cellTh} colSpan={isReview ? reviewCo2ColumnCount * 2 : 2}>
+                      {isReview ? renderCoSplitHeaderCell('co2', CO_MAX.co2, co2TotalSplit) : 'CO-2'}
+                    </th>
 
                     {visibleBtlIndices.map((n) => (
                       <th key={`btl-head-${n}`} style={cellTh} colSpan={2}>
@@ -3127,35 +2608,17 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     </th>
                     {showTotalColumn ? <th style={cellTh} /> : null}
 
-                    {useQpQEntry ? (
-                      <>
-                        {qpQuestions.map((_, i) => <th key={`q3m-${i}`} style={cellTh}>Mark</th>)}
-                        {Array.from({ length: hideSecondCo ? 1 : 2 }).map((_, i) => <th key={`q3p-${i}`} style={cellTh}>%</th>)}
-                        {visibleBtlIndices.flatMap((n) => [
-                          <th key={`q3btlm-${n}`} style={cellTh}>Mark</th>,
-                          <th key={`q3btlp-${n}`} style={cellTh}>%</th>,
-                        ])}
-                      </>
-                    ) : (
-                      Array.from({ length: (isReview ? reviewCo1ColumnCount + reviewCo2ColumnCount : (hideSecondCo ? 1 : 2)) + visibleBtlIndices.length }).flatMap((_, i) => (
-                        <React.Fragment key={i}>
-                          <th style={cellTh}>Mark</th>
-                          <th style={cellTh}>%</th>
-                        </React.Fragment>
-                      ))
-                    )}
+                    {Array.from({ length: (isReview ? reviewCo1ColumnCount + reviewCo2ColumnCount : 2) + visibleBtlIndices.length }).flatMap((_, i) => (
+                      <React.Fragment key={i}>
+                        <th style={cellTh}>Mark</th>
+                        <th style={cellTh}>%</th>
+                      </React.Fragment>
+                    ))}
                   </tr>
                   <tr>
                     <th style={cellTh}>Name / Max Marks</th>
                     <th style={cellTh}>{MAX_ASMT1}</th>
                     {showTotalColumn ? <th style={cellTh}>{MAX_ASMT1}</th> : null}
-                    {useQpQEntry ? (
-                      <>
-                        {qpQuestions.map((q, i) => <th key={`q4m-${i}`} style={cellTh}>{q.max}</th>)}
-                        <th style={cellTh}>%</th>
-                        {!hideSecondCo && <th style={cellTh}>%</th>}
-                      </>
-                    ) : (<>
                     {isReview && reviewSplitEnabled
                       ? Array.from({ length: reviewCo1ColumnCount }).flatMap((_, i) => {
                           const v = i < co1Splits.length ? co1Splits[i] : CO_MAX.co1;
@@ -3180,7 +2643,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                           <th key="co1-max" style={cellTh}>{CO_MAX.co1}</th>,
                           <th key="co1-pct" style={cellTh}>%</th>,
                         ]}
-                    {!hideSecondCo && (isReview && reviewSplitEnabled
+                    {isReview && reviewSplitEnabled
                       ? Array.from({ length: reviewCo2ColumnCount }).flatMap((_, i) => {
                           const v = i < co2Splits.length ? co2Splits[i] : CO_MAX.co2;
                           return [
@@ -3203,8 +2666,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       : [
                           <th key="co2-max" style={cellTh}>{CO_MAX.co2}</th>,
                           <th key="co2-pct" style={cellTh}>%</th>,
-                        ])}
-                    </>)}
+                        ]}
                     {visibleBtlIndices.flatMap((n) => [
                       <th key={`btl-max-${n}`} style={cellTh}>
                         {isReview ? String(BTL_MAX_WHEN_VISIBLE) : String(displayBtlMax((BTL_MAX as any)[`btl${n}`]))}
@@ -3228,7 +2690,6 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                     </tr>
                   ) : (
                     rowsToRender.map((r, idx) => {
-                      const baseRowIdx = resolveBaseRowIndex(r, idx);
                       const reviewCo1MaxByCol = isReview
                         ? Array.from({ length: reviewCo1ColumnCount }).map((_, splitIdx) => {
                             const v = splitIdx < co1Splits.length ? co1Splits[splitIdx] : CO_MAX.co1;
@@ -3251,7 +2712,7 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                       // CO1/CO2 values must come from the row fields so inputs can be cleared.
                       // (Falling back to total/2 breaks backspace + makes the fields feel "locked".)
                       const co1 = isReview ? null : typeof r.co1 === 'number' ? clamp(r.co1, 0, CO_MAX.co1) : null;
-                      const co2 = isReview ? null : hideSecondCo ? null : typeof r.co2 === 'number' ? clamp(r.co2, 0, CO_MAX.co2) : null;
+                      const co2 = isReview ? null : typeof r.co2 === 'number' ? clamp(r.co2, 0, CO_MAX.co2) : null;
 
                       // Total: for SSA1, show sum of CO-1 and CO-2 (out of 20).
                       // If both COs are empty, fall back to stored total (for legacy drafts).
@@ -3307,99 +2768,40 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                                       max={CO_MAX.co1}
                                       step={1}
                                       value={mark}
-                                      onChange={(e) => updateReviewCoMark(baseRowIdx, 'co1', splitIdx, e.target.value)}
+                                      onChange={(e) => updateReviewCoMark(idx, 'co1', splitIdx, e.target.value)}
                                     />
                                   )}
                                 </td>,
                                 <td key={`co1-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo1MaxByCol[splitIdx] || CO_MAX.co1)}</td>,
                               ])
-                            : useQpQEntry
-                              ? (qpQuestions.map((q, i) => {
-                                  const qMarkVal = Array.isArray((r as any).qMarks) ? (r as any).qMarks[i] : undefined;
-                                  const selected = isQpCellSelected(idx, i);
-                                  return (
-                                    <td
-                                      key={`qi-${idx}-${i}`}
-                                      style={{
-                                        ...cellTd,
-                                        textAlign: 'center',
-                                        minWidth: 72,
-                                        background: selected ? '#ecfdf5' : (cellTd as any).background,
-                                        boxShadow: selected ? 'inset 0 0 0 2px #16a34a' : undefined,
+                            : [
+                                <td key={`co1-single-${idx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
+                                  {marksEditDisabled ? (
+                                    <span>{co1 ?? ''}</span>
+                                  ) : (
+                                    <input
+                                      style={inputStyle}
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={typeof r.co1 === 'number' ? String(r.co1) : ''}
+                                      onChange={(e) => {
+                                        if (marksEditDisabled) return;
+                                        const raw = e.target.value;
+                                        const parsed = parseMarkInput(raw);
+                                        if (parsed == null) return updateRow(idx, { co1: '' });
+                                        updateRow(idx, { co1: clamp(parsed, 0, CO_MAX.co1) });
                                       }}
-                                      onMouseDown={(e) => onQpCellMouseDown(idx, i, e.shiftKey)}
-                                      onMouseEnter={() => onQpCellMouseEnter(idx, i)}
-                                    >
-                                      {marksEditDisabled ? (
-                                        <span>{typeof qMarkVal === 'number' ? qMarkVal : ''}</span>
-                                      ) : (
-                                        <input
-                                          style={{ ...inputStyle, borderColor: typeof qMarkVal === 'number' && qMarkVal > q.max ? '#ef4444' : undefined }}
-                                          type="text"
-                                          inputMode="decimal"
-                                          value={typeof qMarkVal === 'number' ? String(qMarkVal) : ''}
-                                          onChange={(e) => {
-                                            if (marksEditDisabled) return;
-                                            const raw = e.target.value;
-                                            const parsed = parseMarkInput(raw);
-                                            if (parsed == null) { e.currentTarget.setCustomValidity(''); updateQMark(baseRowIdx, i, ''); return; }
-                                            if (parsed > q.max) {
-                                              e.currentTarget.setCustomValidity(`Max is ${q.max}`);
-                                              e.currentTarget.reportValidity();
-                                              window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                              return;
-                                            }
-                                            e.currentTarget.setCustomValidity('');
-                                            updateQMark(baseRowIdx, i, raw);
-                                          }}
-                                          onBlur={(e) => {
-                                            const parsed = parseMarkInput(e.target.value);
-                                            if (parsed == null) return;
-                                            updateQMark(baseRowIdx, i, String(round1(clamp(parsed, 0, q.max))));
-                                          }}
-                                        />
-                                      )}
-                                    </td>
-                                  );
-                                }).concat([
-                                  <td key={`coa-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co1, CO_MAX.co1)}</td>,
-                                  ...(!hideSecondCo ? [<td key={`cob-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co2, CO_MAX.co2)}</td>] : []),
-                                ]))
-                              : [
-                                  <td key={`co1-single-${idx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
-                                    {marksEditDisabled ? (
-                                      <span>{co1 ?? ''}</span>
-                                    ) : (
-                                      <input
-                                        style={{ ...inputStyle, borderColor: typeof r.co1 === 'number' && r.co1 > CO_MAX.co1 ? '#ef4444' : undefined }}
-                                        type="text"
-                                        inputMode="decimal"
-                                        value={typeof r.co1 === 'number' ? String(r.co1) : ''}
-                                        onChange={(e) => {
-                                          if (marksEditDisabled) return;
-                                          const raw = e.target.value;
-                                          const parsed = parseMarkInput(raw);
-                                          if (parsed == null) { e.currentTarget.setCustomValidity(''); return updateRow(baseRowIdx, { co1: '' }); }
-                                          if (parsed > CO_MAX.co1) {
-                                            e.currentTarget.setCustomValidity(`Max mark is ${CO_MAX.co1}`);
-                                            e.currentTarget.reportValidity();
-                                            window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                            return;
-                                          }
-                                          e.currentTarget.setCustomValidity('');
-                                          updateRow(baseRowIdx, { co1: parsed });
-                                        }}
-                                        onBlur={(e) => {
-                                          const parsed = parseMarkInput(e.target.value);
-                                          if (parsed == null) return;
-                                          if (parsed > CO_MAX.co1) { updateRow(baseRowIdx, { co1: '' }); return; }
-                                          updateRow(baseRowIdx, { co1: round1(clamp(parsed, 0, CO_MAX.co1)) });
-                                        }}
-                                      />
-                                    )}
-                                  </td>,
-                                  <td key={`co1-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co1, CO_MAX.co1)}</td>,
-                                ]}
+                                      onBlur={(e) => {
+                                        // Normalize formatting on blur (e.g. trim, clamp).
+                                        const parsed = parseMarkInput(e.target.value);
+                                        if (parsed == null) return;
+                                        updateRow(idx, { co1: round1(clamp(parsed, 0, CO_MAX.co1)) });
+                                      }}
+                                    />
+                                  )}
+                                </td>,
+                                <td key={`co1-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co1, CO_MAX.co1)}</td>,
+                              ]}
                           {isReview
                             ? reviewCo2Marks.flatMap((mark, splitIdx) => [
                                 <td key={`co2-mark-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
@@ -3413,19 +2815,19 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                                       max={CO_MAX.co2}
                                       step={1}
                                       value={mark}
-                                      onChange={(e) => updateReviewCoMark(baseRowIdx, 'co2', splitIdx, e.target.value)}
+                                      onChange={(e) => updateReviewCoMark(idx, 'co2', splitIdx, e.target.value)}
                                     />
                                   )}
                                 </td>,
                                 <td key={`co2-pct-${idx}-${splitIdx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(mark === '' ? null : Number(mark), reviewCo2MaxByCol[splitIdx] || CO_MAX.co2)}</td>,
                               ])
-                            : (!hideSecondCo && !useQpQEntry) ? [
+                            : [
                                 <td key={`co2-single-${idx}`} style={{ ...cellTd, textAlign: 'center', minWidth: 86 }}>
                                   {marksEditDisabled ? (
                                     <span>{co2 ?? ''}</span>
                                   ) : (
                                     <input
-                                      style={{ ...inputStyle, borderColor: typeof r.co2 === 'number' && r.co2 > CO_MAX.co2 ? '#ef4444' : undefined }}
+                                      style={inputStyle}
                                       type="text"
                                       inputMode="decimal"
                                       value={typeof r.co2 === 'number' ? String(r.co2) : ''}
@@ -3433,27 +2835,19 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                                         if (marksEditDisabled) return;
                                         const raw = e.target.value;
                                         const parsed = parseMarkInput(raw);
-                                        if (parsed == null) { e.currentTarget.setCustomValidity(''); return updateRow(baseRowIdx, { co2: '' }); }
-                                        if (parsed > CO_MAX.co2) {
-                                          e.currentTarget.setCustomValidity(`Max mark is ${CO_MAX.co2}`);
-                                          e.currentTarget.reportValidity();
-                                          window.setTimeout(() => e.currentTarget.setCustomValidity(''), 0);
-                                          return;
-                                        }
-                                        e.currentTarget.setCustomValidity('');
-                                        updateRow(baseRowIdx, { co2: parsed });
+                                        if (parsed == null) return updateRow(idx, { co2: '' });
+                                        updateRow(idx, { co2: clamp(parsed, 0, CO_MAX.co2) });
                                       }}
                                       onBlur={(e) => {
                                         const parsed = parseMarkInput(e.target.value);
                                         if (parsed == null) return;
-                                        if (parsed > CO_MAX.co2) { updateRow(baseRowIdx, { co2: '' }); return; }
-                                        updateRow(baseRowIdx, { co2: round1(clamp(parsed, 0, CO_MAX.co2)) });
+                                        updateRow(idx, { co2: round1(clamp(parsed, 0, CO_MAX.co2)) });
                                       }}
                                     />
                                   )}
                                 </td>,
                                 <td key={`co2-single-pct-${idx}`} style={{ ...cellTd, textAlign: 'center' }}>{pct(co2, CO_MAX.co2)}</td>,
-                              ] : null}
+                              ]}
 
                           {visibleBtlIndices.map((btl) => {
                             const idx0 = btl - 1;
@@ -3702,15 +3096,13 @@ export default function Ssa1SheetEntry({ subjectId, teachingAssignmentId, label,
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{MAX_ASMT1}</td>
                       </tr>
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{effectiveCoA} max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-1 max</td>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co1}</td>
                       </tr>
-                      {!hideSecondCo && (
                       <tr>
-                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-{effectiveCoB} max</td>
+                        <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>CO-2 max</td>
                         <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>{CO_MAX.co2}</td>
                       </tr>
-                      )}
                       <tr>
                                 <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', fontWeight: 900 }}>Selected BTLs</td>
                                 <td style={{ padding: 10, borderBottom: '1px solid #f3f4f6', textAlign: 'right' }}>

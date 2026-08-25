@@ -838,18 +838,14 @@ export default function LCAPage({
             <tr>
               <td style={{ ...styles.tdLeft, fontWeight: 700 }}>COURSE MODULE</td>
               <td style={{ ...styles.tdLeft, ...styles.cellGreen, ...(validationErrors.has('courseModule') ? { border: '2px solid #ef4444' } : {}) }}>
-                <select
+                <input
                   value={courseMeta.courseModule}
                   onChange={(e) => {
                     setCourseMeta((p) => ({ ...p, courseModule: e.target.value }));
                     if (validationErrors.has('courseModule')) setValidationErrors((p) => { const s = new Set(p); s.delete('courseModule'); return s; });
                   }}
-                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none', cursor: 'pointer' }}
-                >
-                  <option value="">-- Select --</option>
-                  <option value="IM">IM</option>
-                  <option value="DM">DM</option>
-                </select>
+                  style={{ width: '100%', border: 'none', background: 'transparent', fontSize: 15, outline: 'none' }}
+                />
               </td>
             </tr>
           </tbody>

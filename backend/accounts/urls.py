@@ -12,9 +12,6 @@ from .views import (
     MobileOtpVerifyView, 
     MobileRemoveView,
     ChangePasswordView,
-    ForgotPasswordRequestOtpView,
-    ForgotPasswordVerifyOtpView,
-    ForgotPasswordResetView,
     ProfileUpdateView,
     NotificationTemplateApiView,
     UserQueryListCreateView,
@@ -30,7 +27,6 @@ from .views import (
     ProfileImageUpdateRequestView,
     ProfileImageUpdateRequestReviewView,
     UCStateView,
-    LoginLockdownView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .api.dashboard import DashboardView
@@ -43,9 +39,6 @@ urlpatterns = [
     path('mobile/verify-otp/', MobileOtpVerifyView.as_view(), name='mobile_verify_otp'),
     path('mobile/remove/', MobileRemoveView.as_view(), name='mobile_remove'),
     path('change-password/', ChangePasswordView.as_view(), name='change_password'),
-    path('forgot-password/request-otp/', ForgotPasswordRequestOtpView.as_view(), name='forgot_password_request_otp'),
-    path('forgot-password/verify-otp/', ForgotPasswordVerifyOtpView.as_view(), name='forgot_password_verify_otp'),
-    path('forgot-password/reset/', ForgotPasswordResetView.as_view(), name='forgot_password_reset'),
     path('profile/update/', ProfileUpdateView.as_view(), name='profile_update'),
     path('profile-image-update-requests/', ProfileImageUpdateRequestView.as_view(), name='profile_image_update_requests'),
     path('profile-image-update-requests/review/', ProfileImageUpdateRequestReviewView.as_view(), name='profile_image_update_requests_review_list'),
@@ -75,6 +68,8 @@ urlpatterns = [
     path('settings/whatsapp/clear-session/', WhatsAppGatewayClearSessionView.as_view(), name='settings_whatsapp_clear_session'),
     # Under-construction state (read: any auth, write: IQAC only)
     path('uc-state/', UCStateView.as_view(), name='uc_state'),
-    # Login lockdown toggle (read: any auth, write: superuser only)
-    path('login-lockdown/', LoginLockdownView.as_view(), name='login_lockdown'),
+
+    # Compatibility alias for Academic 2.1 endpoints that may be called from
+    # the accounts-prefixed API base used by some frontends.
+    path('academic-v2/', include('academic_v2.urls')),
 ]

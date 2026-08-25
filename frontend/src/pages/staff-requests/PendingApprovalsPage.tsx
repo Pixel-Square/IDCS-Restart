@@ -192,10 +192,10 @@ export default function PendingApprovalsPage() {
         }
       }
       setQuickAction(null);
-      await Promise.all([load(), loadHistory()]);
+      await Promise.all([load(true), loadHistory(), loadAc21Pending()]);
     } catch (e: any) {
-      setActionError(e?.response?.data?.detail || `Failed to ${quickAction.type} request`);
-    } finally {
+      const msg = e instanceof Error ? e.message : `Failed to ${quickAction.type} request`;
+      setActionError(msg);
       setSubmitting(false);
     }
   };

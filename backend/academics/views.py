@@ -16,7 +16,6 @@ from django.utils import timezone
 from datetime import timedelta
 import decimal
 import io
-import re
 import zipfile
 
 from .permissions import IsHODOfDepartment
@@ -77,9 +76,6 @@ from rest_framework import status
 from rest_framework.response import Response
 from .models import StudentMentorMap
 from django.db import transaction
-
-
-
 
 
 def _ensure_teaching_assignments_from_subject_batches(staff_profile) -> int:
@@ -2149,144 +2145,6 @@ class IqacInternalMarksCourseExportView(APIView):
         return response
 
 
-class IqacMarksSemesterZipExportView(APIView):
-    """Download semester-wise multi-exam Excel sheets packaged in a ZIP archive.
-
-    Folder hierarchy:
-      Semester <N>/
-        <Department>/
-          <CourseCode>_<CourseName>_<SectionName>.xlsx
-            -> Sheets: SSA1, CIA1, Formative1, SSA2, CIA2, Formative2, Model Exam, Final Internal, ...
-    """
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request):
-        if not _user_is_iqac_admin(request.user):
-            return Response({'detail': 'Only IQAC/OBE master can download marks export.'}, status=403)
-
-        from academics.services_marks_export import generate_semester_courses_marks_zip
-
-        semesters_param = request.query_params.get('semesters') or request.query_params.get('semester')
-        sem_list = []
-        if semesters_param:
-            for p in str(semesters_param).split(','):
-                p = p.strip()
-                if p.isdigit():
-                    sem_list.append(int(p))
-
-        academic_year = request.query_params.get('academic_year')
-        dept_id_raw = request.query_params.get('department_id')
-        dept_id = int(dept_id_raw) if dept_id_raw and str(dept_id_raw).isdigit() else None
-        batch = request.query_params.get('batch')
-        regulation = request.query_params.get('regulation')
-
-        try:
-            zip_buf, count = generate_semester_courses_marks_zip(
-                semesters=sem_list,
-                academic_year=academic_year,
-                department_id=dept_id,
-                batch=batch,
-                regulation=regulation,
-            )
-
-            if count == 0:
-                return Response({'detail': 'No course sections found for the selected semesters.'}, status=404)
-
-            sem_label = f"semesters_{'_'.join(str(s) for s in sorted(sem_list))}" if sem_list else "all_semesters"
-            filename = f"marks_export_{sem_label}.zip"
-
-            response = HttpResponse(zip_buf.getvalue(), content_type='application/zip')
-            response['Content-Disposition'] = f'attachment; filename="{filename}"'
-            return response
-        except Exception as e:
-            import logging
-            logging.exception("Marks zip export failed: %s", e)
-            return Response({'detail': f'Error generating marks export: {str(e)}'}, status=500)
-
-    def post(self, request):
-        if not _user_is_iqac_admin(request.user):
-            return Response({'detail': 'Only IQAC/OBE master can download marks export.'}, status=403)
-
-        from academics.services_marks_export import generate_semester_courses_marks_zip
-
-        data = request.data if isinstance(request.data, dict) else {}
-        semesters_raw = data.get('semesters', [])
-        sem_list = []
-        if isinstance(semesters_raw, list):
-            for s in semesters_raw:
-                try:
-                    sem_list.append(int(s))
-                except Exception:
-                    pass
-        elif isinstance(semesters_raw, str):
-            for p in semesters_raw.split(','):
-                p = p.strip()
-                if p.isdigit():
-                    sem_list.append(int(p))
-
-        academic_year = data.get('academic_year')
-        dept_id = data.get('department_id')
-        if dept_id:
-            try:
-                dept_id = int(dept_id)
-            except Exception:
-                dept_id = None
-        batch = data.get('batch')
-        regulation = data.get('regulation')
-
-        try:
-            zip_buf, count = generate_semester_courses_marks_zip(
-                semesters=sem_list,
-                academic_year=academic_year,
-                department_id=dept_id,
-                batch=batch,
-                regulation=regulation,
-            )
-
-            if count == 0:
-                return Response({'detail': 'No course sections found for the selected semesters.'}, status=404)
-
-            sem_label = f"semesters_{'_'.join(str(s) for s in sorted(sem_list))}" if sem_list else "all_semesters"
-            filename = f"marks_export_{sem_label}.zip"
-
-            response = HttpResponse(zip_buf.getvalue(), content_type='application/zip')
-            response['Content-Disposition'] = f'attachment; filename="{filename}"'
-            return response
-        except Exception as e:
-            import logging
-            logging.exception("Marks zip export failed: %s", e)
-            return Response({'detail': f'Error generating marks export: {str(e)}'}, status=500)
-
-
-class IqacMarksExportPreviewView(APIView):
-    """Get count and department statistics for selected semesters."""
-
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request):
-        if not _user_is_iqac_admin(request.user):
-            return Response({'detail': 'Only IQAC/OBE master can view preview.'}, status=403)
-
-        from academics.services_marks_export import get_semester_export_preview
-
-        semesters_param = request.query_params.get('semesters') or request.query_params.get('semester')
-        sem_list = []
-        if semesters_param:
-            for p in str(semesters_param).split(','):
-                p = p.strip()
-                if p.isdigit():
-                    sem_list.append(int(p))
-
-        try:
-            preview = get_semester_export_preview(semesters=sem_list)
-            return Response(preview)
-        except Exception as e:
-            import logging
-            logging.exception("Marks export preview failed: %s", e)
-            return Response({'detail': f'Error fetching preview: {str(e)}'}, status=500)
-
-
 class SectionAdvisorViewSet(viewsets.ModelViewSet):
     queryset = SectionAdvisor.objects.select_related('section__batch__course__department', 'advisor')
     serializer_class = SectionAdvisorSerializer
@@ -3921,34 +3779,6 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('You do not have permission to delete academic years.')
         instance.delete()
 
-    @action(detail=False, methods=['get'], url_path='transition_logs')
-    def transition_logs(self, request):
-        """Return all SystemTransitionLog entries, newest first. IQAC/admin only."""
-        if not _user_is_iqac_admin(request.user):
-            return Response({'detail': 'Admin access required.'}, status=403)
-        from .models import SystemTransitionLog
-        logs = SystemTransitionLog.objects.select_related(
-            'academic_year', 'performed_by'
-        ).order_by('-performed_at')[:200]
-        data = [
-            {
-                'id': lg.id,
-                'academic_year': {
-                    'id': lg.academic_year_id,
-                    'name': lg.academic_year.name if lg.academic_year else None,
-                },
-                'performed_by': (
-                    lg.performed_by.get_full_name() or lg.performed_by.username
-                ) if lg.performed_by else None,
-                'performed_at': lg.performed_at.isoformat(),
-                'updated_count': lg.updated_count,
-                'details': lg.details,
-            }
-            for lg in logs
-        ]
-        return Response(data)
-
-
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)
@@ -4463,10 +4293,9 @@ class StaffsPageView(APIView):
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
-        has_coe_role = user.roles.filter(name__iexact='COE').exists()
 
         # require page-view permission unless superuser
-        if not (user.is_superuser or has_ps_role or has_coe_role or 'academics.view_staffs_page' in perms):
+        if not (user.is_superuser or has_ps_role or 'academics.view_staffs_page' in perms):
             return Response({'detail': 'You do not have permission to view staffs page.'}, status=403)
 
         from .models import Department, StaffProfile
@@ -4477,7 +4306,6 @@ class StaffsPageView(APIView):
         # Debug: Log user permissions
         logger.info(f"StaffsPage - User: {user.username}, Superuser: {user.is_superuser}")
         logger.info(f"StaffsPage - Has PS role: {has_ps_role}")
-        logger.info(f"StaffsPage - Has COE role: {has_coe_role}")
         logger.info(f"StaffsPage - Permissions: {perms}")
         logger.info(f"StaffsPage - Has view_all_staff: {'academics.view_all_staff' in perms}")
         logger.info(f"StaffsPage - Has edit_staff: {'academics.edit_staff' in perms}")
@@ -4486,7 +4314,7 @@ class StaffsPageView(APIView):
         can_edit = user.is_superuser or has_ps_role or 'academics.edit_staff' in perms
         
         # Check if user can view all staff (determines if role filter should be shown)
-        can_view_all = user.is_superuser or has_ps_role or has_coe_role or 'academics.view_all_staff' in perms
+        can_view_all = user.is_superuser or has_ps_role or 'academics.view_all_staff' in perms
 
         include_non_teaching = str(request.query_params.get('include_non_teaching', 'false')).strip().lower() in {'1', 'true', 'yes'}
         can_include_non_teaching = bool(user.is_superuser or has_ps_role or can_edit or can_view_all)
@@ -9797,7 +9625,7 @@ class AllStaffListView(APIView):
     """Return all staff members from the database (not department-filtered).
     
     Used for listing all available staff to add to a department.
-    Requires academics.view_staffs_page permission or COE/PS roles.
+    Requires academics.view_staffs_page permission.
     """
     permission_classes = (IsAuthenticated,)
 
@@ -9805,10 +9633,9 @@ class AllStaffListView(APIView):
         user = request.user
         perms = get_user_permissions(user)
         has_ps_role = user.roles.filter(name__iexact='PS').exists()
-        has_coe_role = user.roles.filter(name__iexact='COE').exists()
 
-        # Require page-view permission unless superuser, PS, or COE
-        if not (user.is_superuser or has_ps_role or has_coe_role or 'academics.view_staffs_page' in perms):
+        # Require page-view permission unless superuser
+        if not (user.is_superuser or has_ps_role or 'academics.view_staffs_page' in perms):
             return Response({'detail': 'You do not have permission to view staff list.'}, status=403)
 
         from .models import StaffProfile, DepartmentRole, AcademicYear

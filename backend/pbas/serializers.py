@@ -49,6 +49,7 @@ class PBASNodeTreeSerializer(serializers.ModelSerializer):
             'label',
             'audience',
             'input_mode',
+            'form_schema',
             'link',
             'uploaded_name',
             'limit',
@@ -88,6 +89,7 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
     parent_path = serializers.SerializerMethodField()
     pbas_credit = serializers.SerializerMethodField()
     approved_by_name = serializers.SerializerMethodField()
+    form_schema = serializers.SerializerMethodField()
 
     class Meta:
         model = PBASSubmission
@@ -98,6 +100,8 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
             'parent_path',
             'pbas_credit',
             'submission_type',
+            'form_data',
+            'form_schema',
             'link',
             'file',
             'file_name',
@@ -108,7 +112,10 @@ class PBASSubmissionSerializer(serializers.ModelSerializer):
             'rejection_reason',
             'created_at',
         )
-        read_only_fields = ('id', 'file_name', 'created_at', 'status', 'reviewed_at', 'rejection_reason')
+        read_only_fields = ('id', 'file_name', 'created_at', 'status', 'reviewed_at', 'rejection_reason', 'form_schema')
+
+    def get_form_schema(self, obj):
+        return obj.node.form_schema if (obj.node and obj.node.form_schema) else []
 
     def get_leaf_title(self, obj):
         return obj.node.label if obj.node else ''

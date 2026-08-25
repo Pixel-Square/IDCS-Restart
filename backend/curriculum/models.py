@@ -8,7 +8,6 @@ CLASS_TYPE_CHOICES = (
     ('THEORY_PMBL', 'Theory (PMBL)'),
     ('LAB', 'Lab'),
     ('PURE_LAB', 'Pure Lab'),
-    ('LAB_2', 'Lab 2'),
     ('TCPL', 'Tcpl'),
     ('TCPR', 'Tcpr'),
     ('PRACTICAL', 'Practical'),
@@ -16,7 +15,6 @@ CLASS_TYPE_CHOICES = (
     ('PROJECT', 'Project'),
     ('AUDIT', 'Audit'),
     ('SPECIAL', 'Special'),
-    ('ENGLISH', 'English'),
 )
 
 def validate_class_type_code(value: str):
@@ -96,12 +94,6 @@ class QuestionPaperType(models.Model):
 
     def __str__(self):
         return self.label or self.code
-
-    def save(self, *args, **kwargs):
-        if self.is_active is False and self.pk:
-            self.delete()
-            return
-        super().save(*args, **kwargs)
 
 
 class ClassType(models.Model):
@@ -204,7 +196,6 @@ SPECIAL_ASSESSMENT_CHOICES = (
     ('formative2', 'Formative2'),
     ('cia1', 'CIA1'),
     ('cia2', 'CIA2'),
-    ('model', 'Model'),
 )
 
 
@@ -394,7 +385,7 @@ class CurriculumDepartment(models.Model):
     class Meta:
         verbose_name = 'Department Curriculum'
         verbose_name_plural = 'Department Curricula'
-        unique_together = ('department', 'regulation', 'semester', 'course_code', 'batch')
+        unique_together = ('department', 'regulation', 'semester', 'course_code')
 
     def __str__(self):
         return f"{self.department.code} - {self.regulation} - Sem{self.semester} - {self.course_code or self.course_name or self.pk}"
@@ -432,25 +423,8 @@ class CurriculumDepartment(models.Model):
             im = self.internal_mark or 0
             em = self.external_mark or 0
             self.total_mark = im + em
-
-        # Track manual overrides: if any content fields change and it's NOT a system sync, set overridden=True
-        if self.pk and self.master and not getattr(self, '_syncing', False):
-            try:
-                old = CurriculumDepartment.objects.get(pk=self.pk)
-                content_fields = [
-                    'regulation', 'semester', 'course_code', 'course_name', 'class_type', 'category',
-                    'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark',
-                    'is_elective', 'is_dept_core', 'enabled_assessments'
-                ]
-                for f in content_fields:
-                    if getattr(old, f) != getattr(self, f):
-                        self.overridden = True
-                        break
-            except Exception:
-                pass
-
         # Prevent department-side edits when the linked master is not editable.
-        if self.master and not getattr(self.master, 'editable', False) and self.pk and not getattr(self, '_syncing', False):
+        if self.master and not getattr(self.master, 'editable', False) and self.pk:
             try:
                 old = CurriculumDepartment.objects.get(pk=self.pk)
             except CurriculumDepartment.DoesNotExist:
@@ -461,6 +435,7 @@ class CurriculumDepartment(models.Model):
                     'l', 't', 'p', 's', 'c', 'internal_mark', 'external_mark', 'total_mark',
                     'total_hours',
                     'is_elective',
+                    # 'question_paper_type' is intentionally excluded so HOD can update it independently
                 ]
                 from django.core.exceptions import ValidationError
                 for f in protected_fields:
@@ -526,9 +501,6 @@ class ElectiveSubject(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    # Allow blocking specific departments from choosing this elective
-    blocked_departments = models.ManyToManyField('academics.Department', blank=True, related_name='blocked_elective_subjects')
-
     class Meta:
         verbose_name = 'Elective Subject'
         verbose_name_plural = 'Elective Subjects'
@@ -590,89 +562,3 @@ class ElectiveChoice(models.Model):
             return f"{self.student} -> {self.elective_subject.course_code or self.elective_subject.course_name} ({getattr(self.academic_year, 'name', '')})"
         except Exception:
             return f"ElectiveChoice #{self.pk}"
-
-class ElectivePoll(models.Model):
-    """A polling session for an elective."""
-    parent_elective_name = models.CharField(max_length=255)
-    batch_year = models.ForeignKey('academics.BatchYear', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_polls')
-    department_group = models.ForeignKey(DepartmentGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_polls')
-    
-    is_active = models.BooleanField(default=False)
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = 'Elective Poll'
-        verbose_name_plural = 'Elective Polls'
-        permissions = [
-            ('choose_elective', 'Can choose elective subjects'),
-            ('hod_elective_manage', 'Can view elective poll status for department students'),
-        ]
-
-    def __str__(self):
-        return f"Poll for {self.parent_elective_name}"
-
-
-class ElectivePollSubject(models.Model):
-    """The subjects offered in a particular poll."""
-    poll = models.ForeignKey(ElectivePoll, on_delete=models.CASCADE, related_name='poll_subjects')
-    elective_subject = models.ForeignKey(ElectiveSubject, on_delete=models.CASCADE, related_name='poll_associations')
-    seats = models.PositiveIntegerField(null=True, blank=True)
-    staff = models.ForeignKey('academics.StaffProfile', on_delete=models.SET_NULL, null=True, blank=True, related_name='elective_poll_subjects')
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        verbose_name = 'Elective Poll Subject'
-        verbose_name_plural = 'Elective Poll Subjects'
-
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        
-        # Auto-assign teaching assignment if staff is present
-        if self.staff:
-            try:
-                from academics.models import AcademicYear, TeachingAssignment
-                ay = AcademicYear.objects.filter(is_active=True).first()
-                if ay:
-                    # We use get_or_create to avoid duplicates if saved multiple times
-                    TeachingAssignment.objects.get_or_create(
-                        staff=self.staff,
-                        elective_subject=self.elective_subject,
-                        academic_year=ay,
-                        defaults={'is_active': True}
-                    )
-            except ImportError:
-                pass
-
-    def __str__(self):
-        return f"{self.elective_subject.course_name} in {self.poll}"
-
-# Signals for cascading cleanup
-from django.db.models.signals import post_delete
-from django.dispatch import receiver
-
-@receiver(post_delete, sender=ElectivePollSubject)
-def cleanup_poll_subject_data(sender, instance, **kwargs):
-    """Cleanup choices and assignments when a subject is removed from a poll."""
-    subject = instance.elective_subject
-    
-    # Delete choices associated with this elective subject
-    ElectiveChoice.objects.filter(elective_subject=subject).delete()
-
-    # Delete teaching assignments for this staff-subject pair
-    if instance.staff:
-        try:
-            from academics.models import TeachingAssignment
-            TeachingAssignment.objects.filter(
-                elective_subject=subject,
-                staff=instance.staff,
-                section_id__isnull=True
-            ).delete()
-        except ImportError:
-            pass
-
-    # Finally, delete the master ElectiveSubject record itself if it's not
-    # linked to any other polls (prevents orphaned subject records).
-    if not sender.objects.filter(elective_subject=subject).exists():
-        subject.delete()

@@ -267,13 +267,39 @@ class Section(models.Model):
                 # fail silently and continue saving without semester
                 pass
 
+        return super().save(*args, **kwargs)
+
+
 class MixedSection(models.Model):
+    """A Mixed Section groups multiple regular sections together for
+    cross-section activities (e.g., common lab, common project work).
+
+    Students from different regular sections can be part of the same mixed section.
+    """
     name = models.CharField(max_length=128, help_text='Name of the mixed section (e.g., Lab Group A, Project Batch 1)')
-    description = models.TextField(blank=True, help_text='Additional details about this mixed section')
     batch = models.ForeignKey('Batch', on_delete=models.CASCADE, related_name='mixed_sections', help_text='The batch this mixed section belongs to')
-    sections = models.ManyToManyField('Section', related_name='mixed_sections', help_text='Regular sections that are part of this mixed section')
-    semester = models.ForeignKey('Semester', on_delete=models.SET_NULL, null=True, blank=True, related_name='mixed_sections', help_text='Semester for this mixed section')
-    academic_year = models.ForeignKey('AcademicYear', on_delete=models.CASCADE, null=True, blank=True, related_name='mixed_sections', help_text='Academic year this mixed section is active in')
+    sections = models.ManyToManyField(
+        'Section',
+        related_name='mixed_sections',
+        help_text='Regular sections that are part of this mixed section'
+    )
+    semester = models.ForeignKey(
+        'Semester',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='mixed_sections',
+        help_text='Semester this mixed section belongs to'
+    )
+    academic_year = models.ForeignKey(
+        'AcademicYear',
+        on_delete=models.CASCADE,
+        related_name='mixed_sections',
+        null=True,
+        blank=True,
+        help_text='Academic year this mixed section is active in'
+    )
+    description = models.TextField(blank=True, help_text='Additional details about this mixed section')
     is_active = models.BooleanField(default=True, help_text='Whether this mixed section is currently active')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -281,8 +307,8 @@ class MixedSection(models.Model):
     class Meta:
         verbose_name = 'Mixed Section'
         verbose_name_plural = 'Mixed Sections'
-        ordering = ('batch', 'name')
         unique_together = ('name', 'batch')
+        ordering = ('batch', 'name')
 
     def __str__(self):
         return f"{self.name} ({self.batch})"
@@ -448,7 +474,6 @@ STAFF_STATUS_CHOICES = (
     ('INACTIVE', 'Inactive'),
     ('ALUMNI', 'Alumni'),
     ('RESIGNED', 'Resigned'),
-    ('EXTERNAL', 'External'),
 )
 
 STUDENT_STATUS_CHOICES = (
@@ -467,15 +492,16 @@ class StudentProfile(models.Model):
     )
     reg_no = models.CharField(max_length=64, unique=True, db_index=True)
     section = models.ForeignKey(Section, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
-    batch = models.CharField(max_length=32, blank=True)
-    status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
     mixed_section = models.ForeignKey(
-        MixedSection,
+        'MixedSection',
         on_delete=models.SET_NULL,
-        null=True, blank=True,
+        null=True,
+        blank=True,
         related_name='students',
         help_text='Optional mixed section assignment for cross-section activities'
     )
+    batch = models.CharField(max_length=32, blank=True)
+    status = models.CharField(max_length=16, choices=STUDENT_STATUS_CHOICES, default='ACTIVE')
 
     # Permanent degree department — never changes even when the student is
     # in S&H sections during Year 1.  For Year 2+ students this mirrors
@@ -494,13 +520,10 @@ class StudentProfile(models.Model):
     mobile_number_verified_at = models.DateTimeField(null=True, blank=True)
     profile_image = models.ImageField(upload_to='profile_images/', null=True, blank=True)
 
-    # RFID UID assigned via IDCSScan hardware scanner (for staff)
-    rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
-                                help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
-
     # RFID UID assigned via IDCSScan hardware scanner
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
+    pbas_credit = models.IntegerField(default=0)
 
     def __str__(self):
         return f"Student {self.reg_no} ({self.user.username})"
@@ -758,26 +781,31 @@ class StudentCourseEnrollment(models.Model):
         return f"{self.student.reg_no} enrolled in {self.course}"
 
 
+def _generate_internal_id():
+    """Generate a unique 6-digit numeric ID for internal staff."""
+    return ''.join(secrets.choice('0123456789') for _ in range(6))
+
+
 class StaffProfile(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='staff_profile'
     )
-    staff_id = models.CharField(max_length=64, unique=True, db_index=True)
-    # Internal ID used for internal shuffling/identity mapping workflows.
     internal_id = models.CharField(
         max_length=6,
         unique=True,
         db_index=True,
+        editable=False,
         null=True,
         blank=True,
-        validators=[
-            RegexValidator(
-                regex=r'^\d{6}$',
-                message='Internal ID must be exactly 6 digits (numeric only).',
-            )
-        ],
+        help_text='Auto-generated 6-digit numeric unique ID.',
+    )
+    staff_id = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text='Staff ID (format not restricted).',
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name='staff')
     designation = models.CharField(max_length=128, blank=True)
@@ -790,9 +818,7 @@ class StaffProfile(models.Model):
     # RFID UID assigned via IDCSScan hardware scanner (for staff)
     rfid_uid = models.CharField(max_length=32, blank=True, default='', db_index=True,
                                 help_text='RFID card UID (e.g. 539EA5BB) assigned by the physical scanner.')
-    # 6-digit login code for External Staff (used in ESV portal)
-    login_code = models.CharField(max_length=6, blank=True, default='', db_index=True,
-                                  help_text='Random 6-digit code for external staff login.')
+    pbas_credit = models.IntegerField(default=0)
 
     def __str__(self):
         """Return staff name and ID for display in dropdowns and admin."""
@@ -839,20 +865,13 @@ class StaffProfile(models.Model):
         # Staff-specific status rules
         if hasattr(self, 'status') and self.status == 'ALUMNI':
             raise ValidationError({'status': 'Staff cannot have status ALUMNI.'})
-
-    @classmethod
-    def generate_unique_internal_id(cls):
-        """Generate a unique 6-digit numeric internal ID."""
-        for _ in range(500):
-            # 000001 - 999999 (always 6 digits)
-            candidate = f"{secrets.randbelow(999_999) + 1:06d}"
-            if not cls.objects.filter(internal_id=candidate).exists():
-                return candidate
-        raise ValidationError({'internal_id': 'Unable to generate a unique internal ID. Please try again.'})
-
     def save(self, *args, **kwargs):
+        # Auto-generate internal_id if not set
         if not self.internal_id:
-            self.internal_id = self.generate_unique_internal_id()
+            uid = _generate_internal_id()
+            while StaffProfile.objects.filter(internal_id=uid).exists():
+                uid = _generate_internal_id()
+            self.internal_id = uid
 
         # Validate staff_id uniqueness when changed
         if self.pk:
@@ -953,8 +972,22 @@ class StudentMentorMap(models.Model):
 
 
 class SectionAdvisor(models.Model):
-    section = models.ForeignKey(Section, on_delete=models.CASCADE, null=True, blank=True, related_name='advisor_mappings')
-    mixed_section = models.ForeignKey(MixedSection, on_delete=models.CASCADE, null=True, blank=True, related_name='advisor_mappings')
+    section = models.ForeignKey(
+        Section,
+        on_delete=models.CASCADE,
+        related_name='advisor_mappings',
+        null=True,
+        blank=True,
+        help_text='Regular section assigned to this advisor. Either section or mixed_section must be selected, not both.'
+    )
+    mixed_section = models.ForeignKey(
+        'MixedSection',
+        on_delete=models.CASCADE,
+        related_name='advisor_mappings',
+        null=True,
+        blank=True,
+        help_text='Mixed section assigned to this advisor. Either section or mixed_section must be selected, not both.'
+    )
     advisor = models.ForeignKey(StaffProfile, on_delete=models.CASCADE, related_name='section_advisories')
     academic_year = models.ForeignKey(AcademicYear, on_delete=models.PROTECT, related_name='section_advisors')
     is_active = models.BooleanField(default=True)
@@ -963,17 +996,40 @@ class SectionAdvisor(models.Model):
         verbose_name = 'Section Advisor'
         verbose_name_plural = 'Section Advisors'
         constraints = [
-            models.UniqueConstraint(fields=['section', 'academic_year'], condition=Q(is_active=True), name='unique_active_advisor_per_section_year')
+            models.UniqueConstraint(fields=['section', 'academic_year'], condition=Q(is_active=True) & Q(section__isnull=False), name='unique_active_advisor_per_section_year'),
+            models.UniqueConstraint(fields=['mixed_section', 'academic_year'], condition=Q(is_active=True) & Q(mixed_section__isnull=False), name='unique_active_advisor_per_mixed_section_year')
         ]
 
     def __str__(self):
-        return f"{self.section} -> {self.advisor.staff_id} ({self.academic_year.name})"
+        target = self.mixed_section or self.section
+        return f"{target} -> {self.advisor.staff_id} ({self.academic_year.name})"
 
     def clean(self):
         # Department membership is not enforced at the model level; allow
         # advisors to be assigned across departments. Permission checks
         # remain the responsibility of higher-level logic (views/permissions).
-        pass
+        has_section = self.section_id is not None
+        has_mixed = self.mixed_section_id is not None
+
+        if has_section and has_mixed:
+            raise ValidationError({'section': 'Choose either a Section or a Mixed Section, not both.'})
+        if not has_section and not has_mixed:
+            raise ValidationError({'section': 'Select either a Section or a Mixed Section.'})
+
+        if self.advisor_id and self.academic_year_id:
+            qs = SectionAdvisor.objects.filter(
+                advisor_id=self.advisor_id,
+                academic_year_id=self.academic_year_id,
+                is_active=True,
+            ).exclude(pk=self.pk)
+            if self.section_id is not None:
+                if qs.filter(section_id=self.section_id).exists():
+                    raise ValidationError({'section': 'This advisor is already assigned to this section in the active academic year.'})
+            if self.mixed_section_id is not None:
+                if qs.filter(mixed_section_id=self.mixed_section_id).exists():
+                    raise ValidationError({'mixed_section': 'This advisor is already assigned to this mixed section in the active academic year.'})
+
+        super().clean()
 
 
 # Ensure logical `ADVISOR` role is synchronized with SectionAdvisor records.
@@ -1598,8 +1654,8 @@ class AttendanceAssignmentRequest(models.Model):
 # External Staff Profile
 # ---------------------------------------------------------------------------
 
-def _generate_ext_uid():
-    """Generate a unique 6-digit numeric ID."""
+def _generate_external_id():
+    """Generate a unique 6-digit numeric ID for external staff."""
     return ''.join(secrets.choice('0123456789') for _ in range(6))
 
 
@@ -1615,7 +1671,7 @@ class ExtStaffProfile(models.Model):
         related_name='ext_staff_profile',
         help_text='The user account this external staff profile belongs to.',
     )
-    ext_uid = models.CharField(
+    external_id = models.CharField(
         max_length=6,
         unique=True,
         db_index=True,
@@ -1654,12 +1710,12 @@ class ExtStaffProfile(models.Model):
         ordering = ('-created_at',)
 
     def save(self, *args, **kwargs):
-        if not self.ext_uid:
+        if not self.external_id:
             # Keep regenerating until we find a unique value
-            uid = _generate_ext_uid()
-            while ExtStaffProfile.objects.filter(ext_uid=uid).exists():
-                uid = _generate_ext_uid()
-            self.ext_uid = uid
+            uid = _generate_external_id()
+            while ExtStaffProfile.objects.filter(external_id=uid).exists():
+                uid = _generate_external_id()
+            self.external_id = uid
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -1667,7 +1723,7 @@ class ExtStaffProfile(models.Model):
             uname = self.user.username if self.user else '?'
         except Exception:
             uname = '?'
-        return f"{uname} [{self.ext_uid}]"
+        return f"{uname} [{self.external_id}]"
 
 
 # Historically the code deleted users when profiles were removed.
@@ -1746,7 +1802,7 @@ class ExtStaffFormSettings(models.Model):
                 {"field": "gender", "enabled": True, "required": False, "label": "Gender", "type": "select", "options": ["Male", "Female", "Other"], "order": 5},
                 {"field": "date_of_birth", "enabled": True, "required": False, "label": "Date of Birth", "type": "date", "order": 6},
                 {"field": "designation", "enabled": True, "required": False, "label": "Designation", "type": "text", "order": 7},
-                {"field": "college_name", "enabled": True, "required": False, "label": "College Name", "type": "text", "order": 8},
+                {"field": "college_name", "enabled": True, "required": True, "label": "Organisation/Institution", "type": "text", "order": 8},
                 {"field": "department", "enabled": True, "required": False, "label": "Department", "type": "text", "order": 9},
                 {"field": "teaching", "enabled": True, "required": False, "label": "Type of Faculty", "type": "select", "options": ["Teaching Faculty", "Visiting Faculty", "Guest Lecturer", "Industry Expert", "Other"], "order": 10},
                 {"field": "faculty_id", "enabled": False, "required": False, "label": "Faculty ID", "type": "text", "order": 11},
@@ -1776,8 +1832,7 @@ class ExtStaffFormSettings(models.Model):
             {"field": "gender", "label": "Gender", "type": "select", "options": ["Male", "Female", "Other"]},
             {"field": "date_of_birth", "label": "Date of Birth", "type": "date"},
             {"field": "designation", "label": "Designation", "type": "text"},
-            {"field": "college_name", "label": "College Name", "type": "text"},
-            {"field": "department", "label": "Department", "type": "text"},
+            {"field": "college_name", "label": "Organisation/Institution", "type": "text"},
             {"field": "teaching", "label": "Type of Faculty", "type": "select", "options": ["Teaching Faculty", "Visiting Faculty", "Guest Lecturer", "Industry Expert", "Other"]},
             {"field": "faculty_id", "label": "Faculty ID", "type": "text"},
             {"field": "ug_specialization", "label": "UG Specialization", "type": "text"},

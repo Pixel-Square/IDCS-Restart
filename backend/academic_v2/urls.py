@@ -217,9 +217,7 @@ from .academic_performance_views import (
     FacultyWiseAnalyticsView,
     ClassAdvisorDeepDiveView,
     RangeAnalysisView,
-    ComparisonPerformanceAnalyticsView,
-    StudentCurriculumMarksView,
-    StudentAnalysisChartsView
+    ComparisonPerformanceAnalyticsView
 )
 
 urlpatterns += [
@@ -232,6 +230,4 @@ urlpatterns += [
     path('performance/class-advisor/<str:section_id>/', ClassAdvisorDeepDiveView.as_view(), name='academic-performance-class-advisor'),
     path('performance/range-analysis/', RangeAnalysisView.as_view(), name='academic-performance-range-analysis'),
     path('performance/comparison-analytics/', ComparisonPerformanceAnalyticsView.as_view(), name='academic-performance-comparison-analytics'),
-    path('performance/student-curriculum-marks/', StudentCurriculumMarksView.as_view(), name='academic-performance-student-curriculum-marks'),
-    path('performance/student-analysis-charts/<str:student_id>/', StudentAnalysisChartsView.as_view(), name='academic-performance-student-analysis-charts'),
 ]

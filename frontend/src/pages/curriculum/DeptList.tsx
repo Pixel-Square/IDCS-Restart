@@ -1,39 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import { normalizeClassType } from '../../constants/classTypes';
 import CurriculumLayout from './CurriculumLayout';
-import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, deleteCurriculumDepartment, fetchElectiveChoices, DeptRow } from '../../services/curriculum';
+import { fetchDeptRows, updateDeptRow, approveDeptRow, createElective, fetchElectives, fetchBatchYears, propagateDeptRow, DeptRow } from '../../services/curriculum';
 import fetchWithAuth from '../../services/fetchAuth';
-import { Edit, Check, X, Save, RefreshCw, Copy, Trash2 } from 'lucide-react';
-import { showAlert, showConfirm } from '../../utils/dialog';
+
+// Inline lightweight SVG icons to avoid importing the whole icon library
+const Icon = ({ children, className }: any) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">{children}</svg>
+);
+const Edit = (props: any) => (
+  <Icon {...props}><path d="M3 21v-3.75L14.06 6.19l3.75 3.75L6.75 21H3zM20.71 7.04a31 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" fill="currentColor"/></Icon>
+);
+const Check = (props: any) => (
+  <Icon {...props}><path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const X = (props: any) => (
+  <Icon {...props}><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const Save = (props: any) => (
+  <Icon {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></Icon>
+);
+const RefreshCw = (props: any) => (
+  <Icon {...props}><path d="M23 4v6h-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><path d="M20.49 15a9 9 0 1 1-1.5-8.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></Icon>
+);
+const Copy = (props: any) => (
+  <Icon {...props}><rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></Icon>
+);
 
 type Department = { id: number; code: string; name: string; short_name?: string };
 type QPType = { id: number; code: string; label: string };
 type ClassTypeItem = { id: number; code: string; label: string };
 
 export default function DeptList() {
-  const draftStorageKey = 'curriculum.dept.drafts.v1';
-  const readDrafts = (): Record<number, any> => {
-    try {
-      const raw = localStorage.getItem(draftStorageKey);
-      const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  };
-  const writeDrafts = (drafts: Record<number, any>) => {
-    try {
-      localStorage.setItem(draftStorageKey, JSON.stringify(drafts));
-    } catch {
-      // ignore storage failures (private mode or quota)
-    }
-  };
-  const applyDrafts = (baseRows: any[], drafts: Record<number, any>) => (
-    baseRows.map((row) => (drafts[row.id] ? { ...row, ...drafts[row.id] } : row))
-  );
-
   const [rows, setRows] = useState<any[]>([]);
-  const [draftRows, setDraftRows] = useState<Record<number, any>>(() => readDrafts());
   const [editAll, setEditAll] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -41,17 +40,16 @@ export default function DeptList() {
   const [allDepartments, setAllDepartments] = useState<Department[]>([]);
   const [batchYears, setBatchYears] = useState<any[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<number | null>(null);
+  const [propagateRow, setPropagateRow] = useState<DeptRow | null>(null);
+  const [propagateTargets, setPropagateTargets] = useState<number[]>([]);
+  const [propagating, setPropagating] = useState(false);
   const [propagateSection, setPropagateSection] = useState(false);
   const [propagateSectionTargets, setPropagateSecTargets] = useState<number[]>([]);
   const [propagatingSec, setPropagatingSec] = useState(false);
   const [qpTypes, setQpTypes] = useState<QPType[]>([]);
   const [classTypes, setClassTypes] = useState<ClassTypeItem[]>([]);
   const [adminClassTypes, setAdminClassTypes] = useState<ClassTypeItem[]>([]);
-  const [adminQpTypes, setAdminQpTypes] = useState<any[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<DeptRow | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleteLinkedCount, setDeleteLinkedCount] = useState<number | null>(null);
+  const [adminQpTypes, setAdminQpTypes] = useState<QPType[]>([]);
   const uniqueRegs = rows && rows.length ? Array.from(new Set(rows.map(r => r.regulation))) : [];
   const uniqueSems = rows && rows.length ? Array.from(new Set(rows.map(r => r.semester))).sort((a,b)=>a-b) : [];
   const [selectedReg, setSelectedReg] = useState<string | null>(null);
@@ -69,10 +67,6 @@ export default function DeptList() {
     if (selectedSem == null && sems.length === 1) setSelectedSem(sems[0]);
   }, [rows]);
   useEffect(() => {
-    fetchDeptRows()
-      .then(r => setRows(applyDrafts(r, draftRows)))
-      .catch(console.error)
-      .finally(() => setLoading(false));
     fetchBatchYears().then(setBatchYears).catch(() => {});
   }, []);
 
@@ -150,11 +144,11 @@ export default function DeptList() {
     setRefreshing(true);
     try {
       const [freshRows, depsRes, by] = await Promise.all([
-        fetchDeptRows(),
-        fetchWithAuth('/api/curriculum/departments/'),
-        fetchBatchYears(),
-      ]);
-      setRows(applyDrafts(freshRows, draftRows));
+          fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined }),
+          fetchWithAuth('/api/curriculum/departments/'),
+          fetchBatchYears(),
+        ]);
+      setRows(freshRows);
       const depsData = await depsRes.json();
       setAllDepartments(depsData.results || []);
       setBatchYears(by);
@@ -216,10 +210,9 @@ export default function DeptList() {
     try {
       const updated = await updateDeptRow(row.id, row);
       setRows(rs => rs.map(r => r.id === updated.id ? updated : r));
-      clearDraftsForRowIds([updated.id]);
-      await showAlert('Saved');
+      alert('Saved');
     } catch (e: any) {
-      await showAlert(String(e), 'error');
+      alert(String(e));
     }
   }
 
@@ -227,32 +220,12 @@ export default function DeptList() {
     try {
       const updated = await updateDeptRow(row.id, row);
       setRows(rs => rs.map(r => r.id === updated.id ? updated : r));
-      clearDraftsForRowIds([updated.id]);
       setEditingRow(null);
-      await showAlert('Row updated successfully');
+      alert('Row updated successfully');
     } catch (e: any) {
-      await showAlert(String(e), 'error');
+      alert(String(e));
     }
   }
-
-  const updateRowValue = (rowId: number, patch: Record<string, any>) => {
-    setRows(rs => rs.map(row => row.id === rowId ? { ...row, ...patch } : row));
-    setDraftRows(prev => {
-      const next = { ...prev, [rowId]: { ...(prev[rowId] || {}), ...patch } };
-      writeDrafts(next);
-      return next;
-    });
-  };
-
-  const clearDraftsForRowIds = (rowIds: number[]) => {
-    setDraftRows(prev => {
-      if (!rowIds.length) return prev;
-      const next = { ...prev };
-      rowIds.forEach(id => { delete next[id]; });
-      writeDrafts(next);
-      return next;
-    });
-  };
 
   const [editingRow, setEditingRow] = useState<number | null>(null);
   // electives will be derived from `rows` where `is_elective === true`
@@ -274,26 +247,10 @@ export default function DeptList() {
   const isIqac = userRoles.map((r) => String(r || '').toUpperCase()).includes('IQAC');
   const isHod = userRoles.map((r) => String(r || '').toUpperCase()).includes('HOD');
   const canApprove = Array.isArray(userPerms) && (userPerms.includes('curriculum.department.approve') || userPerms.includes('CURRICULUM_DEPARTMENT_APPROVE'));
-  const masterWritePerms = [
-    'curriculum.master.edit',
-    'CURRICULUM_MASTER_EDIT',
-    'curriculum.master.publish',
-    'CURRICULUM_MASTER_PUBLISH',
-    'curriculum_master_edit',
-    'curriculum_master_publish',
-    'obe.master.manage',
-  ];
-  const deptWritePerms = [
-    'curriculum.department.approve',
-    'CURRICULUM_DEPARTMENT_APPROVE',
-    'curriculum_department_approve',
-    'academics.manage_curriculum',
-    'academics.change_elective_teaching',
-  ];
-  // Propagate/copy is allowed for master or department curriculum access users
-  const canPropagate = Array.isArray(userPerms) && userPerms.some(p => masterWritePerms.includes(p) || deptWritePerms.includes(p));
-  // Delete stays restricted to master-level permissions
-  const canDeleteDept = Array.isArray(userPerms) && userPerms.some(p => masterWritePerms.includes(p));
+  // Propagate/copy is only for users with master curriculum or all-department curriculum access
+  const canPropagate = Array.isArray(userPerms) && (
+    userPerms.some(p => ['curriculum.master.edit', 'CURRICULUM_MASTER_EDIT', 'curriculum.master.publish', 'CURRICULUM_MASTER_PUBLISH', 'curriculum_master_edit', 'curriculum_master_publish'].includes(p))
+  );
 
   async function onApprove(rowId: number, action: 'approve'|'reject'){
     try{
@@ -301,47 +258,9 @@ export default function DeptList() {
       // refresh all rows
       const fresh = await fetchDeptRows({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined, batch_id: selectedBatch ?? undefined });
       setRows(fresh);
-      await showAlert('OK');
-    }catch(e:any){ await showAlert(String(e), 'error'); }
+      alert('OK');
+    }catch(e:any){ alert(String(e)); }
   }
-
-  async function handleDeleteDeptRow() {
-    if (!deleteTarget) return;
-    setDeleteLoading(true);
-    setDeleteError(null);
-    try {
-      await deleteCurriculumDepartment(deleteTarget.id);
-      clearDraftsForRowIds([deleteTarget.id]);
-      await handleRefresh();
-      setDeleteTarget(null);
-      setDeleteLinkedCount(null);
-    } catch (e: any) {
-      const message = String(e?.message || e || 'Delete failed');
-      setDeleteError(message);
-    } finally {
-      setDeleteLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!deleteTarget || !deleteTarget.is_elective) {
-      setDeleteLinkedCount(null);
-      return;
-    }
-    fetchElectiveChoices({ parent_id: deleteTarget.id, include_inactive: true, page_size: 1 })
-      .then((res) => {
-        if (cancelled) return;
-        setDeleteLinkedCount(res.count || 0);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDeleteLinkedCount(null);
-      });
-    return () => { cancelled = true; };
-  }, [deleteTarget]);
-
-
 
   useEffect(() => {
     if (uniqueDepts.length === 1) {
@@ -422,9 +341,9 @@ export default function DeptList() {
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
       setAddModalOpen(false);
-      await showAlert('Elective subject added');
+      alert('Elective subject added');
     } catch (e: any) {
-      await showAlert(String(e), 'error');
+      alert(String(e));
     }
   }
 
@@ -451,9 +370,9 @@ export default function DeptList() {
       const es = await fetchElectives({ department_id: currentDept ?? undefined, regulation: selectedReg ?? undefined, semester: selectedSem ?? undefined });
       setElectiveSubjects(es);
       setEditElectiveOpen(false);
-      await showAlert('Elective updated');
+      alert('Elective updated');
     } catch (e: any) {
-      await showAlert(String(e), 'error');
+      alert(String(e));
     }
   }
 
@@ -469,16 +388,14 @@ export default function DeptList() {
   );
 
   async function handlePropagateSection() {
-    const visibleRows = filteredRows;
-    if (visibleRows.length === 0) return;
-    const invalidTargets = propagateSectionTargets.filter((batchId) =>
-      hasExistingDeptForBatch(batchId, currentDept, selectedReg, selectedSem)
+    const visibleRows = rows.filter(r =>
+      (!currentDept || r.department.id === currentDept) &&
+      (!selectedReg || r.regulation === selectedReg) &&
+      (!selectedSem || r.semester === selectedSem) &&
+      (!selectedBatch || (r.batch && r.batch.id === selectedBatch))
     );
-    if (invalidTargets.length > 0) {
-      await showAlert('Propagation blocked: target batch already has subjects for this regulation/semester. Delete existing course(s) to propagate to avoid duplication, else edit manually.', 'error');
-      return;
-    }
-    if (!(await showConfirm(`Propagate all ${visibleRows.length} visible row(s) to ${propagateSectionTargets.length} batch(es)?`))) return;
+    if (visibleRows.length === 0) return;
+    if (!confirm(`Propagate all ${visibleRows.length} visible row(s) to ${propagateSectionTargets.length} batch(es)?`)) return;
     setPropagatingSec(true);
     let totalSuccess = 0;
     const allErrors: string[] = [];
@@ -489,24 +406,44 @@ export default function DeptList() {
         allErrors.push(...res.errors);
       }
       if (allErrors.length) {
-        await showAlert(`${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`, 'warning');
+        alert(`${totalSuccess} created, ${allErrors.length} failed:\n${allErrors.slice(0, 5).join('\n')}`);
       } else {
-        await showAlert(`Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
+        alert(`Section propagated — ${totalSuccess} entries created across ${propagateSectionTargets.length} batch(es).`);
       }
       await handleRefresh();
       setPropagateSection(false);
       setPropagateSecTargets([]);
     } catch (e: any) {
-      await showAlert('Propagation failed: ' + String(e), 'error');
+      alert('Propagation failed: ' + String(e));
     } finally {
       setPropagatingSec(false);
     }
   }
 
+  async function handlePropagateDeptRow() {
+    if (!propagateRow || propagateTargets.length === 0) return;
+    setPropagating(true);
+    try {
+      const result = await propagateDeptRow(propagateRow, propagateTargets);
+      if (result.errors.length) {
+        alert(`${result.success.length} succeeded, ${result.errors.length} failed:\n${result.errors.join('\n')}`);
+      } else {
+        alert(`Successfully propagated to ${result.success.length} batch(es).`);
+      }
+      await handleRefresh();
+      setPropagateRow(null);
+      setPropagateTargets([]);
+    } catch (e: any) {
+      alert('Propagation failed: ' + String(e));
+    } finally {
+      setPropagating(false);
+    }
+  }
+
   async function saveAllVisible() {
-    const visible = filteredRows.filter(r => r.editable);
-    if (visible.length === 0) return await showAlert('No editable rows to save', 'warning');
-    if (!(await showConfirm(`Save ${visible.length} editable rows?`))) return;
+    const visible = rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && r.editable);
+    if (visible.length === 0) return alert('No editable rows to save');
+    if (!confirm(`Save ${visible.length} editable rows?`)) return;
     try {
       setSavingAll(true);
       const promises = visible.map(r => updateDeptRow(r.id, r).catch(e => ({ __error: String(e), id: r.id })));
@@ -515,17 +452,16 @@ export default function DeptList() {
       const updatedMap: Record<number, any> = {};
       results.forEach(res => { if (res && !res.__error) updatedMap[res.id] = res; });
       setRows(rs => rs.map(r => updatedMap[r.id] ? updatedMap[r.id] : r));
-      clearDraftsForRowIds(Object.keys(updatedMap).map((id) => Number(id)));
       const errors = results.filter(r => r && r.__error);
       if (errors.length) {
-        await showAlert(`${errors.length} rows failed to save. Check console for details.`, 'error');
+        alert(`${errors.length} rows failed to save. Check console for details.`);
         console.error('SaveAll errors', errors);
       } else {
-        await showAlert('All editable rows saved');
+        alert('All editable rows saved');
         setEditAll(false);
       }
     } catch (e:any) {
-      await showAlert(String(e), 'error');
+      alert(String(e));
     } finally { setSavingAll(false); }
   }
 
@@ -538,32 +474,9 @@ export default function DeptList() {
     return (
       (!selectedReg || row.regulation === selectedReg) &&
       (!selectedSem || row.semester === selectedSem) &&
-      (!selectedBatch || rowBatchId === selectedBatch || rowBatchId === null)
+      (!selectedBatch || rowBatchId === selectedBatch)
     );
   };
-  const matchesFilterWithDept = (row: any) => (
-    (!currentDept || row.department.id === currentDept) &&
-    matchesFilter(row)
-  );
-  function hasExistingDeptForBatch(batchId: number, deptId: number | null, regulation: string | null, semester: number | null) {
-    if (!batchId || !deptId || !regulation || !semester) return false;
-    return rows.some((r) => {
-      const rBatchId = r.batch?.id ?? r.batch_id ?? null;
-      return rBatchId === batchId && r.department?.id === deptId && r.regulation === regulation && Number(r.semester) === Number(semester);
-    });
-  }
-  const filteredRows = rows.filter(matchesFilterWithDept);
-  const totals = filteredRows.reduce(
-    (acc, row) => {
-      acc.l += Number(row.l || 0);
-      acc.t += Number(row.t || 0);
-      acc.p += Number(row.p || 0);
-      acc.s += Number(row.s || 0);
-      acc.c += Number(row.c || 0);
-      return acc;
-    },
-    { l: 0, t: 0, p: 0, s: 0, c: 0 }
-  );
   const filteredPendingRows = rows.filter((row) => isPendingSubject(row) && matchesFilter(row));
   const filteredPendingByDepartment = filteredPendingRows.reduce((acc: Record<number, number>, row: any) => {
     const deptId = Number(row?.department?.id || 0);
@@ -745,16 +658,16 @@ export default function DeptList() {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {filteredRows.map(r => (
+            {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem)).map(r => (
               <tr key={r.id} className={`hover:bg-gray-50 transition-colors ${r.editable ? 'bg-slate-50' : ''}`}>
                 {(editingRow === r.id || (editAll && r.editable)) ? (
                   <>
-                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => updateRowValue(r.id, { course_code: e.target.value })} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => updateRowValue(r.id, { mnemonic: e.target.value })} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.course_code || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_code: e.target.value } : row))} className="w-full min-w-[160px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input value={r.mnemonic || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, mnemonic: e.target.value } : row))} className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
                         value={r.batch?.id ?? r.batch_id ?? ''}
-                        onChange={e => updateRowValue(r.id, { batch_id: e.target.value ? Number(e.target.value) : null })}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, batch_id: e.target.value ? Number(e.target.value) : null } : row))}
                         className="w-full min-w-[100px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                       >
                         <option value="">—</option>
@@ -764,7 +677,7 @@ export default function DeptList() {
                     <td className="px-3 py-2">
                       <textarea
                         value={r.course_name || ''}
-                        onChange={e => updateRowValue(r.id, { course_name: e.target.value })}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, course_name: e.target.value } : row))}
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
                         style={{ minHeight: '32px' }}
                         placeholder="Course Name"
@@ -779,14 +692,14 @@ export default function DeptList() {
                     <td className="px-3 py-2 whitespace-nowrap">
                       <input
                         value={r.category || ''}
-                        onChange={e => updateRowValue(r.id, { category: e.target.value })}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, category: e.target.value } : row))}
                         className="w-full min-w-[140px] px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                       />
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <select
                         value={r.class_type || 'THEORY'}
-                        onChange={e => updateRowValue(r.id, { class_type: e.target.value })}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, class_type: e.target.value } : row))}
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
@@ -794,24 +707,24 @@ export default function DeptList() {
                       </select>
                     </td>
                     <td className="px-3 py-2 text-center whitespace-nowrap">
-                      <input type="checkbox" checked={!!r.is_elective} onChange={e => updateRowValue(r.id, { is_elective: e.target.checked })} className="w-4 h-4" />
+                      <input type="checkbox" checked={!!r.is_elective} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, is_elective: e.target.checked } : row))} className="w-4 h-4" />
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => updateRowValue(r.id, { l: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => updateRowValue(r.id, { t: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => updateRowValue(r.id, { p: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => updateRowValue(r.id, { s: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => updateRowValue(r.id, { c: Number(e.target.value) })} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => updateRowValue(r.id, { internal_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => updateRowValue(r.id, { external_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => updateRowValue(r.id, { total_mark: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
-                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => updateRowValue(r.id, { total_hours: Number(e.target.value) })} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.l || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, l: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.t || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, t: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.p || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, p: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.s || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, s: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.c || 0} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, c: Number(e.target.value) } : row))} className="w-full min-w-[72px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.internal_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, internal_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.external_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, external_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_mark || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_mark: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
+                    <td className="px-3 py-2 whitespace-nowrap"><input type="number" value={r.total_hours || ''} onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, total_hours: Number(e.target.value) } : row))} className="w-full min-w-[88px] text-right px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500" /></td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {!r.class_type ? (
                         <span className="text-xs text-gray-500">Select class type first</span>
                       ) : (
                       <select
                         value={r.question_paper_type || ''}
-                        onChange={e => updateRowValue(r.id, { question_paper_type: e.target.value })}
+                        onChange={e => setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: e.target.value } : row))}
                         className="w-full px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500 edit-cell-input"
                         style={{ minWidth: 90 }}
                       >
@@ -861,7 +774,27 @@ export default function DeptList() {
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_mark ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.total_hours ?? '-'}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      <span className="text-sm">{r.question_paper_type || '-'}</span>
+                      {(adminQpTypes.length > 0 || qpTypes.length > 0) ? (
+                        <select
+                          value={r.question_paper_type || ''}
+                          onChange={async (e) => {
+                            const val = e.target.value;
+                            setRows(rs => rs.map(row => row.id === r.id ? { ...row, question_paper_type: val } : row));
+                            try {
+                              await updateDeptRow(r.id, { question_paper_type: val });
+                            } catch (err: any) {
+                              alert('Failed to save QP Type: ' + String(err));
+                            }
+                          }}
+                          className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          style={{ minWidth: 80 }}
+                        >
+                          <option value="">—</option>
+                          {renderQpTypeOptions()}
+                        </select>
+                      ) : (
+                        <span className="text-sm">{r.question_paper_type || '-'}</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-sm">{r.editable ? <span className="text-emerald-600 font-semibold">Yes</span> : <span className="text-gray-400">No</span>}</td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
@@ -877,15 +810,16 @@ export default function DeptList() {
                         ) : (
                           <div className="w-8 h-8"></div>
                         )}
-                        {canDeleteDept && (
+                        {batchYears.length > 1 && canPropagate && (
                           <button
-                            onClick={() => { setDeleteTarget(r); setDeleteError(null); }}
-                            className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                            title="Delete"
+                            className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                            onClick={() => { setPropagateRow(r); setPropagateTargets([]); }}
+                            title="Propagate to other batch"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Copy className="w-4 h-4" />
                           </button>
                         )}
+                        
                         {canApprove && r.approval_status === 'PENDING' ? (
                           <>
                             <button
@@ -918,59 +852,9 @@ export default function DeptList() {
                 )}
               </tr>
             ))}
-            {filteredRows.length > 0 && (
-              <tr className="bg-gray-50 font-semibold">
-                <td colSpan={7} className="px-3 py-3 text-sm text-gray-700">Total</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.l}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.t}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.p}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.s}</td>
-                <td className="px-3 py-3 text-sm text-gray-900">{totals.c}</td>
-                <td colSpan={7} className="px-3 py-3"></td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
-      {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-            <h3 className="text-lg font-bold text-gray-900">Delete Department Curriculum</h3>
-            <p className="text-sm text-gray-600 mt-2">
-              Are you sure you want to delete{' '}
-              <span className="font-semibold">{deleteTarget.course_name || deleteTarget.course_code || 'this subject'}</span>?
-            </p>
-            <p className="text-xs text-gray-400 mt-1">This action cannot be undone.</p>
-            {deleteTarget.is_elective && deleteLinkedCount && deleteLinkedCount > 0 && (
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Note: Students have already chosen subjects for this elective. Deleting it may affect their choices.
-              </div>
-            )}
-            {deleteError && (
-              <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 whitespace-pre-wrap">
-                {deleteError}
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-3">
-              <button
-                onClick={() => { if (!deleteLoading) setDeleteTarget(null); }}
-                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-                disabled={deleteLoading}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteDeptRow}
-                disabled={deleteLoading}
-                className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 disabled:opacity-50"
-              >
-                {deleteLoading ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Elective options section */}
       <div className="mt-6">
         <h3 className="text-xl font-bold text-gray-900 mb-4">Elective Options</h3>
@@ -997,20 +881,13 @@ export default function DeptList() {
               return (
                 <div key={parent.id} className="bg-white rounded-lg shadow-md p-4">
                   <div className="flex items-center justify-between mb-4">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-lg font-bold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
-                        {crossDeptMatches.length > 0 && (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800" title="Includes shared subjects from other departments">
-                            +{crossDeptMatches.length} shared
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                        {parent.batch?.name && <span>Batch: {parent.batch.name}</span>}
-                        {parent.regulation && <span>Regulation: {parent.regulation}</span>}
-                        {parent.semester !== undefined && parent.semester !== null && <span>Semester: {parent.semester}</span>}
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-lg font-bold text-gray-900">{parent.course_name || parent.course_code || 'Elective'}</div>
+                      {crossDeptMatches.length > 0 && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800" title="Includes shared subjects from other departments">
+                          +{crossDeptMatches.length} shared
+                        </span>
+                      )}
                     </div>
                     <button 
                       onClick={() => openAddModal(parent)} 
@@ -1136,11 +1013,9 @@ export default function DeptList() {
                       <div key={parentName} className="bg-white rounded-lg shadow-sm p-4">
                         <h5 className="text-base font-bold text-gray-800 mb-3 flex items-center gap-2">
                           <span className="inline-flex items-center px-2 py-1 rounded bg-amber-100 text-amber-700 text-sm">
-                            {parentName}
+                            Elective Slot:
                           </span>
-                          <span className="text-xs text-gray-500">
-                            {electives.length} {electives.length === 1 ? 'subject' : 'subjects'}
-                          </span>
+                          {parentName}
                         </h5>
                         <div className="w-full overflow-x-auto">
                           <table className="w-full divide-y divide-gray-200">
@@ -1148,7 +1023,7 @@ export default function DeptList() {
                               <tr>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Code</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Course</th>
-                                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Dept</th>
+                                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">From Dept</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Group</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">CAT</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Class</th>
@@ -1161,16 +1036,15 @@ export default function DeptList() {
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">EXT</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">TTL</th>
                                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">Hours</th>
-                                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700 uppercase whitespace-nowrap">QP Type</th>
                               </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-100">
                               {electives.map((o: any) => (
-                                <tr key={o.id} className="hover:bg-gray-50 transition-colors">
-                                  <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_code || '-'}</td>
+                                <tr key={o.id} className="hover:bg-amber-50/50 transition-colors">
+                                  <td className="px-3 py-2 whitespace-nowrap text-sm font-medium">{o.course_code || '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.course_name || '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800" title={`From ${o.owner_department_name}`}>
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-600 text-white shadow-sm" title={o.owner_department_name}>
                                       {o.owner_department_name?.split(' - ')[1] || o.owner_department_name?.split(' - ')[0] || 'Other'}
                                     </span>
                                   </td>
@@ -1192,7 +1066,6 @@ export default function DeptList() {
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.external_mark ?? '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_mark ?? '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-sm">{o.total_hours ?? '-'}</td>
-                                  <td className="px-3 py-2 whitespace-nowrap text-sm">{o.question_paper_type || '-'}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -1590,7 +1463,7 @@ export default function DeptList() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate Entire Section</h3>
             <p className="text-sm text-gray-500 mb-1">
-              Copy <strong>all {filteredRows.length} visible rows</strong>
+              Copy <strong>all {rows.filter(r => (!currentDept || r.department.id === currentDept) && (!selectedReg || r.regulation === selectedReg) && (!selectedSem || r.semester === selectedSem) && (!selectedBatch || (r.batch && r.batch.id === selectedBatch))).length} visible rows</strong>
             </p>
             <p className="text-xs text-gray-400 mb-4">
               Dept: <span className="font-medium">{allDepartments.find(d => d.id === currentDept)?.short_name || allDepartments.find(d => d.id === currentDept)?.code || 'All'}</span> &nbsp;|&nbsp;
@@ -1602,10 +1475,8 @@ export default function DeptList() {
             <div className="space-y-2 mb-5">
               {batchYears
                 .filter(b => !selectedBatch || b.id !== selectedBatch)
-                .map(b => {
-                  const hasExisting = hasExistingDeptForBatch(b.id, currentDept, selectedReg, selectedSem);
-                  return (
-                  <label key={b.id} className={`flex items-center gap-3 p-2 rounded-lg ${hasExisting ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
                     <input
                       type="checkbox"
                       className="w-4 h-4 rounded border-gray-300 accent-purple-600"
@@ -1615,15 +1486,10 @@ export default function DeptList() {
                           e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
                         )
                       }
-                      disabled={hasExisting}
                     />
                     <span className="text-sm font-medium text-gray-700">{b.name}</span>
-                    {hasExisting && (
-                      <span className="ml-auto text-xs text-rose-600">Has existing subjects</span>
-                    )}
                   </label>
-                  );
-                })}
+                ))}
             </div>
             <div className="flex gap-3 justify-end">
               <button
@@ -1645,6 +1511,54 @@ export default function DeptList() {
       )}
 
       {/* Propagate Row Modal */}
+      {propagateRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-1">Propagate to Other Batch</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Copy <strong>{propagateRow.course_name || propagateRow.course_code}</strong>{' '}
+              from <span className="font-medium text-gray-700">{propagateRow.department?.name}</span>{' '}
+              (Batch: <span className="font-medium text-indigo-700">{propagateRow.batch?.name || '—'}</span>) to:
+            </p>
+            <div className="space-y-2 mb-5">
+              {batchYears
+                .filter(b => b.id !== (propagateRow.batch?.id ?? propagateRow.batch_id))
+                .map(b => (
+                  <label key={b.id} className="flex items-center gap-3 cursor-pointer p-2 rounded-lg hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300 accent-purple-600"
+                      checked={propagateTargets.includes(b.id)}
+                      onChange={e =>
+                        setPropagateTargets(prev =>
+                          e.target.checked ? [...prev, b.id] : prev.filter(id => id !== b.id)
+                        )
+                      }
+                    />
+                    <span className="text-sm font-medium text-gray-700">{b.name}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setPropagateRow(null); setPropagateTargets([]); }}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={propagateTargets.length === 0 || propagating}
+                onClick={handlePropagateDeptRow}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              >
+                {propagating
+                  ? 'Propagating…'
+                  : `Propagate to ${propagateTargets.length} batch${propagateTargets.length !== 1 ? 'es' : ''}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </CurriculumLayout>
   );

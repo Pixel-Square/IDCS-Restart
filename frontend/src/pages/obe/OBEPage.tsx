@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, ClipboardList, TrendingUp, BarChart2 } from 'lucide-react';
 
 import CDAPPage from '../lca/CDAPPage';
@@ -1685,7 +1685,7 @@ export default function OBEPage(): JSX.Element {
               {/* Question Bank tab */}
               {activeTab === 'question_bank' && questionBankTeachingAssignment && (
                 <section aria-label="Question Bank" style={{ background: '#f8fafc', padding: 0, borderRadius: 16, overflow: 'hidden' }}>
-                  <QuestionBankPage courseCode={questionBankTeachingAssignment.subject_code || ''} courseName={questionBankTeachingAssignment.subject_name || questionBankTeachingAssignment.name} />
+                  <QuestionBankPage courseCode={questionBankTeachingAssignment.subject_code || ''} courseName={questionBankTeachingAssignment.subject_name || (questionBankTeachingAssignment as any).name} />
                 </section>
               )}
               {activeTab === 'question_bank' && !questionBankTeachingAssignment && (
