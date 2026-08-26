@@ -332,63 +332,7 @@ export default function COattainmentTable({
     return '-';
   };
 
-  const getCoTotalValue = (student: any, coNum: number, visitedColIds = new Set<string>()) => {
-    let sum = 0;
-    let hasAnyNumeric = false;
-
-    const evalColValue = (col: ColumnDef): number | null => {
-      if (!col || visitedColIds.has(col.id)) return null;
-
-      if (col.kind === 'raw') {
-        const raw = getRawTotal(student, coNum);
-        return typeof raw === 'number' && !isNaN(raw) ? raw : null;
-      }
-      if (col.kind === 'weighted') {
-        const w = getWeightedTotal(student, coNum);
-        return typeof w === 'number' && !isNaN(w) ? w : null;
-      }
-      if (col.kind === 'exam') {
-        const sc = getExamScore(student, col.meta?.exam, coNum);
-        return typeof sc === 'number' && !isNaN(sc) ? sc : null;
-      }
-      if (col.kind === 'formula' && col.formula) {
-        // Skip formula columns that depend on CO Sub-Column Total to prevent self-reference
-        if (/\[CO[x0-9]*-?(CO-)?(SUBCOL(UMNS)?-)?TOTAL\]/i.test(col.formula)) return null;
-
-        const nextVisited = new Set(visitedColIds);
-        nextVisited.add(col.id);
-        const fVal = evaluateFormulaForStudent(student, col.formula, coNum, nextVisited);
-        return typeof fVal === 'number' && !isNaN(fVal) ? fVal : null;
-      }
-      return null;
-    };
-
-    for (const col of subColumns) {
-      if (col.kind === 'total' || col.id === 'co_total') continue;
-      const val = evalColValue(col);
-      if (typeof val === 'number') {
-        sum += val;
-        hasAnyNumeric = true;
-      }
-    }
-
-    if (!hasAnyNumeric) {
-      const raw = getRawTotal(student, coNum);
-      if (typeof raw === 'number' && raw > 0) return Number.isInteger(raw) ? raw : Number(raw.toFixed(2));
-      const weighted = getWeightedTotal(student, coNum);
-      if (typeof weighted === 'number' && weighted > 0) return Number.isInteger(weighted) ? weighted : Number(weighted.toFixed(2));
-      return '-';
-    }
-    return Number.isInteger(sum) ? sum : Number(sum.toFixed(2));
-  };
-
-  const evaluateFormulaForStudent = (student: any, formula: string, coNum: number, visitedColIds = new Set<string>()) => {
-    const rawTotal = getRawTotal(student, coNum);
-    const weightedTotal = getWeightedTotal(student, coNum);
-    const coTotalVal = getCoTotalValue(student, coNum, visitedColIds);
-    const numericCoTotal = typeof coTotalVal === 'number' ? coTotalVal : 0;
-
-    // 1. Calculate COX-MAX-WEIGHT & COX-EXAMS-MAX-WEIGHT: aggregate max weight for this CO across exams (excluding CQI)
+  const getCalculatedAttainment = (student: any, coNum: number) => {
     let coExamsMaxWeight = 0;
     const examList = Array.isArray(data.exams) && data.exams.length > 0 
       ? data.exams 
@@ -401,18 +345,31 @@ export default function COattainmentTable({
         if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
         const coWeights = ex?.co_weights;
         const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+        const examWeight = Number(ex?.weight ?? 0);
+
         if (coWeights && typeof coWeights === 'object' && (coWeights[coNum] != null || coWeights[String(coNum)] != null)) {
           const w = Number(coWeights[coNum] ?? coWeights[String(coNum)] ?? 0);
-          if (!Number.isNaN(w)) coExamsMaxWeight += w;
+          // Validate: co_weights must represent course weightage, NOT raw question marks.
+          // If the value exceeds the exam's total weight, it's raw marks — fall back to weight/covered.
+          if (!Number.isNaN(w) && w <= examWeight + 0.01) {
+            coExamsMaxWeight += w;
+          } else if (covered.includes(coNum)) {
+            // co_weights[coNum] appears to be raw marks — use exam weight split instead
+            const pw = Number(ex?.weight_per_co ?? 0);
+            if (!Number.isNaN(pw) && pw > 0) {
+              coExamsMaxWeight += pw;
+            } else if (examWeight > 0 && covered.length > 0) {
+              coExamsMaxWeight += examWeight / covered.length;
+            }
+          }
         } else if (covered.includes(coNum)) {
           const pw = Number(ex?.weight_per_co ?? 0);
           if (!Number.isNaN(pw) && pw > 0) {
             coExamsMaxWeight += pw;
-          } else if (Number(ex?.weight ?? 0) > 0 && covered.length > 0) {
-            coExamsMaxWeight += Number(ex.weight) / covered.length;
+          } else if (examWeight > 0 && covered.length > 0) {
+            coExamsMaxWeight += examWeight / covered.length;
           }
         }
-        // If Mark Manager has Exam split component enabled
         if (ex?.cia_enabled && covered.includes(coNum)) {
           const ciaW = Number(ex?.cia_weight ?? 0);
           if (ciaW > 0) {
@@ -424,105 +381,52 @@ export default function COattainmentTable({
 
     let finalCoMaxWeight = Number(coExamsMaxWeight.toFixed(4));
     if (finalCoMaxWeight <= 0) {
-      // Fallback to proportional share of internal total marks if exam weights not explicitly listed
+      // Fall back: sum of exam weights for COs that cover this CO number
+      if (Array.isArray(examList)) {
+        examList.forEach((ex: any) => {
+          if (String(ex?.kind || '').toLowerCase() === 'cqi') return;
+          const covered = Array.isArray(ex?.covered_cos) ? ex.covered_cos : [];
+          if (covered.includes(coNum)) {
+            finalCoMaxWeight += Number(ex?.weight ?? 0) / Math.max(covered.length, 1);
+          }
+        });
+        finalCoMaxWeight = Number(finalCoMaxWeight.toFixed(4));
+      }
+    }
+    if (finalCoMaxWeight <= 0) {
       const totalInternal = Number(data.total_internal_marks || data.class_type?.total_internal_marks || 40);
       finalCoMaxWeight = Number((totalInternal / (data.co_count || 5)).toFixed(2));
     }
 
-    const coObtWeight = weightedTotal;
-
-    const context: Record<string, number> = {
-      'COX-SUBCOL-TOTAL': numericCoTotal,
-      'COX_SUBCOL_TOTAL': numericCoTotal,
-      'COX-SUBCOLUMNS-TOTAL': numericCoTotal,
-      'COX_SUBCOLUMNS_TOTAL': numericCoTotal,
-      'COX-TOTAL': numericCoTotal,
-      'COX_TOTAL': numericCoTotal,
-      'COX-CO-TOTAL': numericCoTotal,
-      'COX_CO_TOTAL': numericCoTotal,
-
-      [`CO${coNum}-SUBCOL-TOTAL`]: numericCoTotal,
-      [`CO${coNum}_SUBCOL_TOTAL`]: numericCoTotal,
-      [`CO${coNum}-SUBCOLUMNS-TOTAL`]: numericCoTotal,
-      [`CO${coNum}_SUBCOLUMNS_TOTAL`]: numericCoTotal,
-      [`CO${coNum}-TOTAL`]: numericCoTotal,
-      [`CO${coNum}_TOTAL`]: numericCoTotal,
-      [`CO${coNum}-CO-TOTAL`]: numericCoTotal,
-      [`CO${coNum}_CO_TOTAL`]: numericCoTotal,
-
-      'COX-TOTAL-RAW': rawTotal,
-      'COX_TOTAL_RAW': rawTotal,
-      [`CO${coNum}-TOTAL-RAW`]: rawTotal,
-      [`CO${coNum}_TOTAL_RAW`]: rawTotal,
-      'CO-RAW': rawTotal,
-      'CO_RAW': rawTotal,
-      'COX-RAW': rawTotal,
-      'COX_RAW': rawTotal,
-      [`CO${coNum}-RAW`]: rawTotal,
-      [`CO${coNum}_RAW`]: rawTotal,
-
-      'COX-TOTAL-WEIGHT': coObtWeight,
-      'COX_TOTAL_WEIGHT': coObtWeight,
-      'COX-WEIGHTED': coObtWeight,
-      'COX_WEIGHTED': coObtWeight,
-      [`CO${coNum}-TOTAL-WEIGHT`]: coObtWeight,
-      [`CO${coNum}_TOTAL_WEIGHT`]: coObtWeight,
-      [`CO${coNum}-WEIGHTED`]: coObtWeight,
-      [`CO${coNum}_WEIGHTED`]: coObtWeight,
-
-      'COX-OBT-WEIGHT': coObtWeight,
-      'COX_OBT_WEIGHT': coObtWeight,
-      'COX-OBT': coObtWeight,
-      'COX_OBT': coObtWeight,
-      [`CO${coNum}-OBT-WEIGHT`]: coObtWeight,
-      [`CO${coNum}_OBT_WEIGHT`]: coObtWeight,
-      [`CO${coNum}-OBT`]: coObtWeight,
-      [`CO${coNum}_OBT`]: coObtWeight,
-
-      'COX-MAX-WEIGHT': finalCoMaxWeight,
-      'COX_MAX_WEIGHT': finalCoMaxWeight,
-      'COX-EXAMS-MAX-WEIGHT': finalCoMaxWeight,
-      'COX_EXAMS_MAX_WEIGHT': finalCoMaxWeight,
-      'CO-MAX': finalCoMaxWeight,
-      'CO_MAX': finalCoMaxWeight,
-      [`CO${coNum}-MAX-WEIGHT`]: finalCoMaxWeight,
-      [`CO${coNum}_MAX_WEIGHT`]: finalCoMaxWeight,
-      [`CO${coNum}-EXAMS-MAX-WEIGHT`]: finalCoMaxWeight,
-      [`CO${coNum}_EXAMS_MAX_WEIGHT`]: finalCoMaxWeight,
-      [`CO${coNum}-MAX`]: finalCoMaxWeight,
-      [`CO${coNum}_MAX`]: finalCoMaxWeight,
-    };
-
-    if (Array.isArray(examList)) {
-      examList.forEach((ex: any) => {
-        const code = getExamCode(ex);
-        const examVal = getExamScore(student, ex, coNum);
-        const numericVal = typeof examVal === 'number' ? examVal : 0;
-
-        context[`COX-${code}-RAW`] = numericVal;
-        context[`COX_${code}_RAW`] = numericVal;
-        context[`COX-${code}-OBT`] = numericVal;
-        context[`COX_${code}_OBT`] = numericVal;
-        context[`${code}-COX-RAW`] = numericVal;
-        context[`${code}_COX_RAW`] = numericVal;
-
-        context[`CO${coNum}-${code}-RAW`] = numericVal;
-        context[`CO${coNum}_${code}_RAW`] = numericVal;
-        context[`${code}-CO${coNum}-RAW`] = numericVal;
-        context[`${code}_CO${coNum}_RAW`] = numericVal;
-      });
+    // Determine obtained weight for student in this CO
+    let coObtWeight = 0;
+    if (Array.isArray(student?.co_totals) && student.co_totals[coNum - 1] !== undefined) {
+      coObtWeight = Number(student.co_totals[coNum - 1] ?? 0);
+    } else {
+      coObtWeight = getWeightedTotal(student, coNum);
     }
 
-    const result = evaluateFormulaExpr(formula, context);
-    if (result !== null) {
-      return Number.isInteger(result) ? result : Number(result.toFixed(2));
+    if (finalCoMaxWeight > 0 && coObtWeight >= 0) {
+      const calc = (coObtWeight / finalCoMaxWeight) * 50;
+      return Number.isInteger(calc) ? calc : Number(calc.toFixed(2));
     }
     return '-';
   };
 
+  const getCoTotalValue = (student: any, coNum: number, visitedColIds = new Set<string>()) => {
+    return getCalculatedAttainment(student, coNum);
+  };
+
+  const evaluateFormulaForStudent = (student: any, formula: string, coNum: number, visitedColIds = new Set<string>()) => {
+    return getCalculatedAttainment(student, coNum);
+  };
+
   const getCellValue = (student: any, col: ColumnDef, coNum: number) => {
     if (col.kind === 'total' || col.id === 'co_total') {
-      return getCoTotalValue(student, coNum);
+      return getCalculatedAttainment(student, coNum);
+    }
+    if (col.kind === 'formula') {
+      return getCalculatedAttainment(student, coNum);
     }
     if (col.kind === 'raw') {
       const val = getRawTotal(student, coNum);
@@ -535,10 +439,7 @@ export default function COattainmentTable({
     if (col.kind === 'exam') {
       return getExamScore(student, col.meta?.exam, coNum);
     }
-    if (col.kind === 'formula' && col.formula) {
-      return evaluateFormulaForStudent(student, col.formula, coNum, new Set([col.id]));
-    }
-    return '-';
+    return getCalculatedAttainment(student, coNum);
   };
 
   const coNumbers = Array.from({ length: coCount }, (_, i) => i + 1);

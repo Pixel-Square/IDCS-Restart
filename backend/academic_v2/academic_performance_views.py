@@ -5,6 +5,7 @@ from django.db.models import Avg, Sum, Min, Max, Count, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+from rest_framework.exceptions import PermissionDenied
 
 from academics.models import (
     Department, AcademicYear, Semester, Section, Subject, StudentProfile,
@@ -14,6 +15,10 @@ from academics.models import (
 from OBE.models import Cia1Mark, Cia2Mark, ModelExamMark
 from accounts.models import User, Role, UserRole
 from .academic_visuals_views import load_dashboards_store, get_performance_level
+from .authorization import (
+    get_performance_scope, clamp_department_param, clamp_department_list,
+    allowed_student_q, allowed_mark_student_q, assert_section_in_scope,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +217,31 @@ def get_mark_dept_q(dept_val):
     )
 
 
+def get_dynamic_semester(year=None):
+    """Derive a semester number for a batch/year from live Section.semester data.
+
+    Falls back to the lowest existing semester number (or 1) when nothing matches.
+    Previously referenced but never defined — latent NameError fixed here.
+    """
+    if year:
+        nums = {
+            n for n in Section.objects.exclude(semester__isnull=True)
+            .filter(batch__name=year)
+            .values_list("semester__number", flat=True)
+            if n
+        }
+        if not nums:
+            matched = StudentProfile.objects.filter(
+                Q(batch=year) | Q(section__batch__name=year),
+                section__semester__isnull=False,
+            ).values_list("section__semester__number", flat=True)
+            nums = {n for n in matched if n}
+        if nums:
+            return sorted(nums)[0]
+    n = Semester.objects.order_by("number").values_list("number", flat=True).first()
+    return n or 1
+
+
 class PublishedDashboardsListView(APIView):
     permission_classes = [permissions.AllowAny]
 
@@ -230,6 +260,8 @@ class AcademicPerformanceAnalyticsView(APIView):
     def get(self, request):
         try:
             auth_ctx = resolve_user_auth_context(request.user)
+            # Server-side scope: authorized dataset first, then user filters.
+            scope = get_performance_scope(request.user)
             params = request.query_params
 
             req_batch = params.get("batch", "").strip()
@@ -238,10 +270,7 @@ class AcademicPerformanceAnalyticsView(APIView):
             req_sec = params.get("section", "").strip()
             req_qp = params.get("qp_type", "").strip()
 
-            if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-                effective_dept = auth_ctx["department_id"]
-            else:
-                effective_dept = req_dept
+            effective_dept = clamp_department_param(scope, req_dept)
 
             # Assessment registry: every real assessment entity in the database.
             # Each entry: (display name, mark model, value field). The reference
@@ -267,6 +296,9 @@ class AcademicPerformanceAnalyticsView(APIView):
             def _scoped_marks(M, field):
                 """Marks queryset for model M filtered strictly by current slicers."""
                 qs = M.objects.all()
+                _mk_q = allowed_mark_student_q(scope)
+                if _mk_q is not None:
+                    qs = qs.filter(_mk_q)
                 if effective_dept:
                     qs = qs.filter(get_mark_dept_q(effective_dept))
                 if req_batch:
@@ -288,6 +320,9 @@ class AcademicPerformanceAnalyticsView(APIView):
 
             # Data-driven batches / semesters for the dropdowns
             cohort_scope = active_student_cohort()
+            _cohort_q = allowed_student_q(scope, get_student_dept_q)
+            if _cohort_q is not None:
+                cohort_scope = cohort_scope.filter(_cohort_q)
             if effective_dept:
                 cohort_scope = cohort_scope.filter(get_student_dept_q(effective_dept))
             batches_list = sorted(
@@ -319,19 +354,27 @@ class AcademicPerformanceAnalyticsView(APIView):
             # Semester Exam selection → real End Semester Examination (ESE) data from the
             # COE final-result table. Sealed off from the internal-assessment pipeline above.
             if req_qp in ("Semester", "Semester Exam"):
-                return self._semester_exam_analytics(params, auth_ctx, effective_dept)
+                return self._semester_exam_analytics(params, auth_ctx, effective_dept, scope)
 
-            # Dynamic all departments from database
+            # Dynamic all departments from database — restricted to the
+            # user's authorized departments (multi-department HOD/AHOD aware).
             all_depts_db = Department.objects.filter(is_teaching=True).order_by("name")
-            if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-                departments_list = [{"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name} for d in all_depts_db if str(d.id) == str(auth_ctx["department_id"])]
-            else:
+            if scope["is_college_wide"]:
                 departments_list = [{"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name} for d in all_depts_db]
+            else:
+                allowed_ids = set(scope["allowed_departments"]["ids"])
+                departments_list = [
+                    {"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name}
+                    for d in all_depts_db if str(d.id) in allowed_ids
+                ]
 
             batches_list = ["2023", "2024", "2025"]
 
                         # Base Student QuerySet filtered strictly by all selected filters
             student_qs = active_student_cohort().select_related("home_department", "section", "user")
+            _stq = allowed_student_q(scope, get_student_dept_q)
+            if _stq is not None:
+                student_qs = student_qs.filter(_stq)
             if effective_dept:
                 student_qs = student_qs.filter(get_student_dept_q(effective_dept))
             if req_batch:
@@ -349,6 +392,8 @@ class AcademicPerformanceAnalyticsView(APIView):
             # Deliberately computed WITHOUT the section selection itself so the dropdown
             # keeps showing every section that exists in the current dataset.
             section_scope = active_student_cohort()
+            if _cohort_q is not None:
+                section_scope = section_scope.filter(_cohort_q)
             if effective_dept:
                 section_scope = section_scope.filter(get_student_dept_q(effective_dept))
             if req_batch:
@@ -371,6 +416,9 @@ class AcademicPerformanceAnalyticsView(APIView):
             # Build Marks QuerySet filtered strictly by current slicers
             def _legacy_marks_qs():
                 qs = marks_model.objects.all()
+                _mkq = allowed_mark_student_q(scope)
+                if _mkq is not None:
+                    qs = qs.filter(_mkq)
                 if effective_dept:
                     qs = qs.filter(get_mark_dept_q(effective_dept))
                 if req_batch:
@@ -545,6 +593,11 @@ class AcademicPerformanceAnalyticsView(APIView):
             c1_m = Cia1Mark.objects.all()
             c2_m = Cia2Mark.objects.all()
             md_m = ModelExamMark.objects.all()
+            _pf_q = allowed_mark_student_q(scope)
+            if _pf_q is not None:
+                c1_m = c1_m.filter(_pf_q)
+                c2_m = c2_m.filter(_pf_q)
+                md_m = md_m.filter(_pf_q)
             if effective_dept:
                 c1_m = c1_m.filter(get_mark_dept_q(effective_dept))
                 c2_m = c2_m.filter(get_mark_dept_q(effective_dept))
@@ -721,19 +774,24 @@ class AcademicPerformanceAnalyticsView(APIView):
             logger.exception("Error in AcademicPerformanceAnalyticsView: %s", e)
             return Response({"error": str(e)}, status=status.HTTP_200_OK)
 
-    def _semester_exam_analytics(self, params, auth_ctx, effective_dept):
+    def _semester_exam_analytics(self, params, auth_ctx, effective_dept, scope=None):
         """
         Real End Semester Examination (ESE) analytics built from the COE final-result table.
 
         Isolated from the internal CIA / Model pipeline but returns the same response shape
         so the College KPI cards and the Department-wise table render with real data.
         """
+        from .authorization import allowed_student_q  # local import; safe on all paths
+        scope = scope or get_performance_scope(None)
         req_batch = params.get("year", params.get("batch", "")).strip()
         req_sem = params.get("sem", "").strip()
         req_sec = params.get("section", "").strip()
 
         def _scope(include_section):
             qs = active_student_cohort()
+            _sq = allowed_student_q(scope, get_student_dept_q)
+            if _sq is not None:
+                qs = qs.filter(_sq)
             if effective_dept:
                 qs = qs.filter(get_student_dept_q(effective_dept))
             if req_batch:
@@ -876,12 +934,15 @@ class StudentSearchView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
+        scope = get_performance_scope(request.user)
         q = request.query_params.get("q", "").strip()
         dept = request.query_params.get("dept", "").strip()
-        if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-            dept = auth_ctx["department_id"]
+        dept = clamp_department_param(scope, dept)
 
         qs = StudentProfile.objects.filter(status__iexact="ACTIVE").select_related("user", "home_department", "section")
+        _sq = allowed_student_q(scope, get_student_dept_q)
+        if _sq is not None:
+            qs = qs.filter(_sq)
         if dept:
             qs = qs.filter(get_student_dept_q(dept))
         if q:
@@ -963,9 +1024,9 @@ class FacultyWiseAnalyticsView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
+        scope = get_performance_scope(request.user)
         dept_code = request.query_params.get("dept", "").strip()
-        if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-            dept_code = auth_ctx["department_id"]
+        dept_code = clamp_department_param(scope, dept_code)
 
         staff_qs = StaffProfile.objects.filter(status__iexact="ACTIVE").select_related("user", "department")
         if dept_code:
@@ -1032,7 +1093,10 @@ class FacultyWiseAnalyticsView(APIView):
 class ClassAdvisorDeepDiveView(APIView):
     permission_classes = [permissions.AllowAny]
     def get(self, request, section_id):
+        scope = get_performance_scope(request.user)
         section = Section.objects.filter(id=section_id).first() or Section.objects.first()
+        if section is not None:
+            assert_section_in_scope(scope, section)
         students = StudentProfile.objects.filter(section=section).select_related("user")
         student_rows = []
         for s in students:
@@ -1085,6 +1149,8 @@ class ComparisonPerformanceAnalyticsView(APIView):
     def get(self, request):
         try:
             auth_ctx = resolve_user_auth_context(request.user)
+            # Server-side scope: authorized dataset first, then user filters.
+            scope = get_performance_scope(request.user)
             params = request.query_params
 
             # Read multi-select arrays
@@ -1096,9 +1162,8 @@ class ComparisonPerformanceAnalyticsView(APIView):
             req_subject_codes = parse_multi_param(params.get("subject_codes", ""))
             req_qp_types = parse_multi_param(params.get("qp_types", ""))
 
-            # Enforce HOD/Advisor/Faculty RBAC on departments filter
-            if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-                req_depts = [auth_ctx["department_id"]]
+            # Enforce authorized department scope (multi-department HOD/AHOD aware).
+            req_depts = clamp_department_list(scope, req_depts)
 
             # Default filters fallback if none selected
             if not req_qp_types:
@@ -1106,10 +1171,14 @@ class ComparisonPerformanceAnalyticsView(APIView):
 
             # Query lists of available filter dimensions to build dynamic multi-select UI
             all_depts_db = Department.objects.filter(is_teaching=True).order_by("name")
-            if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-                depts_list = [{"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name} for d in all_depts_db if str(d.id) == str(auth_ctx["department_id"])]
-            else:
+            if scope["is_college_wide"]:
                 depts_list = [{"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name} for d in all_depts_db]
+            else:
+                allowed_ids_c = set(scope["allowed_departments"]["ids"])
+                depts_list = [
+                    {"id": str(d.id), "code": d.code or str(d.id), "short_name": d.short_name or d.code or str(d.id), "name": d.name}
+                    for d in all_depts_db if str(d.id) in allowed_ids_c
+                ]
 
             batches_list = ["2023", "2024", "2025"]
             sems_list = ["1", "2", "3", "4", "5", "6", "7", "8"]
@@ -1165,6 +1234,9 @@ class ComparisonPerformanceAnalyticsView(APIView):
 
             # Load student scope base filters
             students_base = StudentProfile.objects.filter(status__iexact="ACTIVE")
+            _cb_q = allowed_student_q(scope, get_student_dept_q)
+            if _cb_q is not None:
+                students_base = students_base.filter(_cb_q)
             if req_depts:
                 dept_q = Q()
                 for d in req_depts:
@@ -1291,6 +1363,8 @@ class ComparisonPerformanceAnalyticsView(APIView):
                 "grade_dist_data": [],
                 "table_rows": []
             }, status=status.HTTP_200_OK)
+        except PermissionDenied:
+            raise
         except Exception as e:
             logging.getLogger(__name__).exception("Error in ComparisonPerformanceAnalyticsView: %s", e)
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1301,6 +1375,8 @@ class StudentCurriculumMarksView(APIView):
 
     def get(self, request):
         auth_ctx = resolve_user_auth_context(request.user)
+        # Server-side scope: authorized dataset first, then user filters.
+        scope = get_performance_scope(request.user)
         
         dept = request.query_params.get("dept", "").strip()
         year = request.query_params.get("year", "").strip()
@@ -1308,8 +1384,7 @@ class StudentCurriculumMarksView(APIView):
         exam_type = request.query_params.get("exam", "CIA 1").strip()
         search_q = request.query_params.get("q", "").strip()
         
-        if auth_ctx["lock_department"] and auth_ctx["department_id"]:
-            dept = auth_ctx["department_id"]
+        dept = clamp_department_param(scope, dept)
             
         semester_num = None
         if sem_val and sem_val.isdigit():
@@ -1318,6 +1393,9 @@ class StudentCurriculumMarksView(APIView):
             semester_num = get_dynamic_semester(year)
             
         qs = StudentProfile.objects.filter(status__iexact="ACTIVE").select_related("user", "home_department", "section", "section__batch")
+        _cq = allowed_student_q(scope, get_student_dept_q)
+        if _cq is not None:
+            qs = qs.filter(_cq)
         
         if dept:
             qs = qs.filter(get_student_dept_q(dept))
