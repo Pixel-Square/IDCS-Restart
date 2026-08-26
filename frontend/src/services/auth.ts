@@ -395,3 +395,35 @@ export async function changePassword(current_password: string, new_password: str
   const res = await apiClient.post('change-password/', { current_password, new_password, confirm_password })
   return res.data
 }
+
+/* ── Forgot Password (OTP based) ─────────────────────────────────────── */
+
+export type ForgotPasswordMethod = 'email' | 'mobile'
+
+export async function requestForgotPasswordOtp(payload: {
+  method: ForgotPasswordMethod
+  email?: string
+  mobile_number?: string
+}) {
+  const res = await apiClient.post('forgot-password/request/', payload)
+  return res.data
+}
+
+export async function verifyForgotPasswordOtp(payload: {
+  method: ForgotPasswordMethod
+  otp: string
+  email?: string
+  mobile_number?: string
+}): Promise<{ reset_token: string }> {
+  const res = await apiClient.post('forgot-password/verify-otp/', payload)
+  return res.data
+}
+
+export async function resetForgottenPassword(resetToken: string, newPassword: string, confirmPassword: string) {
+  const res = await apiClient.post('forgot-password/reset/', {
+    reset_token: resetToken,
+    new_password: newPassword,
+    confirm_password: confirmPassword,
+  })
+  return res.data
+}

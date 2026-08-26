@@ -157,6 +157,8 @@ export interface EventAnalyticsRow {
   od_type: string;
   grand_total: number;
   approved_at: string;
+  status?: string;
+  updated_at?: string;
 }
 
 export interface EventAnalyticsResponse {

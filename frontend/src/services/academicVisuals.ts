@@ -16,6 +16,12 @@ export interface DashboardVisualConfig {
   semester?: number | string;
   selectedSubjects?: string[];
   selectedTest?: string;
+  /** Category (X-axis) field selected in the visual builder */
+  category?: string;
+  /** Measure (Y-axis value) field selected in the visual builder */
+  measure?: string;
+  /** Series grouping (pivot) field selected in the visual builder */
+  seriesField?: string;
   layout: { x: number; y: number; w: number; h: number };
 }
 
@@ -25,6 +31,7 @@ export interface DepartmentOption {
 }
 
 export interface SubjectOption {
+  id: string;
   code: string;
   name: string;
   department?: string;
@@ -44,6 +51,16 @@ export interface GlobalDashboardFilters {
   performanceLevels: string[];
 }
 
+/** Simple dashboard-level filter bar state used by the visuals builder workspace */
+export interface DashboardGlobalFilters {
+  academicYear: string;
+  department: string;
+  year: string;
+  semester: number | string;
+  subjects: string[];
+  test: string;
+}
+
 export interface DashboardDefinition {
   id: string;
   name: string;
@@ -56,6 +73,8 @@ export interface DashboardDefinition {
   createdDate?: string;
   updatedDate?: string;
   multiFilters: GlobalDashboardFilters;
+  /** Global filter-bar state applied to every visual on the canvas */
+  globalFilters: DashboardGlobalFilters;
   visuals: DashboardVisualConfig[];
 }
 
@@ -137,6 +156,14 @@ export async function createDashboard(
       courseCategories: [],
       assessmentTypes: [],
       performanceLevels: []
+    },
+    globalFilters: {
+      academicYear: academicYear || '2026-27',
+      department: dept || 'CSE',
+      year: year || '3rd Year',
+      semester: semester || 5,
+      subjects: [],
+      test: ''
     },
     visuals: []
   };
@@ -228,7 +255,7 @@ export async function fetchDynamicOptions(): Promise<DynamicOptionsResponse> {
 }
 
 export async function queryDashboardVisualData(
-  multiFilters: GlobalDashboardFilters,
+  multiFilters: GlobalDashboardFilters | DashboardGlobalFilters,
   visualConfig: DashboardVisualConfig
 ): Promise<DashboardQueryResult> {
   for (const ep of ENDPOINTS) {

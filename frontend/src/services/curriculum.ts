@@ -141,7 +141,7 @@ export async function updateMaster(id: number, payload: Partial<Master>) {
   }
 }
 
-export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number }): Promise<DeptRow[]> {
+export async function fetchDeptRows(params?: { department_id?: number; regulation?: string; semester?: number; batch_id?: number; is_elective?: boolean }): Promise<DeptRow[]> {
   const qs = new URLSearchParams();
   if (params?.department_id) qs.set('department_id', String(params.department_id));
   if (params?.regulation) qs.set('regulation', params.regulation);
@@ -406,4 +406,181 @@ export async function propagateDeptRow(
     }
   }
   return results;
+}
+
+/* ── Elective Polls ──────────────────────────────────────────────────── */
+
+export interface DepartmentGroup {
+  id: number;
+  name: string;
+  department_ids?: number[];
+  is_active?: boolean;
+}
+
+export interface ElectivePollSubject {
+  id: number;
+  course_code?: string | null;
+  course_name?: string | null;
+  seats?: number | null;
+  semester?: number | string | null;
+  staff_name?: string | null;
+  department_name?: string | null;
+  is_active?: boolean;
+}
+
+export interface ElectivePoll {
+  id: number;
+  parent_elective_name: string;
+  batch_year?: number | string | null;
+  semester?: number | string | null;
+  department_group?: number | string | null;
+  department_group_name?: string | null;
+  is_active?: boolean;
+  poll_subjects?: ElectivePollSubject[];
+  your_choice_poll_subject_id?: number | null;
+  batch_year_name?: string | null;
+  created_at?: string;
+}
+
+export type HodElectivePollSummary = {
+  poll_id?: number;
+  id?: number;
+  parent_elective_name?: string;
+  batch_year?: string | number | null;
+  department_group?: string | number | null;
+  chosen_count?: number;
+  total_students?: number;
+  students?: Array<Record<string, any>>;
+};
+
+export type HodElectiveDepartmentStatus = {
+  department_id?: number;
+  id?: number;
+  department?: string;
+  name?: string;
+  short_name?: string;
+  total_polls?: number;
+  active_polls?: number;
+  submitted_students?: number;
+  total_students?: number;
+  polls?: HodElectivePollSummary[];
+};
+
+const ELECTIVE_POLLS_BASE = '/api/curriculum/elective-polls';
+
+export async function fetchDepartmentGroups(): Promise<DepartmentGroup[]> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}-groups/`);
+  if (!res.ok) throw new Error('Failed to fetch department groups');
+  const data = await res.json();
+  return Array.isArray(data) ? data : data?.results || [];
+}
+
+export async function fetchElectivePolls(): Promise<ElectivePoll[]> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/`);
+  if (!res.ok) throw new Error('Failed to fetch elective polls');
+  const data = await res.json();
+  return Array.isArray(data) ? data : data?.results || [];
+}
+
+export async function createElectivePoll(payload: Partial<ElectivePoll>): Promise<ElectivePoll> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(errBody || 'Failed to create elective poll');
+  }
+  return res.json();
+}
+
+export async function updateElectivePollStatus(pollId: number, isActive: boolean): Promise<ElectivePoll> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/${pollId}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!res.ok) throw new Error('Failed to update poll status');
+  return res.json();
+}
+
+export async function updateElectivePollSubjectStatus(
+  pollId: number,
+  subjectId: number,
+  isActive: boolean
+): Promise<ElectivePollSubject> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/${pollId}/subjects/${subjectId}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_active: isActive }),
+  });
+  if (!res.ok) throw new Error('Failed to update subject status');
+  return res.json();
+}
+
+export async function updateElectivePollSubjectDetails(
+  pollId: number,
+  subjectId: number,
+  details: { course_code?: string; course_name?: string; seats?: number | string | null }
+): Promise<ElectivePollSubject> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/${pollId}/subjects/${subjectId}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(details),
+  });
+  if (!res.ok) throw new Error('Failed to update subject details');
+  return res.json();
+}
+
+export async function fetchActiveStudentPolls(): Promise<ElectivePoll[]> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/active/`);
+  if (!res.ok) throw new Error('Failed to fetch active polls');
+  const data = await res.json();
+  return Array.isArray(data) ? data : data?.results || [];
+}
+
+export async function submitElectiveChoice(pollId: number, pollSubjectId: string | number): Promise<void> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/${pollId}/submit-choice/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ poll_subject_id: Number(pollSubjectId) }),
+  });
+  if (!res.ok) {
+    let detail = 'Failed to submit choice.';
+    try {
+      const body = await res.json();
+      detail = body?.detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+}
+
+export async function downloadElectivePollExport(pollId: number): Promise<void> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/${pollId}/export/`);
+  if (!res.ok) throw new Error('Failed to export poll');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `elective_poll_${pollId}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function fetchHodElectivePollStatus(): Promise<{ departments: HodElectiveDepartmentStatus[] }> {
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/hod-status/`);
+  if (!res.ok) throw new Error('Failed to fetch HOD elective poll status');
+  return res.json();
+}
+
+export async function fetchElectivePollSeatCounts(year?: string | number): Promise<{ counts: Record<string, number> }> {
+  const qp = year != null && year !== '' ? `?batch_year=${encodeURIComponent(String(year))}` : '';
+  const res = await fetchWithAuth(`${ELECTIVE_POLLS_BASE}/seat-counts/${qp}`);
+  if (!res.ok) throw new Error('Failed to fetch elective seat counts');
+  return res.json();
 }

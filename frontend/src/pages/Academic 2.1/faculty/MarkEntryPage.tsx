@@ -782,20 +782,24 @@ export default function MarkEntryPage() {
     cia_weight: number;
   } | null>(null);
   const [showMarkManagerToggle, setShowMarkManagerToggle] = useState(false);
-  const availableCos = useMemo(() => {
+  const availableCos: number[] = useMemo<number[]>(() => {
     try {
       // Prefer COs from mark_manager config
       if (examInfo?.mark_manager && typeof examInfo.mark_manager.cos === 'object') {
-        const keys = Object.keys(examInfo.mark_manager.cos).map(k => Number(k)).filter(n => Number.isFinite(n) && n > 0);
+        const keys: number[] = Object.keys(examInfo.mark_manager.cos).map(k => Number(k)).filter(n => Number.isFinite(n) && n > 0);
         if (keys.length) return keys.sort((a, b) => a - b);
       }
       // Then covered_cos from examInfo
-      const covered = (examInfo as any)?.covered_cos;
-      if (Array.isArray(covered) && covered.length) return covered.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0).sort((a: number, b: number) => a - b);
+      const covered: any[] = Array.isArray((examInfo as any)?.covered_cos) ? (examInfo as any).covered_cos : [];
+      if (covered.length) return covered.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0).sort((a: number, b: number) => a - b);
       // Then derive from question COs (use examInfo qp_pattern to avoid referencing local questions state)
-      const qpQuestions = Array.isArray((examInfo as any)?.qp_pattern?.questions) ? (examInfo as any).qp_pattern.questions : [];
-      const qcos = qpQuestions.flatMap((q: any) => Array.isArray(q.co_number) ? q.co_number : (q.co_number ? [q.co_number] : []));
-      const uniq = Array.from(new Set(qcos.map((c: any) => Number(c)).filter((n: number) => Number.isFinite(n) && n > 0)));
+      const qpQuestions: any[] = Array.isArray((examInfo as any)?.qp_pattern?.questions) ? (examInfo as any).qp_pattern.questions : [];
+      const qcos: number[] = qpQuestions.flatMap((q: any): number[] =>
+        Array.isArray(q.co_number)
+          ? q.co_number.map((c: any) => Number(c))
+          : (q.co_number != null ? [Number(q.co_number)] : [])
+      );
+      const uniq: number[] = Array.from(new Set(qcos)).filter((n: number) => Number.isFinite(n) && n > 0);
       if (uniq.length) return uniq.sort((a, b) => a - b);
       // Fallback to co_count or 5
       const cnt = Number((examInfo as any)?.co_count) || 5;

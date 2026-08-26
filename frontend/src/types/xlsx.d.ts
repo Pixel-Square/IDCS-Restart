@@ -21,6 +21,7 @@ declare module 'xlsx' {
   export const utils: {
     book_new: () => WorkBook;
     aoa_to_sheet: (data: Array<Array<string | number>>) => WorkSheet;
+    json_to_sheet: (data: Array<Record<string, unknown>>, opts?: Record<string, unknown>) => WorkSheet;
     book_append_sheet: (workbook: WorkBook, worksheet: WorkSheet, name: string) => void;
     sheet_to_json: (worksheet: WorkSheet, opts?: Record<string, unknown>) => unknown[][];
     encode_cell: (cell: { r: number; c: number }) => string;

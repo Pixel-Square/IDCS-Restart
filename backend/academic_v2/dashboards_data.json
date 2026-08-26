@@ -33,13 +33,13 @@
       {
         "id": "vis-line-exam-1787201326653",
         "title": "Assessment Progression \u2013 CIA 1 vs CIA 2 vs Model Exam",
-        "type": "line",
+        "type": "area",
         "dataset": "student_marks",
         "xAxisField": "test",
         "yAxisField": "average_marks",
         "compareBy": "Department",
         "analysisMode": "compare",
-        "aggregation": "average",
+        "aggregation": "sum",
         "showLegend": true,
         "showGrid": true,
         "layout": {
@@ -47,7 +47,9 @@
           "y": 0,
           "w": 6,
           "h": 4
-        }
+        },
+        "seriesField": "test",
+        "category": "reg_no"
       },
       {
         "id": "vis-bar-exam-1787201326653",
@@ -88,6 +90,78 @@
         }
       }
     ],
-    "updatedDate": "2026-08-20"
+    "updatedDate": "2026-08-26",
+    "globalFilters": {
+      "academicYear": "",
+      "department": "ALL",
+      "year": "",
+      "semester": "",
+      "subjects": [],
+      "test": ""
+    }
+  },
+  "dash-1787722333237": {
+    "id": "dash-1787722333237",
+    "name": "Student Academic Performance Dashboard",
+    "department": "148",
+    "academicYear": "2026-27",
+    "year": "1st Year",
+    "semester": 1,
+    "status": "published",
+    "accessRoles": [
+      "Super Admin",
+      "Admin",
+      "HOD",
+      "Faculty"
+    ],
+    "createdDate": "2026-08-26",
+    "updatedDate": "2026-08-26",
+    "globalFilters": {
+      "academicYear": "2026-27",
+      "department": "148",
+      "year": "1st Year",
+      "semester": 1,
+      "subjects": [],
+      "test": ""
+    },
+    "multiFilters": {
+      "academicYears": [
+        "2026-27"
+      ],
+      "departments": [
+        "148"
+      ],
+      "semesters": [
+        "1"
+      ],
+      "sections": [],
+      "subjectNames": [],
+      "subjectCodes": [],
+      "tests": [],
+      "courseCategories": [],
+      "assessmentTypes": [],
+      "performanceLevels": []
+    },
+    "visuals": [
+      {
+        "id": "vis-1787722343238",
+        "title": "New Academic Visual",
+        "type": "column",
+        "dataset": "student_marks",
+        "xAxisField": "",
+        "yAxisField": "",
+        "compareBy": "",
+        "category": "student_name",
+        "measure": "marks_obtained",
+        "seriesField": "subject",
+        "aggregation": "average",
+        "layout": {
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        }
+      }
+    ]
   }
 }

@@ -459,8 +459,18 @@ export default function DashboardEntryPoints({ user }: DashboardEntryPointsProps
                   )}
                 </div>
 
+                {/* Device Busy / Enrollment Mode Banner */}
+                {biosecureStatus?.device_busy && (
+                  <div className="mt-2.5 flex items-center gap-2 text-xs animate-in fade-in duration-300">
+                    <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/25 text-amber-300 font-bold border border-amber-500/50 shadow-inner">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
+                      Scanner Busy: Enrollment in Progress (Attendance scan temporarily paused)
+                    </span>
+                  </div>
+                )}
+
                 {/* Fingerprint placement status for active session */}
-                {biosecureCurrentBatch && (
+                {biosecureCurrentBatch && !biosecureStatus?.device_busy && (
                   <div className="mt-2 flex items-center gap-2 text-xs">
                     {biosecureCurrentBatch.placed ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/20 text-emerald-300 font-medium border border-emerald-500/30">

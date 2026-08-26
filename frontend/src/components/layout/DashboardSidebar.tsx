@@ -89,6 +89,9 @@ import { fetchCurriculumPendingCount } from '../../services/curriculum';
   visual_admin_dashboard: BarChart3,
   academic_visuals: PieChart,
   academic_performance: TrendingUp,
+  // BioSecure
+  biosecure_admin: Shield,
+  biosecure_logs: ClipboardList,
 };
 
 export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: string; user?: any }) {
@@ -611,6 +614,25 @@ export default function DashboardSidebar({ baseUrl = '', user }: { baseUrl?: str
   // IQAC External Management
   if (isIqac && !items.some((item) => item.key === 'external_management')) {
     items.push({ key: 'external_management', label: 'External Management', to: '/iqac/external-management' });
+  }
+
+  // BioSecure Management & Logs for BIOSECURE_ADMIN, IQAC, ADMIN, and SECURITY
+  const canAccessBioSecureAdmin =
+    rolesUpper.includes('BIOSECURE_ADMIN') ||
+    rolesUpper.includes('BIOSECURE') ||
+    rolesUpper.includes('IQAC') ||
+    rolesUpper.includes('ADMIN') ||
+    rolesUpper.includes('SECURITY') ||
+    permsLower.includes('biosecure.manage') ||
+    permsLower.includes('biosecure.view_admin');
+
+  if (canAccessBioSecureAdmin) {
+    if (!items.some((item) => item.key === 'biosecure_admin')) {
+      items.push({ key: 'biosecure_admin', label: 'BioSecure Admin', to: '/biosecure/admin' });
+    }
+    if (!items.some((item) => item.key === 'biosecure_logs')) {
+      items.push({ key: 'biosecure_logs', label: 'BioSecure Logs', to: '/biosecure/admin/logs' });
+    }
   }
 
   // PS (Principal Secretary) specific features

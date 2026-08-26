@@ -7,6 +7,8 @@ type Props = {
   courseId?: string;
   showHeader?: boolean;
   showCourseInput?: boolean;
+  /** When true the page is being viewed by an IQAC / Academic Controller user */
+  isIqac?: boolean;
 };
 
 export default function CDAPPage({ courseId, showHeader = true, showCourseInput = true }: Props) {

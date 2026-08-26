@@ -24,9 +24,18 @@ def get_current_department(staff: StaffProfile) -> Optional[StaffDepartmentAssig
 
 
 def get_effective_roles(user) -> Set[str]:
+    """Canonical effective-role resolver (mirrors academics/services.py).
+
+    UserRole + active DepartmentRole (HOD/AHOD) + active RoleAssignment.
+    """
     roles = set(r.name.upper() for r in user.roles.all())
     st = getattr(user, 'staff_profile', None)
     if st is not None:
+        from academics.models import DepartmentRole
+        dept_roles = DepartmentRole.objects.filter(
+            staff=st, is_active=True
+        ).values_list('role', flat=True)
+        roles.update(str(r).strip().upper() for r in dept_roles if r)
         active = RoleAssignment.objects.filter(staff=st, end_date__isnull=True)
         roles.update([ra.role_name.upper() for ra in active])
     return roles

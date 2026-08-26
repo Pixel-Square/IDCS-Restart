@@ -111,7 +111,7 @@ export default function InternalMarkPage() {
   const [loading, setLoading] = useState(true);
   const [courseInfo, setCourseInfo] = useState<CourseInfo | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [tab, setTab] = useState<'dashboard' | 'exams' | 'co' | 'result'>('dashboard');
+  const [tab, setTab] = useState<'dashboard' | 'exams' | 'co' | 'result' | 'coattainment'>('dashboard');
   // add coattainment tab
   const [showCoAttainment, setShowCoAttainment] = useState(false);
 

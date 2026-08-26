@@ -18,24 +18,64 @@ from .academic_visuals_views import load_dashboards_store, get_performance_level
 logger = logging.getLogger(__name__)
 
 def resolve_user_auth_context(user):
-    if not user or not user.is_authenticated:
+    """Legacy entry point — now delegates to the unified authorization context
+    (see authorization.py). Kept for backwards compatibility with every view
+    and response shape that already consumes it."""
+    from .authorization import build_authorization_context
+
+    ctx = build_authorization_context(user)
+
+    # Legacy anonymous shape (kept identical to the previous behaviour except
+    # that unauthenticated users are no longer treated as college-wide).
+    if not user or not getattr(user, "is_authenticated", False):
         return {
             "user_id": None,
             "username": "Anonymous",
-            "role": "PRINCIPAL",
-            "roles": ["PRINCIPAL"],
-            "is_principal": True,
+            "role": "STAFF",
+            "roles": [],
+            "effective_roles": [],
+            "permissions": [],
+            "is_principal": False,
             "is_hod": False,
             "is_advisor": False,
             "is_faculty": False,
             "is_student": False,
+            "is_college_wide": False,
+            "allowed_departments": {"ids": [], "codes": [], "names": []},
             "department_id": None,
             "department_code": None,
             "department_name": None,
-            "lock_department": False,
+            "lock_department": True,
             "advised_sections": [],
-            "assigned_subjects": []
+            "assigned_subjects": [],
+            "mentee_ids": [],
         }
+
+    # `roles` previously contained only UserRole names; it now reflects the
+    # canonical effective-role set (UserRole + active DepartmentRole +
+    # active RoleAssignment), consistent with /api/accounts/me/.
+    return {
+        "user_id": ctx["user_id"],
+        "username": ctx["username"],
+        "role": ctx["role"],
+        "roles": ctx["roles"],
+        "effective_roles": ctx["effective_roles"],
+        "permissions": ctx["permissions"],
+        "is_principal": ctx["is_principal"],
+        "is_hod": ctx["is_hod"],
+        "is_advisor": ctx["is_advisor"],
+        "is_faculty": ctx["is_faculty"],
+        "is_student": ctx["is_student"],
+        "is_college_wide": ctx["is_college_wide"],
+        "allowed_departments": ctx["allowed_departments"],
+        "department_id": ctx["department_id"],
+        "department_code": ctx["department_code"],
+        "department_name": ctx["department_name"],
+        "lock_department": ctx["lock_department"],
+        "advised_sections": ctx["advised_sections"],
+        "assigned_subjects": ctx["assigned_subjects"],
+        "mentee_ids": ctx["mentee_ids"],
+    }
 
     role_names = list(UserRole.objects.filter(user=user).values_list("role__name", flat=True))
     role_names_upper = [r.upper() for r in role_names]

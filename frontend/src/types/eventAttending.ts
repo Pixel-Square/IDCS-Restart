@@ -42,6 +42,8 @@ export interface EventAttendingFile {
   file_url: string | null;
   original_filename: string;
   uploaded_at: string;
+  /** Page orientation hint used when generating PDFs from this file */
+  orientation?: string;
 }
 
 export interface WorkflowStep {
@@ -92,6 +94,8 @@ export interface EventAttendingFormDetail {
   current_step: number | null;
   current_approver_role: string | null;
   files?: EventAttendingFile[];
+  /** Uploaded proof document URL for the attended event */
+  event_proof?: string | null;
   workflow_progress?: WorkflowStep[];
   full_workflow?: { step_order: number; approver_role: string; is_active: boolean }[];
   approval_logs?: ApprovalLogEntry[];

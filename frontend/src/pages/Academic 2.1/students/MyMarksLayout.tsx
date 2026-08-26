@@ -3,7 +3,7 @@ import { BarChart3, BookOpen, ChevronLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface MyMarksLayoutProps {
-  activeTab: 'dashboard' | 'courses';
+  activeTab: 'dashboard' | 'courses' | 'past-courses';
   title: string;
   subtitle?: string;
   children: React.ReactNode;

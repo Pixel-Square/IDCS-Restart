@@ -87,3 +87,32 @@ export function renderFormValue(value: unknown): React.ReactNode {
 
   return String(value);
 }
+
+/** Small reusable link that opens an uploaded file (proof/document) in a new tab. */
+export function FilePreviewLink({
+  filename,
+  href,
+  className = 'text-blue-600 hover:underline',
+  children,
+}: {
+  filename: string;
+  href?: string | null;
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  const target = toAbsoluteMaybe(String(href || ''));
+  if (!target) {
+    return <span className={className}>{children || filename}</span>;
+  }
+  return (
+    <a
+      href={target}
+      target="_blank"
+      rel="noreferrer"
+      title={filename}
+      className={className}
+    >
+      {children || filename}
+    </a>
+  );
+}

@@ -38,6 +38,7 @@ export default function BioSecureStudentLogsPage() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [logs, setLogs] = useState<BatchLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [deviceBusy, setDeviceBusy] = useState<boolean>(false);
 
   const fetchLogs = async (dateStr: string) => {
     setLoading(true);
@@ -48,6 +49,7 @@ export default function BioSecureStudentLogsPage() {
         setGroupName(data.group_name || '');
         setLogs(data.logs || []);
         setAvailableDates(data.available_dates || []);
+        setDeviceBusy(Boolean(data.device_busy));
       }
     } catch (err: any) {
       console.error('Error fetching logs:', err);
@@ -59,7 +61,7 @@ export default function BioSecureStudentLogsPage() {
   useEffect(() => {
     fetchLogs(selectedDate);
 
-    // If viewing today's logs, poll in background every 3s so placement updates in real time
+    // If viewing today's logs, poll in background every 3s so placement & busy state updates in real time
     if (selectedDate === todayStr) {
       const interval = setInterval(() => {
         if (document.visibilityState === 'visible') {
@@ -70,6 +72,7 @@ export default function BioSecureStudentLogsPage() {
                 setGroupName(data.group_name || '');
                 setLogs(data.logs || []);
                 setAvailableDates(data.available_dates || []);
+                setDeviceBusy(Boolean(data.device_busy));
               }
             })
             .catch(() => {});
@@ -99,6 +102,24 @@ export default function BioSecureStudentLogsPage() {
             Back to Student Dashboard
           </button>
         </div>
+
+        {/* Device Busy Banner if Enrollment window active */}
+        {deviceBusy && (
+          <div className="rounded-2xl border-2 border-amber-400/80 bg-gradient-to-r from-amber-500/20 via-amber-600/10 to-amber-500/20 p-4 text-amber-200 shadow-md backdrop-blur-md flex items-center justify-between gap-3 animate-in fade-in duration-300">
+            <div className="flex items-center gap-3">
+              <span className="w-3.5 h-3.5 rounded-full bg-amber-400 animate-ping flex-shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-amber-300">Biometric Scanner is Currently Busy (Orange Mode)</h4>
+                <p className="text-xs text-amber-200/90 mt-0.5">
+                  Fingerprint registration is in progress on the scanner. Attendance inputs are temporarily suspended until the registration window closes.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-bold px-3 py-1 bg-amber-400/20 text-amber-300 border border-amber-400/40 rounded-xl shrink-0">
+              ENROLLMENT ACTIVE
+            </span>
+          </div>
+        )}
 
         {/* Hero Card */}
         <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 sm:p-8 text-white shadow-2xl border border-indigo-500/20">

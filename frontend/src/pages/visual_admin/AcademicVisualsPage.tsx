@@ -34,12 +34,17 @@ export default function AcademicVisualsPage() {
   const [viewMode, setViewMode] = useState<'landing' | 'workspace' | 'preview'>('landing');
 
   // Dynamic Options queried from DB
-  const [options, setOptions] = useState<DynamicOptionsResponse>({
+  type VisualsOptions = Omit<DynamicOptionsResponse, 'departments'> & { departments: string[] };
+  const [options, setOptions] = useState<VisualsOptions>({
     departments: ['CSE', 'AI & DS', 'ECE', 'EEE', 'MECH', 'CIVIL', 'IT'],
     semesters: [1, 2, 3, 4, 5, 6, 7, 8],
+    sections: [],
     academicYears: ['2026-27', '2025-26'],
+    batches: [],
     subjects: [],
     tests: [],
+    courseCategories: [],
+    assessmentTypes: [],
     dbConnected: true,
   });
 
@@ -69,7 +74,14 @@ export default function AcademicVisualsPage() {
   useEffect(() => {
     async function init() {
       const opts = await fetchDynamicOptions();
-      if (opts) setOptions(opts);
+      if (opts) {
+        setOptions({
+          ...opts,
+          departments: (opts.departments as any[]).map((d) =>
+            typeof d === 'string' ? d : String(d?.code || d?.name || d?.id || '')
+          ),
+        });
+      }
 
       const list = await fetchDashboards();
       if (list && list.length > 0) setDashboards(list);
@@ -124,13 +136,26 @@ export default function AcademicVisualsPage() {
     }
   }, [autoRefreshInterval, activeDashboard, viewMode, refreshCanvasData]);
 
+  // Ensure a dashboard coming from the backend always has globalFilters populated.
+  const withGlobalFilters = (dash: DashboardDefinition): DashboardDefinition => ({
+    ...dash,
+    globalFilters: dash.globalFilters || {
+      academicYear: dash.academicYear || '',
+      department: dash.department || 'ALL',
+      year: dash.year || '',
+      semester: dash.semester ?? '',
+      subjects: [],
+      test: ''
+    }
+  });
+
   const handleOpenDashboard = async (id: string) => {
     const detail = await fetchDashboardDetail(id);
     if (detail) {
-      setActiveDashboard(detail);
+      setActiveDashboard(withGlobalFilters(detail));
     } else {
       const target = dashboards.find((d) => d.id === id);
-      if (target) setActiveDashboard(target);
+      if (target) setActiveDashboard(withGlobalFilters(target));
     }
     setViewMode('workspace');
   };
@@ -155,6 +180,18 @@ export default function AcademicVisualsPage() {
         semester: sem || 5,
         subjects: [],
         test: ''
+      },
+      multiFilters: {
+        academicYears: ['2026-27'],
+        departments: [newDashDept || 'CSE'],
+        semesters: sem ? [String(sem)] : [],
+        sections: [],
+        subjectNames: [],
+        subjectCodes: [],
+        tests: [],
+        courseCategories: [],
+        assessmentTypes: [],
+        performanceLevels: []
       },
       visuals: []
     };
@@ -197,6 +234,9 @@ export default function AcademicVisualsPage() {
       title: 'New Academic Visual',
       type: 'column',
       dataset: 'student_marks',
+      xAxisField: '',
+      yAxisField: '',
+      compareBy: '',
       category: 'student_name',
       measure: 'marks_obtained',
       seriesField: 'subject',

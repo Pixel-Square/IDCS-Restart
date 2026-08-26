@@ -20,6 +20,7 @@ export interface CalendarData {
   toDate: string
   createdAt?: string | null
   updatedAt?: string | null
+  semesterType?: 'ODD' | 'EVEN'
   dates: CalendarDate[]
 }
 

@@ -611,6 +611,35 @@ export async function fetchDueScheduleSubjects(semesterIds: number[]): Promise<{
   return res.json();
 }
 
+/* ── CQI publication status guard ────────────────────────────────────── */
+
+export type CqiPublicationStatusResponse = {
+  /** true when every required prerequisite component for the cycle is published */
+  all_published: boolean;
+  first_unpublished?: {
+    key: string;
+    label: string;
+    tab_key: string;
+  } | null;
+};
+
+export async function fetchCqiPublicationStatus(
+  subjectId: string,
+  teachingAssignmentId: number | null,
+  cycle: number | string,
+  courseType?: string | null
+): Promise<CqiPublicationStatusResponse> {
+  const qp = new URLSearchParams();
+  qp.set('subject_id', subjectId);
+  if (teachingAssignmentId != null) qp.set('teaching_assignment_id', String(teachingAssignmentId));
+  if (cycle != null) qp.set('cycle', String(cycle));
+  if (courseType) qp.set('course_type', courseType);
+  const url = `${apiBase()}/api/obe/cqi-publication-status?${qp.toString()}`;
+  const res = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json', ...authHeader() } });
+  if (!res.ok) await parseError(res, 'CQI publication status fetch failed');
+  return res.json();
+}
+
 export async function upsertDueSchedule(payload: {
   semester_id: number;
   subject_code: string;

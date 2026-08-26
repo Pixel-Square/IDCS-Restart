@@ -844,7 +844,7 @@ export default function ElectivePollPage({ user }: { user?: any }) {
       setPolls([createdPoll, ...polls]);
       
       // Reset form
-      setElectivesForm([{ code: '', name: '', seats: '', staff: '', dept: '', blocked_depts: [] }]);
+      setElectivesForm([{ code: '', name: '', seats: '', seats_mode: 'custom', seats_divide_by: '1', staff: '', dept: '', blocked_depts: [] }]);
       setSelectedYear('');
       setSelectedSemester('');
       setSelectedGroup('');
